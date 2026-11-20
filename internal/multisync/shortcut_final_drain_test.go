@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 func testFinalDrainMount(t *testing.T, childID string, bindingID string) *mountSpec {
@@ -19,7 +21,7 @@ func testFinalDrainMount(t *testing.T, childID string, bindingID string) *mountS
 				mountID: mountID(childID),
 			},
 			parentMountID: "parent",
-			mode:          syncengine.ShortcutChildRunModeFinalDrain,
+			mode:          syncshortcut.ShortcutChildRunModeFinalDrain,
 			ackRef:        testShortcutChildAckRef(t, bindingID),
 		},
 	}
@@ -52,7 +54,7 @@ func TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable(t *testing.T) {
 		},
 		{
 			Identity: MountIdentity{MountID: "root-missing"},
-			Err:      fmt.Errorf("opening child root: %w", syncengine.ErrMountRootUnavailable),
+			Err:      fmt.Errorf("opening child root: %w", syncdomain.ErrMountRootUnavailable),
 		},
 	}
 

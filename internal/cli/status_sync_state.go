@@ -7,7 +7,9 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // readDriveStatusSnapshot reads one drive's status snapshot. A drive with no
@@ -19,23 +21,23 @@ func readDriveStatusSnapshot(
 	ctx context.Context,
 	statePath string,
 	logger *slog.Logger,
-	filter syncengine.ContentFilterConfig,
-) (syncengine.DriveStatusSnapshot, error) {
+	filter syncdomain.ContentFilterConfig,
+) (syncstore.DriveStatusSnapshot, error) {
 	exists, err := managedPathExists(statePath)
 	if err == nil && !exists {
-		return syncengine.DriveStatusSnapshot{}, nil
+		return syncstore.DriveStatusSnapshot{}, nil
 	}
 
-	var snapshot syncengine.DriveStatusSnapshot
+	var snapshot syncstore.DriveStatusSnapshot
 	if err == nil {
-		snapshot, err = syncengine.ReadDriveStatusSnapshotWithFilter(ctx, statePath, logger, filter)
+		snapshot, err = syncstore.ReadDriveStatusSnapshotWithFilter(ctx, statePath, logger, filter)
 	}
 	if err != nil {
 		if logger != nil {
 			logger.Warn("cannot read the sync state for this drive; its status is unavailable",
 				slog.String("path", statePath), slog.Any("error", err))
 		}
-		return syncengine.DriveStatusSnapshot{}, fmt.Errorf("read sync state %s: %w", statePath, err)
+		return syncstore.DriveStatusSnapshot{}, fmt.Errorf("read sync state %s: %w", statePath, err)
 	}
 
 	return snapshot, nil
@@ -45,8 +47,8 @@ func loadShortcutRootStatusSnapshots(
 	ctx context.Context,
 	cfg *config.Config,
 	logger *slog.Logger,
-) map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView {
-	roots := make(map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView)
+) map[driveid.CanonicalID][]syncshortcut.ShortcutRootStatusView {
+	roots := make(map[driveid.CanonicalID][]syncshortcut.ShortcutRootStatusView)
 	if cfg == nil {
 		return roots
 	}
@@ -67,7 +69,7 @@ func loadShortcutRootStatusSnapshots(
 		if !exists {
 			continue
 		}
-		records, err := syncengine.ReadShortcutRootStatusSnapshot(ctx, statePath, cid.String(), cfg.Drives[cid].SyncDir, logger)
+		records, err := syncstore.ReadShortcutRootStatusSnapshot(ctx, statePath, cid.String(), cfg.Drives[cid].SyncDir, logger)
 		if err != nil {
 			if logger != nil {
 				logger.Debug("skip shortcut root status snapshot",
@@ -83,13 +85,13 @@ func loadShortcutRootStatusSnapshots(
 }
 
 func buildSyncStateInfo(
-	snapshot *syncengine.DriveStatusSnapshot,
+	snapshot *syncstore.DriveStatusSnapshot,
 	root statusStoreRoot,
 	verbose bool,
 	examplesLimit int,
 ) syncStateInfo {
 	if snapshot == nil {
-		snapshot = &syncengine.DriveStatusSnapshot{}
+		snapshot = &syncstore.DriveStatusSnapshot{}
 	}
 
 	if examplesLimit <= 0 {
@@ -115,7 +117,7 @@ func buildSyncStateInfo(
 
 // retryingPaths names the work behind the "Retrying" count, which on its own
 // gave no way to find out what kept failing.
-func retryingPaths(rows []syncengine.RetryWorkRow, verbose bool, limit int) []string {
+func retryingPaths(rows []syncdomain.RetryWorkRow, verbose bool, limit int) []string {
 	paths := make([]string, 0, len(rows))
 	for i := range rows {
 		if !verbose && len(paths) >= limit {

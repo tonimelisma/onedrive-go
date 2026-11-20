@@ -12,16 +12,18 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // nfdShortcutAliasEngine is a parent engine whose shortcut alias folder sits
 // on disk under an NFD name (a folder copied from a Mac) while its record
 // holds the stored NFC path, on a filesystem that tells the two apart.
-func nfdShortcutAliasEngine(t *testing.T, mock *engineMockClient, state ShortcutRootState) (*testEngine, string) {
+func nfdShortcutAliasEngine(t *testing.T, mock *syncfixture.EngineMockClient, state syncshortcut.ShortcutRootState) (*testEngine, string) {
 	t.Helper()
 
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.shortcutNamespaceID = shortcutNamespaceTestID
+	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 	aliasOnDisk := filepath.Join(syncRoot, "Shared", norm.NFD.String("Café"))
 	require.NoError(t, os.MkdirAll(aliasOnDisk, 0o700))
 	if _, err := os.Lstat(filepath.Join(syncRoot, "Shared", norm.NFC.String("Café"))); err == nil {
@@ -31,8 +33,8 @@ func nfdShortcutAliasEngine(t *testing.T, mock *engineMockClient, state Shortcut
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", norm.NFD.String("Café")))
 	require.NoError(t, err)
 	stored := "Shared/" + norm.NFC.String("Café")
-	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-		NamespaceID:       shortcutNamespaceTestID,
+	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
+		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: stored,
 		LocalAlias:        norm.NFC.String("Café"),
@@ -55,17 +57,17 @@ func nfdShortcutAliasEngine(t *testing.T, mock *engineMockClient, state Shortcut
 func TestEngine_ShortcutAliasWithNFDNameOnDiskIsNotARename(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{
-		moveItemFn: func(context.Context, driveid.ID, string, string, string) (*graph.Item, error) {
+	mock := &syncfixture.EngineMockClient{
+		MoveItemFn: func(context.Context, driveid.ID, string, string, string) (*graph.Item, error) {
 			require.FailNow(t, "an alias that did not move must not be renamed online")
 			return nil, assert.AnError
 		},
-		deleteItemFn: func(context.Context, driveid.ID, string) error {
+		DeleteItemFn: func(context.Context, driveid.ID, string) error {
 			require.FailNow(t, "an alias that is still there must not be deleted online")
 			return nil
 		},
 	}
-	eng, aliasOnDisk := nfdShortcutAliasEngine(t, mock, ShortcutRootStateActive)
+	eng, aliasOnDisk := nfdShortcutAliasEngine(t, mock, syncshortcut.ShortcutRootStateActive)
 
 	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
 
@@ -75,7 +77,7 @@ func TestEngine_ShortcutAliasWithNFDNameOnDiskIsNotARename(t *testing.T) {
 	roots, err := eng.baseline.ListShortcutRoots(t.Context())
 	require.NoError(t, err)
 	require.Len(t, roots, 1)
-	assert.Equal(t, ShortcutRootStateActive, roots[0].State)
+	assert.Equal(t, syncshortcut.ShortcutRootStateActive, roots[0].State)
 	assert.Equal(t, "Shared/"+norm.NFC.String("Café"), roots[0].RelativeLocalPath)
 }
 
@@ -86,7 +88,7 @@ func TestEngine_ShortcutAliasWithNFDNameOnDiskIsNotARename(t *testing.T) {
 func TestEngine_RemovedShortcutReleaseRemovesTheNFDNamedAliasFolder(t *testing.T) {
 	t.Parallel()
 
-	eng, aliasOnDisk := nfdShortcutAliasEngine(t, &engineMockClient{}, ShortcutRootStateRemovedReleasePending)
+	eng, aliasOnDisk := nfdShortcutAliasEngine(t, &syncfixture.EngineMockClient{}, syncshortcut.ShortcutRootStateRemovedReleasePending)
 
 	_, err := eng.reconcileShortcutRootLocalState(t.Context())
 

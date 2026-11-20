@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // ---------------------------------------------------------------------------
@@ -570,7 +570,7 @@ func conflictCopiesForPath(t *testing.T, absPath string) []string {
 // globConflictCopies lists the conflict copies beside absPath. It asserts
 // nothing, so a poll predicate can call it.
 func globConflictCopies(absPath string) ([]string, error) {
-	stem, ext := syncengine.ConflictStemExt(filepath.Base(absPath))
+	stem, ext := syncdomain.ConflictStemExt(filepath.Base(absPath))
 	matches, err := filepath.Glob(filepath.Join(filepath.Dir(absPath), fmt.Sprintf("%s.conflict-*%s", stem, ext)))
 	if err != nil {
 		return nil, fmt.Errorf("glob conflict copies of %s: %w", absPath, err)

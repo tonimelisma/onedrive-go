@@ -11,7 +11,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // Validates: R-6.2.12
@@ -42,7 +42,7 @@ func TestRunDriveRebindRoot_KeepsStateAndReportsRebind(t *testing.T) {
 
 	statePath := config.DriveStatePath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
-	store, err := syncengine.NewSyncStore(t.Context(), statePath, testDriveLogger(t))
+	store, err := syncstore.NewSyncStore(t.Context(), statePath, testDriveLogger(t))
 	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
 
@@ -92,7 +92,7 @@ func TestRunDriveRebindRoot_RequiresConfirmationWithoutYes(t *testing.T) {
 	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
 	statePath := config.DriveStatePath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
-	store, err := syncengine.NewSyncStore(t.Context(), statePath, testDriveLogger(t))
+	store, err := syncstore.NewSyncStore(t.Context(), statePath, testDriveLogger(t))
 	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
 
@@ -156,7 +156,7 @@ func TestRunDriveRebindRoot_CountsFilesInATildeSyncDir(t *testing.T) {
 
 	statePath := config.DriveStatePath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
-	store, err := syncengine.NewSyncStore(t.Context(), statePath, testDriveLogger(t))
+	store, err := syncstore.NewSyncStore(t.Context(), statePath, testDriveLogger(t))
 	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
 

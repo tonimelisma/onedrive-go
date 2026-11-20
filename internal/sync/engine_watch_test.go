@@ -14,6 +14,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // ---------------------------------------------------------------------------
@@ -56,8 +60,8 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 
 	started := make(chan struct{})
 
-	mock := &engineMockClient{
-		deltaFn: func(ctx context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(ctx context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			close(started)
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -67,17 +71,17 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
 
-	cancel, done := runWatchInBackground(t, eng, SyncBidirectional, WatchOptions{
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncBidirectional, WatchOptions{
 		// Use very long intervals so observers don't fire during test.
 		PollInterval: 1 * time.Hour,
 		Debounce:     1 * time.Hour,
 	})
 
-	receiveWithin(t, started, "RunWatch to enter bootstrap observation")
-	stopWatch(t, cancel, done)
+	syncfixture.ReceiveWithin(t, started, "RunWatch to enter bootstrap observation")
+	syncfixture.StopWatch(t, cancel, done)
 
-	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted
+	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted
 	}), "observers must not start after bootstrap cancellation")
 }
 
@@ -85,10 +89,10 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -98,17 +102,17 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 	eng.enableWebsocket = true
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, opts SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ syncdomain.SocketIOEndpointFetcher, _ driveid.ID, opts syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{
 			started: started,
 			runFn: func(ctx context.Context, _ chan<- struct{}) error {
 				require.NotNil(t, opts.LifecycleHook)
-				opts.LifecycleHook(SocketIOLifecycleEvent{
-					Type:    SocketIOLifecycleEventStarted,
+				opts.LifecycleHook(syncobserve.SocketIOLifecycleEvent{
+					Type:    syncobserve.SocketIOLifecycleEventStarted,
 					DriveID: driveID.String(),
 				})
-				opts.LifecycleHook(SocketIOLifecycleEvent{
-					Type:    SocketIOLifecycleEventConnected,
+				opts.LifecycleHook(syncobserve.SocketIOLifecycleEvent{
+					Type:    syncobserve.SocketIOLifecycleEventConnected,
 					DriveID: driveID.String(),
 					SID:     "sid-1",
 				})
@@ -117,8 +121,8 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 				default:
 				}
 				<-ctx.Done()
-				opts.LifecycleHook(SocketIOLifecycleEvent{
-					Type:    SocketIOLifecycleEventStopped,
+				opts.LifecycleHook(syncobserve.SocketIOLifecycleEvent{
+					Type:    syncobserve.SocketIOLifecycleEventStopped,
 					DriveID: driveID.String(),
 				})
 				return nil
@@ -126,20 +130,20 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 		}
 	}
 
-	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, quietWatchOptions())
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncDownloadOnly, quietWatchOptions())
 
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventWebsocketWakeSourceStarted && event.DriveID == driveID.String()
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventWebsocketWakeSourceStarted && event.DriveID == driveID.String()
 	}, "websocket wake source started")
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventWebsocketConnected &&
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventWebsocketConnected &&
 			event.DriveID == driveID.String() &&
 			event.Note == "sid=sid-1"
 	}, "websocket connected")
 
-	stopWatch(t, cancel, done)
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventWebsocketWakeSourceStopped && event.DriveID == driveID.String()
+	syncfixture.StopWatch(t, cancel, done)
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventWebsocketWakeSourceStopped && event.DriveID == driveID.String()
 	}, "websocket wake source stopped")
 }
 
@@ -147,10 +151,10 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -160,16 +164,16 @@ func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 	recorder := attachDebugEventRecorder(eng)
 	wakeSourcesMade := countWakeSourcesMade(eng)
 
-	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, quietWatchOptions())
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncDownloadOnly, quietWatchOptions())
 
 	waitForWakeSourceDecision(t, recorder)
 	assert.Zero(t, wakeSourcesMade.Load(), "wake source should not start when websocket is disabled")
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 	assert.Zero(t, wakeSourcesMade.Load(), noWakeSourceAfterTheDecision)
-	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventWebsocketWakeSourceStarted ||
-			event.Type == EngineDebugEventWebsocketConnected
+	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventWebsocketWakeSourceStarted ||
+			event.Type == syncdomain.EngineDebugEventWebsocketConnected
 	}), "disabled websocket mode must not emit websocket lifecycle events")
 }
 
@@ -182,7 +186,7 @@ const noWakeSourceAfterTheDecision = "no wake source was made for the rest of th
 // made before the source's goroutine runs.
 func countWakeSourcesMade(eng *testEngine) *atomic.Int32 {
 	made := &atomic.Int32{}
-	eng.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.socketIOWakeSourceFactory = func(_ syncdomain.SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		made.Add(1)
 		return &stubSocketIOWakeSource{started: make(chan struct{}, 1)}
 	}
@@ -194,11 +198,11 @@ func countWakeSourcesMade(eng *testEngine) *atomic.Int32 {
 // start a wake source. The remote observer is started with its wake source,
 // if any, before the local observer, so the local observer's start is that
 // signal: a wake source the watch decided on has been made by then.
-func waitForWakeSourceDecision(t *testing.T, recorder *debugEventRecorder) {
+func waitForWakeSourceDecision(t *testing.T, recorder *syncfixture.DebugEventRecorder) {
 	t.Helper()
 
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}, "local observer started, after the remote observer and its wake source")
 }
 
@@ -206,10 +210,10 @@ func waitForWakeSourceDecision(t *testing.T, recorder *debugEventRecorder) {
 func TestRunWatch_MountRootKeepsPollingOnly(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -221,15 +225,15 @@ func TestRunWatch_MountRootKeepsPollingOnly(t *testing.T) {
 	recorder := attachDebugEventRecorder(eng)
 	wakeSourcesMade := countWakeSourcesMade(eng)
 
-	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, quietWatchOptions())
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncDownloadOnly, quietWatchOptions())
 
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventWebsocketFallback && event.Note == "mount_root"
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventWebsocketFallback && event.Note == "mount_root"
 	}, "websocket mount-root fallback")
 	waitForWakeSourceDecision(t, recorder)
 	assert.Zero(t, wakeSourcesMade.Load(), "wake source should not start for mount-root watch")
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 	assert.Zero(t, wakeSourcesMade.Load(), noWakeSourceAfterTheDecision)
 }
 
@@ -237,10 +241,10 @@ func TestRunWatch_MountRootKeepsPollingOnly(t *testing.T) {
 func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -249,24 +253,24 @@ func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
 
-	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}, "local observer started")
 
 	cancel()
-	require.NoError(t, receiveWithin(t, done, "RunWatch to return after cancellation"),
+	require.NoError(t, syncfixture.ReceiveWithin(t, done, "RunWatch to return after cancellation"),
 		"RunWatch should prefer graceful shutdown over all-observers-exited")
 
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverExited && event.Observer == EngineDebugObserverLocal
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverExited && event.Observer == syncdomain.EngineDebugObserverLocal
 	}, "local observer exited")
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventWatchStopped
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventWatchStopped
 	}, "watch stopped")
 }
 
@@ -278,33 +282,33 @@ func TestRunWatch_UploadOnly_StartsRemoteObserver(t *testing.T) {
 
 	var deltaCalls atomic.Int32
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			deltaCalls.Add(1)
-			return deltaPageWithItems(nil, "token-1"), nil
+			return syncfixture.DeltaPageWithItems(nil, "token-1"), nil
 		},
 	}
 
 	eng, _ := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
 
-	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, WatchOptions{
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, WatchOptions{
 		PollInterval: 50 * time.Millisecond,
 		Debounce:     10 * time.Millisecond,
 	})
 
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}, "local observer started")
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 
 	assert.Positive(t, deltaCalls.Load(), "upload-only watch should still issue delta calls")
-	assert.True(t, recorder.findEvent(func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverRemote
+	assert.True(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
 	}), "upload-only watch must start a remote observer")
 }
 
@@ -319,8 +323,8 @@ func TestWatchRuntime_HandleMaintenanceTick_EmitsDebugEventWithoutSQLiteProbe(t 
 
 	testWatchRuntime(t, eng).handleMaintenanceTick(ctx)
 
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventMaintenanceTickHandled
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventMaintenanceTickHandled
 	}, "maintenance tick handled")
 }
 
@@ -329,11 +333,11 @@ func TestWatchRuntime_HandleMaintenanceTick_EmitsDebugEventWithoutSQLiteProbe(t 
 func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -342,16 +346,16 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 	content := "hello"
-	contentHash := hashContentQuickXor(t, content)
+	contentHash := syncfixture.HashContentQuickXor(t, content)
 
 	// Seed baseline with a synced file.
-	seedOutcomes := []ActionOutcome{{
-		Action:          ActionDownload,
+	seedOutcomes := []syncdomain.ActionOutcome{{
+		Action:          syncdomain.ActionDownload,
 		Success:         true,
 		Path:            "already-synced.txt",
 		DriveID:         driveID,
 		ItemID:          "item-as",
-		ItemType:        ItemTypeFile,
+		ItemType:        syncdomain.ItemTypeFile,
 		RemoteHash:      contentHash,
 		LocalHash:       contentHash,
 		LocalSize:       5,
@@ -360,17 +364,17 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 		RemoteSizeKnown: true,
 	}}
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "")
-	writeLocalFile(t, syncRoot, "already-synced.txt", content)
+	syncfixture.WriteLocalFile(t, syncRoot, "already-synced.txt", content)
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err, "Load")
 
 	setupWatchEngine(t, eng)
-	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []ObservedItem{{
+	require.NoError(t, testWatchRuntime(t, eng).commitObservedItems(ctx, []syncdomain.ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "item-as",
 		Path:     "already-synced.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     contentHash,
 		Size:     5,
 	}}, ""))
@@ -378,8 +382,8 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 	rt := testWatchRuntime(t, eng)
 	applied, err := rt.runSteadyStateReplan(ctx, &watchPipeline{
 		bl:   bl,
-		mode: SyncBidirectional,
-	}, DirtyBatch{})
+		mode: syncdomain.SyncBidirectional,
+	}, syncobserve.DirtyBatch{})
 	require.NoError(t, err)
 	assert.True(t, applied)
 	assert.Empty(t, rt.currentOutbox())
@@ -393,11 +397,11 @@ func TestRunWatch_ProcessBatch_EmptyPlan(t *testing.T) {
 func TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -415,8 +419,8 @@ func TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare(t *t
 
 	err = rt.handleWatchReplanReady(ctx, &watchPipeline{
 		bl:   bl,
-		mode: SyncBidirectional,
-	}, DirtyBatch{})
+		mode: syncdomain.SyncBidirectional,
+	}, syncobserve.DirtyBatch{})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox())
 	assert.True(t, rt.hasPendingReplan())
@@ -432,11 +436,11 @@ func TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare(t *t
 func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -445,33 +449,33 @@ func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
 
-	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, WatchOptions{
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncDownloadOnly, WatchOptions{
 		PollInterval: 1 * time.Hour,
 		Debounce:     10 * time.Millisecond,
 	})
 
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	// Wait for the local observer itself: canceling as soon as the remote one
 	// starts raced its startup (the remote start's state read saw the
 	// cancellation and the runtime stopped before the local observer began).
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}, "local observer started")
 
 	// Create a local file. Download-only still observes it, but upload actions
 	// remain suppressed by mode admission.
-	writeLocalFile(t, syncRoot, "local-only.txt", "should-be-ignored")
+	syncfixture.WriteLocalFile(t, syncRoot, "local-only.txt", "should-be-ignored")
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 
 	bl, err := eng.baseline.Load(context.Background())
 	require.NoError(t, err)
 	_, found := bl.GetByPath("local-only.txt")
 	assert.False(t, found, "download-only watch mode must ignore local-only files created after bootstrap")
-	assert.True(t, recorder.findEvent(func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	assert.True(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}), "download-only watch must start a local observer")
 }
 
@@ -483,11 +487,11 @@ func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -499,21 +503,21 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "subdir"), 0o750))
 
 	// Inject a watcher factory that returns ENOSPC after the first Add (root).
-	watcher := newEnospcWatcher(1)
-	eng.localWatcherFactory = func() (FsWatcher, error) {
+	watcher := syncfixture.NewEnospcWatcher(1)
+	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
 		return watcher, nil
 	}
 
-	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, WatchOptions{
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, WatchOptions{
 		PollInterval: 100 * time.Millisecond, // short for fast test
 		Debounce:     10 * time.Millisecond,
 	})
 
-	receiveWithin(t, watcher.Failures(), "the local watcher to hit ENOSPC")
+	syncfixture.ReceiveWithin(t, watcher.Failures(), "the local watcher to hit ENOSPC")
 
 	// RunWatch returns nil (clean shutdown), not an "all observers exited" error.
 	cancel()
-	require.NoError(t, receiveWithin(t, done, "RunWatch to return after cancellation"),
+	require.NoError(t, syncfixture.ReceiveWithin(t, done, "RunWatch to return after cancellation"),
 		"RunWatch should return nil on clean shutdown with fallback polling")
 }
 
@@ -521,60 +525,60 @@ func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {
 func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
+	mock := &syncfixture.EngineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
 
-	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 
 	ctx := t.Context()
-	setTestBlockScope(t, eng, &BlockScope{
-		Key:           SKService(),
+	setTestBlockScope(t, eng, &syncdomain.BlockScope{
+		Key:           syncdomain.SKService(),
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   eng.nowFunc().Add(5 * time.Second),
 	})
-	_, err := eng.baseline.RecordBlockedRetryWork(ctx, testRetryWorkKey("held.txt", "", ActionUpload), SKService())
+	_, err := eng.baseline.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("held.txt", "", syncdomain.ActionUpload), syncdomain.SKService())
 	require.NoError(t, err)
 
-	_, err = eng.baseline.RecordRetryWorkFailure(ctx, testRetryWorkFailure("retry.txt", "", ActionDownload), func(_ int) time.Duration {
+	_, err = eng.baseline.RecordRetryWorkFailure(ctx, syncfixture.TestRetryWorkFailure("retry.txt", "", syncdomain.ActionDownload), func(_ int) time.Duration {
 		return 5 * time.Second
 	})
 	require.NoError(t, err)
-	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}, "local observer started")
 
 	cancel()
-	recorder.waitUntilSeenOrExit(t, done, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventShutdownStarted
+	recorder.WaitUntilSeenOrExit(t, done, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventShutdownStarted
 	}, "shutdown started")
 
 	clock.Advance(10 * time.Second)
-	require.NoError(t, receiveWithin(t, done, "the watch loop to exit once its timers were advanced"))
+	require.NoError(t, syncfixture.ReceiveWithin(t, done, "the watch loop to exit once its timers were advanced"))
 
-	recorder.requireOrderedSubsequence(t, []func(EngineDebugEvent) bool{
-		func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	recorder.RequireOrderedSubsequence(t, []func(syncdomain.EngineDebugEvent) bool{
+		func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 		},
-		func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventShutdownStarted
+		func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventShutdownStarted
 		},
-		func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventWatchStopped
+		func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventWatchStopped
 		},
 	}, "local observer start, shutdown, and watch stop should occur in order")
-	for _, forbidden := range []EngineDebugEventType{
-		EngineDebugEventRetryTimerFired,
-		EngineDebugEventRetryHeldReleaseStarted,
-		EngineDebugEventTrialTimerFired,
-		EngineDebugEventTrialHeldReleaseStarted,
+	for _, forbidden := range []syncdomain.EngineDebugEventType{
+		syncdomain.EngineDebugEventRetryTimerFired,
+		syncdomain.EngineDebugEventRetryHeldReleaseStarted,
+		syncdomain.EngineDebugEventTrialTimerFired,
+		syncdomain.EngineDebugEventTrialHeldReleaseStarted,
 	} {
-		recorder.requireNoEventAfter(t, func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventShutdownStarted
-		}, func(event EngineDebugEvent) bool {
+		recorder.RequireNoEventAfter(t, func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventShutdownStarted
+		}, func(event syncdomain.EngineDebugEvent) bool {
 			return event.Type == forbidden
 		}, fmt.Sprintf("%s must not occur after shutdown starts", forbidden))
 	}
@@ -583,7 +587,7 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 func installTickerCreatedSignal(eng *testEngine, interval time.Duration) <-chan struct{} {
 	tickerCreated := make(chan struct{})
 	var tickerCreatedOnce atomic.Bool
-	observeEngineClock(eng.Engine).onNewTicker = func(nextInterval time.Duration) {
+	observeEngineClock(eng.Engine).OnNewTicker = func(nextInterval time.Duration) {
 		if nextInterval == interval && tickerCreatedOnce.CompareAndSwap(false, true) {
 			close(tickerCreated)
 		}
@@ -595,7 +599,7 @@ func installTickerCreatedSignal(eng *testEngine, interval time.Duration) <-chan 
 func installAfterFuncCreatedSignal(eng *testEngine, delay time.Duration) <-chan struct{} {
 	timerCreated := make(chan struct{})
 	var timerCreatedOnce atomic.Bool
-	observeEngineClock(eng.Engine).onAfterFunc = func(nextDelay time.Duration) {
+	observeEngineClock(eng.Engine).OnAfterFunc = func(nextDelay time.Duration) {
 		if nextDelay == delay && timerCreatedOnce.CompareAndSwap(false, true) {
 			close(timerCreated)
 		}
@@ -612,88 +616,88 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 	refreshReleased := make(chan struct{})
 	var refreshStartedOnce atomic.Bool
 	var deltaCalls atomic.Int32
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			call := deltaCalls.Add(1)
 			if call == 1 {
-				return deltaPageWithItems([]graph.Item{
-					{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
+				return syncfixture.DeltaPageWithItems([]graph.Item{
+					{ID: "root", IsRoot: true, DriveID: driveid.New(syncfixture.EngineTestDriveID)},
 				}, "bootstrap-token"), nil
 			}
 			if refreshStartedOnce.CompareAndSwap(false, true) {
 				close(refreshStarted)
 			}
 			<-refreshReleased
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
-				{ID: "late-item", Name: "late.txt", ParentID: "root", DriveID: driveid.New(engineTestDriveID), Size: 10, QuickXorHash: "late-hash"},
+			return syncfixture.DeltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveid.New(syncfixture.EngineTestDriveID)},
+				{ID: "late-item", Name: "late.txt", ParentID: "root", DriveID: driveid.New(syncfixture.EngineTestDriveID), Size: 10, QuickXorHash: "late-hash"},
 			}, "refresh-token"), nil
 		},
 	}
 	eng, _ := newTestEngine(t, mock)
-	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	watcher := newSignalingWatcher()
-	eng.localWatcherFactory = func() (FsWatcher, error) {
+	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
 		return watcher, nil
 	}
 	refreshTimerCreated := installAfterFuncCreatedSignal(eng, 15*time.Minute)
-	saveObservationCursorForTest(t, eng.baseline, t.Context(), engineTestDriveID, "seed-token")
+	syncstoretest.SaveObservationCursorForTest(t, eng.baseline, t.Context(), syncfixture.EngineTestDriveID, "seed-token")
 	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(
 		t.Context(),
-		driveid.New(engineTestDriveID),
-		clock.Now().Add(-FullRemoteRefreshInterval+15*time.Minute),
-		RemoteObservationModeDelta,
+		driveid.New(syncfixture.EngineTestDriveID),
+		clock.Now().Add(-syncdomain.FullRemoteRefreshInterval+15*time.Minute),
+		syncdomain.RemoteObservationModeDelta,
 	))
 
 	watchCtx, cancel := context.WithCancel(t.Context())
-	recorder := attachDebugEventRecorderWithHook(eng, func(event EngineDebugEvent) {
-		if event.Type == EngineDebugEventRemoteRefreshCommitted {
+	recorder := attachDebugEventRecorderWithHook(eng, func(event syncdomain.EngineDebugEvent) {
+		if event.Type == syncdomain.EngineDebugEventRemoteRefreshCommitted {
 			cancel()
 		}
 	})
 
 	// The watch runs on watchCtx, which the recorder's hook cancels.
-	_, done := runInBackground(t, watchCtx, func(ctx context.Context) error {
-		return eng.RunWatch(ctx, SyncUploadOnly, quietWatchOptions())
+	_, done := syncfixture.RunInBackground(t, watchCtx, func(ctx context.Context) error {
+		return eng.RunWatch(ctx, syncdomain.SyncUploadOnly, quietWatchOptions())
 	})
 
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}, "local observer started")
-	receiveWithin(t, watcher.Added(), "local watch setup to add a watcher")
-	receiveWithin(t, refreshTimerCreated, "the refresh timer to be created")
+	syncfixture.ReceiveWithin(t, watcher.Added(), "local watch setup to add a watcher")
+	syncfixture.ReceiveWithin(t, refreshTimerCreated, "the refresh timer to be created")
 
 	clock.Advance(15 * time.Minute)
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventRemoteRefreshStarted
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventRemoteRefreshStarted
 	}, "full remote refresh started")
-	receiveWithin(t, refreshStarted, "the full remote refresh's delta fetch to start")
+	syncfixture.ReceiveWithin(t, refreshStarted, "the full remote refresh's delta fetch to start")
 
 	close(refreshReleased)
 
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventShutdownStarted
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventShutdownStarted
 	}, "shutdown started")
 
-	require.NoError(t, receiveWithin(t, done, "the watch loop to exit after shutdown during committed refresh application"))
+	require.NoError(t, syncfixture.ReceiveWithin(t, done, "the watch loop to exit after shutdown during committed refresh application"))
 
-	recorder.requireOrderedSubsequence(t, []func(EngineDebugEvent) bool{
-		func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventRemoteRefreshStarted
+	recorder.RequireOrderedSubsequence(t, []func(syncdomain.EngineDebugEvent) bool{
+		func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventRemoteRefreshStarted
 		},
-		func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventRemoteRefreshApplied
+		func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventRemoteRefreshApplied
 		},
-		func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventShutdownStarted
+		func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventShutdownStarted
 		},
-		func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventWatchStopped
+		func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventWatchStopped
 		},
 	}, "loop-owned refresh application should complete before shutdown drains the watch loop")
-	recorder.requireEventCount(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventRemoteRefreshDroppedOnShutdown
+	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventRemoteRefreshDroppedOnShutdown
 	}, 0, "applied full remote refresh batches should not later be dropped as pending shutdown work")
 }
 
@@ -701,10 +705,10 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -714,42 +718,42 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "subdir"), 0o750))
 	recorder := attachDebugEventRecorder(eng)
 
-	clock := newManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC))
 	clock.SetJitter(5 * time.Second)
 	installManualClockForTestEngine(eng, clock)
 
 	sleepStarted := make(chan struct{})
 	var sleepStartedOnce atomic.Bool
-	observeEngineClock(eng.Engine).onSleep = func(time.Duration) {
+	observeEngineClock(eng.Engine).OnSleep = func(time.Duration) {
 		if sleepStartedOnce.CompareAndSwap(false, true) {
 			close(sleepStarted)
 		}
 	}
 
-	watcher := newEnospcWatcher(1)
-	eng.localWatcherFactory = func() (FsWatcher, error) {
+	watcher := syncfixture.NewEnospcWatcher(1)
+	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
 		return watcher, nil
 	}
-	degradedInterval := LocalWatchHealthySafetyScanInterval
+	degradedInterval := syncobserve.LocalWatchHealthySafetyScanInterval
 	tickerCreated := installTickerCreatedSignal(eng, degradedInterval)
 
-	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, WatchOptions{
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, WatchOptions{
 		PollInterval: 1 * time.Second,
 		Debounce:     5 * time.Millisecond,
 	})
 
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverFallbackStarted
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverFallbackStarted
 	}, "fallback started")
-	receiveWithin(t, tickerCreated, "the fallback ticker to be created")
+	syncfixture.ReceiveWithin(t, tickerCreated, "the fallback ticker to be created")
 	clock.Advance(degradedInterval)
-	receiveWithin(t, sleepStarted, "the fallback jitter sleep to start")
+	syncfixture.ReceiveWithin(t, sleepStarted, "the fallback jitter sleep to start")
 
 	// The sleep is a manual clock's: only cancellation can end it.
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverFallbackStopped
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverFallbackStopped
 	}, "fallback stopped")
 }
 
@@ -763,14 +767,14 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
+	mock := &syncfixture.EngineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 
 	// Create a plan with mismatched Actions and Deps.
-	plan := &ActionPlan{
-		Actions: []Action{
-			{Type: ActionDownload, Path: "file.txt"},
-			{Type: ActionDownload, Path: "file2.txt"},
+	plan := &syncdomain.ActionPlan{
+		Actions: []syncdomain.Action{
+			{Type: syncdomain.ActionDownload, Path: "file.txt"},
+			{Type: syncdomain.ActionDownload, Path: "file2.txt"},
 		},
 		Deps: [][]int{{1}}, // only 1 dep entry for 2 actions
 	}
@@ -798,7 +802,7 @@ func TestExecutePlan_ActionsDepsLengthMismatch(t *testing.T) {
 func TestEngine_Close_CleansStaleAndIsIdempotent(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
+	mock := &syncfixture.EngineMockClient{}
 
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
@@ -808,8 +812,8 @@ func TestEngine_Close_CleansStaleAndIsIdempotent(t *testing.T) {
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 	require.NoError(t, os.MkdirAll(dataDir, 0o750))
 
-	logger := testLogger(t)
-	driveID := driveid.New(engineTestDriveID)
+	logger := syncfixture.TestLogger(t)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
 	eng, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
@@ -829,8 +833,8 @@ func TestEngine_Close_CleansStaleAndIsIdempotent(t *testing.T) {
 	// only; watch observers now belong to the runtime and are cleaned up by the
 	// watch coordinator, not by Engine.Close.
 	setupWatchEngine(t, testEng)
-	testWatchRuntime(t, testEng).resources.remoteObs = &RemoteObserver{}
-	testWatchRuntime(t, testEng).resources.localObs = &LocalObserver{}
+	testWatchRuntime(t, testEng).resources.remoteObs = &syncobserve.RemoteObserver{}
+	testWatchRuntime(t, testEng).resources.localObs = &syncobserve.LocalObserver{}
 
 	// First Close should succeed.
 	require.NoError(t, eng.Close(t.Context()))

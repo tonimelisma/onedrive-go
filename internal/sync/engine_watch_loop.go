@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // runWatchUntilQuiescent drives the bootstrap watch loop until all work due
@@ -14,15 +18,15 @@ import (
 func (rt *watchRuntime) runWatchUntilQuiescent(
 	ctx context.Context,
 	p *watchPipeline,
-	initialOutbox []*TrackedAction,
+	initialOutbox []*syncdomain.TrackedAction,
 ) error {
 	ticker := rt.deps.clock.NewTicker(quiescenceLogInterval)
-	defer StopTicker(ticker)
+	defer syncdomain.StopTicker(ticker)
 
 	rt.enterBootstrap()
 	rt.replaceOutbox(initialOutbox)
 
-	return rt.runWatchLoop(ctx, p, TickerChan(ticker))
+	return rt.runWatchLoop(ctx, p, syncdomain.TickerChan(ticker))
 }
 
 // runWatchLoop owns steady-state watch execution. The same goroutine handles
@@ -178,7 +182,7 @@ func (rt *watchRuntime) runPendingWatchReplan(
 	if !ok {
 		return false, nil
 	}
-	rt.emitRuntimeDebugEvent(EngineDebugEventRunningActionsDrained, "", 0, pendingStartedAt)
+	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventRunningActionsDrained, "", 0, pendingStartedAt)
 
 	applied, err := rt.runSteadyStateReplan(ctx, p, batch)
 	if err != nil {
@@ -272,14 +276,14 @@ func (rt *watchRuntime) handleWatchDispatch(next int) {
 	rt.loop.createAttempts.dispatched(rt.outboxEntry(next))
 	rt.loop.outbox = rt.markDispatched(rt.loop.outbox, next)
 	if postReplanDispatch {
-		rt.emitRuntimeDebugEvent(EngineDebugEventFirstPostReplanDispatch, "", 0, time.Time{})
+		rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventFirstPostReplanDispatch, "", 0, time.Time{})
 	}
 }
 
 func (rt *watchRuntime) handleWatchReplanSignal(
 	ctx context.Context,
 	p *watchPipeline,
-	batch DirtyBatch,
+	batch syncobserve.DirtyBatch,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -296,7 +300,7 @@ func (rt *watchRuntime) handleWatchReplanSignal(
 func (rt *watchRuntime) handleWatchCompletionSignal(
 	ctx context.Context,
 	p *watchPipeline,
-	completion *ActionCompletion,
+	completion *syncdomain.ActionCompletion,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -308,7 +312,7 @@ func (rt *watchRuntime) handleWatchCompletionSignal(
 
 func (rt *watchRuntime) handleWatchLocalObservationBatchSignal(
 	ctx context.Context,
-	batch *LocalObservation,
+	batch *syncobserve.LocalObservation,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -321,7 +325,7 @@ func (rt *watchRuntime) handleWatchLocalObservationBatchSignal(
 
 func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	ctx context.Context,
-	event *ProtectedRootEvent,
+	event *syncshortcut.ProtectedRootEvent,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -349,7 +353,7 @@ func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	if err != nil {
 		return false, fmt.Errorf("sync: read shortcut roots after protected root event: %w", err)
 	}
-	return false, rt.engine.shortcutChildWorkSink(ctx, ShortcutChildWorkSnapshotFromRootsWithParentRoot(
+	return false, rt.engine.shortcutChildWorkSink(ctx, syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 		rt.engine.shortcutNamespaceID,
 		rt.engine.syncRoot,
 		rt.engine.contentFilter,
@@ -359,7 +363,7 @@ func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 
 func (rt *watchRuntime) handleWatchRemoteBatchSignal(
 	ctx context.Context,
-	batch *RemoteObservationBatch,
+	batch *syncobserve.RemoteObservationBatch,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -372,7 +376,7 @@ func (rt *watchRuntime) handleWatchRemoteBatchSignal(
 
 func (rt *watchRuntime) handleWatchRefreshResultSignal(
 	ctx context.Context,
-	result *RemoteObservationBatch,
+	result *syncobserve.RemoteObservationBatch,
 	ok bool,
 ) (bool, error) {
 	if !ok {
@@ -409,14 +413,14 @@ func (rt *watchRuntime) handleWatchHeldReleaseSignal(
 	return rt.handleWatchHeldRelease(ctx, p, trial)
 }
 
-func (rt *watchRuntime) appendReadyFrontier(ready []*TrackedAction) error {
+func (rt *watchRuntime) appendReadyFrontier(ready []*syncdomain.TrackedAction) error {
 	if rt.hasPendingReplan() {
 		rt.retireReadyFrontierForPendingReplan(ready)
 		return nil
 	}
 	nextOutbox := append(rt.currentOutbox(), ready...)
 	rt.replaceOutbox(nextOutbox)
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventReadyFrontierAppended})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventReadyFrontierAppended})
 	return nil
 }
 
@@ -426,7 +430,7 @@ func (rt *watchRuntime) releaseHeldFrontier(
 	trial bool,
 ) error {
 	var (
-		released []*TrackedAction
+		released []*syncdomain.TrackedAction
 		err      error
 	)
 	if trial {
@@ -472,7 +476,7 @@ func (rt *watchRuntime) logObserverError(ctx context.Context, obsErr error) {
 	if obsErr == nil {
 		return
 	}
-	if RunEnded(ctx, obsErr) {
+	if syncdomain.RunEnded(ctx, obsErr) {
 		rt.deps.logger.Debug("observer error during shutdown", slog.Any("error", obsErr))
 		return
 	}
@@ -501,7 +505,7 @@ func observerExitError(observerName string, err error) error {
 // every entry's target full under the slow start (R-6.8.25; a completion
 // wakes the loop), or every due entry parked on its admission instant
 // (R-6.8.24; the admit timer wakes the loop).
-func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *TrackedAction, int) {
+func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *syncdomain.TrackedAction, int) {
 	outbox := rt.currentOutbox()
 	if len(outbox) == 0 {
 		rt.stopAdmitTimer()
@@ -528,7 +532,7 @@ func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *TrackedAction, int) 
 func (rt *watchRuntime) handleWatchReplanReady(
 	ctx context.Context,
 	p *watchPipeline,
-	batch DirtyBatch,
+	batch syncobserve.DirtyBatch,
 ) error {
 	if !rt.canPrepareNow() {
 		rt.queuePendingReplan(batch)
@@ -548,7 +552,7 @@ func (rt *watchRuntime) handleWatchReplanReady(
 func (rt *watchRuntime) handleWatchActionCompletion(
 	ctx context.Context,
 	p *watchPipeline,
-	completion *ActionCompletion,
+	completion *syncdomain.ActionCompletion,
 ) error {
 	rt.loop.createAttempts.completed(completion, rt.deps.now())
 	hadPendingReplan := rt.hasPendingReplan()

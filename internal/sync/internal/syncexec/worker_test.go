@@ -1,0 +1,1081 @@
+package syncexec
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+)
+
+// ---------------------------------------------------------------------------
+// Worker pool mock types (prefixed to avoid collision with executor_test.go)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+func newWorkerTestSetup(t *testing.T) (
+	*ExecutorConfig, *syncstore.SyncStore, string,
+) {
+	t.Helper()
+
+	mgr := syncstoretest.NewTestManager(t)
+
+	syncRoot := t.TempDir()
+	driveID := driveid.New("0000000000000001")
+	logger := synctest.TestLogger(t)
+	syncTree, err := synctree.Open(syncRoot)
+	require.NoError(t, err)
+
+	items := &syncfixture.WorkerMockItemClient{
+		CreateFolderFn: func(_ context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
+			return &graph.Item{ID: "created-" + name, Name: name}, nil
+		},
+		DeleteItemFn: func(_ context.Context, _ driveid.ID, _ string) error {
+			return nil
+		},
+	}
+	dl := &syncfixture.WorkerMockDownloader{
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write([]byte("file-content"))
+			return int64(n), err
+		},
+	}
+	ul := &syncfixture.WorkerMockUploader{}
+
+	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
+	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
+	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	return cfg, mgr, syncRoot
+}
+
+// testDepGraphHelper wraps a DepGraph for worker tests. Add sends
+// dispatchable actions to dispatchCh; drainAndComplete calls dg.Complete and
+// sends newly-dispatchable dependents to dispatchCh.
+type testDepGraphHelper struct {
+	dg         *DepGraph
+	dispatchCh chan *syncdomain.TrackedAction
+	settledCh  chan struct{}
+	settleOnce sync.Once
+}
+
+func newTestDepGraphHelper(t *testing.T) *testDepGraphHelper {
+	t.Helper()
+	return &testDepGraphHelper{
+		dg:         NewDepGraph(synctest.TestLogger(t)),
+		dispatchCh: make(chan *syncdomain.TrackedAction, 64),
+		settledCh:  make(chan struct{}),
+	}
+}
+
+// Add wraps DepGraph.Add and sends ready actions to dispatchCh.
+func (h *testDepGraphHelper) Add(action *syncdomain.Action, id int64, deps []int64) {
+	ta := h.dg.Add(action, id, deps)
+	if ta != nil {
+		h.dispatchCh <- ta
+	}
+}
+
+// Dispatch returns the dispatch channel for WorkerPool.
+func (h *testDepGraphHelper) Dispatch() <-chan *syncdomain.TrackedAction { return h.dispatchCh }
+
+// CompleteCh returns a helper-owned channel that closes once the synthetic
+// test graph has no in-flight nodes left. Production runtime quiescence is
+// engine-owned; worker tests only need a narrow settle signal.
+func (h *testDepGraphHelper) CompleteCh() <-chan struct{} { return h.settledCh }
+
+func (h *testDepGraphHelper) Complete(id int64) ([]*syncdomain.TrackedAction, bool) {
+	ready, ok := h.dg.Complete(id)
+	if ok && h.dg.InFlightCount() == 0 {
+		h.settleOnce.Do(func() { close(h.settledCh) })
+	}
+
+	return ready, ok
+}
+
+// drainAndComplete drains the action completion channel, calls dg.Complete
+// for each completion, and sends newly-ready dependents to dispatchCh. Returns
+// the collected completions. This simulates the engine's drain goroutine.
+func (h *testDepGraphHelper) drainAndComplete(completions <-chan syncdomain.ActionCompletion) []syncdomain.ActionCompletion {
+	var collected []syncdomain.ActionCompletion
+	for r := range completions {
+		collected = append(collected, r)
+		ready, _ := h.Complete(r.ActionID)
+		for _, ta := range ready {
+			h.dispatchCh <- ta
+		}
+	}
+	return collected
+}
+
+// runPoolWithDrain starts the pool, drains completions in a goroutine (calling
+// Complete on each), waits for all actions to finish, then stops the pool
+// and returns the collected completions.
+func runPoolWithDrain(t *testing.T, ctx context.Context, pool *WorkerPool, dgh *testDepGraphHelper) []syncdomain.ActionCompletion {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	pool.Start(ctx, 4)
+
+	var results []syncdomain.ActionCompletion
+	done := make(chan struct{})
+	go func() {
+		results = dgh.drainAndComplete(pool.Completions())
+		close(done)
+	}()
+
+	syncfixture.ReceiveWithin(t, dgh.CompleteCh(), "every action to complete")
+	cancel()
+	pool.Stop()
+	syncfixture.ReceiveWithin(t, done, "the completions drain to finish")
+	return results
+}
+
+// countResults counts succeeded and failed completions.
+func countResults(results []syncdomain.ActionCompletion) (succeeded, failed int) {
+	for i := range results {
+		r := &results[i]
+		if r.Success {
+			succeeded++
+		} else {
+			failed++
+		}
+	}
+	return succeeded, failed
+}
+
+func requireCompletionsChannelClosed(t *testing.T, pool *WorkerPool, reason string) {
+	t.Helper()
+
+	select {
+	case _, ok := <-pool.Completions():
+		assert.False(t, ok, reason)
+	case <-time.After(syncfixture.EventWait):
+		require.Fail(t, reason)
+	}
+}
+
+func TestWorkerPool_ClosedDispatchChannelClosesCompletions(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	dispatchCh := make(chan *syncdomain.TrackedAction)
+	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+
+	pool.Start(t.Context(), 1)
+	close(dispatchCh)
+	requireCompletionsChannelClosed(t, pool, "completions channel should close after workers observe a closed dispatch channel")
+
+	pool.Stop()
+}
+
+func TestWorkerPool_ContextCancellationClosesCompletions(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	dispatchCh := make(chan *syncdomain.TrackedAction)
+	ctx, cancel := context.WithCancel(t.Context())
+	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+
+	pool.Start(ctx, 1)
+	cancel()
+	requireCompletionsChannelClosed(t, pool, "completions channel should close after context cancellation")
+
+	pool.Stop()
+}
+
+func TestWorkerPool_StopIsIdempotentAfterCompletionsClose(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	dispatchCh := make(chan *syncdomain.TrackedAction)
+	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+
+	pool.Start(t.Context(), 1)
+	close(dispatchCh)
+
+	select {
+	case _, ok := <-pool.Completions():
+		assert.False(t, ok, "completions channel should close after dispatch channel close")
+	case <-time.After(syncfixture.EventWait):
+		require.Fail(t, "completions channel did not close after dispatch channel close")
+	}
+
+	pool.Stop()
+	pool.Stop()
+}
+
+func TestWorkerPool_SendResultDropsWhenContextCancellationWins(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	dispatchCh := make(chan *syncdomain.TrackedAction)
+	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+
+	// Saturate the completions buffer so sendResult cannot complete before shutdown.
+	pool.completions <- syncdomain.ActionCompletion{Path: "buffered.txt", ActionID: 1}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	pool.sendResult(ctx, &syncdomain.TrackedAction{
+		ID: 2,
+		Action: syncdomain.Action{
+			Type: syncdomain.ActionUpload,
+			Path: "dropped.txt",
+		},
+	}, nil, fmt.Errorf("shutdown won"))
+
+	require.Len(t, pool.completions, 1, "canceled sendResult should not enqueue another item")
+
+	result := <-pool.completions
+	assert.Equal(t, "buffered.txt", result.Path)
+	assert.EqualValues(t, 1, result.ActionID)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+// Validates: R-5.1.1
+func TestWorkerPool_FolderCreate(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
+	ctx := t.Context()
+
+	actions := []syncdomain.Action{
+		{
+			Type:       syncdomain.ActionFolderCreate,
+			Path:       "Documents",
+			DriveID:    driveid.New("0000000000000001"),
+			ItemID:     "folder-doc",
+			CreateSide: syncdomain.CreateLocal,
+			View: &syncdomain.PathView{
+				Remote: &syncdomain.RemoteState{
+					ItemID:   "folder-doc",
+					DriveID:  driveid.New("0000000000000001"),
+					ItemType: syncdomain.ItemTypeFolder,
+				},
+			},
+		},
+	}
+
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
+
+	succeeded, failed := countResults(results)
+	assert.Equal(t, 0, failed, "failed actions")
+	assert.Equal(t, 1, succeeded)
+
+	// Verify directory was created.
+	info, statErr := os.Stat(filepath.Join(syncRoot, "Documents"))
+	require.NoError(t, statErr, "stat Documents")
+	assert.True(t, info.IsDir(), "Documents should be a directory")
+
+	// Verify baseline was updated.
+	bl, loadErr := mgr.Load(ctx)
+	require.NoError(t, loadErr)
+
+	_, ok := bl.GetByPath("Documents")
+	assert.True(t, ok, "baseline entry not found for Documents")
+}
+
+// Validates: R-5.1
+func TestWorkerPool_DependencyChain(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
+	ctx := t.Context()
+
+	// Folder create → then download into that folder.
+	actions := []syncdomain.Action{
+		{
+			Type:       syncdomain.ActionFolderCreate,
+			Path:       "NewDir",
+			DriveID:    driveid.New("0000000000000001"),
+			CreateSide: syncdomain.CreateLocal,
+			View: &syncdomain.PathView{
+				Path: "NewDir",
+				Remote: &syncdomain.RemoteState{
+					ItemID:   "newdir-id",
+					DriveID:  driveid.New("0000000000000001"),
+					ItemType: syncdomain.ItemTypeFolder,
+				},
+			},
+		},
+		{
+			Type:    syncdomain.ActionDownload,
+			Path:    "NewDir/file.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "file-id",
+			View:    &syncdomain.PathView{Path: "NewDir/file.txt"},
+		},
+	}
+
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+	dgh.Add(&actions[1], 1, []int64{0})
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
+
+	succeeded, failed := countResults(results)
+	assert.Equal(t, 0, failed, "failed actions")
+	assert.Equal(t, 2, succeeded)
+
+	// Verify file was downloaded.
+	content, readErr := localpath.ReadFile(filepath.Join(syncRoot, "NewDir", "file.txt"))
+	require.NoError(t, readErr, "read file")
+	assert.Equal(t, "file-content", string(content))
+}
+
+// Validates: R-2.8.3
+func TestWorkerPool_StopCancelsWork(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	ctx := t.Context()
+
+	actions := []syncdomain.Action{
+		{
+			Type:    syncdomain.ActionDownload,
+			Path:    "slow.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "slow-id",
+			View: &syncdomain.PathView{
+				Remote: &syncdomain.RemoteState{
+					ItemID:  "slow-id",
+					DriveID: driveid.New("0000000000000001"),
+					Size:    100,
+				},
+			},
+		},
+	}
+
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+
+	started := make(chan struct{})
+	cfg.SetDownloads(&syncfixture.WorkerMockDownloader{
+		DownloadFn: func(ctx context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			select {
+			case <-started:
+			default:
+				close(started)
+			}
+			<-ctx.Done()
+			return 0, ctx.Err()
+		},
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool.Start(ctx, 4)
+
+	select {
+	case <-started:
+	case <-time.After(syncfixture.EventWait):
+		require.Fail(t, "timeout waiting for worker download start")
+	}
+
+	// Stop should not hang.
+	done := make(chan struct{})
+	go func() {
+		pool.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success.
+	case <-time.After(syncfixture.EventWait):
+		require.Fail(t, "Stop() did not return within timeout")
+	}
+}
+
+// Validates: R-5.1
+func TestWorkerPool_ResultChannel(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
+	ctx := t.Context()
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "result-test.txt"), []byte("delete me"), 0o600))
+
+	actions := []syncdomain.Action{
+		{
+			Type:    syncdomain.ActionLocalDelete,
+			Path:    "result-test.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "del-id",
+			View:    &syncdomain.PathView{Baseline: syncedBaselineFor(t, filepath.Join(syncRoot, "result-test.txt"))},
+		},
+	}
+
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 42, nil)
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
+
+	// Verify result for the action.
+	var found bool
+	for _, r := range results {
+		if r.Path == "result-test.txt" {
+			assert.True(t, r.Success)
+			assert.Equal(t, int64(42), r.ActionID)
+			found = true
+		}
+	}
+	require.True(t, found, "expected result for result-test.txt in channel")
+}
+
+// Validates: R-6.8.9
+// TestWorkerPool_FailedOutcome verifies that when an action execution fails,
+// the worker reports the failure via the result channel.
+func TestWorkerPool_FailedOutcome(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	ctx := t.Context()
+
+	// Configure a download mock that always fails.
+	cfg.SetDownloads(&syncfixture.WorkerMockDownloader{
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			return 0, fmt.Errorf("simulated download failure")
+		},
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+
+	actions := []syncdomain.Action{
+		{
+			Type:    syncdomain.ActionDownload,
+			Path:    "fail-me.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "fail-id",
+			View: &syncdomain.PathView{
+				Remote: &syncdomain.RemoteState{
+					ItemID:  "fail-id",
+					DriveID: driveid.New("0000000000000001"),
+					Size:    10,
+					Hash:    "somehash",
+				},
+			},
+		},
+	}
+
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
+
+	succeeded, failed := countResults(results)
+	assert.Equal(t, 0, succeeded)
+	assert.GreaterOrEqual(t, failed, 1, "expected at least one failure")
+
+	// Verify the failure details.
+	var foundFailure bool
+	for _, r := range results {
+		if !r.Success && r.Path == "fail-me.txt" {
+			foundFailure = true
+			assert.NotEmpty(t, r.ErrMsg)
+			require.Error(t, r.Err, "Err should carry the full error")
+		}
+	}
+	assert.True(t, foundFailure, "expected failure result for fail-me.txt")
+}
+
+// ---------------------------------------------------------------------------
+// Regression: B-090 — parent resolution via baseline (no createdFolders map)
+// ---------------------------------------------------------------------------
+
+// Validates: R-5.1.1
+// TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline verifies
+// that when action 0 creates a folder and action 1 uploads a file into that
+// folder, the upload resolves its parentID from the baseline.
+func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
+	ctx := t.Context()
+
+	var capturedParentID string
+
+	// Override uploader to capture the parentID used.
+	cfg.SetUploads(&syncfixture.WorkerMockUploader{
+		UploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+			capturedParentID = parentID
+
+			return &graph.Item{ID: "uploaded-into-folder", ETag: "e1"}, nil
+		},
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+
+	// Action 0: create folder "Uploads".
+	// Action 1: upload file "Uploads/doc.txt" into that folder.
+	actions := []syncdomain.Action{
+		{
+			Type:       syncdomain.ActionFolderCreate,
+			Path:       "Uploads",
+			DriveID:    driveid.New("0000000000000001"),
+			CreateSide: syncdomain.CreateLocal,
+			View: &syncdomain.PathView{
+				Remote: &syncdomain.RemoteState{
+					ItemID:   "uploads-folder-id",
+					DriveID:  driveid.New("0000000000000001"),
+					ItemType: syncdomain.ItemTypeFolder,
+				},
+			},
+		},
+		{
+			Type:    syncdomain.ActionUpload,
+			Path:    "Uploads/doc.txt",
+			DriveID: driveid.New("0000000000000001"),
+			View:    &syncdomain.PathView{Path: "Uploads/doc.txt"},
+		},
+	}
+
+	// Write the local file that will be uploaded.
+	absPath := filepath.Join(syncRoot, "Uploads", "doc.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(absPath), 0o700))
+	require.NoError(t, os.WriteFile(absPath, []byte("upload content"), 0o600))
+
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+	dgh.Add(&actions[1], 1, []int64{0})
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
+
+	succeeded, failed := countResults(results)
+	assert.Equal(t, 0, failed, "failed actions")
+	assert.Equal(t, 2, succeeded)
+
+	// The upload must have resolved its parent from the baseline entry committed
+	// by the folder-create action. For CreateSide=CreateLocal, folderOutcome uses
+	// action.View.Remote.ItemID ("uploads-folder-id") as the baseline ItemID.
+	assert.Equal(t, "uploads-folder-id", capturedParentID,
+		"upload parentID should be resolved from baseline after folder create")
+}
+
+// TestWorkerPool_PanicRecovery verifies that a panic in action execution
+// doesn't crash the process — the worker recovers and reports a failure
+// result. The pool completes normally.
+//
+// Validates: R-6.3.8
+func TestWorkerPool_PanicRecovery(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	ctx := t.Context()
+
+	// Configure a download mock that panics.
+	cfg.SetDownloads(&syncfixture.WorkerMockDownloader{
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			panic("intentional panic for testing")
+		},
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+
+	actions := []syncdomain.Action{
+		{
+			Type:    syncdomain.ActionDownload,
+			Path:    "panic-me.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "panic-id",
+			View: &syncdomain.PathView{
+				Remote: &syncdomain.RemoteState{
+					ItemID:  "panic-id",
+					DriveID: driveid.New("0000000000000001"),
+					Size:    10,
+				},
+			},
+		},
+	}
+
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	results := runPoolWithDrain(t, ctx, pool, dgh)
+
+	// If we got here, the panic was recovered — the process didn't crash.
+	_, failed := countResults(results)
+	assert.GreaterOrEqual(t, failed, 1, "panic should be recorded as failure")
+
+	// The failure names the action and the panic value.
+	var foundPanicResult bool
+	for _, r := range results {
+		if !r.Success && r.Path == "panic-me.txt" {
+			assert.Contains(t, r.ErrMsg, "internal error while syncing panic-me.txt: intentional panic for testing")
+			foundPanicResult = true
+		}
+	}
+	assert.True(t, foundPanicResult,
+		"expected panic failure result for panic-me.txt in result channel")
+}
+
+// ---------------------------------------------------------------------------
+// Worker→Engine ownership: worker never calls Complete (R-6.8.9)
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.8.9
+func TestWorker_NeverCallsComplete(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
+	ctx := t.Context()
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "test-no-complete.txt"), []byte("delete me"), 0o600))
+
+	actions := []syncdomain.Action{
+		{
+			Type:    syncdomain.ActionLocalDelete,
+			Path:    "test-no-complete.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "del-id",
+			View:    &syncdomain.PathView{Baseline: syncedBaselineFor(t, filepath.Join(syncRoot, "test-no-complete.txt"))},
+		},
+	}
+
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool.Start(ctx, 4)
+
+	// Read one completion from the channel — worker must send a completion.
+	var result syncdomain.ActionCompletion
+	select {
+	case r := <-pool.Completions():
+		result = r
+	case <-time.After(syncfixture.EventWait):
+		require.Fail(t, "timeout waiting for action completion")
+	}
+
+	// Worker sent the result but did NOT call Complete, so the helper settle
+	// signal must still be open while the graph action remains in flight.
+	select {
+	case <-dgh.CompleteCh():
+		require.Fail(t, "helper settle signal fired — worker must not call Complete")
+	default:
+		// Expected: settle signal stays open because Complete was not called.
+	}
+
+	assert.True(t, result.Success)
+	assert.Equal(t, "test-no-complete.txt", result.Path)
+	assert.Equal(t, int64(0), result.ActionID, "ActionID should match TrackedAction.ID")
+
+	// Now WE call Complete (simulating the engine), which should settle the
+	// helper graph.
+	_, _ = dgh.Complete(result.ActionID)
+
+	select {
+	case <-dgh.CompleteCh():
+		// Expected: settle signal fires after engine calls Complete.
+	case <-time.After(syncfixture.EventWait):
+		require.Fail(t, "helper settle signal did not fire after Complete")
+	}
+
+	pool.Stop()
+}
+
+// ---------------------------------------------------------------------------
+// ActionCompletion populates from TrackedAction (R-2.10.16, R-6.8.12)
+// ---------------------------------------------------------------------------
+
+// Validates: R-2.10.16, R-6.8.12
+func TestActionCompletion_PopulatesFromAction(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	ctx := t.Context()
+
+	actions := []syncdomain.Action{
+		{
+			Type:    syncdomain.ActionLocalDelete,
+			Path:    "shared-action.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "del-id",
+			View:    &syncdomain.PathView{},
+		},
+	}
+
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 77, nil)
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool.Start(ctx, 4)
+
+	var result syncdomain.ActionCompletion
+	select {
+	case r := <-pool.Completions():
+		result = r
+	case <-time.After(syncfixture.EventWait):
+		require.Fail(t, "timeout waiting for action completion")
+	}
+
+	assert.Equal(t, "shared-action.txt", result.Path)
+	assert.Equal(t, driveid.New("0000000000000001"), result.DriveID)
+	assert.False(t, result.IsTrial, "should not be a trial action")
+	assert.Empty(t, result.TrialScopeKey, "no trial scope key")
+	assert.Equal(t, int64(77), result.ActionID, "ActionID should match TrackedAction.ID")
+
+	// Clean up.
+	_, _ = dgh.dg.Complete(result.ActionID)
+	pool.Stop()
+}
+
+// Validates: R-6.8.12
+func TestActionCompletion_HTTPStatusAndRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	ctx := t.Context()
+
+	// Configure a download mock that returns a 429 with Retry-After.
+	cfg.SetDownloads(&syncfixture.WorkerMockDownloader{
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+			return 0, &graph.GraphError{
+				StatusCode: 429,
+				Message:    "throttled",
+				RetryAfter: 30 * time.Second,
+			}
+		},
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+
+	actions := []syncdomain.Action{
+		{
+			Type:    syncdomain.ActionDownload,
+			Path:    "throttled.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "throttled-id",
+			View: &syncdomain.PathView{
+				Remote: &syncdomain.RemoteState{
+					ItemID:  "throttled-id",
+					DriveID: driveid.New("0000000000000001"),
+					Size:    10,
+				},
+			},
+		},
+	}
+
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool.Start(ctx, 4)
+
+	var result syncdomain.ActionCompletion
+	select {
+	case r := <-pool.Completions():
+		result = r
+	case <-time.After(syncfixture.EventWait):
+		require.Fail(t, "timeout waiting for action completion")
+	}
+
+	assert.False(t, result.Success)
+	assert.Equal(t, 429, result.HTTPStatus)
+	assert.Equal(t, 30*time.Second, result.RetryAfter,
+		"RetryAfter should be extracted from GraphError")
+
+	_, _ = dgh.dg.Complete(result.ActionID)
+	pool.Stop()
+}
+
+func TestExtractHTTPStatus_GraphError(t *testing.T) {
+	t.Parallel()
+
+	ge := &graph.GraphError{StatusCode: 404, Message: "not found"}
+	assert.Equal(t, 404, syncdomain.ExtractHTTPStatus(ge))
+}
+
+func TestExtractHTTPStatus_WrappedGraphError(t *testing.T) {
+	t.Parallel()
+
+	ge := &graph.GraphError{StatusCode: 429, Message: "throttled"}
+	wrapped := fmt.Errorf("download failed: %w", ge)
+	assert.Equal(t, 429, syncdomain.ExtractHTTPStatus(wrapped))
+}
+
+func TestExtractHTTPStatus_NonGraphError(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 0, syncdomain.ExtractHTTPStatus(fmt.Errorf("network timeout")))
+}
+
+func TestExtractHTTPStatus_Nil(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 0, syncdomain.ExtractHTTPStatus(nil))
+}
+
+// ---------------------------------------------------------------------------
+// Engine-owned counters (R-6.8.9)
+// ---------------------------------------------------------------------------
+
+// Validates: R-6.8.9
+func TestEngineOwnsCounters(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
+	ctx := t.Context()
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "ok.txt"), []byte("delete me"), 0o600))
+
+	// 2 actions: one succeeds, one fails.
+	cfg.SetDownloads(&syncfixture.WorkerMockDownloader{
+		DownloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
+			if itemID == "fail-id" {
+				return 0, fmt.Errorf("simulated failure")
+			}
+			n, err := w.Write([]byte("ok"))
+			return int64(n), err
+		},
+	})
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+
+	actions := []syncdomain.Action{
+		{
+			Type:    syncdomain.ActionLocalDelete,
+			Path:    "ok.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "ok-id",
+			View:    &syncdomain.PathView{Baseline: syncedBaselineFor(t, filepath.Join(syncRoot, "ok.txt"))},
+		},
+		{
+			Type:    syncdomain.ActionDownload,
+			Path:    "fail.txt",
+			DriveID: driveid.New("0000000000000001"),
+			ItemID:  "fail-id",
+			View: &syncdomain.PathView{
+				Remote: &syncdomain.RemoteState{
+					ItemID:  "fail-id",
+					DriveID: driveid.New("0000000000000001"),
+					Size:    10,
+				},
+			},
+		},
+	}
+
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+	dgh.Add(&actions[1], 1, nil)
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+
+	// Simulate engine-owned counters.
+	var succeeded, failed atomic.Int32
+	pool.Start(ctx, 4)
+
+	done := make(chan struct{})
+	go func() {
+		for r := range pool.Completions() {
+			if r.Success {
+				succeeded.Add(1)
+			} else {
+				failed.Add(1)
+			}
+			_, _ = dgh.Complete(r.ActionID)
+		}
+		close(done)
+	}()
+
+	syncfixture.ReceiveWithin(t, dgh.CompleteCh(), "both actions to complete")
+	pool.Stop()
+	syncfixture.ReceiveWithin(t, done, "the completions drain to finish")
+
+	assert.Equal(t, int32(1), succeeded.Load(), "engine should count 1 success")
+	assert.Equal(t, int32(1), failed.Load(), "engine should count 1 failure")
+}
+
+// syncedBaselineFor describes a file on disk as it was at its last sync, so
+// local-delete fixtures carry the baseline evidence S4 requires before
+// deleting. Fixtures that omit it are asking the executor to delete content
+// it cannot verify, which the planner never does in production.
+func syncedBaselineFor(t *testing.T, absPath string) *syncdomain.BaselineEntry {
+	t.Helper()
+
+	hash, err := driveops.ComputeQuickXorHashContext(t.Context(), absPath)
+	require.NoError(t, err)
+
+	info, err := os.Stat(absPath)
+	require.NoError(t, err)
+
+	return &syncdomain.BaselineEntry{
+		LocalHash:      hash,
+		LocalSize:      info.Size(),
+		LocalSizeKnown: true,
+		LocalMtime:     info.ModTime().UnixNano(),
+	}
+}
+
+// Validates: R-6.8.9
+// Regression: a shutdown landing between transfer completion and the outcome
+// commit used to drop the record because the commit ran on the pool context.
+// The remote create has already happened, so its baseline row must persist.
+func TestWorkerPool_CommitsCompletedOutcomeAfterPoolCancellation(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	poolCtx, cancelPool := context.WithCancel(t.Context())
+	defer cancelPool()
+
+	cfg.SetItemsForTest(&syncfixture.WorkerMockItemClient{
+		CreateFolderFn: func(_ context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
+			// The transfer succeeds, then shutdown arrives before the worker
+			// commits the outcome.
+			cancelPool()
+			return &graph.Item{ID: "created-" + name, Name: name, ParentID: "root-id"}, nil
+		},
+	})
+
+	pool := NewWorkerPool(cfg, nil, mgr, synctest.TestLogger(t), 1)
+	pool.ExecuteActionForTest(poolCtx, &syncdomain.TrackedAction{
+		ID: 1,
+		Action: syncdomain.Action{
+			Type:       syncdomain.ActionFolderCreate,
+			Path:       "Projects",
+			DriveID:    driveid.New("0000000000000001"),
+			CreateSide: syncdomain.CreateRemote,
+			View:       &syncdomain.PathView{Path: "Projects"},
+		},
+	})
+
+	require.Error(t, poolCtx.Err(), "pool context must be canceled before the commit")
+
+	bl, err := mgr.Load(t.Context())
+	require.NoError(t, err)
+	entry, ok := bl.GetByPath("Projects")
+	require.True(t, ok, "completed remote create must be committed despite pool cancellation")
+	assert.Equal(t, "created-Projects", entry.ItemID)
+}
+
+// A pool that has stopped still hands the engine every completion it has
+// room for: the result of work that already happened is never dropped for the
+// stop alone, only when no one is left to read it.
+//
+// Validates: R-2.8.3
+func TestWorkerPool_AStoppedPoolDeliversEveryCompletionItHasRoomFor(t *testing.T) {
+	t.Parallel()
+
+	const finished = 32
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	pool := NewWorkerPool(cfg, nil, mgr, synctest.TestLogger(t), finished)
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
+
+	for i := range finished {
+		pool.sendResult(stopped, &syncdomain.TrackedAction{
+			ID:     int64(i + 1),
+			Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: fmt.Sprintf("file-%d.txt", i)},
+		}, nil, fmt.Errorf("upload: %w", context.Canceled))
+	}
+
+	assert.Len(t, pool.completions, finished, "a stop alone drops no completion")
+}
+
+// A completion a stopped pool has no room for is dropped, and the drop is
+// said at Debug with the action it belonged to, so a result the next sync
+// redoes is not lost without a trace.
+//
+// Validates: R-2.8.3
+func TestWorkerPool_ACompletionDroppedAfterTheStopIsLogged(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, _ := newWorkerTestSetup(t)
+	logger, logs := syncfixture.NewCapturedLogger()
+	pool := NewWorkerPool(cfg, nil, mgr, logger, 1)
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
+
+	for _, path := range []string{"kept.txt", "dropped.txt"} {
+		pool.sendResult(stopped, &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: path}}, nil,
+			fmt.Errorf("upload: %w", context.Canceled))
+	}
+
+	assert.Len(t, pool.completions, 1, "the channel had room for one")
+	assert.Equal(t, 1, syncfixture.CountLevel(logs.String(), "DEBUG"), "the drop is said once: %s", logs.String())
+	assert.Contains(t, logs.String(), "path=dropped.txt")
+}
+
+// Validates: R-6.3.6
+//
+// The pre-upload content hash runs on a worker. Stop cancels the pool context
+// and waits for the workers, so a hash that ignored that context held Stop,
+// and the shutdown behind it, for as long as the file took to read. The
+// hasher here blocks until its context is canceled: Stop returns only if the
+// upload's context reaches the hash.
+func TestWorkerPool_StopReturnsWhileWorkerHashesBeforeUpload(t *testing.T) {
+	t.Parallel()
+
+	cfg, mgr, syncRoot := newWorkerTestSetup(t)
+
+	hashing := make(chan struct{})
+	var hashingOnce sync.Once
+	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t),
+		driveops.WithContentHasher(func(ctx context.Context, _ string) (string, error) {
+			hashingOnce.Do(func() { close(hashing) })
+			<-ctx.Done()
+			return "", ctx.Err()
+		}),
+	))
+
+	absPath := filepath.Join(syncRoot, "slow.bin")
+	require.NoError(t, os.WriteFile(absPath, []byte("upload content"), 0o600))
+
+	actions := []syncdomain.Action{{
+		Type:    syncdomain.ActionUpload,
+		Path:    "slow.bin",
+		DriveID: driveid.New("0000000000000001"),
+		View:    &syncdomain.PathView{Path: "slow.bin"},
+	}}
+	dgh := newTestDepGraphHelper(t)
+	dgh.Add(&actions[0], 0, nil)
+
+	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool.Start(t.Context(), 1)
+
+	select {
+	case <-hashing:
+	case <-time.After(syncfixture.EventWait):
+		require.Fail(t, "the worker never reached the pre-upload hash")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		pool.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(syncfixture.EventWait):
+		require.Fail(t, "Stop must not wait on a hash that honors the pool context")
+	}
+}

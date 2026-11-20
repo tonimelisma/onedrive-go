@@ -16,6 +16,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // Resumable upload sessions in the scenario fake. driveops sends a file above
@@ -67,7 +69,7 @@ func scenarioSessionExpiry() time.Time {
 // engineMockClient itself, every engine test with a large file would change
 // route. Tests opt in with newScenarioSessionEngine.
 type scenarioSessionClient struct {
-	*engineMockClient
+	*syncfixture.EngineMockClient
 	t      *testing.T
 	remote *moveScenarioRemote
 	// chaos, when set, is the chaos Graph layer between the client and the
@@ -84,7 +86,7 @@ var (
 func (r *moveScenarioRemote) sessionClient(t *testing.T) *scenarioSessionClient {
 	t.Helper()
 
-	return &scenarioSessionClient{engineMockClient: r.client(t), t: t, remote: r}
+	return &scenarioSessionClient{EngineMockClient: r.client(t), t: t, remote: r}
 }
 
 // newScenarioSessionEngine is a test engine whose uploads go through client,
@@ -92,7 +94,7 @@ func (r *moveScenarioRemote) sessionClient(t *testing.T) *scenarioSessionClient 
 func newScenarioSessionEngine(t *testing.T, client *scenarioSessionClient) (*testEngine, string) {
 	t.Helper()
 
-	return newTestEngineInDirWith(t, t.Context(), client.engineMockClient, t.TempDir(), func(inputs *engineInputs) {
+	return newTestEngineInDirWith(t, t.Context(), client.EngineMockClient, t.TempDir(), func(inputs *engineInputs) {
 		inputs.Uploads = client
 	})
 }
@@ -386,11 +388,11 @@ func TestScenarioSession_ResumeSendsOnlyTheMissingRanges(t *testing.T) {
 		acceptedBeforeTheFault = 2
 		lastFragmentSize       = 1024
 	)
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	client := remote.sessionClient(t)
 	content := strings.Repeat("r", (fragmentsInTheFile-1)*scenarioSessionFragmentSize+lastFragmentSize)
 	size := int64(len(content))
-	session, err := client.CreateUploadSession(t.Context(), remote.driveID, GraphRootID, "big.bin", size, time.Time{})
+	session, err := client.CreateUploadSession(t.Context(), remote.driveID, syncexec.GraphRootID, "big.bin", size, time.Time{})
 	require.NoError(t, err)
 
 	remote.mu.Lock()

@@ -26,6 +26,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
@@ -569,7 +570,7 @@ func invokeSyncJSON(t *testing.T, leaf *cobra.Command) (string, error) {
 		_ context.Context,
 		_ *config.Holder,
 		drives []*config.ResolvedDrive,
-		mode syncengine.SyncMode,
+		mode syncdomain.SyncMode,
 		_ syncengine.RunOptions,
 		_ *slog.Logger,
 		_ string,

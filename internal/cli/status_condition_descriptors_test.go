@@ -11,7 +11,9 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 const (
@@ -21,12 +23,12 @@ const (
 
 // rootReadIssueSnapshot is a store holding one remote read issue of the given
 // type at path, under the read scope of boundary ("" for the root).
-func rootReadIssueSnapshot(issueType, path, boundary string) *syncengine.DriveStatusSnapshot {
-	return &syncengine.DriveStatusSnapshot{
-		ObservationIssues: []syncengine.ObservationIssueRow{{
+func rootReadIssueSnapshot(issueType, path, boundary string) *syncstore.DriveStatusSnapshot {
+	return &syncstore.DriveStatusSnapshot{
+		ObservationIssues: []syncdomain.ObservationIssueRow{{
 			Path:      path,
-			IssueType: syncengine.IssueType(issueType),
-			ScopeKey:  syncengine.ScopeKey{Kind: syncengine.ScopePermRemoteRead, Param: boundary},
+			IssueType: syncdomain.IssueType(issueType),
+			ScopeKey:  syncdomain.ScopeKey{Kind: syncdomain.ScopePermRemoteRead, Param: boundary},
 		}},
 	}
 }
@@ -83,11 +85,11 @@ func TestBuildSyncStateInfo_RootReadFailureSaysWhatTheRootIs(t *testing.T) {
 func TestBuildSyncStateInfo_AMountPointNotMountedSaysWhatClearsIt(t *testing.T) {
 	t.Parallel()
 
-	snapshot := &syncengine.DriveStatusSnapshot{
-		ObservationIssues: []syncengine.ObservationIssueRow{{
+	snapshot := &syncstore.DriveStatusSnapshot{
+		ObservationIssues: []syncdomain.ObservationIssueRow{{
 			Path:      "nas",
-			IssueType: syncengine.IssueType("local_mount_missing"),
-			ScopeKey:  syncengine.ScopeKey{Kind: syncengine.ScopePermDirRead, Param: "nas"},
+			IssueType: syncdomain.IssueType("local_mount_missing"),
+			ScopeKey:  syncdomain.ScopeKey{Kind: syncdomain.ScopePermDirRead, Param: "nas"},
 		}},
 	}
 	info := buildSyncStateInfo(snapshot, statusStoreRootDrive, false, defaultVisiblePaths)
@@ -110,7 +112,7 @@ func TestBuildSyncStateInfo_AMountPointNotMountedSaysWhatClearsIt(t *testing.T) 
 type rootReadFailureCase struct {
 	name     string
 	root     statusStoreRoot
-	snapshot *syncengine.DriveStatusSnapshot
+	snapshot *syncstore.DriveStatusSnapshot
 	wantType string
 	want     statusConditionDescriptor
 }
@@ -118,7 +120,7 @@ type rootReadFailureCase struct {
 func rootReadFailureCases() []rootReadFailureCase {
 	// Where the shared-folder text does not apply, the condition keeps its
 	// own text, which TestDescribeStatusCondition_CoversFamiliesAndFallback pins.
-	readBlocked := describeStatusCondition(syncengine.ConditionRemoteReadDenied)
+	readBlocked := describeStatusCondition(syncdomain.ConditionRemoteReadDenied)
 
 	return []rootReadFailureCase{
 		{
@@ -179,7 +181,7 @@ type rootRecordingQuerier struct {
 }
 
 func (q *rootRecordingQuerier) QuerySyncState(
-	_ context.Context, _ string, root statusStoreRoot, _ syncengine.ContentFilterConfig,
+	_ context.Context, _ string, root statusStoreRoot, _ syncdomain.ContentFilterConfig,
 ) *syncStateInfo {
 	q.roots = append(q.roots, root)
 	return &syncStateInfo{}
@@ -196,7 +198,7 @@ func TestBuildChildStatusDrive_ReadsTheStoreAsASharedFolder(t *testing.T) {
 	querier := &rootRecordingQuerier{}
 	child := &childMountStatusInput{
 		ParentID: parentID,
-		Root: syncengine.ShortcutRootStatusView{
+		Root: syncshortcut.ShortcutRootStatusView{
 			MountID:     config.ChildMountID(parentID.String(), "binding-docs"),
 			DisplayName: "Docs",
 		},

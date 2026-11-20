@@ -3,19 +3,22 @@ package sync
 import (
 	"context"
 	"errors"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func buildRemoteObservationBatch(
 	engine *Engine,
-	mode RemoteObservationMode,
-	events []RemoteItem,
+	mode syncdomain.RemoteObservationMode,
+	events []syncdomain.RemoteItem,
 	token string,
 	markFullRemoteRefresh bool,
-	findings ObservationFindingsBatch,
-) RemoteObservationBatch {
-	projected := ProjectRemoteObservations(engine.logger, events)
+	findings syncdomain.ObservationFindingsBatch,
+) syncobserve.RemoteObservationBatch {
+	projected := syncobserve.ProjectRemoteObservations(engine.logger, events)
 
-	return RemoteObservationBatch{
+	return syncobserve.RemoteObservationBatch{
 		ObservationMode:       mode,
 		Observed:              projected.Observed,
 		Changes:               projected.Changes,
@@ -29,9 +32,9 @@ func primaryObservationCursorToken(
 	token string,
 	markFullRemoteRefresh bool,
 	changeCount int,
-	mode RemoteObservationMode,
+	mode syncdomain.RemoteObservationMode,
 ) string {
-	needsEnumerateClamp := mode == RemoteObservationModeEnumerate
+	needsEnumerateClamp := mode == syncdomain.RemoteObservationModeEnumerate
 	if token == "" && !markFullRemoteRefresh && !needsEnumerateClamp {
 		return ""
 	}
@@ -44,38 +47,38 @@ func primaryObservationCursorToken(
 
 func buildPrimaryWatchBatch(
 	engine *Engine,
-	bl *Baseline,
-	primaryEvents []RemoteItem,
+	bl *syncdomain.Baseline,
+	primaryEvents []syncdomain.RemoteItem,
 	newToken string,
-) RemoteObservationBatch {
+) syncobserve.RemoteObservationBatch {
 	batch := buildRemoteObservationBatch(
 		engine,
-		RemoteObservationModeDelta,
+		syncdomain.RemoteObservationModeDelta,
 		primaryEvents,
 		newToken,
 		false,
-		NewRemoteObservationFindingsBatch(),
+		syncdomain.NewRemoteObservationFindingsBatch(),
 	)
 	batch.FullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, primaryEvents)
-	batch.Source = RemoteObservationBatchPrimaryWatch
+	batch.Source = syncobserve.RemoteObservationBatchPrimaryWatch
 	batch.ApplyAck = make(chan error, 1)
 
 	return batch
 }
 
-func (e *Engine) preferredMountRootObservationMode() RemoteObservationMode {
+func (e *Engine) preferredMountRootObservationMode() syncdomain.RemoteObservationMode {
 	if e.mountRootDeltaSupported() {
-		return RemoteObservationModeDelta
+		return syncdomain.RemoteObservationModeDelta
 	}
 
-	return RemoteObservationModeEnumerate
+	return syncdomain.RemoteObservationModeEnumerate
 }
 
 func (flow *engineFlow) executePrimaryRootObservation(
 	ctx context.Context,
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 	fullReconcile bool,
-) (RemoteObservationBatch, error) {
+) (syncobserve.RemoteObservationBatch, error) {
 	if flow.engine.hasRemoteMountRoot() {
 		return flow.executeMountRootObservation(ctx, bl, fullReconcile)
 	}
@@ -86,7 +89,7 @@ func (flow *engineFlow) executePrimaryRootObservation(
 // rootReadFailureBatch is the observation batch of a root OneDrive refused
 // to read: no events and no new cursor, only the root's read issue, so the
 // whole tree is unavailable rather than absent.
-func (flow *engineFlow) rootReadFailureBatch(mode RemoteObservationMode, issueType IssueType) RemoteObservationBatch {
+func (flow *engineFlow) rootReadFailureBatch(mode syncdomain.RemoteObservationMode, issueType syncdomain.IssueType) syncobserve.RemoteObservationBatch {
 	return buildRemoteObservationBatch(
 		flow.engine,
 		mode,
@@ -99,32 +102,32 @@ func (flow *engineFlow) rootReadFailureBatch(mode RemoteObservationMode, issueTy
 
 func (flow *engineFlow) executeDriveRootObservation(
 	ctx context.Context,
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 	fullReconcile bool,
-) (RemoteObservationBatch, error) {
+) (syncobserve.RemoteObservationBatch, error) {
 	if fullReconcile {
-		return flow.executeDriveRootFullObservation(ctx, bl, ResyncKindApplyDifferences)
+		return flow.executeDriveRootFullObservation(ctx, bl, syncdomain.ResyncKindApplyDifferences)
 	}
 
 	events, token, topology, err := flow.observeRemoteWithShortcutTopology(ctx, bl)
-	if errors.Is(err, ErrDeltaExpired) {
+	if errors.Is(err, syncdomain.ErrDeltaExpired) {
 		// Info: self-healing. Recovery is a full refresh with orphan
 		// detection, not a bare re-enumeration: a delete that happened while
 		// the token aged out is in no delta window (R-2.15.3).
 		flow.engine.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
-		return flow.executeDriveRootFullObservation(ctx, bl, ResyncKindOf(err))
+		return flow.executeDriveRootFullObservation(ctx, bl, syncdomain.ResyncKindOf(err))
 	}
 	if issueType, ok := rootReadFailureIssueType(err); ok {
-		return flow.rootReadFailureBatch(RemoteObservationModeDelta, issueType), nil
+		return flow.rootReadFailureBatch(syncdomain.RemoteObservationModeDelta, issueType), nil
 	}
 
 	batch := buildRemoteObservationBatch(
 		flow.engine,
-		RemoteObservationModeDelta,
+		syncdomain.RemoteObservationModeDelta,
 		events,
 		token,
 		false,
-		NewRemoteObservationFindingsBatch(),
+		syncdomain.NewRemoteObservationFindingsBatch(),
 	)
 	batch.FullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, events)
 	batch.ShortcutTopology = topology
@@ -144,7 +147,7 @@ func (flow *engineFlow) executeDriveRootObservation(
 // A folder this client deleted itself is no longer in the baseline when its
 // tombstone echoes back, so propagating a local folder delete does not cost a
 // full enumeration.
-func deltaWindowDeletesSyncedFolder(bl *Baseline, events []RemoteItem) bool {
+func deltaWindowDeletesSyncedFolder(bl *syncdomain.Baseline, events []syncdomain.RemoteItem) bool {
 	if bl == nil {
 		return false
 	}
@@ -152,7 +155,7 @@ func deltaWindowDeletesSyncedFolder(bl *Baseline, events []RemoteItem) bool {
 		if !events[i].IsDeleted || events[i].ItemID == "" {
 			continue
 		}
-		if entry, ok := bl.GetByID(events[i].ItemID); ok && entry.ItemType == ItemTypeFolder {
+		if entry, ok := bl.GetByID(events[i].ItemID); ok && entry.ItemType == syncdomain.ItemTypeFolder {
 			return true
 		}
 	}
@@ -164,25 +167,25 @@ func deltaWindowDeletesSyncedFolder(bl *Baseline, events []RemoteItem) bool {
 // and marks it as one, which also restarts the full-refresh cadence.
 func (flow *engineFlow) executeDriveRootFullObservation(
 	ctx context.Context,
-	bl *Baseline,
-	kind ResyncKind,
-) (RemoteObservationBatch, error) {
+	bl *syncdomain.Baseline,
+	kind syncdomain.ResyncKind,
+) (syncobserve.RemoteObservationBatch, error) {
 	full, err := flow.observeRemoteFullWithShortcutTopology(ctx, bl, kind)
 	// A later page whose position OneDrive refused twice is an unusable
 	// position (ErrDeltaExpired) that unwraps to the refusal, which may be
 	// "not found": it says nothing about the root, so it is returned like any
 	// other failure.
-	if issueType, ok := rootReadFailureIssueType(err); ok && !errors.Is(err, ErrDeltaExpired) {
-		return flow.rootReadFailureBatch(RemoteObservationModeDelta, issueType), nil
+	if issueType, ok := rootReadFailureIssueType(err); ok && !errors.Is(err, syncdomain.ErrDeltaExpired) {
+		return flow.rootReadFailureBatch(syncdomain.RemoteObservationModeDelta, issueType), nil
 	}
 
 	batch := buildRemoteObservationBatch(
 		flow.engine,
-		RemoteObservationModeDelta,
+		syncdomain.RemoteObservationModeDelta,
 		full.events,
 		full.token,
 		true,
-		NewRemoteObservationFindingsBatch(),
+		syncdomain.NewRemoteObservationFindingsBatch(),
 	)
 	batch.ShortcutTopology = full.topology
 	batch.OrphansUndecided = full.orphansUndecided
@@ -191,9 +194,9 @@ func (flow *engineFlow) executeDriveRootFullObservation(
 
 func (flow *engineFlow) executeMountRootObservation(
 	ctx context.Context,
-	bl *Baseline,
+	bl *syncdomain.Baseline,
 	fullReconcile bool,
-) (RemoteObservationBatch, error) {
+) (syncobserve.RemoteObservationBatch, error) {
 	observed, err := flow.observeMountRootRemote(ctx, bl, fullReconcile)
 	if issueType, ok := rootReadFailureIssueType(err); ok {
 		return flow.rootReadFailureBatch(observed.mode, issueType), nil
@@ -203,14 +206,14 @@ func (flow *engineFlow) executeMountRootObservation(
 	// full refresh like the drive root's: it restarts the cadence, and an
 	// orphan it could not confirm, which the saved position never reports
 	// again, brings the next one forward on the undecided-refresh backoff.
-	completeDelta := observed.mode == RemoteObservationModeDelta && observed.complete
+	completeDelta := observed.mode == syncdomain.RemoteObservationModeDelta && observed.complete
 	batch := buildRemoteObservationBatch(
 		flow.engine,
 		observed.mode,
 		observed.events,
 		observed.token,
 		fullReconcile || completeDelta,
-		NewRemoteObservationFindingsBatch(),
+		syncdomain.NewRemoteObservationFindingsBatch(),
 	)
 	batch.OrphansUndecided = completeDelta && observed.orphansUndecided
 

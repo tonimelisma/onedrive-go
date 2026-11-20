@@ -7,6 +7,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -41,7 +43,7 @@ type (
 	// (LeftWork) and whether its local tree may be removed (LocalTreeHolds)
 	// are read from that state alone.
 	Report struct {
-		Mode     SyncMode
+		Mode     syncdomain.SyncMode
 		DryRun   bool
 		Duration time.Duration
 
@@ -54,7 +56,7 @@ type (
 		ConflictCopies  int
 		BaselineUpdates int
 		Cleanups        int
-		DeferredByMode  DeferredCounts
+		DeferredByMode  syncdomain.DeferredCounts
 		// HeldLocalDeletes and HeldRemoteDeletes count the deletes the
 		// delete-safety hold kept for confirmation, by the side they would
 		// remove content from.
@@ -136,21 +138,21 @@ type engineInputs struct {
 	RemoteRootItemID         string
 	RemoteRootDeltaCapable   bool
 	ExpectedSyncRootIdentity *synctree.FileIdentity
-	Fetcher                  DeltaFetcher
-	SocketIOFetcher          SocketIOEndpointFetcher
-	Items                    ItemClient
+	Fetcher                  syncdomain.DeltaFetcher
+	SocketIOFetcher          syncdomain.SocketIOEndpointFetcher
+	Items                    syncdomain.ItemClient
 	Downloads                driveops.Downloader
 	Uploads                  driveops.Uploader
 	PathConvergence          driveops.PathConvergence
-	DriveVerifier            DriveVerifier
-	FolderDelta              FolderDeltaFetcher
-	RecursiveLister          RecursiveLister
-	PermChecker              PermissionChecker
+	DriveVerifier            syncdomain.DriveVerifier
+	FolderDelta              syncdomain.FolderDeltaFetcher
+	RecursiveLister          syncdomain.RecursiveLister
+	PermChecker              syncdomain.PermissionChecker
 	Logger                   *slog.Logger
-	ContentFilter            ContentFilterConfig
-	LocalRules               LocalObservationRules
+	ContentFilter            syncdomain.ContentFilterConfig
+	LocalRules               syncdomain.LocalObservationRules
 	ShortcutNamespaceID      string
-	ShortcutChildWorkSink    ShortcutChildWorkSink
+	ShortcutChildWorkSink    syncshortcut.ShortcutChildWorkSink
 	EnableWebsocket          bool
 	TransferWorkers          int
 	CheckWorkers             int

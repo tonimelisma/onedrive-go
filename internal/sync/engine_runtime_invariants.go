@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // invariantChecksEnabled gates expensive invariant assertions used by tests
@@ -21,7 +24,7 @@ func (flow *engineFlow) mustAssertInvariants(ctx context.Context, stage string) 
 	}
 }
 
-func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, key ScopeKey, stage string) {
+func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, key syncdomain.ScopeKey, stage string) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
@@ -32,7 +35,7 @@ func (flow *engineFlow) mustAssertReleasedScope(ctx context.Context, key ScopeKe
 	}
 }
 
-func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, key ScopeKey, stage string) {
+func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, key syncdomain.ScopeKey, stage string) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
@@ -44,7 +47,7 @@ func (flow *engineFlow) mustAssertDiscardedScope(ctx context.Context, key ScopeK
 }
 
 func (flow *engineFlow) mustAssertDispatchAdmissionSealed(
-	outbox []*TrackedAction,
+	outbox []*syncdomain.TrackedAction,
 	stage string,
 ) {
 	if !flow.invariantChecksEnabled() {
@@ -120,13 +123,13 @@ func (flow *engineFlow) assertCurrentInvariants(ctx context.Context) error {
 // detached store access (DetachedStoreContext) so a wedged store cannot hold
 // it; inside a stopping run's drain it keeps the drain's one bound.
 func detachedInvariantCheckContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return DetachedStoreContext(ctx, time.Now().Add(OutcomeCommitTimeout))
+	return syncexec.DetachedStoreContext(ctx, time.Now().Add(syncdomain.OutcomeCommitTimeout))
 }
 
 func (flow *engineFlow) assertWatchRuntimeInvariants() error {
 	{
 		activeScopes := flow.scopes.snapshotActiveScopes()
-		seen := make(map[ScopeKey]struct{}, len(activeScopes))
+		seen := make(map[syncdomain.ScopeKey]struct{}, len(activeScopes))
 		for i := range activeScopes {
 			key := activeScopes[i].Key
 			if _, ok := seen[key]; ok {
@@ -152,7 +155,7 @@ func (flow *engineFlow) assertWatchRuntimeInvariants() error {
 }
 
 func (flow *engineFlow) assertDispatchAdmissionSealed(
-	outbox []*TrackedAction,
+	outbox []*syncdomain.TrackedAction,
 ) error {
 	if !flow.inspect.isDraining() || len(outbox) == 0 {
 		return nil
@@ -202,7 +205,7 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	}
 	links := summarizePersistedScopeLinks(retryWork)
 
-	seenBlocks := make(map[ScopeKey]struct{}, len(blocks))
+	seenBlocks := make(map[syncdomain.ScopeKey]struct{}, len(blocks))
 	for i := range blocks {
 		if blocks[i] == nil {
 			return fmt.Errorf("nil persisted block scope")
@@ -228,7 +231,7 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	return nil
 }
 
-func assertPersistedRetryWorkInvariant(row *RetryWorkRow, seenBlocks map[ScopeKey]struct{}) error {
+func assertPersistedRetryWorkInvariant(row *syncdomain.RetryWorkRow, seenBlocks map[syncdomain.ScopeKey]struct{}) error {
 	if row.Path == "" {
 		return fmt.Errorf("retry_work row missing path for action %s", row.ActionType.String())
 	}
@@ -245,22 +248,22 @@ func assertPersistedRetryWorkInvariant(row *RetryWorkRow, seenBlocks map[ScopeKe
 	return assertBlockedRetryWorkInvariant(row, seenBlocks)
 }
 
-func assertDelayedRetryWorkInvariant(row *RetryWorkRow) error {
-	if !StoredTimeIsSet(row.NextRetryAt) {
+func assertDelayedRetryWorkInvariant(row *syncdomain.RetryWorkRow) error {
+	if !syncdomain.StoredTimeIsSet(row.NextRetryAt) {
 		return fmt.Errorf("retry_work %s is missing retry timing", row.Path)
 	}
 
 	return nil
 }
 
-func assertBlockedRetryWorkInvariant(row *RetryWorkRow, seenBlocks map[ScopeKey]struct{}) error {
+func assertBlockedRetryWorkInvariant(row *syncdomain.RetryWorkRow, seenBlocks map[syncdomain.ScopeKey]struct{}) error {
 	if row.ScopeKey.IsZero() {
 		return fmt.Errorf("blocked retry_work %s is missing scope key", row.Path)
 	}
 	if _, ok := seenBlocks[row.ScopeKey]; !ok {
 		return fmt.Errorf("blocked retry_work %s references missing block scope %s", row.Path, row.ScopeKey.String())
 	}
-	if StoredTimeIsSet(row.NextRetryAt) {
+	if syncdomain.StoredTimeIsSet(row.NextRetryAt) {
 		return fmt.Errorf("blocked retry_work %s must not have retry timing", row.Path)
 	}
 
@@ -268,12 +271,12 @@ func assertBlockedRetryWorkInvariant(row *RetryWorkRow, seenBlocks map[ScopeKey]
 }
 
 type persistedScopeLinks struct {
-	retryCountByScope map[ScopeKey]int
+	retryCountByScope map[syncdomain.ScopeKey]int
 }
 
-func summarizePersistedScopeLinks(retryWork []RetryWorkRow) persistedScopeLinks {
+func summarizePersistedScopeLinks(retryWork []syncdomain.RetryWorkRow) persistedScopeLinks {
 	links := persistedScopeLinks{
-		retryCountByScope: make(map[ScopeKey]int),
+		retryCountByScope: make(map[syncdomain.ScopeKey]int),
 	}
 
 	for i := range retryWork {
@@ -286,11 +289,11 @@ func summarizePersistedScopeLinks(retryWork []RetryWorkRow) persistedScopeLinks 
 	return links
 }
 
-func (links persistedScopeLinks) hasRelatedRows(key ScopeKey) bool {
+func (links persistedScopeLinks) hasRelatedRows(key syncdomain.ScopeKey) bool {
 	return links.retryCountByScope[key] > 0
 }
 
-func (flow *engineFlow) assertReleasedScope(ctx context.Context, key ScopeKey) error {
+func (flow *engineFlow) assertReleasedScope(ctx context.Context, key syncdomain.ScopeKey) error {
 	if flow.scopes.hasActiveScope(key) {
 		return fmt.Errorf("released scope %s still active in runtime state", key.String())
 	}
@@ -318,7 +321,7 @@ func (flow *engineFlow) assertReleasedScope(ctx context.Context, key ScopeKey) e
 	return nil
 }
 
-func (flow *engineFlow) assertDiscardedScope(ctx context.Context, key ScopeKey) error {
+func (flow *engineFlow) assertDiscardedScope(ctx context.Context, key syncdomain.ScopeKey) error {
 	if flow.scopes.hasActiveScope(key) {
 		return fmt.Errorf("discarded scope %s still active in runtime state", key.String())
 	}

@@ -3,6 +3,8 @@ package sync
 import (
 	"cmp"
 	"fmt"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 )
 
 // LeftWork is what a one-shot run left for a later run or the user, as its
@@ -139,7 +141,7 @@ func (h *LocalTreeHolds) Reasons() []string {
 func (h *LocalTreeHolds) keptReasons() []string {
 	var reasons []string
 	if h.KeptNotOnOneDrive.Count > 0 {
-		reasons = append(reasons, FolderNotEmptyReason(h.KeptNotOnOneDrive.Count, h.KeptNotOnOneDrive.Examples))
+		reasons = append(reasons, syncexec.FolderNotEmptyReason(h.KeptNotOnOneDrive.Count, h.KeptNotOnOneDrive.Examples))
 	}
 	if h.KeptNotUploaded.Count > 0 {
 		reasons = append(reasons, notUploadedReason(h.KeptNotUploaded.Count, h.KeptNotUploaded.Examples))
@@ -170,7 +172,7 @@ func newKeptEntries(paths []string) KeptEntries {
 
 	return KeptEntries{
 		Count:    len(paths),
-		Examples: append([]string(nil), paths[:min(len(paths), FolderNotEmptyNamedLimit)]...),
+		Examples: append([]string(nil), paths[:min(len(paths), syncexec.FolderNotEmptyNamedLimit)]...),
 	}
 }
 
@@ -179,7 +181,7 @@ func newKeptEntries(paths []string) KeptEntries {
 func notUploadedReason(count int, examples []string) string {
 	return fmt.Sprintf("%d %s could not be uploaded because the shared folder can no longer be reached (%s); "+
 		"copy what you need elsewhere, then delete them to finish",
-		count, countNoun(count, "change", "changes"), NamedWithMore(count, examples))
+		count, countNoun(count, "change", "changes"), syncexec.NamedWithMore(count, examples))
 }
 
 // notWritableReason is the sentence for synced folders the release could not
@@ -191,7 +193,7 @@ func notWritableReason(count int, examples []string) string {
 	}
 
 	return fmt.Sprintf("%d %s cannot be written to (%s); make %s writable to finish",
-		count, countNoun(count, "folder", "folders"), NamedWithMore(count, named), countNoun(count, "it", "them"))
+		count, countNoun(count, "folder", "folders"), syncexec.NamedWithMore(count, named), countNoun(count, "it", "them"))
 }
 
 // notRemovedReason is the sentence for synced entries the release's local
@@ -201,7 +203,7 @@ func notRemovedReason(count int, examples []string) string {
 
 	return fmt.Sprintf("%d synced %s could not be moved to the trash or deleted (%s); "+
 		"remove %s by hand or fix what keeps %s, then sync again",
-		count, countNoun(count, "item", "items"), NamedWithMore(count, examples), pronoun, pronoun)
+		count, countNoun(count, "item", "items"), syncexec.NamedWithMore(count, examples), pronoun, pronoun)
 }
 
 // countNoun is singular for a count of one and plural otherwise.

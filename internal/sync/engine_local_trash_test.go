@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // A run that died after setting a file aside leaves it under a hidden name in
@@ -19,7 +21,7 @@ import (
 func TestFullScan_LeftoverSetAsideFileIsReportedNotDeleted(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	leftover := filepath.Join(syncRoot, ".onedrive-go.0123456789abcdef.detach")
@@ -33,7 +35,7 @@ func TestFullScan_LeftoverSetAsideFileIsReportedNotDeleted(t *testing.T) {
 	require.NoError(t, err)
 	found := false
 	for i := range issues {
-		if issues[i].Path == ".onedrive-go.0123456789abcdef.detach" && issues[i].IssueType == IssueLocalInterruptedRemoval {
+		if issues[i].Path == ".onedrive-go.0123456789abcdef.detach" && issues[i].IssueType == syncdomain.IssueLocalInterruptedRemoval {
 			found = true
 		}
 	}

@@ -15,6 +15,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -25,7 +28,7 @@ type followUpReadFailure struct {
 	name     string
 	err      error
 	class    errclass.Class
-	evidence func(driveid.ID) ScopeKey
+	evidence func(driveid.ID) syncdomain.ScopeKey
 }
 
 func followUpReadFailures() []followUpReadFailure {
@@ -34,13 +37,13 @@ func followUpReadFailures() []followUpReadFailure {
 			name:     "outage",
 			err:      &graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError},
 			class:    resultRequeue,
-			evidence: func(driveid.ID) ScopeKey { return SKService() },
+			evidence: func(driveid.ID) syncdomain.ScopeKey { return syncdomain.SKService() },
 		},
 		{
 			name:     "throttle",
 			err:      &graph.GraphError{StatusCode: http.StatusTooManyRequests, Err: graph.ErrThrottled},
 			class:    resultBlockScope,
-			evidence: SKThrottleDrive,
+			evidence: syncdomain.SKThrottleDrive,
 		},
 	}
 }
@@ -50,17 +53,17 @@ func followUpReadFailures() []followUpReadFailure {
 // precondition, not the 409 or 412 the read followed, and classified by the
 // read's own answer.
 func requireClassifiedAsTheRead(
-	t *testing.T, read followUpReadFailure, actionType ActionType, driveID driveid.ID, err error,
+	t *testing.T, read followUpReadFailure, actionType syncdomain.ActionType, driveID driveid.ID, err error,
 ) {
 	t.Helper()
 
 	require.ErrorIs(t, err, read.err)
-	require.NotErrorIs(t, err, ErrActionPreconditionChanged, "a failed read proves nothing about the plan")
+	require.NotErrorIs(t, err, syncdomain.ErrActionPreconditionChanged, "a failed read proves nothing about the plan")
 	require.NotErrorIs(t, err, graph.ErrConflict)
 	require.NotErrorIs(t, err, graph.ErrPreconditionFailed)
-	decision := classifyResult(&ActionCompletion{
+	decision := classifyResult(&syncdomain.ActionCompletion{
 		Path: "read-failed", ActionType: actionType, DriveID: driveID,
-		Err: err, HTTPStatus: ExtractHTTPStatus(err),
+		Err: err, HTTPStatus: syncdomain.ExtractHTTPStatus(err),
 	})
 	assert.Equal(t, read.class, decision.Class)
 	assert.Equal(t, read.evidence(driveID), decision.ScopeEvidence)
@@ -80,20 +83,20 @@ func TestExecutor_Upload_ListingFailureAfterACreateConflictIsClassifiedByItsOwnA
 		t.Run(read.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFile(t, "theirs", "root", "doc.txt", "theirs\n")
 			e, _, syncRoot := newScenarioCreateExecutor(t, remote)
 			client := remote.client(t)
-			client.listChildrenFn = func(context.Context, driveid.ID, string) ([]graph.Item, error) {
+			client.ListChildrenFn = func(context.Context, driveid.ID, string) ([]graph.Item, error) {
 				return nil, read.err
 			}
 			e.SetItemsForTest(client)
-			local := writeExecTestFile(t, syncRoot, "doc.txt", "mine\n")
+			local := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "mine\n")
 
-			_, err := e.UploadNewFileForTest(t.Context(), &Action{Type: ActionUpload, Path: "doc.txt"},
-				remote.driveID, GraphRootID, "doc.txt", local)
+			_, err := e.UploadNewFileForTest(t.Context(), &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "doc.txt"},
+				remote.driveID, syncexec.GraphRootID, "doc.txt", local)
 
-			requireClassifiedAsTheRead(t, read, ActionUpload, remote.driveID, UploadTransferError(err))
+			requireClassifiedAsTheRead(t, read, syncdomain.ActionUpload, remote.driveID, syncexec.UploadTransferError(err))
 			assert.Equal(t, map[string]string{"doc.txt": "theirs\n"}, remote.tree(), "nothing was written")
 		})
 	}
@@ -112,25 +115,25 @@ func TestExecutor_CreateRemoteFolder_ListingFailureAfterAConflictIsClassifiedByI
 		t.Run(read.name, func(t *testing.T) {
 			t.Parallel()
 
-			items := &executorMockItemClient{
-				createFolderFn: func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
+			items := &syncfixture.ExecutorMockItemClient{
+				CreateFolderFn: func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
 					return nil, &graph.GraphError{StatusCode: http.StatusConflict, Code: "nameAlreadyExists", Err: graph.ErrConflict}
 				},
-				listChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+				ListChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
 					return nil, read.err
 				},
 			}
-			cfg, _ := newTestExecutorConfig(t, items, &executorMockDownloader{}, &executorMockUploader{})
-			e := NewExecution(cfg, emptyBaseline())
+			cfg, _ := newTestExecutorConfig(t, items, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
+			e := syncexec.NewExecution(cfg, syncfixture.EmptyBaseline())
 			driveID := driveid.New(synctest.TestDriveID)
 
-			o := e.ExecuteFolderCreate(t.Context(), &Action{
-				Type: ActionFolderCreate, Path: "photos", DriveID: driveID, CreateSide: CreateRemote,
-				View: &PathView{Path: "photos"},
+			o := e.ExecuteFolderCreate(t.Context(), &syncdomain.Action{
+				Type: syncdomain.ActionFolderCreate, Path: "photos", DriveID: driveID, CreateSide: syncdomain.CreateRemote,
+				View: &syncdomain.PathView{Path: "photos"},
 			})
 
-			requireOutcomeFailure(t, &o)
-			requireClassifiedAsTheRead(t, read, ActionFolderCreate, driveID, o.Error)
+			syncfixture.RequireOutcomeFailure(t, &o)
+			requireClassifiedAsTheRead(t, read, syncdomain.ActionFolderCreate, driveID, o.Error)
 		})
 	}
 }
@@ -146,32 +149,32 @@ func TestUploadTransferError_AFailedOutcomeLookupIsNotAStalePrecondition(t *test
 	t.Parallel()
 
 	for _, answer := range []*graph.GraphError{
-		{StatusCode: http.StatusConflict, Code: GraphCodeResourceModified, Err: graph.ErrConflict},
-		{StatusCode: http.StatusPreconditionFailed, Code: GraphCodeResourceModified, Err: graph.ErrPreconditionFailed},
+		{StatusCode: http.StatusConflict, Code: syncdomain.GraphCodeResourceModified, Err: graph.ErrConflict},
+		{StatusCode: http.StatusPreconditionFailed, Code: syncdomain.GraphCodeResourceModified, Err: graph.ErrPreconditionFailed},
 	} {
 		for _, read := range followUpReadFailures() {
 			t.Run(fmt.Sprintf("%d then %s", answer.StatusCode, read.name), func(t *testing.T) {
 				t.Parallel()
 
-				client := &engineMockClient{
-					uploadToItemFn: func(
+				client := &syncfixture.EngineMockClient{
+					UploadToItemFn: func(
 						context.Context, driveid.ID, string, string, io.ReaderAt, int64, time.Time, graph.ProgressFunc,
 					) (*graph.Item, error) {
 						return nil, &graph.FinalFragmentError{Err: answer}
 					},
-					getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+					GetItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
 						return nil, read.err
 					},
 				}
-				_, logger := newDebugLogBuffer()
+				_, logger := syncfixture.NewDebugLogBuffer()
 				transfers := driveops.NewTransferManager(client, client, nil, logger)
-				localPath := writeExecTestFile(t, t.TempDir(), "doc.txt", "mine\n")
-				driveID := driveid.New(engineTestDriveID)
+				localPath := syncfixture.WriteExecTestFile(t, t.TempDir(), "doc.txt", "mine\n")
+				driveID := driveid.New(syncfixture.EngineTestDriveID)
 
 				_, err := transfers.UploadFileToItem(t.Context(), driveID, "item-doc", localPath,
 					driveops.UploadOpts{IfMatch: "etag-planned"})
 
-				requireClassifiedAsTheRead(t, read, ActionUpload, driveID, UploadTransferError(err))
+				requireClassifiedAsTheRead(t, read, syncdomain.ActionUpload, driveID, syncexec.UploadTransferError(err))
 			})
 		}
 	}

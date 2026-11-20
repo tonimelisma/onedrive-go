@@ -13,11 +13,13 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // newCollectingTestEngine is a test engine built with collector, as a sync
 // owner builds a mount's engine.
-func newCollectingTestEngine(t *testing.T, mock *engineMockClient, collector *perf.Collector) *testEngine {
+func newCollectingTestEngine(t *testing.T, mock *syncfixture.EngineMockClient, collector *perf.Collector) *testEngine {
 	t.Helper()
 
 	eng, _ := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), func(inputs *engineInputs) {
@@ -37,12 +39,12 @@ func TestRunOnce_CountsOnTheEngineCollectorWithoutAnOwnerWrap(t *testing.T) {
 
 	const content = "alpha!!"
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	mock := newDownloadDeltaMock(
 		driveID,
 		&graph.Item{
 			ID: "item-a", Name: "alpha.txt", ParentID: "root",
-			DriveID: driveID, Size: int64(len(content)), QuickXorHash: testQuickXor(content),
+			DriveID: driveID, Size: int64(len(content)), QuickXorHash: syncfixture.TestQuickXor(content),
 		},
 		"token-perf",
 		[]byte(content),
@@ -50,7 +52,7 @@ func TestRunOnce_CountsOnTheEngineCollectorWithoutAnOwnerWrap(t *testing.T) {
 	mountCollector := perf.NewCollector(nil)
 	eng := newCollectingTestEngine(t, mock, mountCollector)
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 	require.Equal(t, 1, report.Downloads, "the pass downloaded the file and committed it to the store")
 
@@ -66,14 +68,14 @@ func TestRunWatch_CountsOnTheEngineCollectorWithoutAnOwnerWrap(t *testing.T) {
 	t.Parallel()
 
 	mountCollector := perf.NewCollector(nil)
-	eng := newCollectingTestEngine(t, &engineMockClient{}, mountCollector)
+	eng := newCollectingTestEngine(t, &syncfixture.EngineMockClient{}, mountCollector)
 	recorder := attachDebugEventRecorder(eng)
 
-	cancel, done := runWatchInBackground(t, eng, SyncBidirectional, quietWatchOptions())
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncBidirectional, quietWatchOptions())
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 
 	snapshot := mountCollector.Snapshot()
 	assert.Positive(t, snapshot.DBTransactionCount, "store transactions of the bootstrap")
@@ -120,8 +122,8 @@ func TestEngine_WithOwnCollectorWrapsOnceAndReplacesAnother(t *testing.T) {
 func TestEngineStartup_LockedCatalogWarnsAndStarts(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	mock := &engineMockClient{}
+	logger, logs := syncfixture.NewCapturedLogger()
+	mock := &syncfixture.EngineMockClient{}
 	eng, _ := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), func(inputs *engineInputs) {
 		inputs.DriveVerifier = mock
 		inputs.Logger = logger
@@ -132,15 +134,15 @@ func TestEngineStartup_LockedCatalogWarnsAndStarts(t *testing.T) {
 		return fmt.Errorf("updating catalog: %w", config.ErrConfigLocked)
 	}
 
-	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "the sync starts although the catalog is locked")
 	assert.Equal(t, authstate.ReasonSyncAuthRejected, signInRequirementOf(t, eng, account), "the stored requirement stands")
-	assert.Equal(t, 1, countLevel(logs.String(), "WARN"), "one Warn: %s", logs.String())
+	assert.Equal(t, 1, syncfixture.CountLevel(logs.String(), "WARN"), "one Warn: %s", logs.String())
 	assert.Contains(t, logs.String(), "Could not clear the stored sign-in requirement; the next start clears it")
 	assert.Contains(t, logs.String(), account.String(), "the Warn names the account")
 
 	eng.clearAccountAuthRequirement = nil
-	_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, signInRequirementOf(t, eng, account), "the next start clears it")
 }
@@ -156,26 +158,26 @@ const faultComparisonQuery = "FROM comparison_state\nORDER BY path"
 func TestPlanningLoadError_SameTextInOneShotAndWatch(t *testing.T) {
 	t.Parallel()
 
-	eng, fault := newTestEngineOnFaultStore(t, &engineMockClient{}, nil)
+	eng, fault := newTestEngineOnFaultStore(t, &syncfixture.EngineMockClient{}, nil)
 	ctx := t.Context()
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	fault.arm(faultComparisonQuery, errInjectedFault)
-	_, oneShotErr := newOneShotRunner(eng.Engine).runLiveCurrentPlan(ctx, bl, SyncBidirectional, RunOptions{})
-	require.ErrorIs(t, oneShotErr, errInjectedFault, "one-shot")
+	fault.Arm(faultComparisonQuery, syncfixture.ErrInjectedFault)
+	_, oneShotErr := newOneShotRunner(eng.Engine).runLiveCurrentPlan(ctx, bl, syncdomain.SyncBidirectional, RunOptions{})
+	require.ErrorIs(t, oneShotErr, syncfixture.ErrInjectedFault, "one-shot")
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	fault.arm(faultComparisonQuery, errInjectedFault)
-	_, bootstrapErr := rt.runBootstrapCurrentPlan(ctx, bl, SyncBidirectional)
-	require.ErrorIs(t, bootstrapErr, errInjectedFault, "watch bootstrap")
-	fault.arm(faultComparisonQuery, errInjectedFault)
-	_, replanErr := rt.runSteadyStateCurrentPlan(ctx, bl, SyncBidirectional)
-	require.ErrorIs(t, replanErr, errInjectedFault, "watch replan")
+	fault.Arm(faultComparisonQuery, syncfixture.ErrInjectedFault)
+	_, bootstrapErr := rt.runBootstrapCurrentPlan(ctx, bl, syncdomain.SyncBidirectional)
+	require.ErrorIs(t, bootstrapErr, syncfixture.ErrInjectedFault, "watch bootstrap")
+	fault.Arm(faultComparisonQuery, syncfixture.ErrInjectedFault)
+	_, replanErr := rt.runSteadyStateCurrentPlan(ctx, bl, syncdomain.SyncBidirectional)
+	require.ErrorIs(t, replanErr, syncfixture.ErrInjectedFault, "watch replan")
 
 	assert.Equal(t, oneShotErr.Error(), bootstrapErr.Error(), "one-shot and watch bootstrap")
 	assert.Equal(t, oneShotErr.Error(), replanErr.Error(), "one-shot and watch replan")
 	assert.Equal(t, 1, strings.Count(oneShotErr.Error(), "querying comparison state"), oneShotErr.Error())
-	assert.Equal(t, 3, fault.fired(), "each path read the planning state")
+	assert.Equal(t, 3, fault.Fired(), "each path read the planning state")
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/sdnotify"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func standaloneMountSelectionFromResolvedDrives(drives []*config.ResolvedDrive) multisync.StandaloneMountSelection {
@@ -108,7 +109,7 @@ func standaloneMountStartupFailure(
 }
 
 type syncDaemonOrchestrator interface {
-	RunWatch(context.Context, syncengine.SyncMode, syncengine.WatchOptions) error
+	RunWatch(context.Context, syncdomain.SyncMode, syncengine.WatchOptions) error
 }
 
 type syncDaemonOrchestratorFactory func(*multisync.OrchestratorConfig) syncDaemonOrchestrator
@@ -124,7 +125,7 @@ func runSyncDaemon(
 	ctx context.Context,
 	holder *config.Holder,
 	selectors []string,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	logger *slog.Logger,
 	statusWriter io.Writer,
@@ -151,7 +152,7 @@ func runSyncDaemonWithFactory(
 	ctx context.Context,
 	holder *config.Holder,
 	selectors []string,
-	mode syncengine.SyncMode,
+	mode syncdomain.SyncMode,
 	opts syncengine.WatchOptions,
 	logger *slog.Logger,
 	statusWriter io.Writer,

@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // The two edits of one file that conflict in conflictCopyUploadCutAfterCreate.
@@ -34,7 +36,7 @@ func TestCrashRecovery_ConflictCopyWhoseUploadWasCutAfterTheCreate(t *testing.T)
 	t.Parallel()
 
 	for _, lostWAL := range []bool{false, true} {
-		t.Run(crashCaseName(CrashPointUploadCreatedUnrecorded, lostWAL), func(t *testing.T) {
+		t.Run(crashCaseName(syncdomain.CrashPointUploadCreatedUnrecorded, lostWAL), func(t *testing.T) {
 			t.Parallel()
 
 			placeholder, placeholderID, recovered := conflictCopyUploadCutAfterCreate(t, lostWAL)
@@ -70,7 +72,7 @@ func TestCrashRecovery_ConflictCopyWhoseUploadWasCutAfterTheCreate(t *testing.T)
 func conflictCopyUploadCutAfterCreate(t *testing.T, lostWAL bool) (string, string, *syncHarness) {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-c", "root", conflictCrashPath, "c\n")
 	h := newSyncHarness(t, remote)
 	h.eng.serializeWorkers = true
@@ -81,10 +83,10 @@ func conflictCopyUploadCutAfterCreate(t *testing.T, lostWAL bool) (string, strin
 	_, err := h.eng.baseline.RawDBForTest().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 	require.NoError(t, err)
 
-	writeLocalFile(t, h.syncRoot, conflictCrashPath, conflictCrashLocalContent)
+	syncfixture.WriteLocalFile(t, h.syncRoot, conflictCrashPath, conflictCrashLocalContent)
 	remote.putFileAt(t, conflictCrashPath, conflictCrashRemoteContent)
 	capture := &crashCapture{
-		point: CrashPointUploadCreatedUnrecorded, lostWAL: lostWAL,
+		point: syncdomain.CrashPointUploadCreatedUnrecorded, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
 	h.eng.execCfg.SetCrashHookForTest(capture.hook)

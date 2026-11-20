@@ -3,11 +3,14 @@ package sync
 import (
 	"context"
 	"fmt"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func (rt *watchRuntime) handleWatchLocalObservationBatch(
 	ctx context.Context,
-	batch *LocalObservation,
+	batch *syncobserve.LocalObservation,
 ) error {
 	if batch == nil {
 		return nil
@@ -28,22 +31,22 @@ func (rt *watchRuntime) handleWatchLocalObservationBatch(
 // whether the runtime must replan.
 func (rt *watchRuntime) applyLocalObservationBatch(
 	ctx context.Context,
-	batch *LocalObservation,
+	batch *syncobserve.LocalObservation,
 ) (bool, error) {
 	switch batch.Kind {
-	case LocalTruthSuspect:
+	case syncobserve.LocalTruthSuspect:
 		reason := batch.RecoveryReason
 		if reason == "" {
-			reason = LocalTruthRecoveryWatcherError
+			reason = syncdomain.LocalTruthRecoveryWatcherError
 		}
 		if err := rt.deps.store.MarkLocalTruthSuspect(ctx, reason); err != nil {
 			return false, err
 		}
 		rt.engine.collector().RecordLocalObservationSuspect(reason)
 		return true, nil
-	case LocalSnapshot:
+	case syncobserve.LocalSnapshot:
 		return rt.applyLocalSnapshot(ctx, batch)
-	case LocalPatch:
+	case syncobserve.LocalPatch:
 		return rt.applyLocalPatch(ctx, batch)
 	default:
 		return false, fmt.Errorf("sync: applying local observation: unknown kind %d", batch.Kind)
@@ -57,12 +60,12 @@ func (rt *watchRuntime) applyLocalObservationBatch(
 // every safety scan re-reports does not (R-2.8.21). The observer's mount flags
 // are then set from what the store holds, so a disk mounted during the watch
 // is recognized when it is unmounted.
-func (rt *watchRuntime) applyLocalSnapshot(ctx context.Context, batch *LocalObservation) (bool, error) {
+func (rt *watchRuntime) applyLocalSnapshot(ctx context.Context, batch *syncobserve.LocalObservation) (bool, error) {
 	// A scan observed before a shutdown is still committed: detached from
 	// the cancellation, under the bound every detached store write has.
 	commitCtx := ctx
 	if ctx.Err() != nil {
-		detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), OutcomeCommitTimeout)
+		detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), syncdomain.OutcomeCommitTimeout)
 		defer cancel()
 		commitCtx = detached
 	}
@@ -82,7 +85,7 @@ func (rt *watchRuntime) applyLocalSnapshot(ctx context.Context, batch *LocalObse
 	return result.RowsChanged || result.FindingsChanged, nil
 }
 
-func (rt *watchRuntime) applyLocalPatch(ctx context.Context, batch *LocalObservation) (bool, error) {
+func (rt *watchRuntime) applyLocalPatch(ctx context.Context, batch *syncobserve.LocalObservation) (bool, error) {
 	changed := batch.Dirty ||
 		len(batch.Rows) > 0 ||
 		len(batch.DeletedPaths) > 0 ||

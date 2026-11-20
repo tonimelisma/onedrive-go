@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // handleMaintenanceTick processes a periodic watch summary/maintenance tick.
@@ -14,7 +16,7 @@ func (rt *watchRuntime) handleMaintenanceTick(ctx context.Context) {
 	rt.recoverDroppedLocalObservation(ctx)
 	rt.engine.purgeExpiredTrash(false)
 	rt.logWatchSummary(ctx)
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventMaintenanceTickHandled})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventMaintenanceTickHandled})
 }
 
 func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
@@ -28,9 +30,9 @@ func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
 		return
 	}
 
-	if err := rt.handleWatchLocalObservationBatch(ctx, &LocalObservation{
-		Kind:           LocalTruthSuspect,
-		RecoveryReason: LocalTruthRecoveryDroppedEvents,
+	if err := rt.handleWatchLocalObservationBatch(ctx, &syncobserve.LocalObservation{
+		Kind:           syncobserve.LocalTruthSuspect,
+		RecoveryReason: syncdomain.LocalTruthRecoveryDroppedEvents,
 	}); err != nil {
 		rt.resources.localObs.RestoreDropped(droppedEvents, droppedRetries)
 		level := slog.LevelWarn
@@ -61,7 +63,7 @@ func (e *Engine) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, err
 	if err != nil {
 		return 0, fmt.Errorf("sync: reading observation state for remote refresh cadence: %w", err)
 	}
-	if !StoredTimeIsSet(state.NextFullRemoteRefreshAt) {
+	if !syncdomain.StoredTimeIsSet(state.NextFullRemoteRefreshAt) {
 		return 0, nil
 	}
 
@@ -83,7 +85,7 @@ func (e *Engine) shouldRunFullRemoteRefresh(ctx context.Context, requested bool)
 	if err != nil {
 		return false, fmt.Errorf("sync: reading observation state for full remote refresh: %w", err)
 	}
-	if state.Cursor == "" || !StoredTimeIsSet(state.NextFullRemoteRefreshAt) {
+	if state.Cursor == "" || !syncdomain.StoredTimeIsSet(state.NextFullRemoteRefreshAt) {
 		return true, nil
 	}
 
@@ -121,13 +123,13 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 // orphan detection. Non-blocking — the watch loop continues processing events
 // while refresh work runs. The goroutine sends one loop-owned remote batch back
 // to the watch loop; the loop owns durable apply and dirty marking.
-func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *Baseline) {
+func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *syncdomain.Baseline) {
 	if rt.resources.refreshActive {
 		rt.deps.logger.Info("full remote refresh skipped — previous still running")
 		return
 	}
 	rt.resources.refreshActive = true
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshStarted})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshStarted})
 
 	rt.resources.goroutines.start(ctx, watchGoroutineFullRefresh, func(ctx context.Context) {
 		defer rt.recoverFullRemoteRefreshPanic(ctx)
@@ -152,8 +154,8 @@ func (rt *watchRuntime) recoverFullRemoteRefreshPanic(ctx context.Context) {
 	}
 
 	panicErr := panicguard.Recovered(rt.deps.logger, "in the full remote refresh", r)
-	result := RemoteObservationBatch{
-		Source:   RemoteObservationBatchFullRefresh,
+	result := syncobserve.RemoteObservationBatch{
+		Source:   syncobserve.RemoteObservationBatchFullRefresh,
 		FatalErr: fmt.Errorf("sync: %w", panicErr),
 	}
 	rt.finishFullRemoteRefresh(ctx, &result)
@@ -161,10 +163,10 @@ func (rt *watchRuntime) recoverFullRemoteRefreshPanic(ctx context.Context) {
 
 func (rt *watchRuntime) performFullRemoteRefresh(
 	ctx context.Context,
-	bl *Baseline,
-) RemoteObservationBatch {
-	result := RemoteObservationBatch{
-		Source: RemoteObservationBatchFullRefresh,
+	bl *syncdomain.Baseline,
+) syncobserve.RemoteObservationBatch {
+	result := syncobserve.RemoteObservationBatch{
+		Source: syncobserve.RemoteObservationBatchFullRefresh,
 	}
 	start := rt.deps.now()
 	defer func() {
@@ -185,7 +187,7 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 		return result
 	}
 
-	observationBatch.Source = RemoteObservationBatchFullRefresh
+	observationBatch.Source = syncobserve.RemoteObservationBatchFullRefresh
 	observationBatch.ArmFullRefreshTimer = true
 	observationBatch.MarkFullRefreshIfIdle = len(observationBatch.Changes) == 0
 	result = observationBatch
@@ -204,7 +206,7 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 	return result
 }
 
-func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result *RemoteObservationBatch) {
+func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result *syncobserve.RemoteObservationBatch) {
 	select {
 	case rt.resources.refreshResults <- *result:
 	case <-ctx.Done():
@@ -217,7 +219,7 @@ func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result *Rem
 
 func (rt *watchRuntime) applyRemoteRefreshResult(
 	ctx context.Context,
-	result *RemoteObservationBatch,
+	result *syncobserve.RemoteObservationBatch,
 ) error {
 	if result.FatalErr != nil {
 		rt.resources.refreshActive = false
@@ -229,5 +231,5 @@ func (rt *watchRuntime) applyRemoteRefreshResult(
 
 func (rt *watchRuntime) dropRemoteRefreshResultOnShutdown() {
 	rt.resources.refreshActive = false
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRemoteRefreshDroppedOnShutdown})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshDroppedOnShutdown})
 }

@@ -19,6 +19,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -86,12 +88,12 @@ func TestRunOnce_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown(t *testing
 	}
 
 	capture, logger := synctest.NewLogCapture()
-	mock := newRunOnceBidirectionalMock(driveid.New(engineTestDriveID))
-	downloadContent := mock.downloadFn
+	mock := newRunOnceBidirectionalMock(driveid.New(syncfixture.EngineTestDriveID))
+	downloadContent := mock.DownloadFn
 	eng, syncRoot := newTestEngineWithLogger(t, mock, logger)
-	mock.downloadFn = panicATimerAndWaitForTheCancel(eng.Engine)
+	mock.DownloadFn = panicATimerAndWaitForTheCancel(eng.Engine)
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 
 	requireRunEndedByTheTimerPanic(t, capture, err)
 	require.NotNil(t, report, "RunOnce returns the report it has beside the error")
@@ -99,8 +101,8 @@ func TestRunOnce_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown(t *testing
 	assert.Zero(t, report.Succeeded)
 	assertNoFailureRecorded(t, eng.Engine)
 
-	mock.downloadFn = downloadContent
-	report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	mock.DownloadFn = downloadContent
+	report, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "a panic ends only the run it fired in")
 	assert.Equal(t, 1, report.Succeeded, "the next sync redoes the action the panic stopped")
 	assert.FileExists(t, filepath.Join(syncRoot, "remote.txt"))
@@ -120,13 +122,13 @@ func TestRunWatch_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown(t *testin
 	}
 
 	capture, logger := synctest.NewLogCapture()
-	mock := newRunOnceBidirectionalMock(driveid.New(engineTestDriveID))
+	mock := newRunOnceBidirectionalMock(driveid.New(syncfixture.EngineTestDriveID))
 	eng, _ := newTestEngineWithLogger(t, mock, logger)
-	mock.downloadFn = panicATimerAndWaitForTheCancel(eng.Engine)
+	mock.DownloadFn = panicATimerAndWaitForTheCancel(eng.Engine)
 
 	done := make(chan error, 1)
 	go func() {
-		done <- eng.RunWatch(t.Context(), SyncBidirectional, WatchOptions{PollInterval: time.Hour, Debounce: 5 * time.Millisecond})
+		done <- eng.RunWatch(t.Context(), syncdomain.SyncBidirectional, WatchOptions{PollInterval: time.Hour, Debounce: 5 * time.Millisecond})
 	}()
 
 	select {
@@ -166,14 +168,14 @@ func panicInACommandHelper(cancelCommand context.CancelCauseFunc, done chan<- st
 func TestRunOnce_AHelperPanicOfTheCommandEndsTheActionInFlightAsAShutdown(t *testing.T) {
 	t.Parallel()
 
-	mock := newRunOnceBidirectionalMock(driveid.New(engineTestDriveID))
-	downloadContent := mock.downloadFn
+	mock := newRunOnceBidirectionalMock(driveid.New(syncfixture.EngineTestDriveID))
+	downloadContent := mock.DownloadFn
 	eng, syncRoot := newTestEngine(t, mock)
 	commandCtx, cancelCommand := context.WithCancelCause(t.Context())
 	defer cancelCommand(nil)
 	helperDone := make(chan struct{})
 	var helperStarted atomic.Bool
-	mock.downloadFn = func(ctx context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+	mock.DownloadFn = func(ctx context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 		if helperStarted.CompareAndSwap(false, true) {
 			go panicInACommandHelper(cancelCommand, helperDone)
 		}
@@ -182,7 +184,7 @@ func TestRunOnce_AHelperPanicOfTheCommandEndsTheActionInFlightAsAShutdown(t *tes
 		return 0, fmt.Errorf("request canceled: %w", context.Cause(ctx))
 	}
 
-	report, err := eng.RunOnce(commandCtx, SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(commandCtx, syncdomain.SyncBidirectional, RunOptions{})
 	require.True(t, helperStarted.Load(), "the download ran")
 	<-helperDone
 
@@ -193,8 +195,8 @@ func TestRunOnce_AHelperPanicOfTheCommandEndsTheActionInFlightAsAShutdown(t *tes
 	assert.Zero(t, report.Succeeded)
 	assertNoFailureRecorded(t, eng.Engine)
 
-	mock.downloadFn = downloadContent
-	report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	mock.DownloadFn = downloadContent
+	report, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Succeeded, "the next sync redoes the action the stop interrupted")
 	assert.FileExists(t, filepath.Join(syncRoot, "remote.txt"))
@@ -202,7 +204,7 @@ func TestRunOnce_AHelperPanicOfTheCommandEndsTheActionInFlightAsAShutdown(t *tes
 
 // panicThroughTheBoundary panics inside clock's timer boundary, as a timer
 // callback the clock runs would.
-func panicThroughTheBoundary(clock RealClock, value string) {
+func panicThroughTheBoundary(clock syncdomain.RealClock, value string) {
 	defer clock.RecoverTimerPanic()
 
 	panic(value)
@@ -217,13 +219,13 @@ func TestRealClock_ATimerPanicWithNoRunBoundIsOnlyLogged(t *testing.T) {
 	t.Parallel()
 
 	capture, logger := synctest.NewLogCapture()
-	eng := &Engine{wallClock: NewRealClock(logger, &TimerPanics{})}
+	eng := &Engine{wallClock: syncdomain.NewRealClock(logger, &syncdomain.TimerPanics{})}
 	bound := eng.wallClock
 	_, end := eng.beginRun(t.Context())
 	require.NoError(t, end(nil))
 
 	require.NotPanics(t, func() { panicThroughTheBoundary(bound, "late timer exploded") }, "after its run returned")
-	require.NotPanics(t, func() { panicThroughTheBoundary(NewRealClock(logger, nil), "unbound timer exploded") },
+	require.NotPanics(t, func() { panicThroughTheBoundary(syncdomain.NewRealClock(logger, nil), "unbound timer exploded") },
 		"on a clock no engine bound")
 
 	logged := capture.AtLeast(slog.LevelError)

@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.12.3, R-5.6.14
@@ -18,11 +20,11 @@ func TestRunOnce_FullCaseFoldingVariantNeverOverwritesTheSyncedFile(t *testing.T
 	// Manual test: STRASSE.txt was uploaded with replace onto straße.txt,
 	// which OneDrive treats as the same name, and the original content was
 	// gone. strings.ToLower does not fold ß to ss.
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-strasse", "root", "straße.txt", "original\n")
 
 	eng, syncRoot := newTestEngine(t, remote.client(t))
-	skipUnlessNamesCoexist(t, "straße.txt", "STRASSE.txt")
+	syncfixture.SkipUnlessNamesCoexist(t, "straße.txt", "STRASSE.txt")
 	runScenarioPass(t, eng)
 	require.FileExists(t, filepath.Join(syncRoot, "straße.txt"))
 
@@ -31,7 +33,7 @@ func TestRunOnce_FullCaseFoldingVariantNeverOverwritesTheSyncedFile(t *testing.T
 
 	assert.Zero(t, remote.uploads, "the variant must be held as a collision, not uploaded")
 	assert.Equal(t, map[string]string{"straße.txt": "original\n"}, remote.tree())
-	requireScenarioIssue(t, eng, "STRASSE.txt", IssueCaseCollision)
+	requireScenarioIssue(t, eng, "STRASSE.txt", syncdomain.IssueCaseCollision)
 }
 
 // Validates: R-2.12.3
@@ -40,7 +42,7 @@ func TestRunOnce_EmojiOnlyVariantIsACollisionNotAnEndlessConflict(t *testing.T) 
 
 	// Manual test: a.txt retried "graph: conflict" forever against a synced
 	// a😀.txt, because OneDrive ignores the emoji when comparing names (L-30).
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-emoji", "root", "a\U0001F600.txt", "emoji\n")
 
 	eng, syncRoot := newTestEngine(t, remote.client(t))
@@ -51,10 +53,10 @@ func TestRunOnce_EmojiOnlyVariantIsACollisionNotAnEndlessConflict(t *testing.T) 
 
 	assert.Zero(t, remote.uploads)
 	assert.Equal(t, map[string]string{"a\U0001F600.txt": "emoji\n"}, remote.tree())
-	requireScenarioIssue(t, eng, "a.txt", IssueCaseCollision)
+	requireScenarioIssue(t, eng, "a.txt", syncdomain.IssueCaseCollision)
 }
 
-func requireScenarioIssue(t *testing.T, eng *testEngine, path string, issueType IssueType) {
+func requireScenarioIssue(t *testing.T, eng *testEngine, path string, issueType syncdomain.IssueType) {
 	t.Helper()
 
 	issues, err := eng.baseline.ListObservationIssues(t.Context())
@@ -74,8 +76,8 @@ func TestContentFilter_SpellingRenameArtifactIsAlwaysExcluded(t *testing.T) {
 	// A crash between the two renames of a spelling-only rename must not
 	// leave a file that syncs under the temporary name, whatever the filter
 	// settings (junk filtering and dotfile filtering both off here).
-	filter := NewContentFilter(ContentFilterConfig{})
-	assert.False(t, filter.Visible(SpellingRenameArtifactPrefix+"EDIT.txt", ItemTypeFile))
-	assert.False(t, filter.Visible("docs/"+SpellingRenameArtifactPrefix+"EDIT.txt-1", ItemTypeFile))
-	assert.True(t, filter.Visible("docs/EDIT.txt", ItemTypeFile))
+	filter := syncdomain.NewContentFilter(syncdomain.ContentFilterConfig{})
+	assert.False(t, filter.Visible(syncdomain.SpellingRenameArtifactPrefix+"EDIT.txt", syncdomain.ItemTypeFile))
+	assert.False(t, filter.Visible("docs/"+syncdomain.SpellingRenameArtifactPrefix+"EDIT.txt-1", syncdomain.ItemTypeFile))
+	assert.True(t, filter.Visible("docs/EDIT.txt", syncdomain.ItemTypeFile))
 }

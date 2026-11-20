@@ -9,12 +9,13 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 const testMountRemoteRootItemID = "mount-root-id"
 
-func testPublishedShortcutChild(t *testing.T) syncengine.ShortcutChildRunCommand {
+func testPublishedShortcutChild(t *testing.T) syncshortcut.ShortcutChildRunCommand {
 	t.Helper()
 
 	const (
@@ -22,27 +23,27 @@ func testPublishedShortcutChild(t *testing.T) syncengine.ShortcutChildRunCommand
 		remoteDriveID = "remote-drive"
 		remoteItemID  = "remote-root"
 	)
-	return syncengine.ShortcutChildRunCommand{
+	return syncshortcut.ShortcutChildRunCommand{
 		ChildMountID: config.ChildMountID("personal:owner@example.com", "binding-child-docs"),
 		DisplayName:  filepath.Base(relativePath),
-		Engine: syncengine.ShortcutChildEngineSpec{
+		Engine: syncshortcut.ShortcutChildEngineSpec{
 			LocalRoot:     filepath.Join(testParentProcessRoot(), filepath.FromSlash(relativePath)),
 			RemoteDriveID: remoteDriveID,
 			RemoteItemID:  remoteItemID,
 		},
-		Mode:   syncengine.ShortcutChildRunModeNormal,
+		Mode:   syncshortcut.ShortcutChildRunModeNormal,
 		AckRef: testShortcutChildAckRef(t, "binding-child-docs"),
 	}
 }
 
 func testParentSnapshots(
 	parent *StandaloneMountConfig,
-	children ...syncengine.ShortcutChildRunCommand,
-) map[mountID]syncengine.ShortcutChildWorkSnapshot {
+	children ...syncshortcut.ShortcutChildRunCommand,
+) map[mountID]syncshortcut.ShortcutChildWorkSnapshot {
 	if parent == nil {
 		return nil
 	}
-	return map[mountID]syncengine.ShortcutChildWorkSnapshot{
+	return map[mountID]syncshortcut.ShortcutChildWorkSnapshot{
 		mountID(parent.CanonicalID.String()): processSnapshotForParent(parent, children...),
 	}
 }
@@ -55,7 +56,7 @@ func TestBuildStandaloneMountSpecs_PreservesOrderAndReportingFields(t *testing.T
 	second := testStandaloneMount(t, "business:second@example.com", "Second")
 	second.Paused = true
 	first.SelectionIndex = 4
-	first.ContentFilter = syncengine.ContentFilterConfig{
+	first.ContentFilter = syncdomain.ContentFilterConfig{
 		IgnoredDirs:     []string{"build"},
 		IncludedDirs:    []string{"Projects"},
 		IgnoredPaths:    []string{"*.tmp"},
@@ -97,7 +98,7 @@ func TestMountSpecsEquivalentForWatchRestart_ChangesOnContentFilter(t *testing.T
 
 	current := testStandaloneMount(t, "personal:filter-reload@example.com", "Filtered")
 	next := current
-	next.ContentFilter = syncengine.ContentFilterConfig{IgnoredDirs: []string{"node_modules"}}
+	next.ContentFilter = syncdomain.ContentFilterConfig{IgnoredDirs: []string{"node_modules"}}
 
 	currentMounts, err := buildStandaloneMountSpecs([]StandaloneMountConfig{current})
 	require.NoError(t, err)
@@ -251,8 +252,8 @@ func TestChildMountSpecLoweringCarriesChildRuntimeStateOnlyAtRunnerBoundary(t *t
 
 	child := testPublishedShortcutChild(t)
 	child.ChildMountID = config.ChildMountID(parentCfg.CanonicalID.String(), "binding-child-docs")
-	child.Engine.LocalRootIdentity = &syncengine.ShortcutRootIdentity{Device: 7, Inode: 8}
-	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	child.Engine.LocalRootIdentity = &syncshortcut.ShortcutRootIdentity{Device: 7, Inode: 8}
+	child.Mode = syncshortcut.ShortcutChildRunModeFinalDrain
 
 	spec := newChildMountSpec(
 		parentMount,
@@ -315,7 +316,7 @@ func TestBuildRuntimeWork_FinalDrainChildDoesNotSynthesizeParentReservation(t *t
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
 	child := testPublishedShortcutChild(t)
-	child.Mode = syncengine.ShortcutChildRunModeFinalDrain
+	child.Mode = syncshortcut.ShortcutChildRunModeFinalDrain
 
 	decisions, err := buildRuntimeWork(
 		[]StandaloneMountConfig{parent},
@@ -405,7 +406,7 @@ func TestBuildRuntimeWork_MissingParentSkipsChild(t *testing.T) {
 
 	decisions, err := buildRuntimeWork(
 		[]StandaloneMountConfig{parent},
-		map[mountID]syncengine.ShortcutChildWorkSnapshot{
+		map[mountID]syncshortcut.ShortcutChildWorkSnapshot{
 			"missing-parent": processSnapshot(
 				"missing-parent",
 				testChildRecord(t, "missing-parent", "binding-child-docs", "Shortcuts/Docs"),

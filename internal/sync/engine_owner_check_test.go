@@ -14,6 +14,9 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -80,7 +83,7 @@ func assertOwnerCheckFires(t *testing.T, install func(func()), access func()) {
 		defer close(accessed)
 		access()
 	}()
-	receiveWithin(t, accessed, "the second goroutine's call")
+	syncfixture.ReceiveWithin(t, accessed, "the second goroutine's call")
 	assert.Len(t, violations, 1, "the second goroutine's call is caught")
 }
 
@@ -88,7 +91,7 @@ func assertOwnerCheckFires(t *testing.T, install func(func()), access func()) {
 func TestOwnerCheck_DependencyGraphCatchesASecondGoroutine(t *testing.T) {
 	t.Parallel()
 
-	graph := NewDepGraph(synctest.TestLogger(t))
+	graph := syncexec.NewDepGraph(synctest.TestLogger(t))
 	assertOwnerCheckFires(t,
 		func(check func()) { graph.SetOwnerCheck(check) },
 		func() { graph.InFlightCount() },
@@ -102,7 +105,7 @@ func TestOwnerCheck_ScopeLedgerCatchesASecondGoroutine(t *testing.T) {
 	var ledger scopeLedger
 	assertOwnerCheckFires(t,
 		func(check func()) { ledger.ownerCheck = check },
-		func() { ledger.hasActiveScope(SKService()) },
+		func() { ledger.hasActiveScope(syncdomain.SKService()) },
 	)
 }
 
@@ -110,7 +113,7 @@ func TestOwnerCheck_ScopeLedgerCatchesASecondGoroutine(t *testing.T) {
 func TestOwnerCheck_WatchTimersCatchASecondGoroutine(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	assertOwnerCheckFires(t,
@@ -129,18 +132,18 @@ func TestOwnerCheck_WatchTimersCatchASecondGoroutine(t *testing.T) {
 func TestWatchRuntime_TimerCallbacksTouchOnlyChannels(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
-	clock := newManualClock(time.Now())
+	clock := syncfixture.NewManualClock(time.Now())
 	installManualClockForTestEngine(eng, clock)
 	rt := testWatchRuntime(t, eng)
 	installOwnerCheck(t, rt)
 	due := clock.Now().Add(time.Minute)
 
-	rt.scopes.upsertActiveScope(&ActiveScope{Key: SKService(), TrialInterval: time.Minute, NextTrialAt: due})
-	rt.retries.heldByScope[SKService()] = []RetryWorkKey{{Path: "scoped.txt"}}
+	rt.scopes.upsertActiveScope(&syncdomain.ActiveScope{Key: syncdomain.SKService(), TrialInterval: time.Minute, NextTrialAt: due})
+	rt.retries.heldByScope[syncdomain.SKService()] = []syncdomain.RetryWorkKey{{Path: "scoped.txt"}}
 	rt.armTrialTimer()
-	rt.retries.heldByKey[RetryWorkKey{Path: "held.txt"}] = &heldAction{Reason: heldReasonRetry, NextRetry: due}
+	rt.retries.heldByKey[syncdomain.RetryWorkKey{Path: "held.txt"}] = &heldAction{Reason: heldReasonRetry, NextRetry: due}
 	rt.armRetryTimer()
 	rt.armAdmitTimer(due)
 	require.NoError(t, rt.armFullRefreshTimer(t.Context()))
@@ -151,14 +154,14 @@ func TestWatchRuntime_TimerCallbacksTouchOnlyChannels(t *testing.T) {
 	fired := make(chan struct{})
 	go func() {
 		defer close(fired)
-		clock.Advance(FullRemoteRefreshInterval + time.Minute)
+		clock.Advance(syncdomain.FullRemoteRefreshInterval + time.Minute)
 	}()
-	receiveWithin(t, fired, "the second goroutine to fire the timers")
+	syncfixture.ReceiveWithin(t, fired, "the second goroutine to fire the timers")
 
-	receiveWithin(t, rt.timers.trialCh, "the trial timer's signal")
-	receiveWithin(t, rt.timers.retryTimerCh, "the retry timer's signal")
-	receiveWithin(t, rt.timers.admitCh, "the admit timer's signal")
-	receiveWithin(t, rt.resources.refreshCh, "the full refresh timer's signal")
+	syncfixture.ReceiveWithin(t, rt.timers.trialCh, "the trial timer's signal")
+	syncfixture.ReceiveWithin(t, rt.timers.retryTimerCh, "the retry timer's signal")
+	syncfixture.ReceiveWithin(t, rt.timers.admitCh, "the admit timer's signal")
+	syncfixture.ReceiveWithin(t, rt.resources.refreshCh, "the full refresh timer's signal")
 }
 
 // runOwnership counts, for an engine whose runs carry an owner check, the
@@ -237,15 +240,15 @@ func TestRunOnce_UsesRunStateOnlyFromItsGoroutine(t *testing.T) {
 	t.Parallel()
 
 	const content = "owned!"
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	mock := newDownloadDeltaMock(driveID, &graph.Item{
 		ID: "item-a", Name: "owned.txt", ParentID: "root",
-		DriveID: driveID, Size: int64(len(content)), QuickXorHash: testQuickXor(content),
+		DriveID: driveID, Size: int64(len(content)), QuickXorHash: syncfixture.TestQuickXor(content),
 	}, "token-owned", []byte(content))
 	eng, _ := newTestEngine(t, mock)
 	ownership := requireRunOwnership(t, eng)
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Downloads)
 	ownership.assertRunOwned(t, "(*DepGraph)", "(*scopeLedger)")
@@ -261,19 +264,19 @@ func TestRunWatch_UsesRunStateOnlyFromItsGoroutine(t *testing.T) {
 	t.Parallel()
 
 	const content = "watched!"
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	mock := newDownloadDeltaMock(driveID, &graph.Item{
 		ID: "item-a", Name: "watched.txt", ParentID: "root",
-		DriveID: driveID, Size: int64(len(content)), QuickXorHash: testQuickXor(content),
+		DriveID: driveID, Size: int64(len(content)), QuickXorHash: syncfixture.TestQuickXor(content),
 	}, "token-watched", []byte(content))
 	eng, _ := newTestEngine(t, mock)
 	ownership := requireRunOwnership(t, eng)
 	recorder := attachDebugEventRecorder(eng)
 
-	cancel, done := runWatchInBackground(t, eng, SyncBidirectional, quietWatchOptions())
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncBidirectional, quietWatchOptions())
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 	ownership.assertRunOwned(t, "(*DepGraph)", "(*scopeLedger)", "(*watchTimerState)")
 }

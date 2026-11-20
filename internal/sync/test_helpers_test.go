@@ -14,6 +14,10 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // makeReadOnlyForTest takes the owner's write access from dir, so nothing in
@@ -22,8 +26,8 @@ import (
 func makeReadOnlyForTest(t *testing.T, dir string) {
 	t.Helper()
 
-	setTestDirPermissions(t, dir, 0o500)
-	t.Cleanup(func() { setTestDirPermissions(t, dir, 0o700) })
+	syncfixture.SetTestDirPermissions(t, dir, 0o500)
+	t.Cleanup(func() { syncfixture.SetTestDirPermissions(t, dir, 0o700) })
 }
 
 func schemaFingerprint(tb testing.TB, db *sql.DB) []string {
@@ -66,13 +70,13 @@ func TestNewTestStore_TemplateMatchesFreshStore(t *testing.T) {
 	t.Parallel()
 
 	freshPath := filepath.Join(t.TempDir(), "fresh.db")
-	fresh, err := NewSyncStore(t.Context(), freshPath, newTestLogger(t))
+	fresh, err := syncstore.NewSyncStore(t.Context(), freshPath, syncfixture.NewTestLogger(t))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, fresh.Close(context.Background()))
 	})
 
-	templateBacked := newTestStore(t)
+	templateBacked := syncstoretest.NewTestStore(t)
 
 	assert.Equal(t, schemaFingerprint(t, fresh.RawDBForTest()), schemaFingerprint(t, templateBacked.RawDBForTest()))
 	assert.Equal(t, journalMode(t, fresh.RawDBForTest()), journalMode(t, templateBacked.RawDBForTest()))

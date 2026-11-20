@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 func (o *Orchestrator) buildRuntimeWorkSet(
@@ -58,21 +58,21 @@ func (o *Orchestrator) buildStandaloneRuntimeWorkSet(
 
 func (o *Orchestrator) buildRuntimeWorkFromParentSnapshots(
 	parents []*mountSpec,
-	parentSnapshots map[mountID]syncengine.ShortcutChildWorkSnapshot,
+	parentSnapshots map[mountID]syncshortcut.ShortcutChildWorkSnapshot,
 ) (*runtimeWorkSet, error) {
 	return buildRuntimeWorkForParents(parents, parentSnapshots, o.cfg.DataDir, o.logger)
 }
 
 func (o *Orchestrator) buildRuntimeWorkForParentSnapshot(
 	parent *mountSpec,
-	snapshot syncengine.ShortcutChildWorkSnapshot,
+	snapshot syncshortcut.ShortcutChildWorkSnapshot,
 ) (*runtimeWorkSet, error) {
 	if parent == nil {
 		return nil, fmt.Errorf("building parent child runtime work: parent mount is required")
 	}
 	parentCopy := cloneMountSpec(parent)
-	parentSnapshots := map[mountID]syncengine.ShortcutChildWorkSnapshot{
-		parentCopy.id(): syncengine.NormalizeShortcutChildWorkSnapshot(parentCopy.id().String(), snapshot),
+	parentSnapshots := map[mountID]syncshortcut.ShortcutChildWorkSnapshot{
+		parentCopy.id(): syncshortcut.NormalizeShortcutChildWorkSnapshot(parentCopy.id().String(), snapshot),
 	}
 	return o.buildRuntimeWorkFromParentSnapshots([]*mountSpec{parentCopy}, parentSnapshots)
 }

@@ -15,6 +15,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.1.7
@@ -26,14 +28,14 @@ import (
 func TestRunOnce_ReplansASupersededMoveInTheSameRun(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
 	remote.addFolder("item-dir", "root", "dir")
 	remote.addFile(t, "item-a", "item-dir", "a.txt", "alpha\n")
 	client := remote.client(t)
-	move := client.moveItemOptsFn
+	move := client.MoveItemOptsFn
 	var refused atomic.Int32
-	client.moveItemOptsFn = func(
+	client.MoveItemOptsFn = func(
 		ctx context.Context, d driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
 	) (*graph.Item, error) {
 		if refused.CompareAndSwap(0, 1) {
@@ -47,7 +49,7 @@ func TestRunOnce_ReplansASupersededMoveInTheSameRun(t *testing.T) {
 	runScenarioPass(t, eng)
 	require.NoError(t, os.Rename(filepath.Join(syncRoot, "dir"), filepath.Join(syncRoot, "dir-moved")))
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), refused.Load(), "the first move was refused")
@@ -68,12 +70,12 @@ func TestRunOnce_ReplansASupersededMoveInTheSameRun(t *testing.T) {
 func TestRunOnce_OverwriteRefusedWithA412IsReplannedInTheSameRun(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-doc", "root", "doc.txt", "first\n")
 	client := remote.client(t)
-	upload := client.uploadToItemFn
+	upload := client.UploadToItemFn
 	var raced atomic.Int32
-	client.uploadToItemFn = func(
+	client.UploadToItemFn = func(
 		ctx context.Context, d driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64,
 		mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error) {
@@ -89,7 +91,7 @@ func TestRunOnce_OverwriteRefusedWithA412IsReplannedInTheSameRun(t *testing.T) {
 	runScenarioPass(t, eng)
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "doc.txt"), []byte("edited here\n"), 0o600))
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), raced.Load(), "the first overwrite met the remote edit")

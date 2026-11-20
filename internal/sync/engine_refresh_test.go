@@ -14,6 +14,11 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // ---------------------------------------------------------------------------
@@ -23,43 +28,43 @@ import (
 func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
-	events := []RemoteItem{
-		{ObservedItem: ObservedItem{
+	driveID := driveid.New(syncfixture.TestDriveID)
+	events := []syncdomain.RemoteItem{
+		{ObservedItem: syncdomain.ObservedItem{
 			ItemID:    "item1",
 			ParentID:  "parent1",
 			DriveID:   driveID,
 			Path:      "docs/file.txt",
-			ItemType:  ItemTypeFile,
+			ItemType:  syncdomain.ItemTypeFile,
 			Hash:      "qxh1",
 			Size:      1024,
 			Mtime:     123456789,
 			ETag:      "etag1",
 			IsDeleted: false,
 		}},
-		{ObservedItem: ObservedItem{
+		{ObservedItem: syncdomain.ObservedItem{
 			ItemID:    "item2",
 			DriveID:   driveID,
 			Path:      "docs/folder",
-			ItemType:  ItemTypeFolder,
+			ItemType:  syncdomain.ItemTypeFolder,
 			IsDeleted: true,
 		}},
 	}
 
-	items := ProjectRemoteObservations(slog.Default(), events).Observed
+	items := syncobserve.ProjectRemoteObservations(slog.Default(), events).Observed
 	require.Len(t, items, 2)
 
 	assert.Equal(t, driveID, items[0].DriveID)
 	assert.Equal(t, "item1", items[0].ItemID)
 	assert.Equal(t, "docs/file.txt", items[0].Path)
-	assert.Equal(t, ItemTypeFile, items[0].ItemType)
+	assert.Equal(t, syncdomain.ItemTypeFile, items[0].ItemType)
 	assert.Equal(t, "qxh1", items[0].Hash)
 	assert.Equal(t, int64(1024), items[0].Size)
 	assert.Equal(t, int64(123456789), items[0].Mtime)
 	assert.Equal(t, "etag1", items[0].ETag)
 	assert.False(t, items[0].IsDeleted)
 
-	assert.Equal(t, ItemTypeFolder, items[1].ItemType)
+	assert.Equal(t, syncdomain.ItemTypeFolder, items[1].ItemType)
 	assert.True(t, items[1].IsDeleted)
 }
 
@@ -71,9 +76,9 @@ func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
 func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	driveID := driveid.New(syncfixture.TestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return &graph.DeltaPage{
 				Items:     []graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}},
 				DeltaLink: "new-token-should-not-be-saved",
@@ -83,7 +88,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 
 	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
@@ -102,7 +107,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a known delta token.
-	saveObservationCursorForTest(t, e.baseline, ctx, driveID.String(), "old-token")
+	syncstoretest.SaveObservationCursorForTest(t, e.baseline, ctx, driveID.String(), "old-token")
 
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -117,7 +122,7 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 	require.Nil(t, pendingCursor, "no pending cursor when the window holds no change")
 
 	// Token should NOT have been advanced.
-	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
+	savedToken := syncstoretest.ReadObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Equal(t, "old-token", savedToken, "token should not advance when 0 events returned")
 }
 
@@ -125,9 +130,9 @@ func TestObserveAndCommitRemote_ZeroEvents_NoTokenAdvance(t *testing.T) {
 func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	driveID := driveid.New(syncfixture.TestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return &graph.DeltaPage{
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveID},
@@ -140,7 +145,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 
 	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
@@ -159,7 +164,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a known delta token.
-	saveObservationCursorForTest(t, e.baseline, ctx, driveID.String(), "old-token")
+	syncstoretest.SaveObservationCursorForTest(t, e.baseline, ctx, driveID.String(), "old-token")
 
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -178,7 +183,7 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 	require.NotNil(t, pendingCursor)
 	assert.Equal(t, "new-token", pendingCursor.CursorToken, "pending cursor should be returned")
 
-	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
+	savedToken := syncstoretest.ReadObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Equal(t, "old-token", savedToken,
 		"cursor should NOT be committed to DB by observeAndCommitRemoteCurrentState — it is deferred")
 }
@@ -191,12 +196,12 @@ func TestObserveAndCommitRemote_WithEvents_TokenDeferred(t *testing.T) {
 func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
-		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: ItemTypeFile},
-		{Path: "c.txt", DriveID: driveID, ItemID: "id-c", ItemType: ItemTypeFile},
+	bl := syncfixture.NewBaselineForTest([]*syncdomain.BaselineEntry{
+		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: syncdomain.ItemTypeFile},
+		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: syncdomain.ItemTypeFile},
+		{Path: "c.txt", DriveID: driveID, ItemID: "id-c", ItemType: syncdomain.ItemTypeFile},
 	})
 
 	// Seen set has 2 of 3 items — id-b is missing (orphan).
@@ -205,7 +210,7 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 		"id-c": {},
 	}
 
-	orphans := FindBaselineOrphans(bl, seen, driveID, "")
+	orphans := syncstore.FindBaselineOrphans(bl, seen, driveID, "")
 	require.Len(t, orphans, 1, "should detect 1 orphan")
 	assert.Equal(t, "b.txt", orphans[0].Path)
 	assert.Equal(t, "id-b", orphans[0].ItemID)
@@ -217,11 +222,11 @@ func TestFindOrphans_DetectsDeletedItems(t *testing.T) {
 func TestFindOrphans_NoOrphans(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
-		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: ItemTypeFile},
+	bl := syncfixture.NewBaselineForTest([]*syncdomain.BaselineEntry{
+		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: syncdomain.ItemTypeFile},
+		{Path: "b.txt", DriveID: driveID, ItemID: "id-b", ItemType: syncdomain.ItemTypeFile},
 	})
 
 	// All baseline items are in the seen set.
@@ -230,7 +235,7 @@ func TestFindOrphans_NoOrphans(t *testing.T) {
 		"id-b": {},
 	}
 
-	orphans := FindBaselineOrphans(bl, seen, driveID, "")
+	orphans := syncstore.FindBaselineOrphans(bl, seen, driveID, "")
 	assert.Empty(t, orphans, "should find no orphans when all items are in seen set")
 }
 
@@ -238,18 +243,18 @@ func TestFindOrphans_NoOrphans(t *testing.T) {
 func TestFindOrphans_IgnoresOtherDrives(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 	otherDrive := driveid.New("0000000000000002")
 
-	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
-		{Path: "other.txt", DriveID: otherDrive, ItemID: "id-other", ItemType: ItemTypeFile},
+	bl := syncfixture.NewBaselineForTest([]*syncdomain.BaselineEntry{
+		{Path: "a.txt", DriveID: driveID, ItemID: "id-a", ItemType: syncdomain.ItemTypeFile},
+		{Path: "other.txt", DriveID: otherDrive, ItemID: "id-other", ItemType: syncdomain.ItemTypeFile},
 	})
 
 	// Empty seen set — only driveID's items should be orphaned.
 	seen := map[string]struct{}{}
 
-	orphans := FindBaselineOrphans(bl, seen, driveID, "")
+	orphans := syncstore.FindBaselineOrphans(bl, seen, driveID, "")
 	require.Len(t, orphans, 1, "should only detect orphans for the specified drive")
 	assert.Equal(t, "a.txt", orphans[0].Path)
 }
@@ -257,12 +262,12 @@ func TestFindOrphans_IgnoresOtherDrives(t *testing.T) {
 func TestFindOrphans_WithPathPrefix(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	bl := newBaselineForTest([]*BaselineEntry{
-		{Path: "SharedFolder/a.txt", DriveID: driveID, ItemID: "id-a", ItemType: ItemTypeFile},
-		{Path: "SharedFolder/sub/b.txt", DriveID: driveID, ItemID: "id-b", ItemType: ItemTypeFile},
-		{Path: "OtherFolder/c.txt", DriveID: driveID, ItemID: "id-c", ItemType: ItemTypeFile},
+	bl := syncfixture.NewBaselineForTest([]*syncdomain.BaselineEntry{
+		{Path: "SharedFolder/a.txt", DriveID: driveID, ItemID: "id-a", ItemType: syncdomain.ItemTypeFile},
+		{Path: "SharedFolder/sub/b.txt", DriveID: driveID, ItemID: "id-b", ItemType: syncdomain.ItemTypeFile},
+		{Path: "OtherFolder/c.txt", DriveID: driveID, ItemID: "id-c", ItemType: syncdomain.ItemTypeFile},
 	})
 
 	// Only id-a is in the seen set. id-b is an orphan under SharedFolder.
@@ -271,7 +276,7 @@ func TestFindOrphans_WithPathPrefix(t *testing.T) {
 		"id-a": {},
 	}
 
-	orphans := FindBaselineOrphans(bl, seen, driveID, "SharedFolder")
+	orphans := syncstore.FindBaselineOrphans(bl, seen, driveID, "SharedFolder")
 	require.Len(t, orphans, 1, "should detect only orphans under the prefix")
 	assert.Equal(t, "SharedFolder/sub/b.txt", orphans[0].Path)
 }
@@ -280,7 +285,7 @@ func TestFindOrphans_WithPathPrefix(t *testing.T) {
 func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
 	// Full delta returns 2 items (root + file1). Baseline has file1 + file2.
 	// file2 should be detected as an orphan.
@@ -288,7 +293,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 
 	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
@@ -310,10 +315,10 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
-	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
+	bl.Put(&syncdomain.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: syncdomain.ItemTypeFile})
+	bl.Put(&syncdomain.BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: syncdomain.ItemTypeFile})
 
-	full, err := testEngineFlow(t, e).observeRemoteFullWithShortcutTopology(ctx, bl, ResyncKindApplyDifferences)
+	full, err := testEngineFlow(t, e).observeRemoteFullWithShortcutTopology(ctx, bl, syncdomain.ResyncKindApplyDifferences)
 	require.NoError(t, err)
 	assert.Equal(t, "full-token", full.token)
 
@@ -343,14 +348,14 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
-	events := []RemoteItem{
-		{ObservedItem: ObservedItem{ItemID: "valid-1", Path: "a.txt", DriveID: driveID}},
-		{ObservedItem: ObservedItem{ItemID: "", Path: "bad.txt", DriveID: driveID}},
-		{ObservedItem: ObservedItem{ItemID: "valid-2", Path: "b.txt", DriveID: driveID}},
+	driveID := driveid.New(syncfixture.TestDriveID)
+	events := []syncdomain.RemoteItem{
+		{ObservedItem: syncdomain.ObservedItem{ItemID: "valid-1", Path: "a.txt", DriveID: driveID}},
+		{ObservedItem: syncdomain.ObservedItem{ItemID: "", Path: "bad.txt", DriveID: driveID}},
+		{ObservedItem: syncdomain.ObservedItem{ItemID: "valid-2", Path: "b.txt", DriveID: driveID}},
 	}
 
-	items := ProjectRemoteObservations(slog.Default(), events).Observed
+	items := syncobserve.ProjectRemoteObservations(slog.Default(), events).Observed
 	require.Len(t, items, 2, "empty ItemID event should be skipped")
 	assert.Equal(t, "valid-1", items[0].ItemID)
 	assert.Equal(t, "valid-2", items[1].ItemID)
@@ -360,7 +365,7 @@ func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
 func TestShouldRunFullRemoteRefresh_NoCursor(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestEngine(t, &engineMockClient{})
+	e, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 
 	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
 	require.NoError(t, err)
@@ -371,15 +376,15 @@ func TestShouldRunFullRemoteRefresh_NoCursor(t *testing.T) {
 func TestShouldRunFullRemoteRefresh_Overdue(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestEngine(t, &engineMockClient{})
-	clock := newManualClock(time.Unix(1_000, 0))
+	e, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
+	clock := syncfixture.NewManualClock(time.Unix(1_000, 0))
 	installManualClockForTestEngine(e, clock)
 	require.NoError(t, e.baseline.CommitObservationCursor(t.Context(), e.driveID, "token-1"))
 	require.NoError(t, e.baseline.MarkFullRemoteRefresh(
 		t.Context(),
 		e.driveID,
-		clock.Now().Add(-FullRemoteRefreshInterval-time.Minute),
-		RemoteObservationModeDelta,
+		clock.Now().Add(-syncdomain.FullRemoteRefreshInterval-time.Minute),
+		syncdomain.RemoteObservationModeDelta,
 	))
 
 	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
@@ -391,15 +396,15 @@ func TestShouldRunFullRemoteRefresh_Overdue(t *testing.T) {
 func TestShouldRunFullRemoteRefresh_WithinCadence(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestEngine(t, &engineMockClient{})
-	clock := newManualClock(time.Unix(2_000, 0))
+	e, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
+	clock := syncfixture.NewManualClock(time.Unix(2_000, 0))
 	installManualClockForTestEngine(e, clock)
 	require.NoError(t, e.baseline.CommitObservationCursor(t.Context(), e.driveID, "token-1"))
 	require.NoError(t, e.baseline.MarkFullRemoteRefresh(
 		t.Context(),
 		e.driveID,
 		clock.Now().Add(-23*time.Hour),
-		RemoteObservationModeDelta,
+		syncdomain.RemoteObservationModeDelta,
 	))
 
 	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
@@ -411,14 +416,14 @@ func TestShouldRunFullRemoteRefresh_WithinCadence(t *testing.T) {
 func TestFullRemoteRefreshDelay_UsesPersistedTimestamp(t *testing.T) {
 	t.Parallel()
 
-	e, _ := newTestEngine(t, &engineMockClient{})
-	clock := newManualClock(time.Unix(3_000, 0))
+	e, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
+	clock := syncfixture.NewManualClock(time.Unix(3_000, 0))
 	installManualClockForTestEngine(e, clock)
 	require.NoError(t, e.baseline.MarkFullRemoteRefresh(
 		t.Context(),
 		e.driveID,
 		clock.Now().Add(-23*time.Hour),
-		RemoteObservationModeDelta,
+		syncdomain.RemoteObservationModeDelta,
 	))
 
 	delay, err := e.fullRemoteRefreshDelay(t.Context())
@@ -433,13 +438,13 @@ func TestFullRemoteRefreshDelay_UsesPersistedTimestamp(t *testing.T) {
 func TestObserveAndCommitRemoteFull(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
 	mock := fullRefreshOneFileMock(driveID)
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 
 	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
@@ -461,12 +466,12 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
-	bl.Put(&BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: ItemTypeFile})
+	bl.Put(&syncdomain.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: syncdomain.ItemTypeFile})
+	bl.Put(&syncdomain.BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: syncdomain.ItemTypeFile})
 
-	require.NoError(t, e.baseline.CommitObservation(ctx, []ObservedItem{
-		{DriveID: driveID, ItemID: "f1", Path: "file1.txt", ItemType: ItemTypeFile},
-		{DriveID: driveID, ItemID: "f2", Path: "file2.txt", ItemType: ItemTypeFile},
+	require.NoError(t, e.baseline.CommitObservation(ctx, []syncdomain.ObservedItem{
+		{DriveID: driveID, ItemID: "f1", Path: "file1.txt", ItemType: syncdomain.ItemTypeFile},
+		{DriveID: driveID, ItemID: "f2", Path: "file2.txt", ItemType: syncdomain.ItemTypeFile},
 	}, "", driveID))
 
 	pendingCursor, err := testEngineFlow(t, e).observeAndCommitRemoteCurrentState(
@@ -489,7 +494,7 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	// Cursor should be returned as pending — NOT committed to DB.
 	assert.Equal(t, "full-token", pendingCursor.CursorToken, "pending cursor should be returned")
 
-	savedToken := readObservationCursorForTest(t, e.baseline, ctx, driveID.String())
+	savedToken := syncstoretest.ReadObservationCursorForTest(t, e.baseline, ctx, driveID.String())
 	assert.Empty(t, savedToken, "cursor should NOT be committed to DB by observeAndCommitRemoteCurrentState — it is deferred")
 }
 
@@ -497,16 +502,16 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 func TestObserveAndCommitRemoteTruth_RemoteReadDeniedPersistsObservationFindings(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	driveID := driveid.New(syncfixture.TestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return nil, graph.ErrForbidden
 		},
 	}
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 
 	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
@@ -538,8 +543,8 @@ func TestObserveAndCommitRemoteTruth_RemoteReadDeniedPersistsObservationFindings
 	require.NoError(t, err)
 	require.Len(t, issues, 1)
 	assert.Equal(t, "/", issues[0].Path)
-	assert.Equal(t, IssueRemoteReadDenied, issues[0].IssueType)
-	assert.Equal(t, SKPermRemoteRead(""), issues[0].ScopeKey)
+	assert.Equal(t, syncdomain.IssueRemoteReadDenied, issues[0].IssueType)
+	assert.Equal(t, syncdomain.SKPermRemoteRead(""), issues[0].ScopeKey)
 
 	scopes, err := e.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
@@ -561,7 +566,7 @@ func waitForRefreshDone(t *testing.T, ctx context.Context, eng *testEngine) {
 	select {
 	case result := <-rt.resources.refreshResults:
 		require.NoError(t, rt.applyRemoteRefreshResult(ctx, &result))
-	case <-time.After(eventWait):
+	case <-time.After(syncfixture.EventWait):
 		require.Fail(t, "refresh result was not delivered")
 	}
 
@@ -572,10 +577,10 @@ func waitForRefreshDone(t *testing.T, ctx context.Context, eng *testEngine) {
 func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return &graph.DeltaPage{
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveID},
@@ -588,7 +593,7 @@ func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 
 	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
@@ -610,10 +615,10 @@ func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 	bl, err := e.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	bl.Put(&BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: ItemTypeFile})
+	bl.Put(&syncdomain.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: syncdomain.ItemTypeFile})
 
 	ready := setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = syncobserve.NewDirtyBuffer(e.logger)
 
 	// Full reconciliation always hands observed changes back through the watch
 	// dirty scheduler, even when the later planner pass reduces them to a no-op. The
@@ -636,8 +641,8 @@ func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 func TestRunFullRemoteRefreshAsync_DeltaError(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return nil, errors.New("delta unavailable")
 		},
 	}
@@ -649,7 +654,7 @@ func TestRunFullRemoteRefreshAsync_DeltaError(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = syncobserve.NewDirtyBuffer(e.logger)
 
 	// Should not panic — error is logged and function returns.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
@@ -668,8 +673,8 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	// before delta completes.
 	unblock := make(chan struct{})
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			<-unblock
 			return &graph.DeltaPage{DeltaLink: "tok"}, nil
 		},
@@ -682,7 +687,7 @@ func TestRunFullReconciliationAsync_NonBlocking(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = syncobserve.NewDirtyBuffer(e.logger)
 
 	// Call should return immediately — goroutine is blocked in deltaFn.
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
@@ -701,8 +706,8 @@ func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
 
 	deltaCalled := false
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			deltaCalled = true
 			require.Fail(t, "deltaFn should not be called when full remote refresh is already running")
 			return nil, assert.AnError
@@ -716,7 +721,7 @@ func TestRunFullRemoteRefreshAsync_SkipsIfRunning(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = syncobserve.NewDirtyBuffer(e.logger)
 
 	// Pre-set refreshActive — simulates a full remote refresh already in progress.
 	testWatchRuntime(t, e).resources.refreshActive = true
@@ -736,19 +741,19 @@ func TestWatchPipelineCleanup_KeepsRefreshResultChannelUsable(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 
-	pipe, err := rt.initWatchInfra(t.Context(), SyncDownloadOnly, WatchOptions{})
+	pipe, err := rt.initWatchInfra(t.Context(), syncdomain.SyncDownloadOnly, WatchOptions{})
 	require.NoError(t, err)
 	pipe.cleanup()
 
 	done := make(chan struct{})
 	go func() {
-		rt.finishFullRemoteRefresh(context.Background(), &RemoteObservationBatch{})
+		rt.finishFullRemoteRefresh(context.Background(), &syncobserve.RemoteObservationBatch{})
 		close(done)
 	}()
 
 	select {
 	case <-done:
-	case <-time.After(eventWait):
+	case <-time.After(syncfixture.EventWait):
 		require.FailNow(t, "watch cleanup left refresh result senders blocked")
 	}
 }
@@ -757,10 +762,10 @@ func TestWatchPipelineCleanup_KeepsRefreshResultChannelUsable(t *testing.T) {
 func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return &graph.DeltaPage{
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveID},
@@ -773,7 +778,7 @@ func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 
 	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
@@ -795,7 +800,7 @@ func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = syncobserve.NewDirtyBuffer(e.logger)
 
 	// Baseline is empty — delta returns a new file and the watch loop gets
 	// a coarse dirty signal back from the remote refresh.
@@ -811,14 +816,14 @@ func TestRunFullRemoteRefreshAsync_FeedsBuffer(t *testing.T) {
 func TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
-	require.NoError(t, rt.handleWatchLocalObservationBatch(t.Context(), &LocalObservation{Dirty: true}))
-	rt.markDirtyFromRemoteBatch(&RemoteObservationBatch{
-		Changes: []RemoteChange{
+	require.NoError(t, rt.handleWatchLocalObservationBatch(t.Context(), &syncobserve.LocalObservation{Dirty: true}))
+	rt.markDirtyFromRemoteBatch(&syncobserve.RemoteObservationBatch{
+		Changes: []syncobserve.RemoteChange{
 			{Path: "alpha.txt"},
 			{OldPath: "beta.txt"},
 			{Path: "gamma.txt", OldPath: "delta.txt"},
@@ -835,10 +840,10 @@ func TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal(t *tes
 func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return &graph.DeltaPage{
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveID},
@@ -859,22 +864,22 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
 	refreshC := make(chan time.Time, 1)
 	rt.resources.refreshCh = refreshC
-	_, done := runInBackground(t, ctx, func(loopCtx context.Context) error {
+	_, done := syncfixture.RunInBackground(t, ctx, func(loopCtx context.Context) error {
 		return rt.runWatchLoop(loopCtx, &watchPipeline{
 			runtime: rt,
 			bl:      bl,
-			mode:    SyncBidirectional,
+			mode:    syncdomain.SyncBidirectional,
 		})
 	})
 
 	refreshC <- time.Now()
 
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventRemoteRefreshApplied
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventRemoteRefreshApplied
 	}, "watch loop applied periodic full remote refresh result")
 
 	batch := rt.resources.dirtyBuf.FlushImmediate()
@@ -887,20 +892,20 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 	default:
 	}
 
-	savedToken := readObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
+	savedToken := syncstoretest.ReadObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
 	assert.Equal(t, "watch-refresh-token", savedToken)
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 }
 
 // Validates: R-2.8.3
 func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return &graph.DeltaPage{
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveID},
@@ -913,7 +918,7 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	syncDir := t.TempDir()
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 
 	rawEngine, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
@@ -933,8 +938,8 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	// remote_refresh_committed event at the exact point between durable
 	// refresh apply and the ctx.Err() check.
 	ctx, cancel := context.WithCancel(t.Context())
-	attachDebugEventRecorderWithHook(e, func(event EngineDebugEvent) {
-		if event.Type == EngineDebugEventRemoteRefreshCommitted {
+	attachDebugEventRecorderWithHook(e, func(event syncdomain.EngineDebugEvent) {
+		if event.Type == syncdomain.EngineDebugEventRemoteRefreshCommitted {
 			cancel()
 		}
 	})
@@ -943,7 +948,7 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	require.NoError(t, err)
 
 	setupWatchEngine(t, e)
-	testWatchRuntime(t, e).resources.dirtyBuf = NewDirtyBuffer(e.logger)
+	testWatchRuntime(t, e).resources.dirtyBuf = syncobserve.NewDirtyBuffer(e.logger)
 
 	runFullRemoteRefreshAsyncForTest(t, e, ctx, bl)
 	waitForRefreshDone(t, ctx, e)
@@ -951,7 +956,7 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	// Verify observations WERE committed to SQLite — proving we took
 	// the post-commit shutdown path, not the commit-failed path.
 	// CommitObservation saves the primary observation cursor for this drive DB.
-	savedToken := readObservationCursorForTest(t, e.baseline, t.Context(), driveID.String())
+	savedToken := syncstoretest.ReadObservationCursorForTest(t, e.baseline, t.Context(), driveID.String())
 	assert.Equal(t, "shutdown-tok", savedToken,
 		"delta token should be saved — CommitObservation must have succeeded")
 
@@ -970,8 +975,8 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 		Level: slog.LevelInfo,
 	}))
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			require.Fail(t, "deltaFn should not be called when full remote refresh is already running")
 			return nil, assert.AnError
 		},
@@ -1003,10 +1008,10 @@ func TestRunFullReconciliationAsync_SkipLogPromotedToInfo(t *testing.T) {
 func TestRunFullRemoteRefreshAsync_DurationInCompletionLog(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return &graph.DeltaPage{
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveID},
@@ -1061,12 +1066,12 @@ func TestRunFullRemoteRefreshAsync_DurationInCompletionLog(t *testing.T) {
 func TestRunFullRemoteRefreshAsync_DurationInNoChangesLog(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
+	driveID := driveid.New(syncfixture.TestDriveID)
 
 	// Return only root item — FullDelta produces 0 events (root is skipped),
 	// so the function takes the "no changes" path.
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return &graph.DeltaPage{
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveID},
@@ -1118,9 +1123,9 @@ func TestRunFullRemoteRefreshAsync_DurationInNoChangesLog(t *testing.T) {
 
 // fullRefreshOneFileMock enumerates the root and file1 only; any other item
 // is confirmed gone by a live lookup (D-008).
-func fullRefreshOneFileMock(driveID driveid.ID) *engineMockClient {
-	return &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+func fullRefreshOneFileMock(driveID driveid.ID) *syncfixture.EngineMockClient {
+	return &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return &graph.DeltaPage{
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveID},
@@ -1129,7 +1134,7 @@ func fullRefreshOneFileMock(driveID driveid.ID) *engineMockClient {
 				DeltaLink: "full-token",
 			}, nil
 		},
-		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+		GetItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
 			return nil, graph.ErrNotFound
 		},
 	}

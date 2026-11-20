@@ -16,6 +16,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -28,16 +34,16 @@ type driveIdentityProof struct {
 // Single mounted content root only; multi-mount orchestration is handled by
 // internal/multisync.
 type Engine struct {
-	baseline        *SyncStore
-	planner         *Planner
-	execCfg         *ExecutorConfig
-	fetcher         DeltaFetcher
-	socketIOFetcher SocketIOEndpointFetcher
-	itemsClient     ItemClient
-	driveVerifier   DriveVerifier      // optional (B-074)
-	folderDelta     FolderDeltaFetcher // optional: mount-root delta observation
-	recursiveLister RecursiveLister    // optional: mount-root recursive enumeration fallback
-	permHandler     *permissionHandler // encapsulates all permission logic (6.4c)
+	baseline        *syncstore.SyncStore
+	planner         *syncplan.Planner
+	execCfg         *syncexec.ExecutorConfig
+	fetcher         syncdomain.DeltaFetcher
+	socketIOFetcher syncdomain.SocketIOEndpointFetcher
+	itemsClient     syncdomain.ItemClient
+	driveVerifier   syncdomain.DriveVerifier      // optional (B-074)
+	folderDelta     syncdomain.FolderDeltaFetcher // optional: mount-root delta observation
+	recursiveLister syncdomain.RecursiveLister    // optional: mount-root recursive enumeration fallback
+	permHandler     *permissionHandler            // encapsulates all permission logic (6.4c)
 	dataDir         string
 	syncRoot        string
 	syncTree        *synctree.Root
@@ -46,7 +52,7 @@ type Engine struct {
 	locks engineLocks
 	// syncRootIdentity is the one owner of the identity the sync folder must
 	// match; the executor and every observer read it, never a copy.
-	syncRootIdentity       *SyncRootIdentity
+	syncRootIdentity       *syncdomain.SyncRootIdentity
 	driveID                driveid.ID
 	driveType              string
 	remoteRootItemID       string
@@ -62,7 +68,7 @@ type Engine struct {
 	trashPurgedAt   int64
 	transferWorkers int // goroutine count for the worker pool
 	checkWorkers    int // goroutine limit for parallel file hashing
-	contentFilter   ContentFilterConfig
+	contentFilter   syncdomain.ContentFilterConfig
 	// protectedRootsMu guards protectedRoots. The loop goroutine reads them
 	// each time it builds an observer and when housekeeping cleans up; the
 	// full-refresh goroutine and the remote observer's expired-delta recovery
@@ -74,7 +80,7 @@ type Engine struct {
 	// (ShortcutChildAckHandle) reconciles the shortcut roots. Read through
 	// currentProtectedRoots, write through setProtectedRoots (R-6.3.4).
 	protectedRootsMu stdsync.Mutex
-	protectedRoots   []ProtectedRoot
+	protectedRoots   []syncshortcut.ProtectedRoot
 
 	// accountCanonicalID names the catalog record of the account the engine
 	// syncs with, the one whose sign-in requirement a 401 marks and the
@@ -94,22 +100,22 @@ type Engine struct {
 	// catalog lock through it without waiting out the lock's timeout.
 	clearAccountAuthRequirement func(dataDir string, account driveid.CanonicalID) error
 
-	localRules            LocalObservationRules
+	localRules            syncdomain.LocalObservationRules
 	shortcutNamespaceID   string
-	shortcutChildWorkSink ShortcutChildWorkSink
+	shortcutChildWorkSink syncshortcut.ShortcutChildWorkSink
 	enableWebsocket       bool
 
 	// Test/debug-only invariant checks. Production keeps this disabled;
 	// tests enable it to catch lifecycle and scope regressions immediately.
 	assertInvariants bool
-	debugEventHook   func(DebugEvent)
+	debugEventHook   func(syncdomain.DebugEvent)
 	activityHook     func(Activity)
 
 	// dispatchOrder reorders every ready frontier before it is dispatched
 	// (D-090). Tests run scenarios forward, reversed or in a seeded shuffle
 	// so a bug that depends on dispatch order cannot pass by timing; nil, as
 	// in production, keeps the dependency graph's order.
-	dispatchOrder func([]*TrackedAction) []*TrackedAction
+	dispatchOrder func([]*syncdomain.TrackedAction) []*syncdomain.TrackedAction
 	// serializeWorkers runs one worker instead of the pool, so with a
 	// dispatch order execution is deterministic. Test-only.
 	serializeWorkers bool
@@ -130,26 +136,26 @@ type Engine struct {
 	// localWatcherFactory overrides the default fsnotify watcher factory
 	// for the local observer. Tests inject a mock factory to simulate
 	// inotify watch limit exhaustion (ENOSPC).
-	localWatcherFactory func() (FsWatcher, error)
+	localWatcherFactory func() (syncobserve.FsWatcher, error)
 
 	// socketIOWakeSourceFactory is a test seam for watch-mode websocket
 	// wakeups. Production uses NewSocketIOWakeSourceWithOptions.
 	socketIOWakeSourceFactory func(
-		SocketIOEndpointFetcher,
+		syncdomain.SocketIOEndpointFetcher,
 		driveid.ID,
-		SocketIOWakeSourceOptions,
+		syncobserve.SocketIOWakeSourceOptions,
 	) socketIOWakeSourceRunner
 
 	// clock is the engine's single time capability: now, delayed callbacks,
 	// tickers, sleeps, and retry jitter. See SyncClock for why these are one
 	// value rather than five injectable fields.
-	clock SyncClock
+	clock syncdomain.SyncClock
 	// wallClock is the engine's real clock: clock is it unless a test
 	// replaced clock, and every observer the engine builds runs on it, except
 	// that a pass's full local scan, which runs no timer, measures its
 	// racily-clean window on the run's clock (observeLocal). Its timer panics
 	// carry a timer callback's panic to the run it ends (beginRun).
-	wallClock RealClock
+	wallClock syncdomain.RealClock
 	// nextRunID numbers the engine's runs. One engine runs one RunOnce or
 	// RunWatch at a time, and that run's goroutine alone takes the next.
 	nextRunID int64
@@ -192,8 +198,8 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
 	}
 
-	if !SyncRootExists(cfg.SyncRoot) {
-		return nil, fmt.Errorf("%w: %s is missing or is not a folder", ErrMountRootUnavailable, cfg.SyncRoot)
+	if !syncobserve.SyncRootExists(cfg.SyncRoot) {
+		return nil, fmt.Errorf("%w: %s is missing or is not a folder", syncdomain.ErrMountRootUnavailable, cfg.SyncRoot)
 	}
 
 	// The folder and store locks come first and go last (engine_locks.go): a
@@ -209,7 +215,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	storeOwnedByEngine := false
 	defer releaseEngineLocksOnStartupFailure(cfg.Logger, locks, &storeOwnedByEngine)
 
-	bm, err := OpenEngineSyncStoreWithDriver(ctx, cfg.DBPath, cfg.Logger, cfg.storeDriverName())
+	bm, err := syncstore.OpenEngineSyncStoreWithDriver(ctx, cfg.DBPath, cfg.Logger, cfg.storeDriverName())
 	if err != nil {
 		return nil, fmt.Errorf("sync: creating engine: %w", err)
 	}
@@ -219,7 +225,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		return nil, err
 	}
 
-	execCfg := NewExecutorConfig(
+	execCfg := syncexec.NewExecutorConfig(
 		cfg.Items,
 		cfg.Downloads,
 		cfg.Uploads,
@@ -228,7 +234,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		cfg.Logger,
 		cfg.PathConvergence,
 	)
-	rootIdentity := NewSyncRootIdentity(syncRootBinding, syncRootRefusalHint(cfg))
+	rootIdentity := syncdomain.NewSyncRootIdentity(syncRootBinding, syncRootRefusalHint(cfg))
 	trash := configureEngineExecutor(execCfg, cfg, bm, rootIdentity)
 
 	// Construct sessionStore and TransferManager together so the TM is
@@ -247,7 +253,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 
 	e := &Engine{
 		baseline:               bm,
-		planner:                NewPlanner(cfg.Logger),
+		planner:                syncplan.NewPlanner(cfg.Logger),
 		execCfg:                execCfg,
 		fetcher:                cfg.Fetcher,
 		socketIOFetcher:        cfg.SocketIOFetcher,
@@ -276,13 +282,13 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		shortcutNamespaceID:    cfg.ShortcutNamespaceID,
 		shortcutChildWorkSink:  cfg.ShortcutChildWorkSink,
 		enableWebsocket:        cfg.EnableWebsocket,
-		wallClock:              NewRealClock(cfg.Logger, &TimerPanics{}),
+		wallClock:              syncdomain.NewRealClock(cfg.Logger, &syncdomain.TimerPanics{}),
 		socketIOWakeSourceFactory: func(
-			fetcher SocketIOEndpointFetcher,
+			fetcher syncdomain.SocketIOEndpointFetcher,
 			driveID driveid.ID,
-			opts SocketIOWakeSourceOptions,
+			opts syncobserve.SocketIOWakeSourceOptions,
 		) socketIOWakeSourceRunner {
-			return NewSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
+			return syncobserve.NewSocketIOWakeSourceWithOptions(fetcher, driveID, opts)
 		},
 	}
 	e.clock = e.wallClock
@@ -303,8 +309,8 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 }
 
 // buildLocalObserver builds a local observer on the engine's real clock.
-func (e *Engine) buildLocalObserver(bl *Baseline, logger *slog.Logger) *LocalObserver {
-	obs := NewLocalObserver(bl, logger, e.checkWorkers)
+func (e *Engine) buildLocalObserver(bl *syncdomain.Baseline, logger *slog.Logger) *syncobserve.LocalObserver {
+	obs := syncobserve.NewLocalObserver(bl, logger, e.checkWorkers)
 	obs.SetClock(e.wallClock)
 
 	return obs
@@ -312,8 +318,8 @@ func (e *Engine) buildLocalObserver(bl *Baseline, logger *slog.Logger) *LocalObs
 
 // buildRemoteObserver builds an observer of the engine's drive on the
 // engine's real clock.
-func (e *Engine) buildRemoteObserver(bl *Baseline, logger *slog.Logger) *RemoteObserver {
-	obs := NewRemoteObserver(e.fetcher, bl, e.driveID, logger)
+func (e *Engine) buildRemoteObserver(bl *syncdomain.Baseline, logger *slog.Logger) *syncobserve.RemoteObserver {
+	obs := syncobserve.NewRemoteObserver(e.fetcher, bl, e.driveID, logger)
 	obs.SetClock(e.wallClock)
 
 	return obs
@@ -339,7 +345,7 @@ func newEnginePermissionHandler(
 func closeEngineSyncStoreOnStartupFailure(
 	ctx context.Context,
 	logger *slog.Logger,
-	store *SyncStore,
+	store *syncstore.SyncStore,
 	storeOwnedByEngine *bool,
 ) func() {
 	return func() {
@@ -360,7 +366,7 @@ func syncRootRefusalHint(cfg *engineInputs) string {
 	if cfg.ExpectedSyncRootIdentity != nil {
 		return ""
 	}
-	return ErrSyncRootRebindHint
+	return syncdomain.ErrSyncRootRebindHint
 }
 
 // configureEngineExecutor installs the mount-owned executor policy: the remote
@@ -368,10 +374,10 @@ func syncRootRefusalHint(cfg *engineInputs) string {
 // folder identity remote deletes re-check (D-011). It returns the trash so the
 // engine's housekeeping purges the same one.
 func configureEngineExecutor(
-	execCfg *ExecutorConfig,
+	execCfg *syncexec.ExecutorConfig,
 	cfg *engineInputs,
-	store *SyncStore,
-	rootIdentity *SyncRootIdentity,
+	store *syncstore.SyncStore,
+	rootIdentity *syncdomain.SyncRootIdentity,
 ) *localtrash.Trash {
 	execCfg.SetRemoteRootItemID(cfg.RemoteRootItemID)
 	execCfg.SetPendingCreates(store)
@@ -384,10 +390,10 @@ func configureEngineExecutor(
 
 // openBoundSyncTree opens the sync tree and resolves the folder identity
 // every scan of it is validated against (D-001).
-func openBoundSyncTree(ctx context.Context, store *SyncStore, cfg *engineInputs) (*synctree.Root, ResolvedSyncRoot, error) {
+func openBoundSyncTree(ctx context.Context, store *syncstore.SyncStore, cfg *engineInputs) (*synctree.Root, syncdomain.ResolvedSyncRoot, error) {
 	syncTree, err := openSyncTree(cfg.SyncRoot)
 	if err != nil {
-		return nil, ResolvedSyncRoot{}, fmt.Errorf("sync: opening sync tree: %w", err)
+		return nil, syncdomain.ResolvedSyncRoot{}, fmt.Errorf("sync: opening sync tree: %w", err)
 	}
 	if cfg.interposeSyncTree != nil {
 		syncTree = syncTree.Interpose(cfg.interposeSyncTree)
@@ -395,13 +401,13 @@ func openBoundSyncTree(ctx context.Context, store *SyncStore, cfg *engineInputs)
 	warnAboutForeignSyncClients(cfg.SyncRoot, cfg.Logger)
 	binding, err := resolveExpectedSyncRoot(ctx, store, syncTree, cfg.ExpectedSyncRootIdentity)
 	if err != nil {
-		return nil, ResolvedSyncRoot{}, err
+		return nil, syncdomain.ResolvedSyncRoot{}, err
 	}
 	return syncTree, binding, nil
 }
 
 func openSyncTree(syncRoot string) (*synctree.Root, error) {
-	resolved, err := ResolveSyncRootPath(syncRoot)
+	resolved, err := syncobserve.ResolveSyncRootPath(syncRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -421,8 +427,8 @@ func openSyncTree(syncRoot string) (*synctree.Root, error) {
 // alone. Mark-and-bind is serialized: two commits racing would otherwise
 // write two tokens, and the folder would keep the one the store did not
 // record. It reports what the commit changed and marks nothing itself.
-func (e *Engine) commitLocalSnapshot(ctx context.Context, commit LocalSnapshotCommit) (LocalSnapshotCommitResult, error) {
-	var result LocalSnapshotCommitResult
+func (e *Engine) commitLocalSnapshot(ctx context.Context, commit syncstore.LocalSnapshotCommit) (syncstore.LocalSnapshotCommitResult, error) {
+	var result syncstore.LocalSnapshotCommitResult
 	ran, err := e.syncRootIdentity.CompleteBinding(func(expected *synctree.RootIdentity) (*synctree.RootIdentity, error) {
 		var bindErr error
 		var bound *synctree.RootIdentity
@@ -439,10 +445,10 @@ func (e *Engine) commitLocalSnapshot(ctx context.Context, commit LocalSnapshotCo
 // pending: it marks the folder, commits with the binding, and returns the
 // identity the store recorded.
 func (e *Engine) commitLocalSnapshotBinding(
-	ctx context.Context, commit *LocalSnapshotCommit, expected *synctree.RootIdentity,
-) (LocalSnapshotCommitResult, *synctree.RootIdentity, error) {
+	ctx context.Context, commit *syncstore.LocalSnapshotCommit, expected *synctree.RootIdentity,
+) (syncstore.LocalSnapshotCommitResult, *synctree.RootIdentity, error) {
 	if expected == nil {
-		return LocalSnapshotCommitResult{}, nil, fmt.Errorf("sync: binding sync folder: no identity was taken at startup")
+		return syncstore.LocalSnapshotCommitResult{}, nil, fmt.Errorf("sync: binding sync folder: no identity was taken at startup")
 	}
 	bind := *expected
 	bind.Token = ""
@@ -454,7 +460,7 @@ func (e *Engine) commitLocalSnapshotBinding(
 		e.logger.Debug("sync folder cannot carry a bind token; binding on inode and filesystem id",
 			slog.Any("error", err))
 	default:
-		return LocalSnapshotCommitResult{}, nil, fmt.Errorf("sync: binding sync folder: %w", err)
+		return syncstore.LocalSnapshotCommitResult{}, nil, fmt.Errorf("sync: binding sync folder: %w", err)
 	}
 
 	commit.Bind = &bind
@@ -477,8 +483,8 @@ func (e *Engine) commitLocalSnapshotBinding(
 }
 
 func (e *Engine) commitLocalSnapshotUnbound(
-	ctx context.Context, commit *LocalSnapshotCommit,
-) (LocalSnapshotCommitResult, error) {
+	ctx context.Context, commit *syncstore.LocalSnapshotCommit,
+) (syncstore.LocalSnapshotCommitResult, error) {
 	result, err := e.baseline.CommitLocalSnapshot(ctx, commit)
 	if err != nil {
 		return result, fmt.Errorf("sync: replacing local_state snapshot: %w", err)
@@ -490,7 +496,7 @@ func (e *Engine) commitLocalSnapshotUnbound(
 // through: the SQLite driver unless a test named another.
 func (cfg *engineInputs) storeDriverName() string {
 	if cfg.storeDriver == "" {
-		return SqliteDriverName
+		return syncstore.SqliteDriverName
 	}
 
 	return cfg.storeDriver

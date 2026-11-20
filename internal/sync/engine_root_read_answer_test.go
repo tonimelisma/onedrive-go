@@ -12,6 +12,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // rootReadSharedFolderID is the item of the shared folder whose root an
@@ -46,14 +48,14 @@ type rootReadAnswer struct {
 func newRootReadAnswerEngine(t *testing.T, path rootReadPath, answer *rootReadAnswer) *testEngine {
 	t.Helper()
 
-	mock := &engineMockClient{
-		deltaFn: func(context.Context, driveid.ID, string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(context.Context, driveid.ID, string) (*graph.DeltaPage, error) {
 			if answer.err != nil {
 				return nil, answer.err
 			}
-			return deltaPageWithItems(nil, "drive-token"), nil
+			return syncfixture.DeltaPageWithItems(nil, "drive-token"), nil
 		},
-		folderDeltaFn: func(context.Context, driveid.ID, string, string) ([]graph.Item, string, error) {
+		FolderDeltaFn: func(context.Context, driveid.ID, string, string) ([]graph.Item, string, error) {
 			if answer.err != nil {
 				return nil, "", answer.err
 			}
@@ -62,7 +64,7 @@ func newRootReadAnswerEngine(t *testing.T, path rootReadPath, answer *rootReadAn
 		// A folder delta answered "not found" is read as change tracking
 		// the folder does not offer, so the observation lists the folder
 		// instead; the answer that listing gets is the root's.
-		listChildrenRecursiveFn: func(context.Context, driveid.ID, string) ([]graph.Item, error) {
+		ListChildrenRecursiveFn: func(context.Context, driveid.ID, string) ([]graph.Item, error) {
 			return nil, answer.err
 		},
 	}
@@ -78,7 +80,7 @@ func newRootReadAnswerEngine(t *testing.T, path rootReadPath, answer *rootReadAn
 
 // observeRootIssues runs one root observation and returns the observation
 // issues the store then holds.
-func observeRootIssues(t *testing.T, eng *testEngine, path rootReadPath) []ObservationIssueRow {
+func observeRootIssues(t *testing.T, eng *testEngine, path rootReadPath) []syncdomain.ObservationIssueRow {
 	t.Helper()
 
 	ctx := t.Context()
@@ -95,17 +97,17 @@ func observeRootIssues(t *testing.T, eng *testEngine, path rootReadPath) []Obser
 
 // storeRootIssue puts the root issue of the given type into the store, as an
 // earlier root observation left it.
-func storeRootIssue(t *testing.T, eng *testEngine, issueType IssueType) {
+func storeRootIssue(t *testing.T, eng *testEngine, issueType syncdomain.IssueType) {
 	t.Helper()
 
-	batch := ObservationFindingsBatch{
-		Issues: []ObservationIssue{{
+	batch := syncdomain.ObservationFindingsBatch{
+		Issues: []syncdomain.ObservationIssue{{
 			Path:      "/",
 			DriveID:   eng.driveID,
 			IssueType: issueType,
-			ScopeKey:  SKPermRemoteRead(""),
+			ScopeKey:  syncdomain.SKPermRemoteRead(""),
 		}},
-		ManagedIssueTypes: []IssueType{issueType},
+		ManagedIssueTypes: []syncdomain.IssueType{issueType},
 	}
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(t.Context(), &batch))
 }
@@ -123,22 +125,22 @@ func TestRootObservation_AnswerDecidesTheStoredRootIssue(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		stored IssueType
+		stored syncdomain.IssueType
 		answer error
-		want   IssueType
+		want   syncdomain.IssueType
 	}{
-		{name: "not found", answer: graph.ErrNotFound, want: IssueRemoteRootNotFound},
-		{name: "forbidden", answer: graph.ErrForbidden, want: IssueRemoteReadDenied},
+		{name: "not found", answer: graph.ErrNotFound, want: syncdomain.IssueRemoteRootNotFound},
+		{name: "forbidden", answer: graph.ErrForbidden, want: syncdomain.IssueRemoteReadDenied},
 		{
 			name:   "not found replaces the read denial",
-			stored: IssueRemoteReadDenied, answer: graph.ErrNotFound, want: IssueRemoteRootNotFound,
+			stored: syncdomain.IssueRemoteReadDenied, answer: graph.ErrNotFound, want: syncdomain.IssueRemoteRootNotFound,
 		},
 		{
 			name:   "forbidden replaces not found",
-			stored: IssueRemoteRootNotFound, answer: graph.ErrForbidden, want: IssueRemoteReadDenied,
+			stored: syncdomain.IssueRemoteRootNotFound, answer: graph.ErrForbidden, want: syncdomain.IssueRemoteReadDenied,
 		},
-		{name: "a successful read clears not found", stored: IssueRemoteRootNotFound},
-		{name: "a successful read clears the read denial", stored: IssueRemoteReadDenied},
+		{name: "a successful read clears not found", stored: syncdomain.IssueRemoteRootNotFound},
+		{name: "a successful read clears the read denial", stored: syncdomain.IssueRemoteReadDenied},
 	}
 
 	for _, path := range rootReadPaths() {
@@ -162,7 +164,7 @@ func TestRootObservation_AnswerDecidesTheStoredRootIssue(t *testing.T) {
 				require.Len(t, issues, 1)
 				assert.Equal(t, "/", issues[0].Path)
 				assert.Equal(t, tc.want, issues[0].IssueType)
-				assert.Equal(t, SKPermRemoteRead(""), issues[0].ScopeKey)
+				assert.Equal(t, syncdomain.SKPermRemoteRead(""), issues[0].ScopeKey)
 			})
 		}
 	}
@@ -180,19 +182,19 @@ func TestRootReadOfASharedFolder_TheListingDecidesAfterTheFolderDeltaAnswersNotF
 	for _, tc := range []struct {
 		name    string
 		listing error
-		want    []IssueType
+		want    []syncdomain.IssueType
 	}{
 		{name: "listing succeeds"},
-		{name: "listing forbidden", listing: graph.ErrForbidden, want: []IssueType{IssueRemoteReadDenied}},
+		{name: "listing forbidden", listing: graph.ErrForbidden, want: []syncdomain.IssueType{syncdomain.IssueRemoteReadDenied}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			mock := &engineMockClient{
-				folderDeltaFn: func(context.Context, driveid.ID, string, string) ([]graph.Item, string, error) {
+			mock := &syncfixture.EngineMockClient{
+				FolderDeltaFn: func(context.Context, driveid.ID, string, string) ([]graph.Item, string, error) {
 					return nil, "", graph.ErrNotFound
 				},
-				listChildrenRecursiveFn: func(context.Context, driveid.ID, string) ([]graph.Item, error) {
+				ListChildrenRecursiveFn: func(context.Context, driveid.ID, string) ([]graph.Item, error) {
 					return nil, tc.listing
 				},
 			}
@@ -203,7 +205,7 @@ func TestRootReadOfASharedFolder_TheListingDecidesAfterTheFolderDeltaAnswersNotF
 
 			issues := observeRootIssues(t, eng, rootReadPath{name: "shared folder root", sharedFolderRoot: true})
 
-			var got []IssueType
+			var got []syncdomain.IssueType
 			for i := range issues {
 				got = append(got, issues[i].IssueType)
 			}
@@ -222,8 +224,8 @@ func TestRootReadFullRefresh_ALaterPageAnsweredNotFoundIsNotTheRoot(t *testing.T
 
 	const laterPage = "later-page"
 	var laterPageReads atomic.Int32
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
 			if token != laterPage {
 				return &graph.DeltaPage{NextLink: laterPage}, nil
 			}
@@ -237,7 +239,7 @@ func TestRootReadFullRefresh_ALaterPageAnsweredNotFoundIsNotTheRoot(t *testing.T
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 	_, err = testEngineFlow(t, eng).observeAndCommitRemoteCurrentState(ctx, bl, true)
-	require.ErrorIs(t, err, ErrDeltaExpired)
+	require.ErrorIs(t, err, syncdomain.ErrDeltaExpired)
 	assert.Equal(t, int32(2), laterPageReads.Load(), "the later page is asked for twice")
 
 	issues, err := eng.baseline.ListObservationIssues(ctx)
@@ -254,11 +256,11 @@ func TestRootReadFailureIssueType_NamesOnlyNotFoundAndForbidden(t *testing.T) {
 
 	issueType, ok := rootReadFailureIssueType(graph.ErrNotFound)
 	assert.True(t, ok)
-	assert.Equal(t, IssueRemoteRootNotFound, issueType)
+	assert.Equal(t, syncdomain.IssueRemoteRootNotFound, issueType)
 
 	issueType, ok = rootReadFailureIssueType(graph.ErrForbidden)
 	assert.True(t, ok)
-	assert.Equal(t, IssueRemoteReadDenied, issueType)
+	assert.Equal(t, syncdomain.IssueRemoteReadDenied, issueType)
 
 	for _, err := range []error{nil, graph.ErrThrottled, errors.New("connection reset")} {
 		issueType, ok = rootReadFailureIssueType(err)
@@ -274,13 +276,13 @@ func TestRootReadFailureIssueType_NamesOnlyNotFoundAndForbidden(t *testing.T) {
 func TestSharedFolderUnreadable_EitherRootAnswerMakesTheFolderUnreadable(t *testing.T) {
 	t.Parallel()
 
-	rootIssue := func(issueType IssueType, scopeKey ScopeKey) []ObservationIssueRow {
-		return []ObservationIssueRow{{Path: "/", IssueType: issueType, ScopeKey: scopeKey}}
+	rootIssue := func(issueType syncdomain.IssueType, scopeKey syncdomain.ScopeKey) []syncdomain.ObservationIssueRow {
+		return []syncdomain.ObservationIssueRow{{Path: "/", IssueType: issueType, ScopeKey: scopeKey}}
 	}
 
-	assert.True(t, sharedFolderUnreadable(rootIssue(IssueRemoteReadDenied, SKPermRemoteRead(""))))
-	assert.True(t, sharedFolderUnreadable(rootIssue(IssueRemoteRootNotFound, SKPermRemoteRead(""))))
-	assert.False(t, sharedFolderUnreadable(rootIssue(IssueRemoteReadDenied, SKPermRemoteRead("Docs"))),
+	assert.True(t, sharedFolderUnreadable(rootIssue(syncdomain.IssueRemoteReadDenied, syncdomain.SKPermRemoteRead(""))))
+	assert.True(t, sharedFolderUnreadable(rootIssue(syncdomain.IssueRemoteRootNotFound, syncdomain.SKPermRemoteRead(""))))
+	assert.False(t, sharedFolderUnreadable(rootIssue(syncdomain.IssueRemoteReadDenied, syncdomain.SKPermRemoteRead("Docs"))),
 		"a folder below the root that cannot be read leaves the rest readable")
 	assert.False(t, sharedFolderUnreadable(nil))
 }

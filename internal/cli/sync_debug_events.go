@@ -6,11 +6,12 @@ import (
 	"os"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 const testDebugEventsPathEnv = "ONEDRIVE_TEST_DEBUG_EVENTS_PATH"
 
-func openSyncDebugEventHookFromEnv(logger *slog.Logger) (func(syncengine.DebugEvent), func() error, error) {
+func openSyncDebugEventHookFromEnv(logger *slog.Logger) (func(syncdomain.DebugEvent), func() error, error) {
 	path, ok := os.LookupEnv(testDebugEventsPathEnv)
 	if !ok || path == "" {
 		return nil, nil, nil

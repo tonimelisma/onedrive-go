@@ -15,6 +15,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // goneItemID is the remote item a stopping run's download found missing.
@@ -23,13 +27,13 @@ const goneItemID = "gone-item"
 // failedUploads registers an upload for each path in actions, numbered from
 // firstID, and returns what each reported as its run stopped: a 502 from
 // OneDrive, a result that already happened.
-func failedUploads(actions *DepGraph, firstID int64, paths ...string) []ActionCompletion {
-	completions := make([]ActionCompletion, 0, len(paths))
+func failedUploads(actions *syncexec.DepGraph, firstID int64, paths ...string) []syncdomain.ActionCompletion {
+	completions := make([]syncdomain.ActionCompletion, 0, len(paths))
 	for i, path := range paths {
 		id := firstID + int64(i)
-		actions.Add(&Action{Type: ActionUpload, Path: path, View: &PathView{Path: path}}, id, nil)
-		completions = append(completions, ActionCompletion{
-			ActionID: id, Path: path, ActionType: ActionUpload, RunEnded: true,
+		actions.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: path, View: &syncdomain.PathView{Path: path}}, id, nil)
+		completions = append(completions, syncdomain.ActionCompletion{
+			ActionID: id, Path: path, ActionType: syncdomain.ActionUpload, RunEnded: true,
 			HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError, ErrMsg: "bad gateway",
 		})
 	}
@@ -42,39 +46,39 @@ func failedUploads(actions *DepGraph, firstID int64, paths ...string) []ActionCo
 // its run stopped: an upload OneDrive answered with a 502, a download whose
 // item is gone, and a folder create whose outcome commit outlasted its bound.
 // Each is a result that already happened.
-func stoppingRunCompletions(t *testing.T, eng *testEngine, actions *DepGraph) []ActionCompletion {
+func stoppingRunCompletions(t *testing.T, eng *testEngine, actions *syncexec.DepGraph) []syncdomain.ActionCompletion {
 	t.Helper()
 
-	require.NoError(t, eng.baseline.CommitObservation(t.Context(), []ObservedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(t.Context(), []syncdomain.ObservedItem{{
 		DriveID:  eng.driveID,
 		ItemID:   goneItemID,
 		Path:     "gone.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "hash-gone",
 		Size:     4,
 		ETag:     "etag-gone",
 	}}, "delta-1", eng.driveID))
 
 	completions := failedUploads(actions, 1, "report.txt")
-	actions.Add(&Action{
-		Type: ActionDownload, Path: "gone.txt", ItemID: goneItemID, DriveID: eng.driveID, View: &PathView{Path: "gone.txt"},
+	actions.Add(&syncdomain.Action{
+		Type: syncdomain.ActionDownload, Path: "gone.txt", ItemID: goneItemID, DriveID: eng.driveID, View: &syncdomain.PathView{Path: "gone.txt"},
 	}, 2, nil)
-	actions.Add(&Action{Type: ActionFolderCreate, Path: "Projects", View: &PathView{Path: "Projects"}}, 3, nil)
+	actions.Add(&syncdomain.Action{Type: syncdomain.ActionFolderCreate, Path: "Projects", View: &syncdomain.PathView{Path: "Projects"}}, 3, nil)
 
 	return append(completions,
-		ActionCompletion{
-			ActionID: 2, Path: "gone.txt", ActionType: ActionDownload, RunEnded: true,
-			Err: &RemoteItemGoneError{Op: "download", ItemID: goneItemID, Role: "item"},
+		syncdomain.ActionCompletion{
+			ActionID: 2, Path: "gone.txt", ActionType: syncdomain.ActionDownload, RunEnded: true,
+			Err: &syncexec.RemoteItemGoneError{Op: "download", ItemID: goneItemID, Role: "item"},
 		},
-		ActionCompletion{
-			ActionID: 3, Path: "Projects", ActionType: ActionFolderCreate, RunEnded: true,
-			Err: fmt.Errorf("sync: commit outcome: %w: %w", context.DeadlineExceeded, ErrStoreAccessTimedOut),
+		syncdomain.ActionCompletion{
+			ActionID: 3, Path: "Projects", ActionType: syncdomain.ActionFolderCreate, RunEnded: true,
+			Err: fmt.Errorf("sync: commit outcome: %w: %w", context.DeadlineExceeded, syncdomain.ErrStoreAccessTimedOut),
 		},
 	)
 }
 
 // retryWorkPaths returns the paths of the retry work store holds.
-func retryWorkPaths(t *testing.T, store *SyncStore) []string {
+func retryWorkPaths(t *testing.T, store *syncstore.SyncStore) []string {
 	t.Helper()
 
 	rows := listRetryWorkForTest(t, store, t.Context())
@@ -101,8 +105,8 @@ func requireStoppingRunRecorded(t *testing.T, eng *testEngine) {
 }
 
 // closedCompletions returns a closed channel that holds completions.
-func closedCompletions(completions []ActionCompletion) chan ActionCompletion {
-	ch := make(chan ActionCompletion, len(completions))
+func closedCompletions(completions []syncdomain.ActionCompletion) chan syncdomain.ActionCompletion {
+	ch := make(chan syncdomain.ActionCompletion, len(completions))
 	for i := range completions {
 		ch <- completions[i]
 	}
@@ -140,7 +144,7 @@ func runWatchDrain(ctx context.Context, rt *watchRuntime, p *watchPipeline) erro
 // holdStoreConnection takes the store's one connection, so every access of
 // the store waits until its context ends, and returns the release, which a
 // cleanup also runs.
-func holdStoreConnection(t *testing.T, store *SyncStore) func() {
+func holdStoreConnection(t *testing.T, store *syncstore.SyncStore) func() {
 	t.Helper()
 
 	conn, err := store.RawDBForTest().Conn(t.Context())
@@ -160,11 +164,11 @@ func holdStoreConnection(t *testing.T, store *SyncStore) func() {
 
 // stoppingWatchRuntime returns a watch runtime whose stop bound is short and
 // whose log the test reads.
-func stoppingWatchRuntime(t *testing.T) (*testEngine, *watchRuntime, *syncLockedBuffer) {
+func stoppingWatchRuntime(t *testing.T) (*testEngine, *watchRuntime, *syncfixture.SyncLockedBuffer) {
 	t.Helper()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.stopBound = workerTestCommitBound
@@ -180,19 +184,19 @@ func stoppingWatchRuntime(t *testing.T) (*testEngine, *watchRuntime, *syncLocked
 func TestOneShotEngineLoop_ACanceledPassRecordsTheCompletionsItDrains(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *TrackedAction, 1)
+	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 	completions := closedCompletions(stoppingRunCompletions(t, eng, runner.sched.graph))
 
-	err := runWithin(t, stoppedContext(t), "the canceled pass to drain its completions", func(ctx context.Context) error {
+	err := syncfixture.RunWithin(t, stoppedContext(t), "the canceled pass to drain its completions", func(ctx context.Context) error {
 		return runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, completions, nil)
 	})
 	require.NoError(t, err)
 
 	requireStoppingRunRecorded(t, eng)
-	require.Eventually(t, func() bool { return runner.canceledAt.Load() != nil }, eventWait, time.Millisecond,
+	require.Eventually(t, func() bool { return runner.canceledAt.Load() != nil }, syncfixture.EventWait, time.Millisecond,
 		"the pass records its cancel, which its stop's bound starts at")
 }
 
@@ -230,15 +234,15 @@ func TestWatchRuntime_AStoreThatDoesNotAnswerEndsTheDrainAtItsBound(t *testing.T
 	rt.beginWatchDrain(stopped, p)
 
 	release := holdStoreConnection(t, eng.baseline)
-	err := runWithin(t, t.Context(), "the drain to end at its bound", func(context.Context) error {
+	err := syncfixture.RunWithin(t, t.Context(), "the drain to end at its bound", func(context.Context) error {
 		return runWatchDrain(stopped, rt, p)
 	})
 	release()
 
-	require.ErrorIs(t, err, ErrStoreAccessTimedOut)
+	require.ErrorIs(t, err, syncdomain.ErrStoreAccessTimedOut)
 	require.ErrorContains(t, err, "the stop's time ran out before recording 2 of its results")
 	assert.Empty(t, retryWorkPaths(t, eng.baseline), "the bound cut both records")
-	assert.Equal(t, 1, countLevel(logs.String(), "WARN"), "the loss is said once: %s", logs.String())
+	assert.Equal(t, 1, syncfixture.CountLevel(logs.String(), "WARN"), "the loss is said once: %s", logs.String())
 	assert.Contains(t, logs.String(), "The stop's time ran out before 2 results were recorded")
 }
 
@@ -254,15 +258,15 @@ func TestWatchRuntime_EveryRecordOfAStopSharesItsOneBound(t *testing.T) {
 
 	eng, rt, logs := stoppingWatchRuntime(t)
 	succeeded := []string{"first.txt", "second.txt"}
-	completions := make([]ActionCompletion, 0, len(succeeded))
+	completions := make([]syncdomain.ActionCompletion, 0, len(succeeded))
 	for i, path := range succeeded {
-		_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), testRetryWorkFailure(path, "", ActionUpload),
+		_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), syncfixture.TestRetryWorkFailure(path, "", syncdomain.ActionUpload),
 			retryDelayForDecision(nil))
 		require.NoError(t, err)
 		id := int64(i + 1)
-		rt.sched.graph.Add(&Action{Type: ActionUpload, Path: path, View: &PathView{Path: path}}, id, nil)
-		completions = append(completions, ActionCompletion{
-			ActionID: id, Path: path, ActionType: ActionUpload, Success: true, RunEnded: true,
+		rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: path, View: &syncdomain.PathView{Path: path}}, id, nil)
+		completions = append(completions, syncdomain.ActionCompletion{
+			ActionID: id, Path: path, ActionType: syncdomain.ActionUpload, Success: true, RunEnded: true,
 		})
 	}
 	p := &watchPipeline{}
@@ -277,7 +281,7 @@ func TestWatchRuntime_EveryRecordOfAStopSharesItsOneBound(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.ElementsMatch(t, succeeded, retryWorkPaths(t, eng.baseline), "no clear ran past the stop's one bound")
-	require.ErrorIs(t, rt.endStopDrain(), ErrStoreAccessTimedOut)
+	require.ErrorIs(t, rt.endStopDrain(), syncdomain.ErrStoreAccessTimedOut)
 	assert.Contains(t, logs.String(), "The stop's time ran out before 2 results were recorded")
 }
 
@@ -297,15 +301,15 @@ func TestWatchRuntime_AStopsBoundStartsAtItsCancel(t *testing.T) {
 	defer stopNoting()
 
 	release := holdStoreConnection(t, eng.baseline)
-	err := RunDetachedStoreAccess(run, workerTestCommitBound, func(ctx context.Context) error {
+	err := syncexec.RunDetachedStoreAccess(run, workerTestCommitBound, func(ctx context.Context) error {
 		cancelRun()
 		_, listErr := eng.baseline.ListBlockScopes(ctx)
 
 		return listErr
 	})
 	release()
-	require.ErrorIs(t, err, ErrStoreAccessTimedOut, "the run's goroutine waited out the store")
-	require.Eventually(t, func() bool { return rt.canceledAt.Load() != nil }, eventWait, time.Millisecond,
+	require.ErrorIs(t, err, syncdomain.ErrStoreAccessTimedOut, "the run's goroutine waited out the store")
+	require.Eventually(t, func() bool { return rt.canceledAt.Load() != nil }, syncfixture.EventWait, time.Millisecond,
 		"the cancel is recorded")
 
 	seen := time.Now()
@@ -330,13 +334,13 @@ func TestRunDetachedStoreAccess_ANestedAccessKeepsTheOuterBound(t *testing.T) {
 	type runValueKey struct{}
 	run, stop := context.WithCancel(context.WithValue(t.Context(), runValueKey{}, "kept"))
 	stop()
-	outer, cancel := DetachedStoreContext(run, time.Now().Add(time.Hour))
+	outer, cancel := syncexec.DetachedStoreContext(run, time.Now().Add(time.Hour))
 	defer cancel()
 	outerDeadline, bounded := outer.Deadline()
 	require.True(t, bounded, "a detached context has a deadline")
 
 	var innerDeadline time.Time
-	require.NoError(t, RunDetachedStoreAccess(outer, OutcomeCommitTimeout, func(ctx context.Context) error {
+	require.NoError(t, syncexec.RunDetachedStoreAccess(outer, syncdomain.OutcomeCommitTimeout, func(ctx context.Context) error {
 		innerDeadline, _ = ctx.Deadline()
 		assert.Equal(t, "kept", ctx.Value(runValueKey{}), "the run's values are kept")
 
@@ -354,15 +358,15 @@ func TestRunDetachedStoreAccess_ANestedAccessKeepsTheOuterBound(t *testing.T) {
 func TestOneShotEngineLoop_ACanceledPassSealsItsOutbox(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *TrackedAction)
-	admitted := runner.sched.graph.Add(&Action{Type: ActionUpload, Path: "queued.txt", View: &PathView{Path: "queued.txt"}}, 1, nil)
+	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
+	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction)
+	admitted := runner.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "queued.txt", View: &syncdomain.PathView{Path: "queued.txt"}}, 1, nil)
 	require.NotNil(t, admitted)
 
-	err := runWithin(t, stoppedContext(t), "the canceled pass to seal its outbox", func(ctx context.Context) error {
-		return runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, make(chan ActionCompletion), []*TrackedAction{admitted})
+	err := syncfixture.RunWithin(t, stoppedContext(t), "the canceled pass to seal its outbox", func(ctx context.Context) error {
+		return runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, make(chan syncdomain.ActionCompletion), []*syncdomain.TrackedAction{admitted})
 	})
 	require.NoError(t, err)
 
@@ -380,8 +384,8 @@ func TestEngineFlow_AStoppingRunAsksOneDriveNothing(t *testing.T) {
 
 	const mountRoot = "stop-mount-root"
 	probes := 0
-	eng, _ := newTestEngine(t, &engineMockClient{
-		listItemPermissionsFn: func(context.Context, driveid.ID, string) ([]graph.Permission, error) {
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{
+		ListItemPermissionsFn: func(context.Context, driveid.ID, string) ([]graph.Permission, error) {
 			probes++
 			return []graph.Permission{{Roles: []string{"read"}}}, nil
 		},
@@ -390,13 +394,13 @@ func TestEngineFlow_AStoppingRunAsksOneDriveNothing(t *testing.T) {
 	eng.permHandler.remoteRootItemID = mountRoot
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
-	flow.sched.graph.Add(&Action{Type: ActionUpload, Path: "Shared/file.txt", View: &PathView{Path: "Shared/file.txt"}}, 1, nil)
-	refused := ActionCompletion{
-		ActionID: 1, Path: "Shared/file.txt", ActionType: ActionUpload, RunEnded: true,
+	flow.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "Shared/file.txt", View: &syncdomain.PathView{Path: "Shared/file.txt"}}, 1, nil)
+	refused := syncdomain.ActionCompletion{
+		ActionID: 1, Path: "Shared/file.txt", ActionType: syncdomain.ActionUpload, RunEnded: true,
 		HTTPStatus: http.StatusForbidden, ErrMsg: "folder is read-only",
 	}
 
-	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &Baseline{}))
+	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &syncdomain.Baseline{}))
 	require.NoError(t, flow.endStopDrain())
 
 	assert.Zero(t, probes, "a stop asks OneDrive nothing")
@@ -416,8 +420,8 @@ func TestEngineFlow_AStoppingRunAsksOneDriveNothingForATrial(t *testing.T) {
 		trialPath = "Shared/file.txt"
 	)
 	probes := 0
-	eng, _ := newTestEngine(t, &engineMockClient{
-		listItemPermissionsFn: func(context.Context, driveid.ID, string) ([]graph.Permission, error) {
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{
+		ListItemPermissionsFn: func(context.Context, driveid.ID, string) ([]graph.Permission, error) {
 			probes++
 			return []graph.Permission{{Roles: []string{"read"}}}, nil
 		},
@@ -426,19 +430,19 @@ func TestEngineFlow_AStoppingRunAsksOneDriveNothingForATrial(t *testing.T) {
 	eng.permHandler.remoteRootItemID = mountRoot
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
-	scopeKey := SKService()
-	setTestBlockScope(t, eng, &BlockScope{Key: scopeKey, NextTrialAt: eng.nowFunc()})
-	blocked := &RetryWorkRow{Path: trialPath, ActionType: ActionUpload, ScopeKey: scopeKey, Blocked: true, AttemptCount: 1}
+	scopeKey := syncdomain.SKService()
+	setTestBlockScope(t, eng, &syncdomain.BlockScope{Key: scopeKey, NextTrialAt: eng.nowFunc()})
+	blocked := &syncdomain.RetryWorkRow{Path: trialPath, ActionType: syncdomain.ActionUpload, ScopeKey: scopeKey, Blocked: true, AttemptCount: 1}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blocked))
 	flow.retryWork.rows[blocked.WorkKey()] = *blocked
-	flow.sched.graph.Add(&Action{Type: ActionUpload, Path: trialPath, View: &PathView{Path: trialPath}}, 1, nil)
-	refused := ActionCompletion{
-		ActionID: 1, Path: trialPath, ActionType: ActionUpload, RunEnded: true,
+	flow.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: trialPath, View: &syncdomain.PathView{Path: trialPath}}, 1, nil)
+	refused := syncdomain.ActionCompletion{
+		ActionID: 1, Path: trialPath, ActionType: syncdomain.ActionUpload, RunEnded: true,
 		HTTPStatus: http.StatusForbidden, ErrMsg: "folder is read-only",
 		IsTrial: true, TrialScopeKey: scopeKey,
 	}
 
-	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &Baseline{}))
+	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &syncdomain.Baseline{}))
 	require.NoError(t, flow.endStopDrain())
 
 	assert.Zero(t, probes, "a stop asks OneDrive nothing for a trial")
@@ -474,17 +478,17 @@ func TestEngineFlow_AStoppingRunProbesNoLocalFolder(t *testing.T) {
 	t.Parallel()
 
 	const refusedPath = unwritableStopFolder + "/file.txt"
-	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
 	makeUnwritableStopFolder(t, syncRoot)
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
-	flow.sched.graph.Add(&Action{Type: ActionDownload, Path: refusedPath, View: &PathView{Path: refusedPath}}, 1, nil)
-	refused := ActionCompletion{
-		ActionID: 1, Path: refusedPath, ActionType: ActionDownload, RunEnded: true,
-		Err: os.ErrPermission, ErrMsg: "permission denied", FailureCapability: PermissionCapabilityLocalWrite,
+	flow.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionDownload, Path: refusedPath, View: &syncdomain.PathView{Path: refusedPath}}, 1, nil)
+	refused := syncdomain.ActionCompletion{
+		ActionID: 1, Path: refusedPath, ActionType: syncdomain.ActionDownload, RunEnded: true,
+		Err: os.ErrPermission, ErrMsg: "permission denied", FailureCapability: syncdomain.PermissionCapabilityLocalWrite,
 	}
 
-	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &Baseline{}))
+	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &syncdomain.Baseline{}))
 	require.NoError(t, flow.endStopDrain())
 
 	rows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -492,7 +496,7 @@ func TestEngineFlow_AStoppingRunProbesNoLocalFolder(t *testing.T) {
 	assert.Equal(t, refusedPath, rows[0].Path)
 	assert.False(t, rows[0].Blocked, "the refusal is recorded as retry work, not as a probed boundary")
 	assert.True(t, rows[0].ScopeKey.IsZero(), "no folder scope holds the refusal")
-	assert.False(t, isTestBlockScopeed(eng, SKPermLocalWrite(unwritableStopFolder)), "the folder was not probed")
+	assert.False(t, isTestBlockScopeed(eng, syncdomain.SKPermLocalWrite(unwritableStopFolder)), "the folder was not probed")
 }
 
 // A stopping run's scope trial probes no local folder either: a trial refused
@@ -504,30 +508,30 @@ func TestEngineFlow_AStoppingRunProbesNoLocalFolderForATrial(t *testing.T) {
 	t.Parallel()
 
 	const trialPath = unwritableStopFolder + "/file.txt"
-	eng, syncRoot := newTestEngine(t, &engineMockClient{})
+	eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
 	makeUnwritableStopFolder(t, syncRoot)
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
-	scopeKey := SKService()
-	setTestBlockScope(t, eng, &BlockScope{Key: scopeKey, NextTrialAt: eng.nowFunc()})
-	blocked := &RetryWorkRow{Path: trialPath, ActionType: ActionDownload, ScopeKey: scopeKey, Blocked: true, AttemptCount: 1}
+	scopeKey := syncdomain.SKService()
+	setTestBlockScope(t, eng, &syncdomain.BlockScope{Key: scopeKey, NextTrialAt: eng.nowFunc()})
+	blocked := &syncdomain.RetryWorkRow{Path: trialPath, ActionType: syncdomain.ActionDownload, ScopeKey: scopeKey, Blocked: true, AttemptCount: 1}
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blocked))
 	flow.retryWork.rows[blocked.WorkKey()] = *blocked
-	flow.sched.graph.Add(&Action{Type: ActionDownload, Path: trialPath, View: &PathView{Path: trialPath}}, 1, nil)
-	refused := ActionCompletion{
-		ActionID: 1, Path: trialPath, ActionType: ActionDownload, RunEnded: true,
-		Err: os.ErrPermission, ErrMsg: "permission denied", FailureCapability: PermissionCapabilityLocalWrite,
+	flow.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionDownload, Path: trialPath, View: &syncdomain.PathView{Path: trialPath}}, 1, nil)
+	refused := syncdomain.ActionCompletion{
+		ActionID: 1, Path: trialPath, ActionType: syncdomain.ActionDownload, RunEnded: true,
+		Err: os.ErrPermission, ErrMsg: "permission denied", FailureCapability: syncdomain.PermissionCapabilityLocalWrite,
 		IsTrial: true, TrialScopeKey: scopeKey,
 	}
 
-	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &Baseline{}))
+	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &syncdomain.Baseline{}))
 	require.NoError(t, flow.endStopDrain())
 
 	rows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, rows, 1)
 	assert.Equal(t, trialPath, rows[0].Path)
 	assert.False(t, rows[0].Blocked, "the refusal is recorded as retry work, not as a probed boundary")
-	assert.False(t, isTestBlockScopeed(eng, SKPermLocalWrite(unwritableStopFolder)), "the folder was not probed")
+	assert.False(t, isTestBlockScopeed(eng, syncdomain.SKPermLocalWrite(unwritableStopFolder)), "the folder was not probed")
 }
 
 // The watch records the cancel of the context it runs on, so the bound of its
@@ -537,11 +541,11 @@ func TestEngineFlow_AStoppingRunProbesNoLocalFolderForATrial(t *testing.T) {
 func TestRunWatch_RecordsTheCancelOfItsRun(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	rt := newWatchRuntime(eng.Engine)
 
-	require.NoError(t, eng.runWatch(stoppedContext(t), rt, SyncBidirectional, WatchOptions{}))
-	require.Eventually(t, func() bool { return rt.canceledAt.Load() != nil }, eventWait, time.Millisecond,
+	require.NoError(t, eng.runWatch(stoppedContext(t), rt, syncdomain.SyncBidirectional, WatchOptions{}))
+	require.Eventually(t, func() bool { return rt.canceledAt.Load() != nil }, syncfixture.EventWait, time.Millisecond,
 		"the watch records its cancel")
 }
 
@@ -553,16 +557,16 @@ func TestRunWatch_RecordsTheCancelOfItsRun(t *testing.T) {
 func TestEngineFlow_AStoppingRunReleasesNoHeldWork(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
 	completions := failedUploads(flow.sched.graph, 1, "report.txt")
-	held := flow.sched.graph.Add(&Action{Type: ActionUpload, Path: "held.txt", View: &PathView{Path: "held.txt"}}, 2, nil)
+	held := flow.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "held.txt", View: &syncdomain.PathView{Path: "held.txt"}}, 2, nil)
 	require.NotNil(t, held)
-	flow.holdAction(held, heldReasonRetry, ScopeKey{}, flow.deps.now().Add(-time.Minute))
+	flow.holdAction(held, heldReasonRetry, syncdomain.ScopeKey{}, flow.deps.now().Add(-time.Minute))
 
-	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &completions[0], &Baseline{}))
+	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &completions[0], &syncdomain.Baseline{}))
 	require.NoError(t, flow.endStopDrain())
 
-	assert.Contains(t, flow.retries.heldByKey, RetryWorkKeyForAction(&held.Action), "the due action stays held")
+	assert.Contains(t, flow.retries.heldByKey, syncdomain.RetryWorkKeyForAction(&held.Action), "the due action stays held")
 }

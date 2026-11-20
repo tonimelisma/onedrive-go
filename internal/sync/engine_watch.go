@@ -8,6 +8,10 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -47,7 +51,7 @@ const quiescenceLogInterval = 30 * time.Second
 // working set and worker pool that the steady-state watch loop uses.
 // A timer callback that panics ends the watch with an error wrapping
 // panicguard.ErrPanic (beginRun).
-func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions) (err error) {
+func (e *Engine) RunWatch(ctx context.Context, mode syncdomain.SyncMode, opts WatchOptions) (err error) {
 	runCtx, end := e.beginRun(ctx)
 	defer func() { err = end(err) }()
 
@@ -57,7 +61,7 @@ func (e *Engine) RunWatch(ctx context.Context, mode SyncMode, opts WatchOptions)
 // runWatch is the watch RunWatch runs on rt under its bound context. The end
 // of that context is recorded for the whole watch (noteRunCancel), so the
 // stop's bound starts at the cancel.
-func (e *Engine) runWatch(ctx context.Context, rt *watchRuntime, mode SyncMode, opts WatchOptions) error {
+func (e *Engine) runWatch(ctx context.Context, rt *watchRuntime, mode syncdomain.SyncMode, opts WatchOptions) error {
 	e.logger.Info("watch mode starting",
 		slog.String("mode", mode.String()),
 		slog.Duration("poll_interval", e.resolvePollInterval(opts)),
@@ -146,19 +150,19 @@ func isWatchObserverStartupStopped(ctx context.Context, err error) bool {
 // engine's limit on its database, as for classifyResult, so a drain whose
 // bound cut records short ends the watch with that store failure.
 func isWatchShutdownError(ctx context.Context, err error) bool {
-	return RunEnded(ctx, err) && IsCancellationEcho(err) && !errors.Is(err, ErrStoreAccessTimedOut)
+	return syncdomain.RunEnded(ctx, err) && syncdomain.IsCancellationEcho(err) && !errors.Is(err, syncdomain.ErrStoreAccessTimedOut)
 }
 
 // watchPipeline holds watch-loop dependencies that are not already runtime-owned.
 // Created by initWatchInfra; cleaned up by its cleanup method.
 type watchPipeline struct {
 	runtime      *watchRuntime
-	bl           *Baseline
-	replanReady  <-chan DirtyBatch
-	completions  <-chan ActionCompletion
+	bl           *syncdomain.Baseline
+	replanReady  <-chan syncobserve.DirtyBatch
+	completions  <-chan syncdomain.ActionCompletion
 	maintenanceC <-chan time.Time
-	mode         SyncMode
-	pool         *WorkerPool // for bootstrapSync to access Completions()
+	mode         syncdomain.SyncMode
+	pool         *syncexec.WorkerPool // for bootstrapSync to access Completions()
 	cleanup      func()
 }
 
@@ -179,34 +183,34 @@ type socketIOWakeSourceRunner interface {
 //     and the current actionable set is rebuilt.
 func (rt *watchRuntime) initWatchInfra(
 	ctx context.Context,
-	mode SyncMode,
+	mode syncdomain.SyncMode,
 	opts WatchOptions,
 ) (*watchPipeline, error) {
 	// The graph starts empty, and startRuntimeStage replaces it with each
 	// plan's. Active scope state is loaded from the persisted block_scopes
 	// table into watch-owned runtime state.
-	rt.sched.graph = NewDepGraph(rt.deps.logger)
+	rt.sched.graph = syncexec.NewDepGraph(rt.deps.logger)
 	rt.sched.graph.SetOwnerCheck(rt.engine.runOwnerCheck)
 	if err := rt.loadActiveScopes(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 
-	rt.scopes.state = NewScopeState(rt.engine.nowFunc, rt.deps.logger)
+	rt.scopes.state = syncexec.NewScopeState(rt.engine.nowFunc, rt.deps.logger)
 	rt.sched.nextActionID = 0
 
 	// dispatchCh feeds admitted actions to workers. Watch mode keeps this
 	// unbuffered so not-yet-started work remains engine-owned until a worker is
 	// actually ready to receive it.
-	rt.sched.dispatchCh = make(chan *TrackedAction, watchDispatchBuf)
+	rt.sched.dispatchCh = make(chan *syncdomain.TrackedAction, watchDispatchBuf)
 
-	pool := NewWorkerPool(rt.engine.execCfg, rt.sched.dispatchCh, executorStoreOf(rt.deps.store), rt.deps.logger, watchCompletionBuf)
+	pool := syncexec.NewWorkerPool(rt.engine.execCfg, rt.sched.dispatchCh, executorStoreOf(rt.deps.store), rt.deps.logger, watchCompletionBuf)
 	pool.SetRuntimeOptions(rt.engine.collector(), rt.engine.serializeWorkers)
 	pool.Start(ctx, rt.engine.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse
 	// dirty/full-refresh signals only; snapshot refresh and planning happen
 	// after debounce.
-	dirtyBuf := NewDirtyBuffer(rt.deps.logger)
+	dirtyBuf := syncobserve.NewDirtyBuffer(rt.deps.logger)
 	rt.resources.dirtyBuf = dirtyBuf
 	replanReady := dirtyBuf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
 
@@ -222,7 +226,7 @@ func (rt *watchRuntime) initWatchInfra(
 		runtime:      rt,
 		replanReady:  replanReady,
 		completions:  pool.Completions(),
-		maintenanceC: TickerChan(maintenanceTicker),
+		maintenanceC: syncdomain.TickerChan(maintenanceTicker),
 		mode:         mode,
 		pool:         pool,
 	}
@@ -230,7 +234,7 @@ func (rt *watchRuntime) initWatchInfra(
 	pipe.cleanup = func() {
 		rt.resources.goroutines.stop(rt.deps.clock, rt.deps.logger)
 
-		StopTicker(maintenanceTicker)
+		syncdomain.StopTicker(maintenanceTicker)
 		rt.resetRefreshTimer(nil)
 
 		rt.stopRetryTimer()
@@ -243,7 +247,7 @@ func (rt *watchRuntime) initWatchInfra(
 		rt.resources.activeObservers = 0
 		rt.resources.remoteObs = nil
 		rt.resources.localObs = nil
-		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventWatchStopped})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventWatchStopped})
 		rt.deps.logger.Info("watch mode stopped")
 	}
 
@@ -258,7 +262,7 @@ func (rt *watchRuntime) initWatchInfra(
 // steady-state watch loop uses. Blocks until all bootstrap actions due now complete.
 //
 // Must be called after startup + initWatchInfra and before startObservers.
-func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode SyncMode, pipe *watchPipeline) error {
+func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode syncdomain.SyncMode, pipe *watchPipeline) error {
 	rt.deps.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 
 	if pipe == nil || pipe.bl == nil {
@@ -298,12 +302,12 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode SyncMode, pipe *
 
 func (rt *watchRuntime) finishBootstrapWithoutActions(
 	ctx context.Context,
-	pendingRemoteObservation *RemoteObservationBatch,
+	pendingRemoteObservation *syncobserve.RemoteObservationBatch,
 ) error {
 	if _, err := rt.commitPendingRemoteObservation(ctx, pendingRemoteObservation); err != nil {
 		return err
 	}
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventBootstrapQuiesced})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventBootstrapQuiesced})
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
 		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
 	}
@@ -314,7 +318,7 @@ func (rt *watchRuntime) finishBootstrapWithoutActions(
 func (rt *watchRuntime) finishBootstrapAfterActions(
 	ctx context.Context,
 ) error {
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventBootstrapQuiesced})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventBootstrapQuiesced})
 	rt.scheduleFollowUpIfSettled()
 	rt.postSyncHousekeeping(ctx)
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
@@ -328,7 +332,7 @@ func (rt *watchRuntime) finishBootstrapAfterActions(
 // their channels on the watch runtime. The watch loop owns local and remote
 // batch application and dirty marking; observers do not commit SQLite directly.
 func (rt *watchRuntime) startObservers(
-	ctx context.Context, bl *Baseline, opts WatchOptions,
+	ctx context.Context, bl *syncdomain.Baseline, opts WatchOptions,
 ) error {
 	// Bootstrap uses loop termination to mean "quiesced"; the observer-backed
 	// loop must always start from steady-state running ownership.
@@ -336,9 +340,9 @@ func (rt *watchRuntime) startObservers(
 		return err
 	}
 
-	localBatches := make(chan LocalObservation, watchObservationBuf)
-	protectedRootEvents := make(chan ProtectedRootEvent, watchObservationBuf)
-	remoteBatches := make(chan RemoteObservationBatch, watchObservationBuf)
+	localBatches := make(chan syncobserve.LocalObservation, watchObservationBuf)
+	protectedRootEvents := make(chan syncshortcut.ProtectedRootEvent, watchObservationBuf)
+	remoteBatches := make(chan syncobserve.RemoteObservationBatch, watchObservationBuf)
 	errs := make(chan error, 2)
 	// Every step that can fail runs before the first goroutine starts, so a
 	// start that fails leaves nothing running.
@@ -347,11 +351,11 @@ func (rt *watchRuntime) startObservers(
 		return err
 	}
 
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventObserverStarted, Observer: EngineDebugObserverRemote})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverStarted, Observer: syncdomain.EngineDebugObserverRemote})
 	rt.startRemoteObserver(ctx, bl, remoteBatches, errs, opts)
 
 	rt.resources.localObs = localObs
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventObserverStarted, Observer: EngineDebugObserverLocal})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverStarted, Observer: syncdomain.EngineDebugObserverLocal})
 	rt.startLocalObserver(ctx, localObs, localBatches, protectedRootEvents, errs)
 
 	rt.resources.observerErrs = errs
@@ -371,10 +375,10 @@ const watchObserverCount = 2
 // nothing.
 func (rt *watchRuntime) buildWatchLocalObserver(
 	ctx context.Context,
-	bl *Baseline,
-	localBatches chan<- LocalObservation,
-	protectedRootEvents chan<- ProtectedRootEvent,
-) (*LocalObserver, error) {
+	bl *syncdomain.Baseline,
+	localBatches chan<- syncobserve.LocalObservation,
+	protectedRootEvents chan<- syncshortcut.ProtectedRootEvent,
+) (*syncobserve.LocalObserver, error) {
 	localObs := rt.engine.buildLocalObserver(bl, rt.deps.logger)
 	hashCache, err := rt.engine.baseline.NewLocalHashCache(ctx)
 	if err != nil {
@@ -390,7 +394,7 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 		return nil, err
 	}
 	localObs.SetMountBoundaryFlags(mountFlags)
-	localObs.SetProtectedRootEventSink(func(event ProtectedRootEvent) {
+	localObs.SetProtectedRootEventSink(func(event syncshortcut.ProtectedRootEvent) {
 		select {
 		case protectedRootEvents <- event:
 		default:
@@ -402,7 +406,7 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 		}
 	})
 	localObs.SetLocalObservationBatchChannel(localBatches)
-	localObs.SetSafetyScan(LocalWatchHealthySafetyScanInterval, true)
+	localObs.SetSafetyScan(syncobserve.LocalWatchHealthySafetyScanInterval, true)
 	localObs.SetDebugEvents(rt.deps.emit)
 
 	if rt.engine.localWatcherFactory != nil {
@@ -416,13 +420,13 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 // startRemoteObserver so both observers are launched through one shape.
 func (rt *watchRuntime) startLocalObserver(
 	ctx context.Context,
-	localObs *LocalObserver,
-	localBatches chan<- LocalObservation,
-	protectedRootEvents chan<- ProtectedRootEvent,
+	localObs *syncobserve.LocalObserver,
+	localBatches chan<- syncobserve.LocalObservation,
+	protectedRootEvents chan<- syncshortcut.ProtectedRootEvent,
 	errs chan<- error,
 ) {
 	rt.resources.goroutines.start(ctx, watchGoroutineLocalObserver, func(ctx context.Context) {
-		defer rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventObserverExited, Observer: EngineDebugObserverLocal})
+		defer rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverLocal})
 		defer close(localBatches)
 		defer close(protectedRootEvents)
 		defer recoverObserverPanic(rt.deps.logger, observerNameLocal, errs)
@@ -443,31 +447,31 @@ func (rt *watchRuntime) startLocalObserver(
 // were simply lost. Now the fallback scans at once, then at the normal
 // safety-scan interval, and tries to watch again after 10 minutes, doubling
 // to an hour while the limit persists.
-func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *LocalObserver) error {
+func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *syncobserve.LocalObserver) error {
 	tree := rt.engine.syncTree
-	retryDelay := LocalWatchRetryInitialDelay
-	var warnedCause WatchUnavailableCause
+	retryDelay := syncobserve.LocalWatchRetryInitialDelay
+	var warnedCause syncobserve.WatchUnavailableCause
 
 	for {
 		watchStart := rt.deps.now()
 		watchErr := localObs.Watch(ctx, tree)
-		cause, ok := WatchUnavailableCauseOf(watchErr)
+		cause, ok := syncobserve.WatchUnavailableCauseOf(watchErr)
 		if !ok {
 			return observerExitError(observerNameLocal, watchErr)
 		}
-		if rt.deps.since(watchStart) >= LocalWatchRetryMaxDelay {
+		if rt.deps.since(watchStart) >= syncobserve.LocalWatchRetryMaxDelay {
 			// Watching worked for a long stretch before failing again: this
 			// is a new episode, not a persisting limit.
-			retryDelay = LocalWatchRetryInitialDelay
+			retryDelay = syncobserve.LocalWatchRetryInitialDelay
 		}
 
 		interval := localObs.EffectiveSafetyScanInterval()
-		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventObserverFallbackStarted, Observer: EngineDebugObserverLocal})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverFallbackStarted, Observer: syncdomain.EngineDebugObserverLocal})
 		if cause != warnedCause {
 			warnedCause = cause
-			rt.deps.logger.Warn("Cannot watch the sync folder for changes ("+WatchUnavailableReason(cause)+"). "+
-				"Local changes will be noticed every "+WaitText(interval)+
-				" instead of at once; watching will be retried. To fix: "+WatchUnavailableFix(cause),
+			rt.deps.logger.Warn("Cannot watch the sync folder for changes ("+syncobserve.WatchUnavailableReason(cause)+"). "+
+				"Local changes will be noticed every "+syncobserve.WaitText(interval)+
+				" instead of at once; watching will be retried. To fix: "+syncobserve.WatchUnavailableFix(cause),
 				slog.Duration("scan_interval", interval),
 				slog.Duration("retry_after", retryDelay),
 				slog.Any("error", watchErr),
@@ -480,20 +484,20 @@ func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *Lo
 		}
 
 		retryDue := rt.runPeriodicFullScan(ctx, localObs, tree, interval, retryDelay)
-		rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventObserverFallbackStopped, Observer: EngineDebugObserverLocal})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverFallbackStopped, Observer: syncdomain.EngineDebugObserverLocal})
 		if !retryDue {
 			return nil // clean exit after context cancel
 		}
 
-		retryDelay = min(2*retryDelay, LocalWatchRetryMaxDelay)
+		retryDelay = min(2*retryDelay, syncobserve.LocalWatchRetryMaxDelay)
 		rt.deps.logger.Info("retrying to watch the sync folder for changes")
 	}
 }
 
 func (rt *watchRuntime) startRemoteObserver(
 	ctx context.Context,
-	bl *Baseline,
-	remoteBatches chan<- RemoteObservationBatch,
+	bl *syncdomain.Baseline,
+	remoteBatches chan<- syncobserve.RemoteObservationBatch,
 	errs chan<- error,
 	opts WatchOptions,
 ) {
@@ -514,7 +518,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 	wakeSource := rt.engine.socketIOWakeSourceFactory(
 		rt.engine.socketIOFetcher,
 		rt.engine.driveID,
-		SocketIOWakeSourceOptions{
+		syncobserve.SocketIOWakeSourceOptions{
 			Logger:        rt.deps.logger,
 			Clock:         rt.deps.clock,
 			LifecycleHook: rt.emitSocketIOLifecycleEvent,
@@ -560,8 +564,8 @@ func (rt *watchRuntime) reportSocketIOWakeSourceStop(err error) {
 	)
 }
 
-func (rt *watchRuntime) emitSocketIOLifecycleEvent(event SocketIOLifecycleEvent) {
-	debugEvent := EngineDebugEvent{
+func (rt *watchRuntime) emitSocketIOLifecycleEvent(event syncobserve.SocketIOLifecycleEvent) {
+	debugEvent := syncdomain.EngineDebugEvent{
 		DriveID: event.DriveID,
 		Note:    event.Note,
 		Delay:   event.Delay,
@@ -569,27 +573,27 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event SocketIOLifecycleEvent)
 	}
 
 	switch event.Type {
-	case SocketIOLifecycleEventStarted:
-		debugEvent.Type = EngineDebugEventWebsocketWakeSourceStarted
-	case SocketIOLifecycleEventEndpointFetchFail:
-		debugEvent.Type = EngineDebugEventWebsocketEndpointFetchFail
-	case SocketIOLifecycleEventConnectFail:
-		debugEvent.Type = EngineDebugEventWebsocketConnectFail
-	case SocketIOLifecycleEventConnected:
-		debugEvent.Type = EngineDebugEventWebsocketConnected
+	case syncobserve.SocketIOLifecycleEventStarted:
+		debugEvent.Type = syncdomain.EngineDebugEventWebsocketWakeSourceStarted
+	case syncobserve.SocketIOLifecycleEventEndpointFetchFail:
+		debugEvent.Type = syncdomain.EngineDebugEventWebsocketEndpointFetchFail
+	case syncobserve.SocketIOLifecycleEventConnectFail:
+		debugEvent.Type = syncdomain.EngineDebugEventWebsocketConnectFail
+	case syncobserve.SocketIOLifecycleEventConnected:
+		debugEvent.Type = syncdomain.EngineDebugEventWebsocketConnected
 		if event.SID != "" {
 			debugEvent.Note = "sid=" + event.SID
 		}
-	case SocketIOLifecycleEventRefreshRequested:
-		debugEvent.Type = EngineDebugEventWebsocketRefreshRequested
-	case SocketIOLifecycleEventConnectionDropped:
-		debugEvent.Type = EngineDebugEventWebsocketConnectionDropped
-	case SocketIOLifecycleEventNotificationWake:
-		debugEvent.Type = EngineDebugEventWebsocketNotificationWake
-	case SocketIOLifecycleEventWakeCoalesced:
-		debugEvent.Type = EngineDebugEventWebsocketWakeCoalesced
-	case SocketIOLifecycleEventStopped:
-		debugEvent.Type = EngineDebugEventWebsocketWakeSourceStopped
+	case syncobserve.SocketIOLifecycleEventRefreshRequested:
+		debugEvent.Type = syncdomain.EngineDebugEventWebsocketRefreshRequested
+	case syncobserve.SocketIOLifecycleEventConnectionDropped:
+		debugEvent.Type = syncdomain.EngineDebugEventWebsocketConnectionDropped
+	case syncobserve.SocketIOLifecycleEventNotificationWake:
+		debugEvent.Type = syncdomain.EngineDebugEventWebsocketNotificationWake
+	case syncobserve.SocketIOLifecycleEventWakeCoalesced:
+		debugEvent.Type = syncdomain.EngineDebugEventWebsocketWakeCoalesced
+	case syncobserve.SocketIOLifecycleEventStopped:
+		debugEvent.Type = syncdomain.EngineDebugEventWebsocketWakeSourceStopped
 	default:
 		return
 	}
@@ -602,11 +606,11 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event SocketIOLifecycleEvent)
 // pending), then every interval. It returns true when retryAfter has passed
 // and the caller should try to watch again, false when the context ended.
 func (rt *watchRuntime) runPeriodicFullScan(
-	ctx context.Context, obs *LocalObserver, tree *synctree.Root,
+	ctx context.Context, obs *syncobserve.LocalObserver, tree *synctree.Root,
 	interval time.Duration, retryAfter time.Duration,
 ) bool {
 	ticker := rt.deps.clock.NewTicker(interval)
-	defer StopTicker(ticker)
+	defer syncdomain.StopTicker(ticker)
 
 	retryCh := make(chan struct{}, 1)
 	retryTimer := rt.deps.clock.AfterFunc(retryAfter, func() {
@@ -629,7 +633,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 	}
 	for {
 		select {
-		case <-TickerChan(ticker):
+		case <-syncdomain.TickerChan(ticker):
 			// Jitter: sleep 0-10% of interval to prevent thundering-herd
 			// when multiple drives fire periodic scans simultaneously.
 			if jitter := interval / periodicScanJitterDivisor; jitter > 0 {
@@ -653,7 +657,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 // the safety scan, so its findings go exactly as a safety scan's do, the
 // empty set included. It returns false when the context ended.
 func (rt *watchRuntime) runFallbackScan(
-	ctx context.Context, obs *LocalObserver, tree *synctree.Root, scanFailing *bool,
+	ctx context.Context, obs *syncobserve.LocalObserver, tree *synctree.Root, scanFailing *bool,
 ) bool {
 	result, err := obs.FullScan(ctx, tree)
 	if err != nil {
@@ -669,14 +673,14 @@ func (rt *watchRuntime) runFallbackScan(
 		rt.deps.logger.Log(ctx, level, "Could not rescan the sync folder; will retry",
 			slog.Any("error", err),
 		)
-		obs.TrySendLocalTruthSuspect(ctx, LocalTruthRecoveryFullScanFailed)
+		obs.TrySendLocalTruthSuspect(ctx, syncdomain.LocalTruthRecoveryFullScanFailed)
 
 		return true
 	}
 	*scanFailing = false
 
 	obs.TrySendFullLocalSnapshot(ctx, result)
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventObserverFallbackScanned, Observer: EngineDebugObserverLocal})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverFallbackScanned, Observer: syncdomain.EngineDebugObserverLocal})
 
 	return true
 }

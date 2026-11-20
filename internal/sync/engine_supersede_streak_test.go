@@ -9,6 +9,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.8.9
@@ -20,7 +24,7 @@ func TestRecordSupersede_WarnsOnceWhenTheSameActionKeepsGoingStale(t *testing.T)
 		deps:             runtimeDeps{logger: slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))},
 		supersedeStreaks: make(map[string]int),
 	}
-	move := &ActionCompletion{ActionType: ActionRemoteMove, OldPath: "movesrc", Path: "movedst", ErrMsg: "remote item changed"}
+	move := &syncdomain.ActionCompletion{ActionType: syncdomain.ActionRemoteMove, OldPath: "movesrc", Path: "movedst", ErrMsg: "remote item changed"}
 
 	for range supersedeStreakWarnThreshold + 2 {
 		flow.recordSupersede(move)
@@ -58,15 +62,15 @@ func TestSupersedeParkDelay_DoublesToACap(t *testing.T) {
 func TestApplySupersededCompletion_ParksTheSameActionAfterAStreak(t *testing.T) {
 	t.Parallel()
 
-	store := newTestStore(t)
+	store := syncstoretest.NewTestStore(t)
 	signals := &recordingSignals{}
 	flow := &engineFlow{
-		deps:             runtimeDeps{store: store, logger: testLogger(t)},
+		deps:             runtimeDeps{store: store, logger: syncfixture.TestLogger(t)},
 		supersedeStreaks: make(map[string]int),
 		signals:          signals,
 	}
-	flow.retryWork.rows = map[RetryWorkKey]RetryWorkRow{}
-	stale := &ActionCompletion{ActionType: ActionRemoteMove, OldPath: "movesrc", Path: "movedst", ErrMsg: "remote item changed"}
+	flow.retryWork.rows = map[syncdomain.RetryWorkKey]syncdomain.RetryWorkRow{}
+	stale := &syncdomain.ActionCompletion{ActionType: syncdomain.ActionRemoteMove, OldPath: "movesrc", Path: "movedst", ErrMsg: "remote item changed"}
 
 	for range supersedeParkThreshold - 1 {
 		require.NoError(t, flow.applySupersededCompletion(t.Context(), nil, stale, "test"))
@@ -92,12 +96,12 @@ func TestPruneSupersedeStreaks_ForgetsActionsTheNewPlanLacks(t *testing.T) {
 	t.Parallel()
 
 	flow := &engineFlow{supersedeStreaks: make(map[string]int)}
-	kept := &ActionCompletion{ActionType: ActionUpload, Path: "kept.txt"}
-	dropped := &ActionCompletion{ActionType: ActionRemoteMove, OldPath: "a", Path: "b"}
+	kept := &syncdomain.ActionCompletion{ActionType: syncdomain.ActionUpload, Path: "kept.txt"}
+	dropped := &syncdomain.ActionCompletion{ActionType: syncdomain.ActionRemoteMove, OldPath: "a", Path: "b"}
 	flow.recordSupersede(kept)
 	flow.recordSupersede(dropped)
 
-	flow.pruneSupersedeStreaks(&ActionPlan{Actions: []Action{{Type: ActionUpload, Path: "kept.txt"}}})
+	flow.pruneSupersedeStreaks(&syncdomain.ActionPlan{Actions: []syncdomain.Action{{Type: syncdomain.ActionUpload, Path: "kept.txt"}}})
 
 	assert.Equal(t, 1, flow.supersedeStreaks[supersedeStreakKey(kept)])
 	assert.NotContains(t, flow.supersedeStreaks, supersedeStreakKey(dropped))

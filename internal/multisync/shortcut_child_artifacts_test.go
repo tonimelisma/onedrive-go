@@ -13,6 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
@@ -169,7 +170,7 @@ func TestOrchestratorCleanupWithEmptyDataDirFailsLoudly(t *testing.T) {
 			namespaceID: "personal:parent@example.com",
 			ackRef:      testShortcutChildAckRef(t, "binding-empty-data-dir"),
 			localRoot:   filepath.Join(t.TempDir(), "Shortcut"),
-			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			reason:      syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 		}}},
 		map[mountID]shortcutChildAckHandle{},
 		nil,
@@ -224,15 +225,15 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsUsesInjectedExecutor
 			namespaceID: "personal:parent@example.com",
 			ackRef:      testShortcutChildAckRef(t, "binding-cleanup"),
 			localRoot:   filepath.Join(t.TempDir(), "Shortcut"),
-			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			reason:      syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 		}},
 	}
 	ackers := map[mountID]shortcutChildAckHandle{
 		"personal:parent@example.com": mockShortcutChildAckHandle{
-			ackCleanupFn: func(_ context.Context, ack syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildWorkSnapshot, error) {
+			ackCleanupFn: func(_ context.Context, ack syncshortcut.ShortcutChildArtifactCleanupAck) (syncshortcut.ShortcutChildWorkSnapshot, error) {
 				assert.False(t, ack.Ref.IsZero())
 				acked = append(acked, "ack")
-				return syncengine.ShortcutChildWorkSnapshot{}, nil
+				return syncshortcut.ShortcutChildWorkSnapshot{}, nil
 			},
 		},
 	}
@@ -271,13 +272,13 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsReturnsAckFailureAft
 			mountID:     childMountID,
 			namespaceID: "personal:parent@example.com",
 			ackRef:      testShortcutChildAckRef(t, "binding-ack-fail"),
-			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			reason:      syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 		}},
 	}
 	ackers := map[mountID]shortcutChildAckHandle{
 		"personal:parent@example.com": mockShortcutChildAckHandle{
-			ackCleanupFn: func(context.Context, syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildWorkSnapshot, error) {
-				return syncengine.ShortcutChildWorkSnapshot{}, errors.New("parent store temporarily unavailable")
+			ackCleanupFn: func(context.Context, syncshortcut.ShortcutChildArtifactCleanupAck) (syncshortcut.ShortcutChildWorkSnapshot, error) {
+				return syncshortcut.ShortcutChildWorkSnapshot{}, errors.New("parent store temporarily unavailable")
 			},
 		},
 	}
@@ -318,7 +319,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsForDecisionsRequiresLiveParentAc
 			mountID:     childMountID,
 			namespaceID: "personal:parent@example.com",
 			ackRef:      testShortcutChildAckRef(t, "binding-no-ack"),
-			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			reason:      syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 		}},
 	}
 
@@ -361,21 +362,21 @@ func TestOrchestratorPurgeShortcutChildArtifactsRecordsMixedCleanupDiagnostics(t
 				namespaceID: "personal:parent@example.com",
 				ackRef:      testShortcutChildAckRef(t, "binding-artifact-fail"),
 				localRoot:   filepath.Join(t.TempDir(), "ArtifactFail"),
-				reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+				reason:      syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 			},
 			{
 				mountID:     ackFailMountID,
 				namespaceID: "personal:parent@example.com",
 				ackRef:      testShortcutChildAckRef(t, "binding-ack-fail"),
 				localRoot:   filepath.Join(t.TempDir(), "AckFail"),
-				reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+				reason:      syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 			},
 		},
 	}
 	ackers := map[mountID]shortcutChildAckHandle{
 		"personal:parent@example.com": mockShortcutChildAckHandle{
-			ackCleanupFn: func(context.Context, syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildWorkSnapshot, error) {
-				return syncengine.ShortcutChildWorkSnapshot{}, errors.New("parent store temporarily unavailable")
+			ackCleanupFn: func(context.Context, syncshortcut.ShortcutChildArtifactCleanupAck) (syncshortcut.ShortcutChildWorkSnapshot, error) {
+				return syncshortcut.ShortcutChildWorkSnapshot{}, errors.New("parent store temporarily unavailable")
 			},
 		},
 	}
@@ -416,7 +417,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsAfterSuccessful
 			namespaceID: "personal:parent@example.com",
 			ackRef:      testShortcutChildAckRef(t, "binding-retry-success"),
 			localRoot:   filepath.Join(t.TempDir(), "RetrySuccess"),
-			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			reason:      syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 		}},
 	}
 
@@ -426,8 +427,8 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsAfterSuccessful
 
 	ackers := map[mountID]shortcutChildAckHandle{
 		"personal:parent@example.com": mockShortcutChildAckHandle{
-			ackCleanupFn: func(context.Context, syncengine.ShortcutChildArtifactCleanupAck) (syncengine.ShortcutChildWorkSnapshot, error) {
-				return syncengine.ShortcutChildWorkSnapshot{}, nil
+			ackCleanupFn: func(context.Context, syncshortcut.ShortcutChildArtifactCleanupAck) (syncshortcut.ShortcutChildWorkSnapshot, error) {
+				return syncshortcut.ShortcutChildWorkSnapshot{}, nil
 			},
 		},
 	}
@@ -462,7 +463,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsClearsDiagnosticsWhenNoCleanupWo
 			namespaceID: "personal:parent@example.com",
 			ackRef:      testShortcutChildAckRef(t, "binding-no-work-remains"),
 			localRoot:   filepath.Join(t.TempDir(), "NoWorkRemains"),
-			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			reason:      syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 		}}},
 		nil,
 		nil,
@@ -506,7 +507,7 @@ func TestOrchestratorPurgeShortcutChildArtifactsKeepsDiagnosticsForParentScopedN
 			namespaceID: "personal:parent-a@example.com",
 			ackRef:      testShortcutChildAckRef(t, "binding-parent-a"),
 			localRoot:   filepath.Join(t.TempDir(), "ParentA"),
-			reason:      syncengine.ShortcutChildArtifactCleanupParentRemoved,
+			reason:      syncshortcut.ShortcutChildArtifactCleanupParentRemoved,
 		}}},
 		nil,
 		nil,

@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func withSocketIODebugEvents(t *testing.T, env map[string]string) (map[string]string, string) {
@@ -85,7 +85,7 @@ func waitForDaemonReady(t *testing.T, eventsPath string) {
 		debugEventsSummary(suiteDriveRoles, readSocketIODebugEvents(t, eventsPath)))
 }
 
-func readSocketIODebugEvents(t *testing.T, path string) []syncengine.DebugEvent {
+func readSocketIODebugEvents(t *testing.T, path string) []syncdomain.DebugEvent {
 	t.Helper()
 
 	data, err := os.ReadFile(path) //nolint:gosec // the debug-event stream in the test's own temp dir
@@ -101,13 +101,13 @@ func readSocketIODebugEvents(t *testing.T, path string) []syncengine.DebugEvent 
 		return nil
 	}
 
-	events := make([]syncengine.DebugEvent, 0, len(lines))
+	events := make([]syncdomain.DebugEvent, 0, len(lines))
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 
-		var event syncengine.DebugEvent
+		var event syncdomain.DebugEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			continue
 		}
@@ -148,7 +148,7 @@ func waitForSocketIOConnected(t *testing.T, eventsPath string, timeout time.Dura
 		debugEventsSummary(suiteDriveRoles, readSocketIODebugEvents(t, eventsPath)))
 }
 
-func isExpectedMountRootWebsocketFallback(event *syncengine.DebugEvent) bool {
+func isExpectedMountRootWebsocketFallback(event *syncdomain.DebugEvent) bool {
 	return event.Note == "mount_root"
 }
 
@@ -240,7 +240,7 @@ func assertNoSocketIOConnected(t *testing.T, eventsPath string) {
 	assert.False(t, containsSocketIOEvent(events, debugEventWebsocketConnected))
 }
 
-func containsSocketIOEvent(events []syncengine.DebugEvent, target string) bool {
+func containsSocketIOEvent(events []syncdomain.DebugEvent, target string) bool {
 	for i := range events {
 		if string(events[i].Type) == target {
 			return true

@@ -8,32 +8,35 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // watchDeleteRemainingRows stores rows as local truth, runs the delete the
 // watch observer reports for rel, applies the batch it sends the way the
 // watch loop does, and returns the rows left.
-func watchDeleteRemainingRows(t *testing.T, baseline *Baseline, rows []LocalStateRow, rel string) []LocalStateRow {
+func watchDeleteRemainingRows(t *testing.T, baseline *syncdomain.Baseline, rows []syncdomain.LocalStateRow, rel string) []syncdomain.LocalStateRow {
 	t.Helper()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), rows))
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.PendingTimers = make(map[string]SyncTimer)
-	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
-	batches := make(chan LocalObservation, 1)
+	obs := syncobserve.NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs.PendingTimers = make(map[string]syncdomain.SyncTimer)
+	obs.HashRequests = make(chan syncobserve.HashRequest, syncobserve.HashRequestBufSize)
+	batches := make(chan syncobserve.LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 
 	syncRoot := t.TempDir()
-	obs.HandleDelete(t.Context(), newRecordingFsWatcher(), mustOpenSyncTree(t, syncRoot),
+	obs.HandleDelete(t.Context(), syncfixture.NewRecordingFsWatcher(), syncfixture.MustOpenSyncTree(t, syncRoot),
 		filepath.Join(syncRoot, rel), rel, filepath.Base(rel))
 
-	var batch LocalObservation
+	var batch syncobserve.LocalObservation
 	select {
 	case batch = <-batches:
 	default:
@@ -55,34 +58,34 @@ func watchDeleteRemainingRows(t *testing.T, baseline *Baseline, rows []LocalStat
 func TestHandleDelete_UnwatchedNewDirectoryRemovesSubtreeRows(t *testing.T) {
 	t.Parallel()
 
-	remaining := watchDeleteRemainingRows(t, emptyBaseline(), []LocalStateRow{
-		{Path: "new", ItemType: ItemTypeFolder},
-		{Path: "new/a.txt", ItemType: ItemTypeFile},
-		{Path: "new/nested", ItemType: ItemTypeFolder},
-		{Path: "new/nested/b.txt", ItemType: ItemTypeFile},
-		{Path: "new-sibling.txt", ItemType: ItemTypeFile},
+	remaining := watchDeleteRemainingRows(t, syncfixture.EmptyBaseline(), []syncdomain.LocalStateRow{
+		{Path: "new", ItemType: syncdomain.ItemTypeFolder},
+		{Path: "new/a.txt", ItemType: syncdomain.ItemTypeFile},
+		{Path: "new/nested", ItemType: syncdomain.ItemTypeFolder},
+		{Path: "new/nested/b.txt", ItemType: syncdomain.ItemTypeFile},
+		{Path: "new-sibling.txt", ItemType: syncdomain.ItemTypeFile},
 	}, "new")
 
-	assert.Equal(t, []LocalStateRow{{Path: "new-sibling.txt", ItemType: ItemTypeFile}}, remaining)
+	assert.Equal(t, []syncdomain.LocalStateRow{{Path: "new-sibling.txt", ItemType: syncdomain.ItemTypeFile}}, remaining)
 }
 
 // Validates: R-2.8.8
 func TestHandleDelete_FileDeleteKeepsSiblingsThatShareItsNamePrefix(t *testing.T) {
 	t.Parallel()
 
-	baseline := baselineWith(&BaselineEntry{
-		Path: "report", DriveID: driveid.New("d"), ItemID: "item1", ItemType: ItemTypeFile,
+	baseline := syncfixture.BaselineWith(&syncdomain.BaselineEntry{
+		Path: "report", DriveID: driveid.New("d"), ItemID: "item1", ItemType: syncdomain.ItemTypeFile,
 	})
-	remaining := watchDeleteRemainingRows(t, baseline, []LocalStateRow{
-		{Path: "report", ItemType: ItemTypeFile},
-		{Path: "report.txt", ItemType: ItemTypeFile},
-		{Path: "report-old", ItemType: ItemTypeFolder},
-		{Path: "report-old/a.txt", ItemType: ItemTypeFile},
+	remaining := watchDeleteRemainingRows(t, baseline, []syncdomain.LocalStateRow{
+		{Path: "report", ItemType: syncdomain.ItemTypeFile},
+		{Path: "report.txt", ItemType: syncdomain.ItemTypeFile},
+		{Path: "report-old", ItemType: syncdomain.ItemTypeFolder},
+		{Path: "report-old/a.txt", ItemType: syncdomain.ItemTypeFile},
 	}, "report")
 
-	assert.Equal(t, []LocalStateRow{
-		{Path: "report-old", ItemType: ItemTypeFolder},
-		{Path: "report-old/a.txt", ItemType: ItemTypeFile},
-		{Path: "report.txt", ItemType: ItemTypeFile},
+	assert.Equal(t, []syncdomain.LocalStateRow{
+		{Path: "report-old", ItemType: syncdomain.ItemTypeFolder},
+		{Path: "report-old/a.txt", ItemType: syncdomain.ItemTypeFile},
+		{Path: "report.txt", ItemType: syncdomain.ItemTypeFile},
 	}, remaining)
 }

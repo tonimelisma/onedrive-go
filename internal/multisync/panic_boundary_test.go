@@ -17,6 +17,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -36,7 +37,7 @@ func runWatchCatchingPanics(t *testing.T, orch *Orchestrator) watchOutcome {
 	var outcome watchOutcome
 	require.NoError(t, runWithin(t, t.Context(), "RunWatch to return", func(ctx context.Context) error {
 		defer func() { outcome.escaped = recover() }()
-		outcome.err = orch.RunWatch(ctx, syncengine.SyncBidirectional, syncengine.WatchOptions{})
+		outcome.err = orch.RunWatch(ctx, syncdomain.SyncBidirectional, syncengine.WatchOptions{})
 		return nil
 	}))
 
@@ -79,7 +80,7 @@ func TestRunWatch_LoopPanicIsLoggedWithStackAndReturnsAnError(t *testing.T) {
 	engineStopped := make(chan struct{})
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 				<-ctx.Done()
 				close(engineStopped)
 				return ctx.Err()
@@ -134,7 +135,7 @@ func TestRunWatch_APanicDuringStartupStopsTheDrivesThatStarted(t *testing.T) {
 	var stopped atomic.Int32
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 				<-ctx.Done()
 				stopped.Add(1)
 				return ctx.Err()
@@ -235,7 +236,7 @@ func TestRunOnce_ControlServerPanicIsLoggedAndThePassFinishes(t *testing.T) {
 	}
 	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+			runOnceFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 				// The pass runs once the server has panicked, so its close
 				// cannot come first.
 				select {
@@ -248,7 +249,7 @@ func TestRunOnce_ControlServerPanicIsLoggedAndThePassFinishes(t *testing.T) {
 		}, nil
 	}
 
-	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	result := orch.RunOnce(t.Context(), syncdomain.SyncBidirectional, syncengine.RunOptions{})
 
 	require.Len(t, result.Reports, 1)
 	require.NoError(t, result.Reports[0].Err, "the pass finished")
@@ -351,7 +352,7 @@ func TestRunOnce_APanickingEngineCloseFailsTheRun(t *testing.T) {
 		}, nil
 	}
 
-	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	result := orch.RunOnce(t.Context(), syncdomain.SyncBidirectional, syncengine.RunOptions{})
 
 	require.ErrorIs(t, result.Stuck, panicguard.ErrPanic)
 	require.ErrorContains(t, result.Stuck, "ClosePanic")
@@ -384,7 +385,7 @@ func TestRunOnce_AShortcutPanicIsThatShortcutsErrorAndThePassFinishes(t *testing
 			return &mockEngine{shouldPanic: true}, nil
 		}
 		return &mockEngine{
-			runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+			runOnceFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 				if err := req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(parent.CanonicalID.String(), child)); err != nil {
 					return nil, err
 				}
@@ -393,7 +394,7 @@ func TestRunOnce_AShortcutPanicIsThatShortcutsErrorAndThePassFinishes(t *testing
 		}, nil
 	}
 
-	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	result := orch.RunOnce(t.Context(), syncdomain.SyncBidirectional, syncengine.RunOptions{})
 
 	require.NoError(t, result.Stuck)
 	var parentReport, childReport *MountReport
@@ -484,7 +485,7 @@ func TestRunIndexedMountWork_APanicWhileStartingShortcutsIsThatDrivesReport(t *t
 	cfg.Logger = logger
 	orch := NewOrchestrator(cfg)
 	mounts, work := oneDriveWork(t, cfg, logger)
-	coordinator := newOneShotChildRuns(orch, syncengine.SyncBidirectional, syncengine.RunOptions{}, mounts)
+	coordinator := newOneShotChildRuns(orch, syncdomain.SyncBidirectional, syncengine.RunOptions{}, mounts)
 	coordinator.snapshots[mounts[0].id()] = processSnapshot(parent.CanonicalID.String(), child)
 	// Marking the shortcuts started is the locked step; with no map to mark
 	// them in it panics while it holds the lock.
@@ -559,13 +560,13 @@ func TestRunOnce_APanicAroundADrivesShortcutsIsThatDrivesReport(t *testing.T) {
 		case req.Mount.projectionKind() == MountProjectionChild:
 			panic("shortcut engine exploded")
 		case req.Mount.id() == mountID(plain.CanonicalID.String()):
-			return &mockEngine{runOnceFn: func(context.Context, syncengine.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
+			return &mockEngine{runOnceFn: func(context.Context, syncdomain.SyncMode, syncengine.RunOptions) (*syncengine.Report, error) {
 				close(plainSynced)
 				return &syncengine.Report{}, nil
 			}}, nil
 		default:
 			return &mockEngine{
-				runOnceFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+				runOnceFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 					if err := req.Mount.shortcutChildWorkSink()(ctx, processSnapshot(withShortcuts.CanonicalID.String(), child)); err != nil {
 						return nil, err
 					}
@@ -575,7 +576,7 @@ func TestRunOnce_APanicAroundADrivesShortcutsIsThatDrivesReport(t *testing.T) {
 		}
 	}
 
-	result := orch.RunOnce(t.Context(), syncengine.SyncBidirectional, syncengine.RunOptions{})
+	result := orch.RunOnce(t.Context(), syncdomain.SyncBidirectional, syncengine.RunOptions{})
 
 	select {
 	case <-plainSynced:

@@ -5,6 +5,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // Validates: R-6.6.30
@@ -12,9 +15,9 @@ func TestWatchConditionCountTotal_SumsRawCounts(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, 6, watchConditionCountTotal([]watchConditionCount{
-		{Key: ConditionInvalidFilename, Count: 2},
-		{Key: ConditionRemoteWriteDenied, Count: 3},
-		{Key: ConditionAuthenticationRequired, Count: 1},
+		{Key: syncdomain.ConditionInvalidFilename, Count: 2},
+		{Key: syncdomain.ConditionRemoteWriteDenied, Count: 3},
+		{Key: syncdomain.ConditionAuthenticationRequired, Count: 1},
 	}))
 }
 
@@ -23,14 +26,14 @@ func TestWatchConditionCounts_SortsAndAggregatesProjectedGroups(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, []watchConditionCount{
-		{Key: ConditionServiceOutage, Count: 3},
-		{Key: ConditionDiskFull, Count: 4},
-	}, watchConditionCounts([]StoredConditionGroup{
+		{Key: syncdomain.ConditionServiceOutage, Count: 3},
+		{Key: syncdomain.ConditionDiskFull, Count: 4},
+	}, watchConditionCounts([]syncstore.StoredConditionGroup{
 		{ConditionKey: "", Count: 5},
-		{ConditionKey: ConditionServiceOutage, Count: 0},
-		{ConditionKey: ConditionServiceOutage, Count: 1},
-		{ConditionKey: ConditionServiceOutage, Count: 2},
-		{ConditionKey: ConditionDiskFull, Count: 4},
+		{ConditionKey: syncdomain.ConditionServiceOutage, Count: 0},
+		{ConditionKey: syncdomain.ConditionServiceOutage, Count: 1},
+		{ConditionKey: syncdomain.ConditionServiceOutage, Count: 2},
+		{ConditionKey: syncdomain.ConditionDiskFull, Count: 4},
 	}))
 }
 
@@ -38,41 +41,41 @@ func TestWatchConditionCounts_SortsAndAggregatesProjectedGroups(t *testing.T) {
 func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 	t.Parallel()
 
-	summary := buildWatchConditionSummary(&DriveStatusSnapshot{
+	summary := buildWatchConditionSummary(&syncstore.DriveStatusSnapshot{
 		RetryingItems: 4,
-		ObservationIssues: []ObservationIssueRow{
-			{IssueType: IssueInvalidFilename},
-			{IssueType: IssueRemoteReadDenied, ScopeKey: SKPermRemoteRead("Shared/Docs")},
+		ObservationIssues: []syncdomain.ObservationIssueRow{
+			{IssueType: syncdomain.IssueInvalidFilename},
+			{IssueType: syncdomain.IssueRemoteReadDenied, ScopeKey: syncdomain.SKPermRemoteRead("Shared/Docs")},
 		},
-		BlockScopes: []*BlockScope{
+		BlockScopes: []*syncdomain.BlockScope{
 			{
-				Key:           SKPermRemoteWrite("Shared/Docs"),
+				Key:           syncdomain.SKPermRemoteWrite("Shared/Docs"),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
 			{
-				Key:           SKService(),
+				Key:           syncdomain.SKService(),
 				TrialInterval: time.Minute,
 				NextTrialAt:   time.Unix(0, 0).UTC().Add(time.Minute),
 			},
 		},
-		BlockedRetryWork: []RetryWorkRow{
-			{ScopeKey: SKPermRemoteWrite("Shared/Docs"), Path: "Shared/Docs/a.txt"},
-			{ScopeKey: SKPermRemoteWrite("Shared/Docs"), Path: "Shared/Docs/b.txt"},
+		BlockedRetryWork: []syncdomain.RetryWorkRow{
+			{ScopeKey: syncdomain.SKPermRemoteWrite("Shared/Docs"), Path: "Shared/Docs/a.txt"},
+			{ScopeKey: syncdomain.SKPermRemoteWrite("Shared/Docs"), Path: "Shared/Docs/b.txt"},
 		},
 	})
 
 	assert.Equal(t, 4, summary.Retrying)
 	assert.Equal(t, 5, summary.ConditionTotal)
 	assert.ElementsMatch(t, []watchConditionCount{
-		{Key: ConditionInvalidFilename, Count: 1},
-		{Key: ConditionRemoteReadDenied, Count: 1},
-		{Key: ConditionRemoteWriteDenied, Count: 2},
-		{Key: ConditionServiceOutage, Count: 1},
+		{Key: syncdomain.ConditionInvalidFilename, Count: 1},
+		{Key: syncdomain.ConditionRemoteReadDenied, Count: 1},
+		{Key: syncdomain.ConditionRemoteWriteDenied, Count: 2},
+		{Key: syncdomain.ConditionServiceOutage, Count: 1},
 	}, summary.Counts)
 	assert.Equal(t, []watchRemoteBlockedGroup{
 		{
-			ScopeKey:     SKPermRemoteWrite("Shared/Docs"),
+			ScopeKey:     syncdomain.SKPermRemoteWrite("Shared/Docs"),
 			BlockedPaths: []string{"Shared/Docs/a.txt", "Shared/Docs/b.txt"},
 		},
 	}, summary.RemoteBlocked)
@@ -82,17 +85,17 @@ func TestBuildWatchConditionSummary_AggregatesRawAuthorities(t *testing.T) {
 func TestBuildWatchConditionSummary_RemoteBlockedGroupsOnlyTrackActiveScopes(t *testing.T) {
 	t.Parallel()
 
-	summary := buildWatchConditionSummary(&DriveStatusSnapshot{
-		ObservationIssues: []ObservationIssueRow{{
+	summary := buildWatchConditionSummary(&syncstore.DriveStatusSnapshot{
+		ObservationIssues: []syncdomain.ObservationIssueRow{{
 			Path:      "Shared/Docs/file.txt",
-			IssueType: IssueRemoteWriteDenied,
-			ScopeKey:  SKPermRemoteWrite("Shared/Docs"),
+			IssueType: syncdomain.IssueRemoteWriteDenied,
+			ScopeKey:  syncdomain.SKPermRemoteWrite("Shared/Docs"),
 		}},
 	})
 
 	assert.Equal(t, 1, summary.ConditionTotal)
 	assert.Equal(t, []watchConditionCount{{
-		Key:   ConditionRemoteWriteDenied,
+		Key:   syncdomain.ConditionRemoteWriteDenied,
 		Count: 1,
 	}}, summary.Counts)
 	assert.Empty(t, summary.RemoteBlocked)

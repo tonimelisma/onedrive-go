@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // postSyncHousekeeping runs non-critical cleanup after a sync pass: leftover
@@ -178,7 +180,7 @@ func (e *Engine) purgeExpiredTrash(force bool) {
 	}
 }
 
-func transferArtifactCleanupSkipDirs(filter ContentFilterConfig, protectedRoots []ProtectedRoot) []string {
+func transferArtifactCleanupSkipDirs(filter syncdomain.ContentFilterConfig, protectedRoots []syncshortcut.ProtectedRoot) []string {
 	skipDirs := append([]string(nil), filter.IgnoredDirs...)
 	for i := range protectedRoots {
 		if protectedRoots[i].Path == "" {

@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.1.7
@@ -25,8 +27,8 @@ func TestRunOnce_WaitsOutAShortPauseBeforeTheNextPass(t *testing.T) {
 	// Twelve files against a window of ten requests: the first pass is
 	// throttled, the second finishes, within the four-pass bound.
 	const files = 12
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-	clock := newManualClock(time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC))
 	const window = 2 * time.Second
 	limiter := newThrottleWindowClient(clock.Now, 10, window)
 	eng, syncRoot := newTestEngine(t, limiter.wrap(remote.client(t)))
@@ -40,10 +42,10 @@ func TestRunOnce_WaitsOutAShortPauseBeforeTheNextPass(t *testing.T) {
 		return nil
 	}
 	for i := range files {
-		writeLocalFile(t, syncRoot, fmt.Sprintf("bulk/file-%02d.txt", i), fmt.Sprintf("content %d", i))
+		syncfixture.WriteLocalFile(t, syncRoot, fmt.Sprintf("bulk/file-%02d.txt", i), fmt.Sprintf("content %d", i))
 	}
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Zero(t, report.LeftForNextSync, "the pauses were waited out inside the run: %+v", report)
 	assert.Equal(t, files, remote.uploads, "every upload completed in one run")
@@ -64,8 +66,8 @@ func TestRunOnce_LeavesWorkBehindAPauseLongerThanTenMinutes(t *testing.T) {
 	t.Parallel()
 
 	const files = 20
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-	clock := newManualClock(time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC))
 	limiter := newThrottleWindowClient(clock.Now, 10, 20*time.Minute)
 	eng, syncRoot := newTestEngine(t, limiter.wrap(remote.client(t)))
 	eng.transferWorkers = 4
@@ -78,10 +80,10 @@ func TestRunOnce_LeavesWorkBehindAPauseLongerThanTenMinutes(t *testing.T) {
 		return nil
 	}
 	for i := range files {
-		writeLocalFile(t, syncRoot, fmt.Sprintf("bulk/file-%02d.txt", i), fmt.Sprintf("content %d", i))
+		syncfixture.WriteLocalFile(t, syncRoot, fmt.Sprintf("bulk/file-%02d.txt", i), fmt.Sprintf("content %d", i))
 	}
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Positive(t, report.LeftForNextSync, "a twenty-minute pause is not waited out: %+v", report)
 	assert.Zero(t, waited)

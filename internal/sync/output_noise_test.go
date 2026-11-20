@@ -13,6 +13,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -25,19 +29,19 @@ import (
 func TestEngineFlow_FatalAuth_ReturnedOnceNotLogged(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
 
-	decision := &ResultDecision{
+	decision := &syncdomain.ResultDecision{
 		Class:        errclass.ClassFatal,
-		ConditionKey: ConditionAuthenticationRequired,
-		TrialHint:    TrialHintFatal,
+		ConditionKey: syncdomain.ConditionAuthenticationRequired,
+		TrialHint:    syncdomain.TrialHintFatal,
 	}
 	for _, path := range []string{"first.txt", "second.txt", "third.txt"} {
-		_, err := flow.applyNormalCompletionDecision(t.Context(), decision, nil, &ActionCompletion{
+		_, err := flow.applyNormalCompletionDecision(t.Context(), decision, nil, &syncdomain.ActionCompletion{
 			Path:       path,
-			ActionType: ActionUpload,
+			ActionType: syncdomain.ActionUpload,
 		}, nil)
 
 		var fatalErr *fatalCompletionError
@@ -45,8 +49,8 @@ func TestEngineFlow_FatalAuth_ReturnedOnceNotLogged(t *testing.T) {
 	}
 
 	output := logs.String()
-	assert.Zero(t, countLevel(output, "ERROR"), "the returned error is the report; logging it too prints it twice")
-	assert.Zero(t, countLevel(output, "WARN"))
+	assert.Zero(t, syncfixture.CountLevel(output, "ERROR"), "the returned error is the report; logging it too prints it twice")
+	assert.Zero(t, syncfixture.CountLevel(output, "WARN"))
 	assert.Equal(t, 1, strings.Count(output, "authentication required: sync stopping"),
 		"later in-flight 401s add nothing new")
 }
@@ -55,18 +59,18 @@ func TestEngineFlow_FatalAuth_ReturnedOnceNotLogged(t *testing.T) {
 func TestEngineFlow_SuppressedShutdownCompletionError_QuietForCancellationAndRepeatFatal(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
-	completion := &ActionCompletion{Path: "a.txt", ActionType: ActionUpload}
+	completion := &syncdomain.ActionCompletion{Path: "a.txt", ActionType: syncdomain.ActionUpload}
 
 	flow.logSuppressedShutdownCompletionError(completion, fmt.Errorf("commit outcome: %w", context.Canceled))
 	flow.logSuppressedShutdownCompletionError(completion, fatalResultError(completion))
-	assert.Zero(t, countLevel(logs.String(), "WARN"), "a clean shutdown produces no warnings")
+	assert.Zero(t, syncfixture.CountLevel(logs.String(), "WARN"), "a clean shutdown produces no warnings")
 
 	flow.logSuppressedShutdownCompletionError(completion, errors.New("disk I/O error"))
 	output := logs.String()
-	assert.Equal(t, 1, countLevel(output, "WARN"), "a real bookkeeping failure while stopping stays visible")
+	assert.Equal(t, 1, syncfixture.CountLevel(output, "WARN"), "a real bookkeeping failure while stopping stays visible")
 	assert.Contains(t, output, "Could not record the result for a.txt while stopping")
 }
 
@@ -74,8 +78,8 @@ func TestEngineFlow_SuppressedShutdownCompletionError_QuietForCancellationAndRep
 func TestPollOutageLog_WarnsOncePerOutage(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	var outage PollOutageLog
+	logger, logs := syncfixture.NewCapturedLogger()
+	var outage syncobserve.PollOutageLog
 
 	for range 5 {
 		outage.Failed(logger, "Can't check OneDrive for changes; retrying", errors.New("dial tcp: no route"), 0)
@@ -85,9 +89,9 @@ func TestPollOutageLog_WarnsOncePerOutage(t *testing.T) {
 	outage.Failed(logger, "Can't check OneDrive for changes; retrying", errors.New("dial tcp: no route"), 0)
 
 	output := logs.String()
-	assert.Equal(t, 2, countLevel(output, "WARN"), "one warning per outage, not per attempt")
-	assert.Equal(t, 4, countLevel(output, "DEBUG"), "repeats inside one outage stay at debug")
-	assert.Equal(t, 1, countLevel(output, "INFO+2"), "recovery is reported once, at NOTICE, only after an outage")
+	assert.Equal(t, 2, syncfixture.CountLevel(output, "WARN"), "one warning per outage, not per attempt")
+	assert.Equal(t, 4, syncfixture.CountLevel(output, "DEBUG"), "repeats inside one outage stay at debug")
+	assert.Equal(t, 1, syncfixture.CountLevel(output, "INFO+2"), "recovery is reported once, at NOTICE, only after an outage")
 }
 
 // Regression: every watch safety scan re-reports every persistent skipped
@@ -98,23 +102,23 @@ func TestPollOutageLog_WarnsOncePerOutage(t *testing.T) {
 func TestEngineFlow_SkippedFindings_WarnOnlyWhenNew(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
 
-	bad := SkippedItem{Path: "docs/bad:name.txt", Reason: IssueInvalidFilename, Detail: "name contains ':'"}
-	requireReconcileSkipped(t, flow, []SkippedItem{bad})
-	requireReconcileSkipped(t, flow, []SkippedItem{bad})
-	requireReconcileSkipped(t, flow, []SkippedItem{bad})
+	bad := syncdomain.SkippedItem{Path: "docs/bad:name.txt", Reason: syncdomain.IssueInvalidFilename, Detail: "name contains ':'"}
+	requireReconcileSkipped(t, flow, []syncdomain.SkippedItem{bad})
+	requireReconcileSkipped(t, flow, []syncdomain.SkippedItem{bad})
+	requireReconcileSkipped(t, flow, []syncdomain.SkippedItem{bad})
 
 	output := logs.String()
-	assert.Equal(t, 1, countLevel(output, "WARN"), "an unchanged skipped file warns once, not on every scan")
+	assert.Equal(t, 1, syncfixture.CountLevel(output, "WARN"), "an unchanged skipped file warns once, not on every scan")
 	assert.Contains(t, output, "Not syncing docs/bad:name.txt: name contains ':'")
 
-	other := SkippedItem{Path: "docs/other?.txt", Reason: IssueInvalidFilename, Detail: "name contains '?'"}
-	requireReconcileSkipped(t, flow, []SkippedItem{bad, other})
+	other := syncdomain.SkippedItem{Path: "docs/other?.txt", Reason: syncdomain.IssueInvalidFilename, Detail: "name contains '?'"}
+	requireReconcileSkipped(t, flow, []syncdomain.SkippedItem{bad, other})
 	output = logs.String()
-	assert.Equal(t, 2, countLevel(output, "WARN"), "a newly skipped file still warns")
+	assert.Equal(t, 2, syncfixture.CountLevel(output, "WARN"), "a newly skipped file still warns")
 	assert.Contains(t, output, "Not syncing docs/other?.txt")
 	assert.NotContains(t, output, "action=", "each line is complete; the watch summary names status once")
 }
@@ -127,18 +131,18 @@ func TestEngineFlow_SkippedFindings_WarnOnlyWhenNew(t *testing.T) {
 func TestEngineFlow_SkippedFindings_GroupedWarningNamesTheWholeGroup(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	flow := testEngineFlow(t, eng)
 
-	var mixed, same []SkippedItem
+	var mixed, same []syncdomain.SkippedItem
 	for i := range 11 {
 		detail := "detail B"
 		if i%2 == 0 {
 			detail = "detail A"
 		}
-		mixed = append(mixed, SkippedItem{Path: fmt.Sprintf("mixed/%02d", i), Reason: IssueInvalidFilename, Detail: detail})
-		same = append(same, SkippedItem{Path: fmt.Sprintf("same/%02d", i), Reason: IssueInvalidFilename, Detail: "the name ends with a period"})
+		mixed = append(mixed, syncdomain.SkippedItem{Path: fmt.Sprintf("mixed/%02d", i), Reason: syncdomain.IssueInvalidFilename, Detail: detail})
+		same = append(same, syncdomain.SkippedItem{Path: fmt.Sprintf("same/%02d", i), Reason: syncdomain.IssueInvalidFilename, Detail: "the name ends with a period"})
 	}
 	requireReconcileSkipped(t, flow, mixed)
 	requireReconcileSkipped(t, flow, same)
@@ -158,20 +162,20 @@ func TestEngineFlow_SkippedFindings_GroupedWarningNamesTheWholeGroup(t *testing.
 func TestWatchConditionSummary_StatesBreakdownAndHintOnce(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	seedObservationIssueRowForTest(t, rt.deps.store, &ObservationIssue{
+	syncstoretest.SeedObservationIssueRowForTest(t, rt.deps.store, &syncdomain.ObservationIssue{
 		Path:      "docs/CON",
-		DriveID:   driveid.New(engineTestDriveID),
-		IssueType: IssueInvalidFilename,
+		DriveID:   driveid.New(syncfixture.EngineTestDriveID),
+		IssueType: syncdomain.IssueInvalidFilename,
 	})
 	rt.logWatchSummary(t.Context())
 
 	output := logs.String()
-	assert.Equal(t, 1, countLevel(output, "WARN"))
+	assert.Equal(t, 1, syncfixture.CountLevel(output, "WARN"))
 	assert.Contains(t, output,
 		`msg="Some files are not syncing: 1 file with names OneDrive does not allow. Run 'onedrive-go status' for details."`)
 	assert.Contains(t, output, "condition_total=1", "the count stays in the log file")
@@ -187,15 +191,15 @@ func TestWatchConditionSummary_StatesBreakdownAndHintOnce(t *testing.T) {
 func TestWatchConditionSummary_DebugLineOnlyWhenTheBreakdownChanges(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	seedBadName := func(path string) {
-		seedObservationIssueRowForTest(t, rt.deps.store, &ObservationIssue{
+		syncstoretest.SeedObservationIssueRowForTest(t, rt.deps.store, &syncdomain.ObservationIssue{
 			Path:      path,
-			DriveID:   driveid.New(engineTestDriveID),
-			IssueType: IssueInvalidFilename,
+			DriveID:   driveid.New(syncfixture.EngineTestDriveID),
+			IssueType: syncdomain.IssueInvalidFilename,
 		})
 	}
 
@@ -204,7 +208,7 @@ func TestWatchConditionSummary_DebugLineOnlyWhenTheBreakdownChanges(t *testing.T
 		rt.logWatchSummary(t.Context())
 	}
 	output := logs.String()
-	assert.Equal(t, 1, countLevel(output, "WARN"), "the summary is said when the condition appears")
+	assert.Equal(t, 1, syncfixture.CountLevel(output, "WARN"), "the summary is said when the condition appears")
 	assert.Zero(t, strings.Count(output, "sync conditions changed"), "ticks with the same conditions write nothing")
 
 	seedBadName("docs/PRN")
@@ -214,7 +218,7 @@ func TestWatchConditionSummary_DebugLineOnlyWhenTheBreakdownChanges(t *testing.T
 	output = logs.String()
 	assert.Equal(t, 1, strings.Count(output, "sync conditions changed"), "a tick whose counts moved writes one line")
 	assert.Contains(t, output, `breakdown="2 files with names OneDrive does not allow"`)
-	assert.Equal(t, 1, countLevel(output, "WARN"), "a count change is not a new kind of condition")
+	assert.Equal(t, 1, syncfixture.CountLevel(output, "WARN"), "a count change is not a new kind of condition")
 }
 
 // A failed read of the conditions is a housekeeping step that keeps failing:
@@ -225,12 +229,12 @@ func TestWatchConditionSummary_DebugLineOnlyWhenTheBreakdownChanges(t *testing.T
 func TestWatchConditionSummary_AFailedReadIsLoggedOnce(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	// An issue type no member has: the snapshot read refuses the row.
-	db := requireStoreTestRawDB(t, eng.baseline)
+	db := syncstoretest.RequireStoreTestRawDB(t, eng.baseline)
 	_, err := db.ExecContext(t.Context(),
 		`INSERT INTO observation_issues (path, issue_type, scope_key) VALUES ('x.txt', 'not_an_issue_type', '')`)
 	require.NoError(t, err)
@@ -249,7 +253,7 @@ func TestWatchConditionSummary_AFailedReadIsLoggedOnce(t *testing.T) {
 	}
 	assert.Equal(t, 1, strings.Count(logs.String(), `level=INFO msg="reading the sync conditions for the watch summary works again"`),
 		logs.String())
-	assert.Equal(t, 1, countLevel(logs.String(), "WARN"), "the recovery is not a new failure")
+	assert.Equal(t, 1, syncfixture.CountLevel(logs.String(), "WARN"), "the recovery is not a new failure")
 }
 
 // Socket.io is a best-effort wake source; watch keeps polling. A long outage
@@ -262,11 +266,11 @@ func TestSocketIOWakeSource_RetriesNeverWarn(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	logger, logs := newCapturedLogger()
+	logger, logs := syncfixture.NewCapturedLogger()
 	sleeps := 0
-	source := NewSocketIOWakeSourceWithOptions(&mockSocketIOEndpointFetcher{}, driveid.New(synctest.TestDriveID), SocketIOWakeSourceOptions{
+	source := syncobserve.NewSocketIOWakeSourceWithOptions(&syncfixture.MockSocketIOEndpointFetcher{}, driveid.New(synctest.TestDriveID), syncobserve.SocketIOWakeSourceOptions{
 		Logger: logger,
-		Clock: &scriptedSleepClock{SyncClock: RealClock{}, sleep: func(context.Context, time.Duration) error {
+		Clock: &syncfixture.ScriptedSleepClock{SyncClock: syncdomain.RealClock{}, SleepFunc: func(context.Context, time.Duration) error {
 			sleeps++
 			if sleeps >= 5 {
 				cancel()
@@ -276,12 +280,12 @@ func TestSocketIOWakeSource_RetriesNeverWarn(t *testing.T) {
 		}},
 	})
 
-	require.NoError(t, runWithin(t, ctx, "the fifth retry sleep to stop the wake source", func(runCtx context.Context) error {
+	require.NoError(t, syncfixture.RunWithin(t, ctx, "the fifth retry sleep to stop the wake source", func(runCtx context.Context) error {
 		return source.Run(runCtx, make(chan struct{}, 1))
 	}))
 
 	output := logs.String()
-	assert.Zero(t, countLevel(output, "WARN"))
+	assert.Zero(t, syncfixture.CountLevel(output, "WARN"))
 	assert.Equal(t, 1, strings.Count(output, "Instant change notifications from OneDrive are unavailable"),
 		"the outage is announced once, not per retry")
 }
@@ -294,41 +298,41 @@ func TestSocketIOWakeSource_RetriesNeverWarn(t *testing.T) {
 func TestEngineFlow_BlockScope_ReportedOnceWhenItStarts(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
 
 	// A persisted block scope must own blocked retry work (invariant).
-	seedBlockedWork := func(key ScopeKey) {
-		require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+	seedBlockedWork := func(key syncdomain.ScopeKey) {
+		require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 			Path:         "blocked-" + key.String() + ".txt",
-			ActionType:   ActionUpload,
+			ActionType:   syncdomain.ActionUpload,
 			ScopeKey:     key,
 			Blocked:      true,
 			AttemptCount: 1,
 		}))
 	}
 
-	throttle := SKThrottleDrive(eng.driveID)
+	throttle := syncdomain.SKThrottleDrive(eng.driveID)
 	seedBlockedWork(throttle)
 	for range 4 {
-		require.NoError(t, flow.applyBlockScope(t.Context(), ScopeUpdateResult{
-			Block: true, ScopeKey: throttle, ConditionType: IssueRateLimited,
+		require.NoError(t, flow.applyBlockScope(t.Context(), syncdomain.ScopeUpdateResult{
+			Block: true, ScopeKey: throttle, ConditionType: syncdomain.IssueRateLimited,
 		}))
 	}
 	output := logs.String()
-	assert.Zero(t, countLevel(output, "WARN"), "rate limiting is handled automatically")
+	assert.Zero(t, syncfixture.CountLevel(output, "WARN"), "rate limiting is handled automatically")
 	assert.Equal(t, 1, strings.Count(output, "OneDrive is limiting requests"))
 
-	seedBlockedWork(SKQuotaOwn())
+	seedBlockedWork(syncdomain.SKQuotaOwn())
 	for range 3 {
-		require.NoError(t, flow.applyBlockScope(t.Context(), ScopeUpdateResult{
-			Block: true, ScopeKey: SKQuotaOwn(), ConditionType: IssueQuotaExceeded,
+		require.NoError(t, flow.applyBlockScope(t.Context(), syncdomain.ScopeUpdateResult{
+			Block: true, ScopeKey: syncdomain.SKQuotaOwn(), ConditionType: syncdomain.IssueQuotaExceeded,
 		}))
 	}
 	output = logs.String()
-	assert.Equal(t, 1, countLevel(output, "WARN"), "a full drive is warned once, in plain words")
+	assert.Equal(t, 1, syncfixture.CountLevel(output, "WARN"), "a full drive is warned once, in plain words")
 	assert.Contains(t, output, "OneDrive storage is full; uploads are paused")
 }
 
@@ -340,26 +344,26 @@ func TestEngineFlow_BlockScope_ReportedOnceWhenItStarts(t *testing.T) {
 func TestWatchRuntime_ObserverExit_ReturnedOnceWithCause(t *testing.T) {
 	t.Parallel()
 
-	logger, logs := newCapturedLogger()
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	logger, logs := syncfixture.NewCapturedLogger()
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	rt := newWatchRuntime(eng.Engine)
 	rt.resources.activeObservers = 2
 
 	stopped, stop := context.WithCancel(t.Context())
 	stop()
 	rt.logObserverError(stopped, observerExitError(observerNameRemote, fmt.Errorf("poll: %w", context.Canceled)))
-	assert.Zero(t, countLevel(logs.String(), "WARN"), "cancellation is shutdown, not news")
+	assert.Zero(t, syncfixture.CountLevel(logs.String(), "WARN"), "cancellation is shutdown, not news")
 
 	cause := errors.New("inotify: too many open files")
 	rt.logObserverError(t.Context(), observerExitError(observerNameLocal, cause))
 	require.NoError(t, rt.handleObserverExit(&watchPipeline{}, false))
 	output := logs.String()
-	assert.Equal(t, 1, countLevel(output, "WARN"))
+	assert.Equal(t, 1, syncfixture.CountLevel(output, "WARN"))
 	assert.Contains(t, output, "Stopped watching local files for changes")
 
 	err := rt.handleObserverExit(&watchPipeline{}, false)
 	require.ErrorIs(t, err, cause, "the returned error names why watching stopped")
-	assert.Zero(t, countLevel(logs.String(), "ERROR"), "the returned error is the only report")
+	assert.Zero(t, syncfixture.CountLevel(logs.String(), "ERROR"), "the returned error is the only report")
 }
 
 // The watch condition summary used to fingerprint counts, so it re-warned on
@@ -371,14 +375,14 @@ func TestWatchConditionSummary_WarnsOnlyForNewActionableKinds(t *testing.T) {
 	t.Parallel()
 
 	throttled := watchConditionSummary{ConditionTotal: 3, Counts: []watchConditionCount{
-		{Key: ConditionRateLimited, Count: 3},
+		{Key: syncdomain.ConditionRateLimited, Count: 3},
 	}}
 	moreThrottled := watchConditionSummary{ConditionTotal: 9, Counts: []watchConditionCount{
-		{Key: ConditionRateLimited, Count: 9},
+		{Key: syncdomain.ConditionRateLimited, Count: 9},
 	}}
 	withBadName := watchConditionSummary{ConditionTotal: 10, Counts: []watchConditionCount{
-		{Key: ConditionInvalidFilename, Count: 1},
-		{Key: ConditionRateLimited, Count: 9},
+		{Key: syncdomain.ConditionInvalidFilename, Count: 1},
+		{Key: syncdomain.ConditionRateLimited, Count: 9},
 	}}
 
 	assert.False(t, watchConditionSummaryAddsActionable(throttled, ""), "throttling is never a warning")
@@ -393,7 +397,7 @@ func TestWatchConditionSummary_WarnsOnlyForNewActionableKinds(t *testing.T) {
 // requireReconcileSkipped commits a scan of no rows with the skipped
 // findings, failing the test on error; the change report is not what these
 // tests observe.
-func requireReconcileSkipped(t *testing.T, flow *engineFlow, skipped []SkippedItem) {
+func requireReconcileSkipped(t *testing.T, flow *engineFlow, skipped []syncdomain.SkippedItem) {
 	t.Helper()
 
 	_, err := flow.commitLocalScan(t.Context(), nil, skipped, nil)

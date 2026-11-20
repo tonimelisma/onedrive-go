@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // runSteadyStateReplan is the single steady-state watch replan entry. Dirty
@@ -21,7 +23,7 @@ import (
 func (rt *watchRuntime) runSteadyStateReplan(
 	ctx context.Context,
 	p *watchPipeline,
-	batch DirtyBatch,
+	batch syncobserve.DirtyBatch,
 ) (bool, error) {
 	if p == nil || p.bl == nil {
 		return false, fmt.Errorf("sync: steady-state replan requires loaded baseline")
@@ -34,27 +36,27 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	rt.engine.collector().RecordWatchBatch(1)
 
 	replanStart := rt.deps.now()
-	rt.emitRuntimeDebugEvent(EngineDebugEventSteadyStateReplanStarted, "", 0, time.Time{})
+	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventSteadyStateReplanStarted, "", 0, time.Time{})
 
 	observeStart := rt.deps.now()
-	rt.emitRuntimeDebugEvent(EngineDebugEventLocalTruthRefreshStarted, "", 0, replanStart)
+	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventLocalTruthRefreshStarted, "", 0, replanStart)
 	localResult, err := rt.refreshAndCommitLocalCurrentState(ctx, p.bl)
 	rt.recordReplanWorkerIdle(perf.ReplanIdlePhaseLocalRefresh, observeStart, rt.totalWorkers())
 	if err != nil {
 		return rt.handleSteadyStateLocalRefreshError(ctx, err)
 	}
-	rt.emitRuntimeDebugEvent(EngineDebugEventLocalTruthRefreshFinished, "", len(localResult.Rows), observeStart)
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventSteadyStateObservationCompleted})
+	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventLocalTruthRefreshFinished, "", len(localResult.Rows), observeStart)
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventSteadyStateObservationCompleted})
 	rt.engine.collector().RecordObserve(len(localResult.Rows), rt.deps.since(observeStart))
 
 	planStart := rt.deps.now()
-	rt.emitRuntimeDebugEvent(EngineDebugEventPlanningStarted, "", 0, replanStart)
+	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventPlanningStarted, "", 0, replanStart)
 	runtime, err := rt.runSteadyStateCurrentPlan(ctx, p.bl, p.mode)
 	rt.recordReplanWorkerIdle(perf.ReplanIdlePhasePlanning, planStart, rt.totalWorkers())
 	if err != nil {
 		return false, rt.finishSteadyStateReplanStep(ctx, "build_current_plan", err)
 	}
-	rt.emitRuntimeDebugEvent(EngineDebugEventPlanningFinished, "", 0, planStart)
+	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventPlanningFinished, "", 0, planStart)
 
 	installStart := rt.deps.now()
 	rt.noteInstalledPlan(runtime.Plan)
@@ -67,7 +69,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	rt.loop.postReplanOutbox = len(dispatch) > 0
 	// A plan of publication-only work has already settled.
 	rt.scheduleFollowUpIfSettled()
-	rt.emitRuntimeDebugEvent(EngineDebugEventNewPlanInstalled, "", len(dispatch), replanStart)
+	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventNewPlanInstalled, "", len(dispatch), replanStart)
 
 	return true, nil
 }

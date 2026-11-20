@@ -1,5 +1,9 @@
 package sync
 
+import (
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+)
+
 const (
 	engineDebugNoteRemoteCurrent  = "remote_current"
 	engineDebugNoteLocalSkipped   = "local_skipped"
@@ -13,7 +17,7 @@ const (
 // observers' included, passes through here.
 //
 //nolint:gocritic // Value semantics are intentional so runtime hooks cannot mutate engine-owned events.
-func (e *Engine) emitDebugEvent(event EngineDebugEvent) {
+func (e *Engine) emitDebugEvent(event syncdomain.EngineDebugEvent) {
 	if event.At.IsZero() {
 		event.At = e.nowFunc()
 	}
@@ -29,6 +33,6 @@ func (e *Engine) emitDebugEvent(event EngineDebugEvent) {
 // SetDebugEventHook installs the sink of the engine's debug event stream.
 // Call it before a run starts; the hook is called on the goroutine that
 // emits each event.
-func (e *Engine) SetDebugEventHook(hook func(DebugEvent)) {
+func (e *Engine) SetDebugEventHook(hook func(syncdomain.DebugEvent)) {
 	e.debugEventHook = hook
 }

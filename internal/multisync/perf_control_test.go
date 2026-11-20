@@ -15,6 +15,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
@@ -120,7 +121,7 @@ func TestOrchestrator_MountPerfIncludesContextRecordedMetrics(t *testing.T) {
 	recorded := make(chan error, 1)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+			runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
 				recorded <- recordContextPerfMetrics(perf.WithCollector(ctx, req.PerfCollector))
 				<-ctx.Done()
 				return ctx.Err()
@@ -160,7 +161,7 @@ func TestOrchestrator_OneShotMountPerfIncludesContextRecordedMetrics(t *testing.
 	mountsDuringPass := make(chan map[string]perf.Snapshot, 1)
 	orch.engineFactory = func(_ context.Context, req engineFactoryRequest) (engineRunner, error) {
 		return &mockEngine{
-			runOnceFn: func(ctx context.Context, mode syncengine.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
+			runOnceFn: func(ctx context.Context, mode syncdomain.SyncMode, _ syncengine.RunOptions) (*syncengine.Report, error) {
 				if err := recordContextPerfMetrics(perf.WithCollector(ctx, req.PerfCollector)); err != nil {
 					return nil, err
 				}
@@ -173,7 +174,7 @@ func TestOrchestrator_OneShotMountPerfIncludesContextRecordedMetrics(t *testing.
 
 	result := orch.RunOnce(
 		perf.WithCollector(t.Context(), commandCollector),
-		syncengine.SyncBidirectional,
+		syncdomain.SyncBidirectional,
 		syncengine.RunOptions{},
 	)
 	require.Len(t, result.Reports, 1)

@@ -12,6 +12,9 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // seedDeleteSafetyRemote builds a remote with count files spread over two
@@ -20,7 +23,7 @@ import (
 func seedDeleteSafetyRemote(t *testing.T, count int) *moveScenarioRemote {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-photos", "root", "Photos")
 	remote.addFolder("item-docs", "root", "Docs")
 	for i := range count {
@@ -43,10 +46,10 @@ func deleteSafetyFilePath(syncRoot string, i int) string {
 	return filepath.Join(syncRoot, folder, fmt.Sprintf("f%03d.txt", i))
 }
 
-func readHeldDeletes(t *testing.T, eng *testEngine) []HeldDeleteRow {
+func readHeldDeletes(t *testing.T, eng *testEngine) []syncstore.HeldDeleteRow {
 	t.Helper()
 
-	rows, err := QueryHeldDeleteRowsWithRunner(t.Context(), eng.baseline.RawDBForTest())
+	rows, err := syncstore.QueryHeldDeleteRowsWithRunner(t.Context(), eng.baseline.RawDBForTest())
 	require.NoError(t, err)
 	return rows
 }
@@ -75,13 +78,13 @@ func TestPlanner_MassRemoteDeleteIsHeldForConfirmation(t *testing.T) {
 	held := readHeldDeletes(t, eng)
 	require.Len(t, held, 60, "status reads the held deletes from the store")
 	assert.Equal(t, "remote", held[0].Side)
-	assert.Equal(t, string(DeleteSafetyReasonTooMany), held[0].Reason)
+	assert.Equal(t, string(syncdomain.DeleteSafetyReasonTooMany), held[0].Reason)
 
 	snapshot, err := eng.baseline.ReadDriveStatusSnapshot(t.Context())
 	require.NoError(t, err)
-	groups := ProjectStoredConditionGroups(&snapshot)
+	groups := syncstore.ProjectStoredConditionGroups(&snapshot)
 	require.Len(t, groups, 1)
-	assert.Equal(t, ConditionDeletesHeld, groups[0].ConditionKey)
+	assert.Equal(t, syncdomain.ConditionDeletesHeld, groups[0].ConditionKey)
 	assert.Equal(t, 60, groups[0].Count)
 
 	// The hold is stable while truth is unchanged.
@@ -90,7 +93,7 @@ func TestPlanner_MassRemoteDeleteIsHeldForConfirmation(t *testing.T) {
 	assert.Equal(t, 60, report.HeldRemoteDeletes)
 
 	// `sync --confirm-deletes` applies them and clears the condition.
-	report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: true})
+	report, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{ConfirmDeletes: true})
 	require.NoError(t, err)
 	require.Zero(t, report.Failed, "errors: %v", report.Errors)
 	assert.Len(t, remote.deletes, 60)
@@ -113,13 +116,13 @@ func TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld(t *testing.T) {
 	// can tell this from a person deleting everything.
 	remote.mu.Lock()
 	for id := range remote.items {
-		if id != StrRoot {
+		if id != syncdomain.StrRoot {
 			delete(remote.items, id)
 		}
 	}
 	remote.mu.Unlock()
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{FullReconcile: true})
 	require.NoError(t, err)
 
 	assert.FileExists(t, deleteSafetyFilePath(syncRoot, 0), "local files must survive an empty remote enumeration")
@@ -128,7 +131,7 @@ func TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld(t *testing.T) {
 	held := readHeldDeletes(t, eng)
 	require.NotEmpty(t, held)
 	assert.Equal(t, "local", held[0].Side)
-	assert.Equal(t, string(DeleteSafetyReasonSideVanished), held[0].Reason)
+	assert.Equal(t, string(syncdomain.DeleteSafetyReasonSideVanished), held[0].Reason)
 }
 
 // Validates: R-6.2.5, R-6.4.2
@@ -261,7 +264,7 @@ func TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked(t *tes
 	for i := 70; i < 140; i++ {
 		require.NoError(t, os.Remove(deleteSafetyFilePath(syncRoot, i)))
 	}
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: true})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{ConfirmDeletes: true})
 	require.NoError(t, err)
 
 	assert.Len(t, remote.deletes, 70, "only the confirmed set is deleted on OneDrive")
@@ -283,7 +286,7 @@ func TestRunOnce_SlowDeletionAcrossPassesIsHeldWithinTheWindow(t *testing.T) {
 
 	remote := seedDeleteSafetyRemote(t, 200)
 	eng, syncRoot := newTestEngine(t, remote.client(t))
-	clock := newManualClock(time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	runScenarioPass(t, eng)
 
@@ -305,7 +308,7 @@ func TestRunOnce_SlowDeletionAcrossPassesIsHeldWithinTheWindow(t *testing.T) {
 	// The confirmation reviews what went before it: the approved set runs
 	// and the ledger for that side is cleared, so a few more deletes after
 	// it are an ordinary small deletion again.
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{ConfirmDeletes: true})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{ConfirmDeletes: true})
 	require.NoError(t, err)
 	assert.Zero(t, report.HeldRemoteDeletes)
 	assert.Len(t, remote.deletes, 80)
@@ -324,7 +327,7 @@ func TestRunOnce_DeletesOlderThanTheWindowStopCounting(t *testing.T) {
 
 	remote := seedDeleteSafetyRemote(t, 200)
 	eng, syncRoot := newTestEngine(t, remote.client(t))
-	clock := newManualClock(time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	runScenarioPass(t, eng)
 
@@ -334,7 +337,7 @@ func TestRunOnce_DeletesOlderThanTheWindowStopCounting(t *testing.T) {
 	runScenarioPass(t, eng)
 	require.Len(t, remote.deletes, 40)
 
-	clock.Advance(DeleteSafetyWindow + time.Minute)
+	clock.Advance(syncdomain.DeleteSafetyWindow + time.Minute)
 	for i := 40; i < 80; i++ {
 		require.NoError(t, os.Remove(deleteSafetyFilePath(syncRoot, i)))
 	}

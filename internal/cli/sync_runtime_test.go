@@ -16,16 +16,18 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 type testSyncDaemonOrchestrator struct {
 	called bool
-	mode   syncengine.SyncMode
+	mode   syncdomain.SyncMode
 	opts   syncengine.WatchOptions
 	err    error
 }
 
-func (o *testSyncDaemonOrchestrator) RunWatch(_ context.Context, mode syncengine.SyncMode, opts syncengine.WatchOptions) error {
+func (o *testSyncDaemonOrchestrator) RunWatch(_ context.Context, mode syncdomain.SyncMode, opts syncengine.WatchOptions) error {
 	o.called = true
 	o.mode = mode
 	o.opts = opts
@@ -53,7 +55,7 @@ func TestRunSyncWatch_UsesInjectedRunner(t *testing.T) {
 		ctx context.Context,
 		gotHolder *config.Holder,
 		selectors []string,
-		mode syncengine.SyncMode,
+		mode syncdomain.SyncMode,
 		opts syncengine.WatchOptions,
 		logger *slog.Logger,
 		statusWriter io.Writer,
@@ -63,7 +65,7 @@ func TestRunSyncWatch_UsesInjectedRunner(t *testing.T) {
 		assert.Equal(t, t.Context(), ctx)
 		assert.Same(t, holder, gotHolder)
 		assert.Equal(t, []string{"drive-a"}, selectors)
-		assert.Equal(t, syncengine.SyncBidirectional, mode)
+		assert.Equal(t, syncdomain.SyncBidirectional, mode)
 		assert.Equal(t, expectedOpts, opts)
 		assert.NotNil(t, logger)
 		assert.Equal(t, io.Discard, statusWriter)
@@ -76,7 +78,7 @@ func TestRunSyncWatch_UsesInjectedRunner(t *testing.T) {
 		cc,
 		holder,
 		[]string{"drive-a"},
-		syncengine.SyncBidirectional,
+		syncdomain.SyncBidirectional,
 		expectedOpts,
 		slog.New(slog.DiscardHandler),
 		io.Discard,
@@ -106,7 +108,7 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		ctx context.Context,
 		gotHolder *config.Holder,
 		drives []*config.ResolvedDrive,
-		mode syncengine.SyncMode,
+		mode syncdomain.SyncMode,
 		opts syncengine.RunOptions,
 		logger *slog.Logger,
 		controlSocketPath string,
@@ -114,7 +116,7 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		assert.Equal(t, t.Context(), ctx)
 		assert.Same(t, holder, gotHolder)
 		assert.Equal(t, []*config.ResolvedDrive{drive}, drives)
-		assert.Equal(t, syncengine.SyncUploadOnly, mode)
+		assert.Equal(t, syncdomain.SyncUploadOnly, mode)
 		assert.Equal(t, syncengine.RunOptions{DryRun: true}, opts)
 		assert.NotNil(t, logger)
 		assert.Equal(t, "/tmp/control.sock", controlSocketPath)
@@ -126,7 +128,7 @@ func TestRunSyncOnce_UsesInjectedRunner(t *testing.T) {
 		cc,
 		holder,
 		[]*config.ResolvedDrive{drive},
-		syncengine.SyncUploadOnly,
+		syncdomain.SyncUploadOnly,
 		syncengine.RunOptions{DryRun: true},
 		slog.New(slog.DiscardHandler),
 		"/tmp/control.sock",
@@ -362,7 +364,7 @@ func TestRunSyncDaemonWithFactory_NoDrivesConfigured(t *testing.T) {
 		t.Context(),
 		holder,
 		nil,
-		syncengine.SyncBidirectional,
+		syncdomain.SyncBidirectional,
 		syncengine.WatchOptions{},
 		slog.New(slog.DiscardHandler),
 		io.Discard,
@@ -390,7 +392,7 @@ func TestRunSyncDaemonWithFactory_ReportsInvalidSyncDirThroughStartupResults(t *
 		t.Context(),
 		holder,
 		nil,
-		syncengine.SyncBidirectional,
+		syncdomain.SyncBidirectional,
 		syncengine.WatchOptions{},
 		slog.New(slog.DiscardHandler),
 		io.Discard,
@@ -431,7 +433,7 @@ func TestRunSyncDaemonWithFactory_CallsOrchestrator(t *testing.T) {
 		t.Context(),
 		holder,
 		nil,
-		syncengine.SyncBidirectional,
+		syncdomain.SyncBidirectional,
 		opts,
 		logger,
 		io.Discard,
@@ -454,7 +456,7 @@ func TestRunSyncDaemonWithFactory_CallsOrchestrator(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, factoryCalls)
 	assert.True(t, orch.called)
-	assert.Equal(t, syncengine.SyncBidirectional, orch.mode)
+	assert.Equal(t, syncdomain.SyncBidirectional, orch.mode)
 	assert.Equal(t, opts, orch.opts)
 }
 
@@ -473,7 +475,7 @@ func TestRunSyncDaemonWithFactory_PassesMissingSyncDirToOrchestrator(t *testing.
 		t.Context(),
 		holder,
 		nil,
-		syncengine.SyncBidirectional,
+		syncdomain.SyncBidirectional,
 		syncengine.WatchOptions{},
 		slog.New(slog.DiscardHandler),
 		io.Discard,
@@ -509,7 +511,7 @@ func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoMountStarts(t *testi
 		t.Context(),
 		holder,
 		nil,
-		syncengine.SyncBidirectional,
+		syncdomain.SyncBidirectional,
 		syncengine.WatchOptions{},
 		slog.New(slog.DiscardHandler),
 		io.Discard,
@@ -523,8 +525,8 @@ func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoMountStarts(t *testi
 						Results: []multisync.MountStartupResult{{
 							Identity: testStandaloneMountIdentity(cid),
 							Status:   multisync.MountStartupIncompatibleStore,
-							Err: &syncengine.StateStoreIncompatibleError{
-								Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
+							Err: &syncstore.StateStoreIncompatibleError{
+								Reason: syncstore.StateStoreIncompatibleReasonIncompatibleSchema,
 							},
 						}},
 					},
@@ -551,7 +553,7 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 		t.Context(),
 		holder,
 		nil,
-		syncengine.SyncBidirectional,
+		syncdomain.SyncBidirectional,
 		syncengine.WatchOptions{},
 		slog.New(slog.DiscardHandler),
 		status,
@@ -565,8 +567,8 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 					Results: []multisync.MountStartupResult{{
 						Identity: testStandaloneMountIdentity(cid),
 						Status:   multisync.MountStartupIncompatibleStore,
-						Err: &syncengine.StateStoreIncompatibleError{
-							Reason: syncengine.StateStoreIncompatibleReasonIncompatibleSchema,
+						Err: &syncstore.StateStoreIncompatibleError{
+							Reason: syncstore.StateStoreIncompatibleReasonIncompatibleSchema,
 						},
 					}},
 				},

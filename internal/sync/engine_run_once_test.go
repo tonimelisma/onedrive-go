@@ -19,28 +19,32 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-func newRunOnceBidirectionalMock(driveID driveid.ID) *engineMockClient {
-	return &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+func newRunOnceBidirectionalMock(driveID driveid.ID) *syncfixture.EngineMockClient {
+	return &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				{
 					ID: "remote-file-1", Name: "remote.txt", ParentID: "root",
-					DriveID: driveID, Size: int64(len("remote-content")), QuickXorHash: testQuickXor("remote-content"),
+					DriveID: driveID, Size: int64(len("remote-content")), QuickXorHash: syncfixture.TestQuickXor("remote-content"),
 				},
 			}, "token-after"), nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("remote-content"))
 			return int64(n), err
 		},
-		uploadFn: func(
+		UploadFn: func(
 			_ context.Context,
 			_ driveid.ID,
 			_ string,
@@ -57,7 +61,7 @@ func newRunOnceBidirectionalMock(driveID driveid.ID) *engineMockClient {
 	}
 }
 
-func installDryRunContentMutationGuards(t *testing.T, mock *engineMockClient) *atomic.Int32 {
+func installDryRunContentMutationGuards(t *testing.T, mock *syncfixture.EngineMockClient) *atomic.Int32 {
 	t.Helper()
 
 	var mutationCalls atomic.Int32
@@ -66,31 +70,31 @@ func installDryRunContentMutationGuards(t *testing.T, mock *engineMockClient) *a
 		assert.Failf(t, "dry-run content mutator called", "%s", name)
 	}
 
-	mock.createFolderFn = func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
+	mock.CreateFolderFn = func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
 		fail("CreateFolder")
 		return nil, fmt.Errorf("dry-run content mutator called: CreateFolder")
 	}
-	mock.moveItemIfMatchFn = func(_ context.Context, _ driveid.ID, _, _, _, _ string) (*graph.Item, error) {
+	mock.MoveItemIfMatchFn = func(_ context.Context, _ driveid.ID, _, _, _, _ string) (*graph.Item, error) {
 		fail("MoveItemIfMatch")
 		return nil, fmt.Errorf("dry-run content mutator called: MoveItemIfMatch")
 	}
-	mock.deleteItemIfMatchFn = func(_ context.Context, _ driveid.ID, _, _ string) error {
+	mock.DeleteItemIfMatchFn = func(_ context.Context, _ driveid.ID, _, _ string) error {
 		fail("DeleteItemIfMatch")
 		return nil
 	}
-	mock.permanentDeleteFn = func(_ context.Context, _ driveid.ID, _ string) error {
+	mock.PermanentDeleteFn = func(_ context.Context, _ driveid.ID, _ string) error {
 		fail("PermanentDeleteItem")
 		return nil
 	}
-	mock.downloadFn = func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+	mock.DownloadFn = func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 		fail("Download")
 		return 0, nil
 	}
-	mock.uploadFn = func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+	mock.UploadFn = func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 		fail("Upload")
 		return nil, fmt.Errorf("dry-run content mutator called: Upload")
 	}
-	mock.uploadToItemFn = func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+	mock.UploadToItemFn = func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 		fail("UploadToItem")
 		return nil, fmt.Errorf("dry-run content mutator called: UploadToItem")
 	}
@@ -106,8 +110,8 @@ func TestNewEngine_ZeroDriveID_ReturnsError(t *testing.T) {
 	syncRoot := filepath.Join(tmpDir, "sync")
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
-	mock := &engineMockClient{}
-	logger := testLogger(t)
+	mock := &syncfixture.EngineMockClient{}
+	logger := syncfixture.TestLogger(t)
 
 	_, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
@@ -128,11 +132,11 @@ func TestNewEngine_ZeroDriveID_ReturnsError(t *testing.T) {
 func TestRunOnce_NoChanges(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			// Return root only — no content changes.
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
+			return syncfixture.DeltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveid.New(syncfixture.EngineTestDriveID)},
 			}, "token-1"), nil
 		},
 	}
@@ -140,10 +144,10 @@ func TestRunOnce_NoChanges(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
-	assert.Equal(t, SyncBidirectional, report.Mode)
+	assert.Equal(t, syncdomain.SyncBidirectional, report.Mode)
 
 	total := report.Downloads + report.Uploads + report.LocalDeletes +
 		report.RemoteDeletes + report.FolderCreates + report.Moves +
@@ -157,26 +161,26 @@ func TestRunOnce_NoChanges(t *testing.T) {
 func TestRunOnce_SharePointRootFormsRecordsActionableFailure(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveid.New(syncfixture.EngineTestDriveID)},
 			}, "token-1"), nil
 		},
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.localRules = LocalObservationRules{RejectSharePointRootForms: true}
-	writeLocalFile(t, syncRoot, "forms", "reserved root name")
+	eng.localRules = syncdomain.LocalObservationRules{RejectSharePointRootForms: true}
+	syncfixture.WriteLocalFile(t, syncRoot, "forms", "reserved root name")
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 	assert.Equal(t, 0, report.Uploads, "reserved SharePoint root names must not produce upload actions")
 
 	failures := actionableObservationIssuesForTest(t, eng.baseline, t.Context())
 	require.Len(t, failures, 1)
 	assert.Equal(t, "forms", failures[0].Path)
-	assert.Equal(t, IssueInvalidFilename, failures[0].IssueType)
+	assert.Equal(t, syncdomain.IssueInvalidFilename, failures[0].IssueType)
 	assert.True(t, failures[0].ScopeKey.IsZero())
 }
 
@@ -185,20 +189,20 @@ func TestRunOnce_DownloadOnly_ObservesLocalScanButSuppressesUploads(t *testing.T
 	t.Parallel()
 
 	// Place a local file that would generate an upload event if scanned.
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
-				{ID: "root", IsRoot: true, DriveID: driveid.New(engineTestDriveID)},
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
+				{ID: "root", IsRoot: true, DriveID: driveid.New(syncfixture.EngineTestDriveID)},
 			}, "token-1"), nil
 		},
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	writeLocalFile(t, syncRoot, "local-only.txt", "should not be uploaded")
+	syncfixture.WriteLocalFile(t, syncRoot, "local-only.txt", "should not be uploaded")
 
 	ctx := t.Context()
 
-	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
 	assert.Equal(t, 0, report.Uploads, "download-only mode should suppress uploads even though local scan still runs")
@@ -209,10 +213,10 @@ func TestRunOnce_DownloadOnly_ObservesLocalScanButSuppressesUploads(t *testing.T
 func TestRunOnce_DownloadOnly_DefersEditDeleteRecreateUpload(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -221,15 +225,15 @@ func TestRunOnce_DownloadOnly_DefersEditDeleteRecreateUpload(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	writeLocalFile(t, syncRoot, "edit-delete.txt", "baseline content")
-	baselineHash := hashContentQuickXor(t, "baseline content")
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
-		Action:          ActionDownload,
+	syncfixture.WriteLocalFile(t, syncRoot, "edit-delete.txt", "baseline content")
+	baselineHash := syncfixture.HashContentQuickXor(t, "baseline content")
+	seedBaseline(t, eng.baseline, ctx, []syncdomain.ActionOutcome{{
+		Action:          syncdomain.ActionDownload,
 		Success:         true,
 		Path:            "edit-delete.txt",
 		DriveID:         driveID,
 		ItemID:          "item-edit-delete",
-		ItemType:        ItemTypeFile,
+		ItemType:        syncdomain.ItemTypeFile,
 		LocalHash:       baselineHash,
 		RemoteHash:      baselineHash,
 		LocalSize:       int64(len("baseline content")),
@@ -241,11 +245,11 @@ func TestRunOnce_DownloadOnly_DefersEditDeleteRecreateUpload(t *testing.T) {
 		ETag:            "etag-edit-delete",
 	}}, "")
 
-	writeLocalFile(t, syncRoot, "edit-delete.txt", "locally modified content")
+	syncfixture.WriteLocalFile(t, syncRoot, "edit-delete.txt", "locally modified content")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), RemoteObservationModeDelta))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), syncdomain.RemoteObservationModeDelta))
 
-	report, err := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
 	assert.Zero(t, report.Uploads, "download-only should defer the local-wins edit-delete upload")
@@ -267,17 +271,17 @@ func TestRunOnce_UploadOnly_StillObservesRemoteDelta(t *testing.T) {
 	t.Parallel()
 
 	deltaCalled := false
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			deltaCalled = true
-			return deltaPageWithItems(nil, "token-1"), nil
+			return syncfixture.DeltaPageWithItems(nil, "token-1"), nil
 		},
 	}
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	_, err := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
+	_, err := eng.RunOnce(ctx, syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 	assert.True(t, deltaCalled, "upload-only mode should still observe remote delta")
 }
@@ -286,17 +290,17 @@ func TestRunOnce_UploadOnly_StillObservesRemoteDelta(t *testing.T) {
 func TestRunOnce_Bidirectional_FullRun(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	mock := newRunOnceBidirectionalMock(driveID)
 
 	eng, syncRoot := newTestEngine(t, mock)
 
 	// Create a local-only file.
-	writeLocalFile(t, syncRoot, "local.txt", "local-content")
+	syncfixture.WriteLocalFile(t, syncRoot, "local.txt", "local-content")
 
 	ctx := t.Context()
 
-	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
 	// Expect at least one download (remote.txt) and one upload (local.txt).
@@ -319,7 +323,7 @@ func TestRunOnce_Bidirectional_FullRun(t *testing.T) {
 func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
@@ -329,9 +333,9 @@ func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *
 		require.NoError(t, tx.Rollback())
 	}()
 
-	_, err = ReplaceLocalStateTxForTest(ctx, tx, []LocalStateRow{{
+	_, err = syncstore.ReplaceLocalStateTxForTest(ctx, tx, []syncdomain.LocalStateRow{{
 		Path:     "tx-only.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "hash",
 		Size:     4,
 		Mtime:    5,
@@ -348,44 +352,44 @@ func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *
 func TestReconcileRuntimeState_PrunesRetryAndScopeState(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &RetryWorkRow{
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &syncdomain.RetryWorkRow{
 		Path:         "keep.txt",
-		ActionType:   ActionUpload,
+		ActionType:   syncdomain.ActionUpload,
 		AttemptCount: 1,
 	}))
-	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &RetryWorkRow{
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &syncdomain.RetryWorkRow{
 		Path:         "drop.txt",
-		ActionType:   ActionDownload,
+		ActionType:   syncdomain.ActionDownload,
 		AttemptCount: 1,
 	}))
-	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKService(),
+	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &syncdomain.BlockScope{
+		Key:           syncdomain.SKService(),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(160, 0),
 	}))
-	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKThrottleDrive(driveid.New("drive1")),
+	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &syncdomain.BlockScope{
+		Key:           syncdomain.SKThrottleDrive(driveid.New("drive1")),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(260, 0),
 	}))
-	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &RetryWorkRow{
+	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &syncdomain.RetryWorkRow{
 		Path:         "blocked.txt",
-		ActionType:   ActionRemoteDelete,
-		ScopeKey:     SKService(),
+		ActionType:   syncdomain.ActionRemoteDelete,
+		ScopeKey:     syncdomain.SKService(),
 		Blocked:      true,
 		AttemptCount: 1,
 	}))
 
-	err := flow.reconcileRuntimeState(ctx, &ActionPlan{
-		Actions: []Action{{
-			Type: ActionUpload,
+	err := flow.reconcileRuntimeState(ctx, &syncdomain.ActionPlan{
+		Actions: []syncdomain.Action{{
+			Type: syncdomain.ActionUpload,
 			Path: "keep.txt",
 		}},
-	}, PassObservedRemoteThenLocal)
+	}, syncstore.PassObservedRemoteThenLocal)
 	require.NoError(t, err)
 
 	retries, err := eng.baseline.ListRetryWork(ctx)
@@ -402,13 +406,13 @@ func TestReconcileRuntimeState_PrunesRetryAndScopeState(t *testing.T) {
 func TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	mock := newRunOnceBidirectionalMock(driveID)
 
 	eng, syncRoot := newTestEngine(t, mock)
-	writeLocalFile(t, syncRoot, "local.txt", "local-content")
+	syncfixture.WriteLocalFile(t, syncRoot, "local.txt", "local-content")
 
-	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
 	localRows, err := eng.baseline.ListLocalState(t.Context())
@@ -421,7 +425,7 @@ func TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation(t *testin
 	require.NoError(t, err)
 	require.Len(t, reconciliationRows, 2)
 
-	byPath := make(map[string]SQLiteReconciliationRow, len(reconciliationRows))
+	byPath := make(map[string]syncdomain.SQLiteReconciliationRow, len(reconciliationRows))
 	for _, row := range reconciliationRows {
 		byPath[row.Path] = row
 	}
@@ -434,11 +438,11 @@ func TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation(t *testin
 func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				{
 					ID: "f1", Name: "newfile.txt", ParentID: "root",
@@ -452,7 +456,7 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{DryRun: true})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{DryRun: true})
 	require.NoError(t, err, "RunOnce")
 
 	assert.True(t, report.DryRun, "report.DryRun")
@@ -467,7 +471,7 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 	assert.Equal(t, 0, bl.Len(), "dry-run should not commit")
 
 	// Verify delta token is not saved (dry-run must not advance the token).
-	savedToken := readObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String())
+	savedToken := syncstoretest.ReadObservationCursorForTest(t, eng.baseline, ctx, eng.driveID.String())
 	assert.Empty(t, savedToken, "dry-run should not save delta token")
 }
 
@@ -475,10 +479,10 @@ func TestRunOnce_DryRun_NoExecution(t *testing.T) {
 func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				{
 					ID: "remote-preview", Name: "remote-preview.txt", ParentID: "root",
@@ -492,9 +496,9 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
-	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []LocalStateRow{{
+	require.NoError(t, eng.baseline.ReplaceLocalState(ctx, []syncdomain.LocalStateRow{{
 		Path:     "stale-local.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "stale-local-hash",
 		Size:     5,
 		Mtime:    11,
@@ -507,7 +511,7 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-live-before-dry-run"))
 
-	writeLocalFile(t, syncRoot, "fresh-local.txt", "fresh-local")
+	syncfixture.WriteLocalFile(t, syncRoot, "fresh-local.txt", "fresh-local")
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -547,7 +551,7 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 	require.NoError(t, err)
 	assert.Empty(t, liveBlockScopes, "dry-run read boundaries must stay out of block_scopes")
 
-	savedToken := readObservationCursorForTest(t, eng.baseline, ctx, driveID.String())
+	savedToken := syncstoretest.ReadObservationCursorForTest(t, eng.baseline, ctx, driveID.String())
 	assert.Equal(t, "token-live-before-dry-run", savedToken)
 }
 
@@ -555,10 +559,10 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems(nil, "token-dry-run-clear"), nil
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems(nil, "token-dry-run-clear"), nil
 		},
 	}
 
@@ -566,14 +570,14 @@ func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
-	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
+	syncstoretest.SeedObservationIssueRowForTest(t, eng.baseline, &syncdomain.ObservationIssue{
 		Path:      "/",
 		DriveID:   driveID,
-		IssueType: IssueRemoteReadDenied,
-		ScopeKey:  SKPermRemoteRead(""),
+		IssueType: syncdomain.IssueRemoteReadDenied,
+		ScopeKey:  syncdomain.SKPermRemoteRead(""),
 	})
-	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
-		Key:           SKPermRemoteWrite(""),
+	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &syncdomain.BlockScope{
+		Key:           syncdomain.SKPermRemoteWrite(""),
 		TrialInterval: time.Minute,
 		NextTrialAt:   time.Unix(160, 0),
 	}))
@@ -587,22 +591,22 @@ func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T
 	liveObservationIssues, err := eng.baseline.ListObservationIssues(ctx)
 	require.NoError(t, err)
 	require.Len(t, liveObservationIssues, 1)
-	assert.Equal(t, IssueRemoteReadDenied, liveObservationIssues[0].IssueType)
+	assert.Equal(t, syncdomain.IssueRemoteReadDenied, liveObservationIssues[0].IssueType)
 	assert.Equal(t, "/", liveObservationIssues[0].Path)
 
 	liveBlockScopes, err := eng.baseline.ListBlockScopes(ctx)
 	require.NoError(t, err)
 	require.Len(t, liveBlockScopes, 1)
-	assert.Equal(t, SKPermRemoteWrite(""), liveBlockScopes[0].Key)
+	assert.Equal(t, syncdomain.SKPermRemoteWrite(""), liveBlockScopes[0].Key)
 }
 
 // Validates: R-2.1.5
 func TestLoadDryRunCurrentInputs_LocalObservationFindingsStayScratchOnly(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems(nil, "token-dry-run-local-findings"), nil
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems(nil, "token-dry-run-local-findings"), nil
 		},
 	}
 
@@ -610,8 +614,8 @@ func TestLoadDryRunCurrentInputs_LocalObservationFindingsStayScratchOnly(t *test
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
 
-	seedObservationIssueForTest(t, eng.baseline, "stale-invalid.txt", IssueInvalidFilename, ScopeKey{})
-	writeLocalFile(t, syncRoot, "CON", "reserved name")
+	syncstoretest.SeedObservationIssueForTest(t, eng.baseline, "stale-invalid.txt", syncdomain.IssueInvalidFilename, syncdomain.ScopeKey{})
+	syncfixture.WriteLocalFile(t, syncRoot, "CON", "reserved name")
 
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -630,23 +634,23 @@ func TestLoadDryRunCurrentInputs_LocalObservationFindingsStayScratchOnly(t *test
 	require.NoError(t, err)
 	require.Len(t, liveObservationIssues, 1)
 	assert.Equal(t, "stale-invalid.txt", liveObservationIssues[0].Path)
-	assert.Equal(t, IssueInvalidFilename, liveObservationIssues[0].IssueType)
+	assert.Equal(t, syncdomain.IssueInvalidFilename, liveObservationIssues[0].IssueType)
 }
 
 // Validates: R-2.1.1, R-3.3.12
 func TestRunOnce_MountRootUsesScopedDeltaAndToken(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	deltaCalled := false
 	folderDeltaCalls := 0
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			deltaCalled = true
-			return deltaPageWithItems(nil, "wrong-token"), nil
+			return syncfixture.DeltaPageWithItems(nil, "wrong-token"), nil
 		},
-		folderDeltaFn: func(_ context.Context, gotDriveID driveid.ID, folderID, token string) ([]graph.Item, string, error) {
+		FolderDeltaFn: func(_ context.Context, gotDriveID driveid.ID, folderID, token string) ([]graph.Item, string, error) {
 			folderDeltaCalls++
 			assert.Equal(t, driveID, gotDriveID)
 			assert.Equal(t, "mount-root-root", folderID)
@@ -659,7 +663,7 @@ func TestRunOnce_MountRootUsesScopedDeltaAndToken(t *testing.T) {
 				},
 			}, "scoped-token-1", nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("data"))
 			return int64(n), err
 		},
@@ -683,22 +687,22 @@ func TestRunOnce_MountRootUsesScopedDeltaAndToken(t *testing.T) {
 		FolderDelta:            mock,
 		RecursiveLister:        mock,
 		PermChecker:            mock,
-		Logger:                 testLogger(t),
+		Logger:                 syncfixture.TestLogger(t),
 	})
 	require.NoError(t, err)
-	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
 	installManualClock(eng, clock)
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	report, err := eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.False(t, deltaCalled, "drive-root delta must not be used for mount-root engines")
 	assert.Equal(t, 1, folderDeltaCalls)
 	assert.GreaterOrEqual(t, report.Downloads, 1)
 
-	token := readObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
+	token := syncstoretest.ReadObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
 	assert.Equal(t, "scoped-token-1", token)
 }
 
@@ -706,11 +710,11 @@ func TestRunOnce_MountRootUsesScopedDeltaAndToken(t *testing.T) {
 func TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	folderDeltaCalls := 0
 
-	mock := &engineMockClient{
-		folderDeltaFn: func(_ context.Context, gotDriveID driveid.ID, folderID, token string) ([]graph.Item, string, error) {
+	mock := &syncfixture.EngineMockClient{
+		FolderDeltaFn: func(_ context.Context, gotDriveID driveid.ID, folderID, token string) ([]graph.Item, string, error) {
 			folderDeltaCalls++
 			assert.Equal(t, driveID, gotDriveID)
 			assert.Equal(t, "mount-root-root", folderID)
@@ -746,16 +750,16 @@ func TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken(t *testing.T) {
 		FolderDelta:            mock,
 		RecursiveLister:        mock,
 		PermChecker:            mock,
-		Logger:                 testLogger(t),
+		Logger:                 syncfixture.TestLogger(t),
 	})
 	require.NoError(t, err)
-	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
 	installManualClock(eng, clock)
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	report, err := eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{DryRun: true})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncDownloadOnly, RunOptions{DryRun: true})
 	require.NoError(t, err)
 	assert.True(t, report.DryRun)
 	assert.Equal(t, 1, folderDeltaCalls)
@@ -765,7 +769,7 @@ func TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, bl.Len())
 
-	token := readObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
+	token := syncstoretest.ReadObservationCursorForTest(t, eng.baseline, t.Context(), driveID.String())
 	assert.Empty(t, token)
 }
 
@@ -773,15 +777,15 @@ func TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken(t *testing.T) {
 func TestRunOnce_MountRootDeltaIncapableSkipsFolderDelta(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	folderDeltaCalled := false
 	listCalls := 0
-	mock := &engineMockClient{
-		folderDeltaFn: func(_ context.Context, _ driveid.ID, _, _ string) ([]graph.Item, string, error) {
+	mock := &syncfixture.EngineMockClient{
+		FolderDeltaFn: func(_ context.Context, _ driveid.ID, _, _ string) ([]graph.Item, string, error) {
 			folderDeltaCalled = true
 			return nil, "", nil
 		},
-		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
+		ListChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
 			listCalls++
 			assert.Equal(t, driveID, gotDriveID)
 			assert.Equal(t, "mount-root-root", folderID)
@@ -807,14 +811,14 @@ func TestRunOnce_MountRootDeltaIncapableSkipsFolderDelta(t *testing.T) {
 		FolderDelta:            mock,
 		RecursiveLister:        mock,
 		PermChecker:            mock,
-		Logger:                 testLogger(t),
+		Logger:                 syncfixture.TestLogger(t),
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	_, err = eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.False(t, folderDeltaCalled)
 	assert.Equal(t, 1, listCalls)
@@ -824,10 +828,10 @@ func TestRunOnce_MountRootDeltaIncapableSkipsFolderDelta(t *testing.T) {
 func TestRunOnce_MountRootEnumerateStillPersistsFullReconcileCadenceWithoutToken(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	listCalls := 0
-	mock := &engineMockClient{
-		listChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
+	mock := &syncfixture.EngineMockClient{
+		ListChildrenRecursiveFn: func(_ context.Context, gotDriveID driveid.ID, folderID string) ([]graph.Item, error) {
 			listCalls++
 			assert.Equal(t, driveID, gotDriveID)
 			assert.Equal(t, "mount-root-root", folderID)
@@ -851,38 +855,38 @@ func TestRunOnce_MountRootEnumerateStillPersistsFullReconcileCadenceWithoutToken
 		Uploads:          mock,
 		RecursiveLister:  mock,
 		PermChecker:      mock,
-		Logger:           testLogger(t),
+		Logger:           syncfixture.TestLogger(t),
 	})
 	require.NoError(t, err)
-	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
 	installManualClock(eng, clock)
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	_, err = eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, listCalls)
 
 	state, err := eng.baseline.ReadObservationState(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, state.Cursor)
-	assert.Equal(t, clock.Now().Add(RemoteRefreshEnumerateInterval).UnixNano(), state.NextFullRemoteRefreshAt)
+	assert.Equal(t, clock.Now().Add(syncstore.RemoteRefreshEnumerateInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 }
 
 // Validates: R-6.6.28
 func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				{
 					ID: "f1", Name: "good.txt", ParentID: "root",
-					DriveID: driveID, Size: int64(len("good")), QuickXorHash: testQuickXor("good"),
+					DriveID: driveID, Size: int64(len("good")), QuickXorHash: syncfixture.TestQuickXor("good"),
 				},
 				{
 					ID: "f2", Name: "bad.txt", ParentID: "root",
@@ -890,7 +894,7 @@ func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 				},
 			}, "token-1"), nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
+		DownloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
 			if itemID == "f2" {
 				// Use 403 (non-retryable) to avoid retry delays in tests.
 				return 0, &graph.GraphError{StatusCode: 403, Message: "forbidden"}
@@ -904,7 +908,7 @@ func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 	// DAG executor handles individual failures gracefully — RunOnce succeeds
 	// but reports the failure in Stats.
 	require.NoError(t, err, "RunOnce")
@@ -925,8 +929,8 @@ func TestRunOnce_ExecutorPartialFailure(t *testing.T) {
 func TestRunOnce_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return nil, context.Canceled
 		},
 	}
@@ -935,14 +939,14 @@ func TestRunOnce_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // pre-cancel
 
-	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 	require.Error(t, err, "expected error from canceled context")
 }
 
 func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
 	mock := newDownloadDeltaMock(
 		driveID,
@@ -957,11 +961,11 @@ func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
 	// Verify delta token was saved.
-	token := readObservationCursorForTest(t, eng.baseline, ctx, engineTestDriveID)
+	token := syncstoretest.ReadObservationCursorForTest(t, eng.baseline, ctx, syncfixture.EngineTestDriveID)
 	assert.Equal(t, "new-delta-token", token)
 }
 
@@ -969,7 +973,7 @@ func TestRunOnce_DeltaTokenPersisted(t *testing.T) {
 func TestRunOnce_BaselineUpdatedAfterRun(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
 	mock := newDownloadDeltaMock(
 		driveID,
@@ -984,7 +988,7 @@ func TestRunOnce_BaselineUpdatedAfterRun(t *testing.T) {
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
 	// Reload and verify.
@@ -1000,16 +1004,16 @@ func TestRunOnce_BaselineUpdatedAfterRun(t *testing.T) {
 func TestNewEngine_InvalidDBPath(t *testing.T) {
 	t.Parallel()
 
-	logger := testLogger(t)
+	logger := syncfixture.TestLogger(t)
 
 	_, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    "/nonexistent/deeply/nested/path/test.db",
 		SyncRoot:  t.TempDir(),
-		DriveID:   driveid.New(engineTestDriveID),
-		Fetcher:   &engineMockClient{},
-		Items:     &engineMockClient{},
-		Downloads: &engineMockClient{},
-		Uploads:   &engineMockClient{},
+		DriveID:   driveid.New(syncfixture.EngineTestDriveID),
+		Fetcher:   &syncfixture.EngineMockClient{},
+		Items:     &syncfixture.EngineMockClient{},
+		Downloads: &syncfixture.EngineMockClient{},
+		Uploads:   &syncfixture.EngineMockClient{},
 		Logger:    logger,
 	})
 
@@ -1024,7 +1028,7 @@ func TestNewEngine_RequiresResetForNonSQLiteStateDB(t *testing.T) {
 	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o600))
 
 	resetErr := requireIncompatibleStoreEngineError(t, dbPath)
-	assert.Equal(t, StateStoreIncompatibleReasonOpenFailed, resetErr.Reason)
+	assert.Equal(t, syncstore.StateStoreIncompatibleReasonOpenFailed, resetErr.Reason)
 }
 
 // Validates: R-2.5.5, R-2.5.6
@@ -1032,7 +1036,7 @@ func TestNewEngine_RequiresResetForIncompatibleSchemaStateDB(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	db, err := sql.Open("sqlite", SqliteFileURI(dbPath, nil))
+	db, err := sql.Open("sqlite", syncstore.SqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE baseline (
@@ -1046,7 +1050,7 @@ func TestNewEngine_RequiresResetForIncompatibleSchemaStateDB(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	resetErr := requireIncompatibleStoreEngineError(t, dbPath)
-	assert.Equal(t, StateStoreIncompatibleReasonIncompatibleSchema, resetErr.Reason)
+	assert.Equal(t, syncstore.StateStoreIncompatibleReasonIncompatibleSchema, resetErr.Reason)
 }
 
 // Validates: R-2.5.5, R-2.5.6
@@ -1057,7 +1061,7 @@ func TestNewEngine_RequiresResetForUnsupportedStoreGeneration(t *testing.T) {
 	createUnsupportedGenerationStateDB(t, dbPath)
 
 	resetErr := requireIncompatibleStoreEngineError(t, dbPath)
-	assert.Equal(t, StateStoreIncompatibleReasonIncompatibleSchema, resetErr.Reason)
+	assert.Equal(t, syncstore.StateStoreIncompatibleReasonIncompatibleSchema, resetErr.Reason)
 }
 
 // Validates: R-2.5.5, R-2.5.8
@@ -1068,7 +1072,7 @@ func TestNewEngine_RequiresResetForCorruptStateDB(t *testing.T) {
 	createCorruptRemoteStateDB(t, dbPath)
 
 	resetErr := requireIncompatibleStoreEngineError(t, dbPath)
-	assert.Equal(t, StateStoreIncompatibleReasonCorrupt, resetErr.Reason)
+	assert.Equal(t, syncstore.StateStoreIncompatibleReasonCorrupt, resetErr.Reason)
 	assert.Contains(t, resetErr.Error(), "damaged")
 	require.Error(t, resetErr.Cause)
 }
@@ -1080,7 +1084,7 @@ func TestNewEngine_RequiresResetForCorruptStateDB(t *testing.T) {
 func createCorruptRemoteStateDB(t *testing.T, dbPath string) {
 	t.Helper()
 
-	store, err := NewSyncStore(t.Context(), dbPath, testLogger(t))
+	store, err := syncstore.NewSyncStore(t.Context(), dbPath, syncfixture.TestLogger(t))
 	require.NoError(t, err)
 	db := store.RawDBForTest()
 	for i := range 200 {
@@ -1107,33 +1111,33 @@ func createCorruptRemoteStateDB(t *testing.T, dbPath string) {
 func createUnsupportedGenerationStateDB(t *testing.T, dbPath string) {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", SqliteFileURI(dbPath, nil))
+	db, err := sql.Open("sqlite", syncstore.SqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 
-	_, err = db.ExecContext(t.Context(), CanonicalSchemaSQLForTest())
+	_, err = db.ExecContext(t.Context(), syncstore.CanonicalSchemaSQLForTest())
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `DROP TABLE store_metadata`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 }
 
-func requireIncompatibleStoreEngineError(t *testing.T, dbPath string) *StateStoreIncompatibleError {
+func requireIncompatibleStoreEngineError(t *testing.T, dbPath string) *syncstore.StateStoreIncompatibleError {
 	t.Helper()
 
 	eng, err := newEngine(t.Context(), &engineInputs{
 		DBPath:    dbPath,
 		SyncRoot:  t.TempDir(),
-		DriveID:   driveid.New(engineTestDriveID),
-		Fetcher:   &engineMockClient{},
-		Items:     &engineMockClient{},
-		Downloads: &engineMockClient{},
-		Uploads:   &engineMockClient{},
-		Logger:    testLogger(t),
+		DriveID:   driveid.New(syncfixture.EngineTestDriveID),
+		Fetcher:   &syncfixture.EngineMockClient{},
+		Items:     &syncfixture.EngineMockClient{},
+		Downloads: &syncfixture.EngineMockClient{},
+		Uploads:   &syncfixture.EngineMockClient{},
+		Logger:    syncfixture.TestLogger(t),
 	})
 	require.Error(t, err)
 	require.Nil(t, eng)
 
-	var resetErr *StateStoreIncompatibleError
+	var resetErr *syncstore.StateStoreIncompatibleError
 	require.ErrorAs(t, err, &resetErr)
 
 	return resetErr
@@ -1143,11 +1147,11 @@ func requireIncompatibleStoreEngineError(t *testing.T, dbPath string) *StateStor
 func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	callCount := 0
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, token string) (*graph.DeltaPage, error) {
 			callCount++
 			// First call (with saved token) returns expired.
 			if callCount == 1 {
@@ -1155,7 +1159,7 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 			}
 
 			// Second call (empty token) succeeds.
-			return deltaPageWithItems([]graph.Item{
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "fresh-token"), nil
 		},
@@ -1165,17 +1169,17 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed a stale delta token.
-	seedOutcomes := []ActionOutcome{{
-		Action:  ActionDownload,
+	seedOutcomes := []syncdomain.ActionOutcome{{
+		Action:  syncdomain.ActionDownload,
 		Success: true,
 		Path:    "seed.txt",
 		DriveID: driveID,
 		ItemID:  "seed-1",
 	}}
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "stale-token")
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), RemoteObservationModeDelta))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), syncdomain.RemoteObservationModeDelta))
 
-	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 
 	// Delta should have been called twice (expired + retry).
@@ -1193,13 +1197,13 @@ func TestRunOnce_DeltaExpired_AutoRetry(t *testing.T) {
 func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
 	// Seed a baseline entry that matches the delta response exactly.
 	// The planner will see no diff, so reconciliation emits an empty action plan.
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				{
 					ID: "f1", Name: "unchanged.txt", ParentID: "root",
@@ -1213,13 +1217,13 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline so the file appears as already synced with matching hash.
-	seedOutcomes := []ActionOutcome{{
-		Action:          ActionDownload,
+	seedOutcomes := []syncdomain.ActionOutcome{{
+		Action:          syncdomain.ActionDownload,
 		Success:         true,
 		Path:            "unchanged.txt",
 		DriveID:         driveID,
 		ItemID:          "f1",
-		ItemType:        ItemTypeFile,
+		ItemType:        syncdomain.ItemTypeFile,
 		RemoteHash:      "matchhash",
 		LocalHash:       "matchhash",
 		LocalSize:       5,
@@ -1230,7 +1234,7 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	seedBaseline(t, eng.baseline, ctx, seedOutcomes, "old-token")
 
 	// Write a matching local file so the local observer also sees no change.
-	writeLocalFile(t, syncRoot, "unchanged.txt", "hello")
+	syncfixture.WriteLocalFile(t, syncRoot, "unchanged.txt", "hello")
 
 	// This should complete without deadlock — use a timeout to detect hangs.
 	done := make(chan struct{})
@@ -1238,14 +1242,14 @@ func TestRunOnce_EmptyPlan_NoPanic(t *testing.T) {
 	var runErr error
 
 	go func() {
-		report, runErr = eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+		report, runErr = eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 		close(done)
 	}()
 
 	select {
 	case <-done:
 		// Good — completed.
-	case <-time.After(eventWait):
+	case <-time.After(syncfixture.EventWait):
 		require.Fail(t, "RunOnce deadlocked on empty action plan")
 	}
 
@@ -1266,13 +1270,13 @@ func TestRunOnce_DeltaTokenCommittedWithObservations(t *testing.T) {
 	// Seed a known delta token.
 	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
 
-	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 	require.GreaterOrEqual(t, report.Failed, 1, "should have failures")
 
 	// Delta token IS advanced — committed atomically with observations.
 	// Failed items are tracked in remote_state, not by rolling back the token.
-	token := readObservationCursorForTest(t, eng.baseline, ctx, engineTestDriveID)
+	token := syncstoretest.ReadObservationCursorForTest(t, eng.baseline, ctx, syncfixture.EngineTestDriveID)
 	assert.Equal(t, "new-token-after-observation", token,
 		"delta token should advance with observations even when actions fail")
 }
@@ -1285,7 +1289,7 @@ func TestRunOnce_FailedActionsRemainInReportErrorsAfterSummaryLogging(t *testing
 
 	seedBaseline(t, eng.baseline, ctx, nil, "old-token")
 
-	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 	require.GreaterOrEqual(t, report.Failed, 1, "should have failures")
 	require.NotEmpty(t, report.Errors, "report should keep raw errors after summary logging")
@@ -1295,11 +1299,11 @@ func TestRunOnce_FailedActionsRemainInReportErrorsAfterSummaryLogging(t *testing
 func newRunOnceFailingDownloadEngine(t *testing.T) (*testEngine, context.Context) {
 	t.Helper()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				{
 					ID: "f1", Name: "will-fail.txt", ParentID: "root",
@@ -1307,7 +1311,7 @@ func newRunOnceFailingDownloadEngine(t *testing.T) (*testEngine, context.Context
 				},
 			}, "new-token-after-observation"), nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			return 0, fmt.Errorf("simulated network error")
 		},
 	}
@@ -1320,14 +1324,14 @@ func newRunOnceFailingDownloadEngine(t *testing.T) (*testEngine, context.Context
 func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("recovered-download"))
 			return int64(n), err
 		},
@@ -1351,7 +1355,7 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 		`UPDATE observation_state SET next_full_remote_refresh_at = ?`, time.Now().Add(time.Hour).UnixNano())
 	require.NoError(t, err)
 
-	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
+	report, runErr := eng.RunOnce(ctx, syncdomain.SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
 	assert.Equal(t, 1, report.Downloads, "remote mirror drift should be reconciled without a fresh delta event")
 
@@ -1371,10 +1375,10 @@ func TestRunOnce_ReconcilesRemoteMirrorDownloadDriftWithoutFreshDelta(t *testing
 func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -1383,19 +1387,19 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	writeLocalFile(t, syncRoot, "remote-edit.txt", "original remote edit")
-	writeLocalFile(t, syncRoot, "remote-delete.txt", "original remote delete")
+	syncfixture.WriteLocalFile(t, syncRoot, "remote-edit.txt", "original remote edit")
+	syncfixture.WriteLocalFile(t, syncRoot, "remote-delete.txt", "original remote delete")
 
-	editHash := hashContentQuickXor(t, "original remote edit")
-	deleteHash := hashContentQuickXor(t, "original remote delete")
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
+	editHash := syncfixture.HashContentQuickXor(t, "original remote edit")
+	deleteHash := syncfixture.HashContentQuickXor(t, "original remote delete")
+	seedBaseline(t, eng.baseline, ctx, []syncdomain.ActionOutcome{
 		{
-			Action:          ActionDownload,
+			Action:          syncdomain.ActionDownload,
 			Success:         true,
 			Path:            "remote-edit.txt",
 			DriveID:         driveID,
 			ItemID:          "item-edit",
-			ItemType:        ItemTypeFile,
+			ItemType:        syncdomain.ItemTypeFile,
 			LocalHash:       editHash,
 			RemoteHash:      editHash,
 			LocalSize:       int64(len("original remote edit")),
@@ -1407,12 +1411,12 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 			ETag:            "etag-edit-old",
 		},
 		{
-			Action:          ActionDownload,
+			Action:          syncdomain.ActionDownload,
 			Success:         true,
 			Path:            "remote-delete.txt",
 			DriveID:         driveID,
 			ItemID:          "item-delete",
-			ItemType:        ItemTypeFile,
+			ItemType:        syncdomain.ItemTypeFile,
 			LocalHash:       deleteHash,
 			RemoteHash:      deleteHash,
 			LocalSize:       int64(len("original remote delete")),
@@ -1433,9 +1437,9 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 	)
 	require.NoError(t, err, "seed remote mirror edit row")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), RemoteObservationModeDelta))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), syncdomain.RemoteObservationModeDelta))
 
-	report, runErr := eng.RunOnce(ctx, SyncUploadOnly, RunOptions{})
+	report, runErr := eng.RunOnce(ctx, syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
 
 	assert.Zero(t, report.Downloads, "upload-only should not execute remote-to-local repair")
@@ -1456,14 +1460,14 @@ func TestRunOnce_UploadOnly_ReportsDeferredRemoteMirrorDriftWithoutFreshDelta(t 
 func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("recovered-download"))
 			return int64(n), err
 		},
@@ -1472,15 +1476,15 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	writeLocalFile(t, syncRoot, "retry-download.txt", "recovered-download")
-	downloadHash := hashContentQuickXor(t, "recovered-download")
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
-		Action:          ActionDownload,
+	syncfixture.WriteLocalFile(t, syncRoot, "retry-download.txt", "recovered-download")
+	downloadHash := syncfixture.HashContentQuickXor(t, "recovered-download")
+	seedBaseline(t, eng.baseline, ctx, []syncdomain.ActionOutcome{{
+		Action:          syncdomain.ActionDownload,
 		Success:         true,
 		Path:            "retry-download.txt",
 		DriveID:         driveID,
 		ItemID:          "item-dl",
-		ItemType:        ItemTypeFile,
+		ItemType:        syncdomain.ItemTypeFile,
 		LocalHash:       downloadHash,
 		RemoteHash:      downloadHash,
 		LocalSize:       18,
@@ -1501,9 +1505,9 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 	)
 	require.NoError(t, err, "seed remote mirror row")
 	require.NoError(t, eng.baseline.CommitObservationCursor(ctx, driveID, "token-current"))
-	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), RemoteObservationModeDelta))
+	require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, driveID, time.Now(), syncdomain.RemoteObservationModeDelta))
 
-	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
+	report, runErr := eng.RunOnce(ctx, syncdomain.SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
 	assert.Equal(t, 0, report.Downloads, "download-only should not handle two-sided drift")
 
@@ -1521,12 +1525,12 @@ func TestRunOnce_DownloadOnly_DoesNotOverrideLocalDeleteWhenRemoteAlsoChanged(t 
 func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			// The kept folder keeps the remote side from being empty, which
 			// the delete-safety hold would rightly refuse to act on.
-			return deltaPageWithItems([]graph.Item{
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				{ID: "kept", Name: "kept", ParentID: "root", IsFolder: true, DriveID: driveID},
 			}, "token-1"), nil
@@ -1536,15 +1540,15 @@ func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	writeLocalFile(t, syncRoot, "retry-delete.txt", "delete me")
-	deleteHash := hashContentQuickXor(t, "delete me")
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
-		Action:          ActionDownload,
+	syncfixture.WriteLocalFile(t, syncRoot, "retry-delete.txt", "delete me")
+	deleteHash := syncfixture.HashContentQuickXor(t, "delete me")
+	seedBaseline(t, eng.baseline, ctx, []syncdomain.ActionOutcome{{
+		Action:          syncdomain.ActionDownload,
 		Success:         true,
 		Path:            "retry-delete.txt",
 		DriveID:         driveID,
 		ItemID:          "item-del",
-		ItemType:        ItemTypeFile,
+		ItemType:        syncdomain.ItemTypeFile,
 		LocalHash:       deleteHash,
 		RemoteHash:      deleteHash,
 		LocalSize:       9,
@@ -1556,7 +1560,7 @@ func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 		ETag:            "etag-del",
 	}}, "")
 
-	report, runErr := eng.RunOnce(ctx, SyncDownloadOnly, RunOptions{})
+	report, runErr := eng.RunOnce(ctx, syncdomain.SyncDownloadOnly, RunOptions{})
 	require.NoError(t, runErr, "RunOnce")
 	assert.Equal(t, 1, report.LocalDeletes, "remote delete drift should be reconciled without a fresh delta event")
 
@@ -1578,13 +1582,13 @@ func TestRunOnce_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 func TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}}, "token-1"), nil
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}}, "token-1"), nil
 		},
 		// The orphan is confirmed gone by a live lookup.
-		getItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
+		GetItemFn: func(context.Context, driveid.ID, string) (*graph.Item, error) {
 			return nil, graph.ErrNotFound
 		},
 	}
@@ -1596,7 +1600,7 @@ func TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans(t *testing.T) {
 		VALUES ('ghost', 'gone/never-synced.txt', 'file', 'h', 1, 1)`)
 	require.NoError(t, err)
 
-	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{FullReconcile: true})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{FullReconcile: true})
 	require.NoError(t, err)
 	assert.Zero(t, report.Downloads+report.LocalDeletes+report.RemoteDeletes)
 
@@ -1615,28 +1619,28 @@ func TestRunOnce_FullRescanDropsUnsyncedRemoteStateOrphans(t *testing.T) {
 func TestRunOnce_MountRootUndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	dataHash := hashContentQuickXor(t, "data")
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	dataHash := syncfixture.HashContentQuickXor(t, "data")
 	both, failLookup := true, false
 	item := func(id, name string) graph.Item {
 		return graph.Item{ID: id, Name: name, ParentID: "mount-root-root", DriveID: driveID, Size: 4, QuickXorHash: dataHash}
 	}
-	mock := &engineMockClient{
-		folderDeltaFn: func(_ context.Context, _ driveid.ID, _, _ string) ([]graph.Item, string, error) {
+	mock := &syncfixture.EngineMockClient{
+		FolderDeltaFn: func(_ context.Context, _ driveid.ID, _, _ string) ([]graph.Item, string, error) {
 			items := []graph.Item{item("remote-keep", "keep.txt")}
 			if both {
 				items = append(items, item("remote-gone", "gone.txt"))
 			}
 			return items, "scoped-token", nil
 		},
-		getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+		GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
 			if itemID == "remote-gone" && failLookup {
 				return nil, &graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError}
 			}
 			found := item(itemID, strings.TrimPrefix(itemID, "remote-")+".txt")
 			return &found, nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("data"))
 			return int64(n), err
 		},
@@ -1658,26 +1662,26 @@ func TestRunOnce_MountRootUndecidedOrphanPullsTheNextRescanForward(t *testing.T)
 		FolderDelta:            mock,
 		RecursiveLister:        mock,
 		PermChecker:            mock,
-		Logger:                 testLogger(t),
+		Logger:                 syncfixture.TestLogger(t),
 	})
 	require.NoError(t, err)
-	clock := newManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC))
 	installManualClock(eng, clock)
 	t.Cleanup(func() {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	_, err = eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{})
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncDownloadOnly, RunOptions{})
 	require.NoError(t, err)
 
 	both, failLookup = false, true
-	_, err = eng.RunOnce(t.Context(), SyncDownloadOnly, RunOptions{FullReconcile: true})
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncDownloadOnly, RunOptions{FullReconcile: true})
 	require.NoError(t, err)
 
 	state, err := eng.baseline.ReadObservationState(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, state.UndecidedRefreshStreak)
-	assert.LessOrEqual(t, state.NextFullRemoteRefreshAt, clock.Now().Add(FullRefreshAfterFolderDeleteDelay).UnixNano(),
+	assert.LessOrEqual(t, state.NextFullRemoteRefreshAt, clock.Now().Add(syncdomain.FullRefreshAfterFolderDeleteDelay).UnixNano(),
 		"the next complete enumeration is pulled forward")
 	assert.FileExists(t, filepath.Join(syncRoot, "gone.txt"), "an undecided orphan is kept")
 }

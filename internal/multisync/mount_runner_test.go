@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -23,7 +24,7 @@ func TestMountRunner_Run_Success(t *testing.T) {
 	}
 
 	report := &syncengine.Report{
-		Mode:      syncengine.SyncBidirectional,
+		Mode:      syncdomain.SyncBidirectional,
 		Downloads: 3,
 		Uploads:   2,
 	}

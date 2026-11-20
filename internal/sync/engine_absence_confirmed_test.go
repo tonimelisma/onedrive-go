@@ -13,6 +13,9 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // A complete enumeration returned the item, but the converter dropped it (it
@@ -24,14 +27,14 @@ import (
 func TestFullRefresh_ItemTheConverterSkipsIsNotSynthesizedAsDelete(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	modified := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	keepHash := hashContentQuickXor(t, "keep")
-	notesHash := hashContentQuickXor(t, "my notes")
+	keepHash := syncfixture.HashContentQuickXor(t, "keep")
+	notesHash := syncfixture.HashContentQuickXor(t, "my notes")
 	reportAsPackage := false
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, IsFolder: true, DriveID: driveID},
 				{
 					ID: "item-keep", Name: "keep.txt", ParentID: "root", DriveID: driveID, Size: 4,
@@ -47,25 +50,25 @@ func TestFullRefresh_ItemTheConverterSkipsIsNotSynthesizedAsDelete(t *testing.T)
 
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
-	writeLocalFile(t, syncRoot, "keep.txt", "keep")
-	writeLocalFile(t, syncRoot, "notes.txt", "my notes")
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{
+	syncfixture.WriteLocalFile(t, syncRoot, "keep.txt", "keep")
+	syncfixture.WriteLocalFile(t, syncRoot, "notes.txt", "my notes")
+	seedBaseline(t, eng.baseline, ctx, []syncdomain.ActionOutcome{
 		{
-			Action: ActionDownload, Success: true, Path: "keep.txt", DriveID: driveID, ItemID: "item-keep",
-			ItemType: ItemTypeFile, LocalHash: keepHash, RemoteHash: keepHash,
+			Action: syncdomain.ActionDownload, Success: true, Path: "keep.txt", DriveID: driveID, ItemID: "item-keep",
+			ItemType: syncdomain.ItemTypeFile, LocalHash: keepHash, RemoteHash: keepHash,
 			LocalSize: 4, LocalSizeKnown: true, RemoteSize: 4, RemoteSizeKnown: true, ETag: "etag-keep",
 		},
 		{
-			Action: ActionDownload, Success: true, Path: "notes.txt", DriveID: driveID, ItemID: "item-pkg",
-			ItemType: ItemTypeFile, LocalHash: notesHash, RemoteHash: notesHash,
+			Action: syncdomain.ActionDownload, Success: true, Path: "notes.txt", DriveID: driveID, ItemID: "item-pkg",
+			ItemType: syncdomain.ItemTypeFile, LocalHash: notesHash, RemoteHash: notesHash,
 			LocalSize: 8, LocalSizeKnown: true, RemoteSize: 8, RemoteSizeKnown: true, ETag: "etag-pkg",
 		},
 	}, "")
-	_, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
 	reportAsPackage = true
-	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{FullReconcile: true})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{FullReconcile: true})
 	require.NoError(t, err)
 
 	assert.Zero(t, report.LocalDeletes, "an enumerated item is not absent")
@@ -78,13 +81,13 @@ func TestFullRefresh_ItemTheConverterSkipsIsNotSynthesizedAsDelete(t *testing.T)
 func TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	eng := &Engine{
 		driveID:          driveID,
 		remoteRootItemID: "mount-root",
-		logger:           testLogger(t),
-		itemsClient: &engineMockClient{
-			getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+		logger:           syncfixture.TestLogger(t),
+		itemsClient: &syncfixture.EngineMockClient{
+			GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
 				switch itemID {
 				case "skipped":
 					return &graph.Item{ID: itemID, Name: "a.txt", ParentID: "sub", DriveID: driveID}, nil
@@ -111,14 +114,14 @@ func TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing(t *te
 		},
 	}
 	listed := []graph.Item{{ID: "sub", Name: "sub", ParentID: "mount-root", IsFolder: true}}
-	orphans := []RemoteItem{
-		{ObservedItem: ObservedItem{ItemID: "skipped", Path: "sub/a.txt", IsDeleted: true}},
-		{ObservedItem: ObservedItem{ItemID: "moved-out", Path: "b.txt", IsDeleted: true}},
-		{ObservedItem: ObservedItem{ItemID: "trashed", Path: "c.txt", IsDeleted: true}},
-		{ObservedItem: ObservedItem{ItemID: "gone", Path: "d.txt", IsDeleted: true}},
-		{ObservedItem: ObservedItem{ItemID: "unknown", Path: "e.txt", IsDeleted: true}},
-		{ObservedItem: ObservedItem{ItemID: "no-parent", Path: "f.txt", IsDeleted: true}},
-		{ObservedItem: ObservedItem{ItemID: "unresolvable", Path: "g.txt", IsDeleted: true}},
+	orphans := []syncdomain.RemoteItem{
+		{ObservedItem: syncdomain.ObservedItem{ItemID: "skipped", Path: "sub/a.txt", IsDeleted: true}},
+		{ObservedItem: syncdomain.ObservedItem{ItemID: "moved-out", Path: "b.txt", IsDeleted: true}},
+		{ObservedItem: syncdomain.ObservedItem{ItemID: "trashed", Path: "c.txt", IsDeleted: true}},
+		{ObservedItem: syncdomain.ObservedItem{ItemID: "gone", Path: "d.txt", IsDeleted: true}},
+		{ObservedItem: syncdomain.ObservedItem{ItemID: "unknown", Path: "e.txt", IsDeleted: true}},
+		{ObservedItem: syncdomain.ObservedItem{ItemID: "no-parent", Path: "f.txt", IsDeleted: true}},
+		{ObservedItem: syncdomain.ObservedItem{ItemID: "unresolvable", Path: "g.txt", IsDeleted: true}},
 	}
 
 	confirmed, _ := eng.confirmMountRootOrphans(t.Context(), listed, orphans)
@@ -143,7 +146,7 @@ func TestValidateMountRootListingParents_ChildUnderUnlistedFolderAbortsListing(t
 
 	bad := append(append([]graph.Item(nil), ok...), graph.Item{ID: "x", Name: "x.txt", ParentID: "some-other-folder"})
 	err := validateMountRootListingParents(bad, "mount-root")
-	require.ErrorIs(t, err, ErrRemoteObservationIncomplete)
+	require.ErrorIs(t, err, syncdomain.ErrRemoteObservationIncomplete)
 }
 
 // Validates: R-2.4.3, R-6.2.2
@@ -153,56 +156,56 @@ func TestApplyShortcutRootCompleteOmission_ConfirmedLiveBindingStaysActive(t *te
 	cases := []struct {
 		name  string
 		live  func(itemID string) (*graph.Item, error)
-		state ShortcutRootState
+		state syncshortcut.ShortcutRootState
 	}{
 		{
 			name: "still a live shortcut to the same folder",
 			live: func(itemID string) (*graph.Item, error) {
 				return &graph.Item{ID: itemID, Name: "Docs", RemoteDriveID: "drive-1", RemoteItemID: "target-1", RemoteIsFolder: true}, nil
 			},
-			state: ShortcutRootStateActive,
+			state: syncshortcut.ShortcutRootStateActive,
 		},
 		{
 			name:  "gone",
 			live:  func(string) (*graph.Item, error) { return nil, graph.ErrNotFound },
-			state: ShortcutRootStateRemovedFinalDrain,
+			state: syncshortcut.ShortcutRootStateRemovedFinalDrain,
 		},
 		{
 			name: "now points at another folder",
 			live: func(itemID string) (*graph.Item, error) {
 				return &graph.Item{ID: itemID, Name: "Docs", RemoteDriveID: "drive-1", RemoteItemID: "target-2", RemoteIsFolder: true}, nil
 			},
-			state: ShortcutRootStateRemovedFinalDrain,
+			state: syncshortcut.ShortcutRootStateRemovedFinalDrain,
 		},
 		{
 			name:  "lookup failed",
 			live:  func(string) (*graph.Item, error) { return nil, assert.AnError },
-			state: ShortcutRootStateTargetUnavailable,
+			state: syncshortcut.ShortcutRootStateTargetUnavailable,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			eng, _ := newTestEngine(t, &engineMockClient{
-				getItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{
+				GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
 					return tc.live(itemID)
 				},
 			})
-			require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []ShortcutRootRecord{{
-				NamespaceID:       shortcutNamespaceTestID,
+			require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
+				NamespaceID:       syncfixture.ShortcutNamespaceTestID,
 				BindingItemID:     "binding-1",
 				RelativeLocalPath: "Shared/Docs",
 				LocalAlias:        "Docs",
 				RemoteDriveID:     driveid.New("drive-1"),
 				RemoteItemID:      "target-1",
 				RemoteIsFolder:    true,
-				State:             ShortcutRootStateActive,
+				State:             syncshortcut.ShortcutRootStateActive,
 				ProtectedPaths:    []string{"Shared/Docs"},
 			}}))
 
 			// A complete enumeration that omitted the placeholder.
-			topology := ShortcutTopologyBatch{NamespaceID: shortcutNamespaceTestID, Kind: ShortcutTopologyObservationComplete}
+			topology := syncshortcut.ShortcutTopologyBatch{NamespaceID: syncfixture.ShortcutNamespaceTestID, Kind: syncshortcut.ShortcutTopologyObservationComplete}
 			require.NoError(t, eng.confirmShortcutCompleteOmissions(t.Context(), &topology))
 			_, err := eng.baseline.ApplyShortcutTopology(t.Context(), topology)
 			require.NoError(t, err)
@@ -220,7 +223,7 @@ func TestFullRefresh_OrphanStillLiveOnOneDriveIsNotDeleted(t *testing.T) {
 	t.Parallel()
 
 	const fileID = "item-a"
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	remote.addFile(t, fileID, "root", "a.txt", "alpha\n")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
@@ -233,8 +236,8 @@ func TestFullRefresh_OrphanStillLiveOnOneDriveIsNotDeleted(t *testing.T) {
 	delete(remote.items, fileID)
 	remote.mu.Unlock()
 	client := remote.client(t)
-	baseGetItem := client.getItemFn
-	client.getItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
+	baseGetItem := client.GetItemFn
+	client.GetItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
 		if itemID == fileID {
 			copied := *omitted
 			return &copied, nil
@@ -244,7 +247,7 @@ func TestFullRefresh_OrphanStillLiveOnOneDriveIsNotDeleted(t *testing.T) {
 	eng.fetcher = client
 	eng.itemsClient = client
 
-	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{FullReconcile: true})
 	require.NoError(t, err)
 
 	assert.FileExists(t, filepath.Join(syncRoot, "a.txt"), "an item a live lookup still finds is not deleted")
@@ -262,13 +265,13 @@ func TestFullRefresh_OrphanStillLiveOnOneDriveIsNotDeleted(t *testing.T) {
 func TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	const fileID = "item-a"
 	remote.addFile(t, fileID, "root", "a.txt", "file\n")
 	client := remote.client(t)
-	getItem := client.getItemFn
+	getItem := client.GetItemFn
 	failLookup := false
-	client.getItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
+	client.GetItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
 		if failLookup && itemID == fileID {
 			return nil, &graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError}
 		}
@@ -284,11 +287,11 @@ func TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
 	remote.mkdirAt(t, "a.txt")
 	remote.putFileAt(t, "a.txt/inside.txt", "inside\n")
 	failLookup = true
-	_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
+	_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{FullReconcile: true})
 	require.NoError(t, err)
 	failLookup = false
 
-	clock.advance(FullRefreshAfterFolderDeleteDelay + time.Minute)
+	clock.advance(syncdomain.FullRefreshAfterFolderDeleteDelay + time.Minute)
 	for range 2 {
 		runScenarioPass(t, h.eng)
 	}
@@ -304,19 +307,19 @@ func TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
 // while the orphan stays undecided (doubling from 15 minutes towards the
 // daily cadence), and once a refresh decides it the normal cadence returns.
 func TestFullRefresh_PermanentlyUndecidedOrphanBacksOff(t *testing.T) {
-	skipInShort(t)
+	syncfixture.SkipInShort(t)
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	const fileID = "item-a"
 	remote.addFile(t, fileID, "root", "a.txt", "file\n")
 	// Other content, so the one delete is not an emptied side the
 	// delete-safety hold would keep for confirmation.
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
 	client := remote.client(t)
-	getItem := client.getItemFn
+	getItem := client.GetItemFn
 	failLookup := false
-	client.getItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
+	client.GetItemFn = func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {
 		if failLookup && itemID == fileID {
 			return nil, &graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError}
 		}
@@ -329,7 +332,7 @@ func TestFullRefresh_PermanentlyUndecidedOrphanBacksOff(t *testing.T) {
 
 	remote.deleteAt(t, "a.txt")
 	failLookup = true
-	_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{FullReconcile: true})
+	_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{FullReconcile: true})
 	require.NoError(t, err)
 
 	// Passes every 16 minutes: refreshes are due 15, 30, 60, 120 and 240
@@ -338,12 +341,12 @@ func TestFullRefresh_PermanentlyUndecidedOrphanBacksOff(t *testing.T) {
 	// at most three; without the backoff, one every pass.
 	before := remote.fullDeltaCount()
 	passes, minRefreshes, maxRefreshes := 24, 3, 5
-	if raceDetectorEnabled {
+	if syncfixture.RaceDetectorEnabled {
 		passes, minRefreshes, maxRefreshes = 6, 2, 3
 	}
 	for range passes {
-		clock.advance(FullRefreshAfterFolderDeleteDelay + time.Minute)
-		_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		clock.advance(syncdomain.FullRefreshAfterFolderDeleteDelay + time.Minute)
+		_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 	}
 	backedOff := remote.fullDeltaCount() - before
@@ -354,15 +357,15 @@ func TestFullRefresh_PermanentlyUndecidedOrphanBacksOff(t *testing.T) {
 	// delay on) decides the orphan, and the daily cadence returns.
 	failLookup = false
 	for range 2 * passes {
-		clock.advance(FullRefreshAfterFolderDeleteDelay + time.Minute)
-		_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		clock.advance(syncdomain.FullRefreshAfterFolderDeleteDelay + time.Minute)
+		_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 	}
 	assert.NoFileExists(t, filepath.Join(h.syncRoot, "a.txt"), "the decided orphan is applied")
 	settled := remote.fullDeltaCount()
 	for range passes {
-		clock.advance(FullRefreshAfterFolderDeleteDelay + time.Minute)
-		_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		clock.advance(syncdomain.FullRefreshAfterFolderDeleteDelay + time.Minute)
+		_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 	}
 	assert.Equal(t, settled, remote.fullDeltaCount(), "no early refresh once nothing is undecided")

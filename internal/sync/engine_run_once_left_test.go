@@ -16,6 +16,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-6.6.19, R-6.8.24
@@ -29,19 +33,19 @@ func TestRunOnce_ReportCountsTheWorkAThrottleLeftForTheNextSync(t *testing.T) {
 	t.Parallel()
 
 	const files = 40
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
-	clock := newManualClock(time.Date(2026, 11, 2, 4, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 2, 4, 0, 0, 0, time.UTC))
 	const window = 2 * time.Second
 	limiter := newThrottleWindowClient(clock.Now, 10, window)
 	eng, syncRoot := newTestEngine(t, limiter.wrap(remote.client(t)))
 	eng.transferWorkers = 4
 	installManualClockForTestEngine(eng, clock)
 	for i := range files {
-		writeLocalFile(t, syncRoot, fmt.Sprintf("bulk/file-%02d.txt", i), fmt.Sprintf("content %d\n", i))
+		syncfixture.WriteLocalFile(t, syncRoot, fmt.Sprintf("bulk/file-%02d.txt", i), fmt.Sprintf("content %d\n", i))
 	}
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	planned := report.FolderCreates + report.Uploads
 	require.Less(t, report.Succeeded, planned, "the window of 10 requests cannot carry the whole plan")
@@ -51,12 +55,12 @@ func TestRunOnce_ReportCountsTheWorkAThrottleLeftForTheNextSync(t *testing.T) {
 
 	for i := 0; i < 40 && report.LeftForNextSync+report.Failed > 0; i++ {
 		clock.Advance(window)
-		report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		report, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 	}
 	assert.Zero(t, report.LeftForNextSync, "a converged pass leaves nothing")
 	assert.Equal(t, files, remote.uploads, "every upload completes exactly once")
-	quiet, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	quiet, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Zero(t, quiet.LeftForNextSync)
 	assert.Zero(t, quiet.Succeeded)
@@ -75,9 +79,9 @@ func TestRunOnce_ReportCountsTheWorkAThrottleLeftForTheNextSync(t *testing.T) {
 func TestRunOnce_ReportCountsUnresolvedWork(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	client := remote.client(t)
-	client.createFolderFn = func(context.Context, driveid.ID, string, string) (*graph.Item, error) {
+	client.CreateFolderFn = func(context.Context, driveid.ID, string, string) (*graph.Item, error) {
 		return nil, &graph.GraphError{
 			StatusCode: http.StatusBadRequest,
 			Message:    "The specified file or folder name is too long.",
@@ -85,20 +89,20 @@ func TestRunOnce_ReportCountsUnresolvedWork(t *testing.T) {
 		}
 	}
 	eng, syncRoot := newTestEngine(t, client)
-	clock := newManualClock(time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "deep"), 0o750))
-	writeLocalFile(t, syncRoot, "CON", "a name OneDrive reserves")
-	writeLocalFile(t, syncRoot, "waiting.txt", "failed three times before")
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+	syncfixture.WriteLocalFile(t, syncRoot, "CON", "a name OneDrive reserves")
+	syncfixture.WriteLocalFile(t, syncRoot, "waiting.txt", "failed three times before")
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 		Path:         "waiting.txt",
-		ActionType:   ActionUpload,
-		AttemptCount: unresolvedTestRetryingAttempts,
+		ActionType:   syncdomain.ActionUpload,
+		AttemptCount: syncfixture.UnresolvedTestRetryingAttempts,
 		NextRetryAt:  clock.Now().Add(time.Hour).UnixNano(),
 	}))
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Failed, "the folder OneDrive refused: %v", report.Errors)
 	assert.Equal(t, 1, report.LeftForNextSync, "waiting.txt is held until its retry is due")
@@ -125,25 +129,25 @@ func TestRunOnce_ReportCountsUnresolvedWork(t *testing.T) {
 func TestRunOnce_RetryRowsThePlanDoesNotActOnAreGone(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	eng, _ := newTestEngine(t, remote.client(t))
 	ctx := t.Context()
 	future := time.Now().Add(time.Hour).UnixNano()
-	scope := SKQuotaOwn()
-	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &BlockScope{
+	scope := syncdomain.SKQuotaOwn()
+	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &syncdomain.BlockScope{
 		Key:           scope,
 		TrialInterval: time.Hour,
 		NextTrialAt:   time.Now().Add(time.Hour),
 	}))
-	for _, row := range []*RetryWorkRow{
-		{Path: "gone/retrying.txt", ActionType: ActionUpload, AttemptCount: unresolvedTestRetryingAttempts, NextRetryAt: future},
-		{Path: "gone/blocked.txt", ActionType: ActionUpload, ScopeKey: scope, Blocked: true, AttemptCount: 1},
-		{Path: "gone/deep", ActionType: ActionFolderCreate, ConditionType: IssuePathTooLong, AttemptCount: 1, NextRetryAt: future},
+	for _, row := range []*syncdomain.RetryWorkRow{
+		{Path: "gone/retrying.txt", ActionType: syncdomain.ActionUpload, AttemptCount: syncfixture.UnresolvedTestRetryingAttempts, NextRetryAt: future},
+		{Path: "gone/blocked.txt", ActionType: syncdomain.ActionUpload, ScopeKey: scope, Blocked: true, AttemptCount: 1},
+		{Path: "gone/deep", ActionType: syncdomain.ActionFolderCreate, ConditionType: syncdomain.IssuePathTooLong, AttemptCount: 1, NextRetryAt: future},
 	} {
 		require.NoError(t, eng.baseline.UpsertRetryWork(ctx, row))
 	}
 
-	report, err := eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Zero(t, report.Failed+report.LeftForNextSync, "%+v", report)
 
@@ -163,11 +167,11 @@ func TestRunOnce_RetryRowsThePlanDoesNotActOnAreGone(t *testing.T) {
 func TestRunOnce_ALastStoreReadThatFailsReturnsTheReportAndTheError(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	eng.oneShotPassLimit = 1
-	writeLocalFile(t, syncRoot, "a.txt", "content")
-	db := requireStoreTestRawDB(t, eng.baseline)
+	syncfixture.WriteLocalFile(t, syncRoot, "a.txt", "content")
+	db := syncstoretest.RequireStoreTestRawDB(t, eng.baseline)
 	var damageErr error
 	eng.SetActivityHook(func(Activity) {
 		// An issue type no member has: the snapshot read refuses the row.
@@ -175,7 +179,7 @@ func TestRunOnce_ALastStoreReadThatFailsReturnsTheReportAndTheError(t *testing.T
 			`INSERT INTO observation_issues (path, issue_type, scope_key) VALUES ('x.txt', 'not_an_issue_type', '')`)
 	})
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, damageErr)
 	require.ErrorContains(t, err, "reading the issues the run left")
 	require.NotNil(t, report, "the work the run did is still reported")
@@ -192,17 +196,17 @@ func TestExecutePreparedPlan_AMismatchedPlanFailsEveryActionLoudly(t *testing.T)
 
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError}))
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	report := &Report{}
 	runtime := &runtimePlan{
-		Plan: &ActionPlan{
-			Actions: []Action{{Type: ActionUpload, Path: "a.txt"}, {Type: ActionUpload, Path: "b.txt"}},
+		Plan: &syncdomain.ActionPlan{
+			Actions: []syncdomain.Action{{Type: syncdomain.ActionUpload, Path: "a.txt"}, {Type: syncdomain.ActionUpload, Path: "b.txt"}},
 			Deps:    [][]int{nil},
 		},
 		Report: report,
 	}
 
-	require.NoError(t, newOneShotRunner(eng.Engine).executePreparedPlan(t.Context(), runtime, &Baseline{}))
+	require.NoError(t, newOneShotRunner(eng.Engine).executePreparedPlan(t.Context(), runtime, &syncdomain.Baseline{}))
 	assert.Equal(t, len(runtime.Plan.Actions), report.Failed)
 	assert.Equal(t, LeftWork{Failed: len(runtime.Plan.Actions)}, report.LeftWork(),
 		"every action of the plan is left as failed, none kept for retry")
@@ -234,7 +238,7 @@ func TestRunOnce_FollowUpWorkTheRunEndsOnIsLeftForTheNextSync(t *testing.T) {
 
 			eng, syncRoot := newRemoteSwapTestEngine(t)
 			eng.oneShotPassLimit = tc.limit
-			report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 			require.NoError(t, err)
 			require.Zero(t, report.Failed, "errors: %v", report.Errors)
 			if tc.wantLeft {
@@ -257,7 +261,7 @@ func TestRunOnce_UploadOnlyLeavesNoFollowUpForMovesTheModeHoldsBack(t *testing.T
 	t.Parallel()
 
 	eng, syncRoot := newRemoteSwapTestEngine(t)
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Positive(t, report.DeferredByMode.Moves, "the local moves are held back by the mode: %+v", report)
 	assert.Zero(t, report.LeftForNextSync, "%+v", report)
@@ -270,7 +274,7 @@ func TestRunOnce_UploadOnlyLeavesNoFollowUpForMovesTheModeHoldsBack(t *testing.T
 func newRemoteSwapTestEngine(t *testing.T) (*testEngine, string) {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-a", "root", "a.txt", "A\n")
 	remote.addFile(t, "item-b", "root", "b.txt", "B\n")
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -291,10 +295,10 @@ func newRemoteSwapTestEngine(t *testing.T) (*testEngine, string) {
 func TestPassWithoutActions_KeepsThePlansFollowUp(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &engineMockClient{})
-	followUp := PlanFollowUp{Dropped: 2, Unfinished: 2}
-	pass := eng.passWithoutActions(eng.nowFunc(), SyncBidirectional, RunOptions{}, &runtimePlan{
-		Plan:   &ActionPlan{FollowUp: followUp},
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
+	followUp := syncdomain.PlanFollowUp{Dropped: 2, Unfinished: 2}
+	pass := eng.passWithoutActions(eng.nowFunc(), syncdomain.SyncBidirectional, RunOptions{}, &runtimePlan{
+		Plan:   &syncdomain.ActionPlan{FollowUp: followUp},
 		Report: &Report{},
 	})
 
@@ -313,21 +317,21 @@ func TestPassWithoutActions_KeepsThePlansFollowUp(t *testing.T) {
 func TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync(t *testing.T) {
 	t.Parallel()
 
-	logs := &syncLockedBuffer{}
+	logs := &syncfixture.SyncLockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
-	eng, _ := newTestEngineWithLogger(t, &engineMockClient{}, logger)
-	file := &PathView{Baseline: &BaselineEntry{ItemType: ItemTypeFile}}
-	cycle := []Action{
-		{Type: ActionLocalMove, OldPath: "a.txt", Path: "b.txt", View: file},
-		{Type: ActionLocalMove, OldPath: "b.txt", Path: "a.txt", View: file},
+	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
+	file := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFile}}
+	cycle := []syncdomain.Action{
+		{Type: syncdomain.ActionLocalMove, OldPath: "a.txt", Path: "b.txt", View: file},
+		{Type: syncdomain.ActionLocalMove, OldPath: "b.txt", Path: "a.txt", View: file},
 	}
-	require.Error(t, DependencyCycleForTest(cycle), "the fixture must contain a cycle")
+	require.Error(t, syncplan.DependencyCycleForTest(cycle), "the fixture must contain a cycle")
 
-	plan, err := NewPlanner(logger).PlanActionsForTest(cycle, SyncBidirectional)
+	plan, err := syncplan.NewPlanner(logger).PlanActionsForTest(cycle, syncdomain.SyncBidirectional)
 	require.NoError(t, err)
 	require.Empty(t, plan.Actions, "both moves are dropped")
 
-	pass := eng.passWithoutActions(eng.nowFunc(), SyncBidirectional, RunOptions{}, &runtimePlan{
+	pass := eng.passWithoutActions(eng.nowFunc(), syncdomain.SyncBidirectional, RunOptions{}, &runtimePlan{
 		Plan:   plan,
 		Report: &Report{},
 	})
@@ -346,10 +350,10 @@ func TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync(t *testi
 func TestPlanFollowUp_LeftWhenTheRunEnds(t *testing.T) {
 	t.Parallel()
 
-	followUp := PlanFollowUp{Renames: 3, Deferred: 2, Dropped: 2, Unfinished: 1}
+	followUp := syncdomain.PlanFollowUp{Renames: 3, Deferred: 2, Dropped: 2, Unfinished: 1}
 	assert.Equal(t, 1, followUp.LeftWhenTheRunEnds(false))
 	assert.Equal(t, 4, followUp.LeftWhenTheRunEnds(true))
-	assert.Zero(t, PlanFollowUp{}.LeftWhenTheRunEnds(true))
+	assert.Zero(t, syncdomain.PlanFollowUp{}.LeftWhenTheRunEnds(true))
 }
 
 // Validates: R-6.6.28
@@ -359,18 +363,18 @@ func TestPlanFollowUp_LeftWhenTheRunEnds(t *testing.T) {
 func TestRunOnce_DryRunLeavesUnresolvedZero(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	eng, syncRoot := newTestEngine(t, remote.client(t))
-	writeLocalFile(t, syncRoot, "waiting.txt", "failed three times before")
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+	syncfixture.WriteLocalFile(t, syncRoot, "waiting.txt", "failed three times before")
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 		Path:         "waiting.txt",
-		ActionType:   ActionUpload,
-		AttemptCount: unresolvedTestRetryingAttempts,
+		ActionType:   syncdomain.ActionUpload,
+		AttemptCount: syncfixture.UnresolvedTestRetryingAttempts,
 		NextRetryAt:  time.Now().Add(time.Hour).UnixNano(),
 	}))
-	seedObservationIssueForTest(t, eng.baseline, "CON", IssueInvalidFilename, ScopeKey{})
+	syncstoretest.SeedObservationIssueForTest(t, eng.baseline, "CON", syncdomain.IssueInvalidFilename, syncdomain.ScopeKey{})
 
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{DryRun: true})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{DryRun: true})
 	require.NoError(t, err)
 	assert.True(t, report.DryRun)
 	assert.Zero(t, report.UnsyncedIssues)

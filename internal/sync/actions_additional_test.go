@@ -4,26 +4,28 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.1.3, R-2.1.4
 func TestDeferredCountsAddActionAndTotal(t *testing.T) {
 	t.Parallel()
 
-	var counts DeferredCounts
+	var counts syncdomain.DeferredCounts
 
 	counts.AddAction(nil)
-	counts.AddAction(&Action{Type: ActionCleanup})
-	counts.AddAction(&Action{Type: ActionBaselineUpdate})
-	counts.AddAction(&Action{Type: ActionFolderCreate})
-	counts.AddAction(&Action{Type: ActionLocalMove})
-	counts.AddAction(&Action{Type: ActionRemoteMove})
-	counts.AddAction(&Action{Type: ActionDownload})
-	counts.AddAction(&Action{Type: ActionUpload})
-	counts.AddAction(&Action{Type: ActionLocalDelete})
-	counts.AddAction(&Action{Type: ActionRemoteDelete})
+	counts.AddAction(&syncdomain.Action{Type: syncdomain.ActionCleanup})
+	counts.AddAction(&syncdomain.Action{Type: syncdomain.ActionBaselineUpdate})
+	counts.AddAction(&syncdomain.Action{Type: syncdomain.ActionFolderCreate})
+	counts.AddAction(&syncdomain.Action{Type: syncdomain.ActionLocalMove})
+	counts.AddAction(&syncdomain.Action{Type: syncdomain.ActionRemoteMove})
+	counts.AddAction(&syncdomain.Action{Type: syncdomain.ActionDownload})
+	counts.AddAction(&syncdomain.Action{Type: syncdomain.ActionUpload})
+	counts.AddAction(&syncdomain.Action{Type: syncdomain.ActionLocalDelete})
+	counts.AddAction(&syncdomain.Action{Type: syncdomain.ActionRemoteDelete})
 
-	assert.Equal(t, DeferredCounts{
+	assert.Equal(t, syncdomain.DeferredCounts{
 		FolderCreates: 1,
 		Moves:         2,
 		Downloads:     1,

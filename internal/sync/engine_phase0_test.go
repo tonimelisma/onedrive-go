@@ -16,24 +16,29 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func newBootstrapWatchPipelineForTest(
 	t *testing.T,
 	eng *testEngine,
 	ctx context.Context,
-	mode SyncMode,
+	mode syncdomain.SyncMode,
 	workers int,
 ) *watchPipeline {
 	t.Helper()
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.scopes.state = NewScopeState(eng.nowFunc, eng.logger)
+	rt.scopes.state = syncexec.NewScopeState(eng.nowFunc, eng.logger)
 	bl, err := rt.runStartupStage(ctx)
 	require.NoError(t, err)
 
-	pool := NewWorkerPool(eng.execCfg, rt.sched.dispatchCh, eng.baseline, eng.logger, 1024)
+	pool := syncexec.NewWorkerPool(eng.execCfg, rt.sched.dispatchCh, eng.baseline, eng.logger, 1024)
 	pool.Start(ctx, workers)
 	t.Cleanup(pool.Stop)
 
@@ -54,8 +59,8 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 	var uploadStartedOnce sync.Once
 	allowUpload := make(chan struct{})
 
-	mock := &engineMockClient{
-		uploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+	mock := &syncfixture.EngineMockClient{
+		UploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			uploadStartedOnce.Do(func() {
 				close(uploadStarted)
 			})
@@ -70,38 +75,38 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	writeLocalFile(t, syncRoot, "local.txt", "bootstrap upload")
+	syncfixture.WriteLocalFile(t, syncRoot, "local.txt", "bootstrap upload")
 	recorder := attachDebugEventRecorder(eng)
-	eng.localWatcherFactory = func() (FsWatcher, error) {
-		return newEnospcWatcher(1 << 20), nil
+	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+		return syncfixture.NewEnospcWatcher(1 << 20), nil
 	}
 
-	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
-	receiveWithin(t, uploadStarted, "the bootstrap upload to start before the observers")
-	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
+	syncfixture.ReceiveWithin(t, uploadStarted, "the bootstrap upload to start before the observers")
+	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}), "bootstrap must not quiesce while the bootstrap upload is blocked")
-	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}), "local observer must not start before bootstrap quiesces")
 
 	close(allowUpload)
 
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}, "local observer started")
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 
-	recorder.requireOrderedSubsequence(t, []func(EngineDebugEvent) bool{
-		func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventBootstrapQuiesced
+	recorder.RequireOrderedSubsequence(t, []func(syncdomain.EngineDebugEvent) bool{
+		func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 		},
-		func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+		func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 		},
 	}, "bootstrap quiescence must precede local observer startup")
 }
@@ -114,13 +119,13 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 	downloadStarted := make(chan struct{})
 	var downloadStartedOnce sync.Once
 	allowDownload := make(chan struct{})
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			call := deltaCalls.Add(1)
 			if call == 1 {
-				return deltaPageWithItems([]graph.Item{
+				return syncfixture.DeltaPageWithItems([]graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveID},
 					{
 						ID:           "bootstrap-item",
@@ -133,11 +138,11 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 				}, "bootstrap-token"), nil
 			}
 
-			return deltaPageWithItems([]graph.Item{
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "steady-state-token"), nil
 		},
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			downloadStartedOnce.Do(func() {
 				close(downloadStarted)
 			})
@@ -150,38 +155,38 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 	eng, _ := newTestEngine(t, mock)
 	recorder := attachDebugEventRecorder(eng)
 
-	cancel, done := runWatchInBackground(t, eng, SyncDownloadOnly, WatchOptions{
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncDownloadOnly, WatchOptions{
 		PollInterval: 20 * time.Millisecond,
 		Debounce:     5 * time.Millisecond,
 	})
-	receiveWithin(t, downloadStarted, "the bootstrap download to start before the remote observer")
+	syncfixture.ReceiveWithin(t, downloadStarted, "the bootstrap download to start before the remote observer")
 
 	assert.Equal(t, int32(1), deltaCalls.Load(),
 		"remote observer must not start polling until bootstrap has drained")
-	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}), "bootstrap must not quiesce while the bootstrap download is blocked")
-	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverRemote
+	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
 	}), "remote observer must not start before bootstrap quiesces")
 
 	close(allowDownload)
 
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverRemote
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
 	}, "remote observer started")
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 
-	recorder.requireOrderedSubsequence(t, []func(EngineDebugEvent) bool{
-		func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventBootstrapQuiesced
+	recorder.RequireOrderedSubsequence(t, []func(syncdomain.EngineDebugEvent) bool{
+		func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 		},
-		func(event EngineDebugEvent) bool {
-			return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverRemote
+		func(event syncdomain.EngineDebugEvent) bool {
+			return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
 		},
 	}, "bootstrap quiescence must precede remote observer startup")
 }
@@ -190,63 +195,63 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 func TestPhase0_RunWatch_BootstrapQuiescesWithFutureHeldRetryWork(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	var uploadCalls atomic.Int32
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-future-retry"), nil
 		},
-		uploadFn: func(_ context.Context, _ driveid.ID, _ string, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+		UploadFn: func(_ context.Context, _ driveid.ID, _ string, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			uploadCalls.Add(1)
 			return &graph.Item{ID: "unexpected-upload"}, nil
 		},
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	writeLocalFile(t, syncRoot, "retry-later.txt", "retry me later")
+	syncfixture.WriteLocalFile(t, syncRoot, "retry-later.txt", "retry me later")
 	now := eng.nowFunc()
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 		Path:         "retry-later.txt",
-		ActionType:   ActionUpload,
+		ActionType:   syncdomain.ActionUpload,
 		AttemptCount: 1,
 		NextRetryAt:  now.Add(time.Hour).UnixNano(),
 	}))
 
 	recorder := attachDebugEventRecorder(eng)
-	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}, "local observer started")
 
 	assert.Equal(t, int32(0), uploadCalls.Load(), "future-held retry work must not dispatch during bootstrap")
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 }
 
 // Validates: R-2.1.2, R-2.10.5
 func TestPhase0_RunWatch_DueTrialDrainsDuringBootstrapBeforeObserversStart(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	uploadStarted := make(chan struct{})
 	var uploadStartedOnce sync.Once
 	allowUpload := make(chan struct{})
-	scopeKey := SKService()
+	scopeKey := syncdomain.SKService()
 
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-due-trial"), nil
 		},
-		uploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+		UploadFn: func(_ context.Context, _ driveid.ID, _ string, name string, _ io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			uploadStartedOnce.Do(func() {
 				close(uploadStarted)
 			})
@@ -261,43 +266,43 @@ func TestPhase0_RunWatch_DueTrialDrainsDuringBootstrapBeforeObserversStart(t *te
 	}
 
 	eng, syncRoot := newTestEngine(t, mock)
-	writeLocalFile(t, syncRoot, "trial-held.txt", "trial upload")
+	syncfixture.WriteLocalFile(t, syncRoot, "trial-held.txt", "trial upload")
 	now := eng.nowFunc()
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &RetryWorkRow{
+	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 		Path:         "trial-held.txt",
-		ActionType:   ActionUpload,
+		ActionType:   syncdomain.ActionUpload,
 		ScopeKey:     scopeKey,
 		Blocked:      true,
 		AttemptCount: 1,
 	}))
-	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &BlockScope{
+	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &syncdomain.BlockScope{
 		Key:           scopeKey,
 		TrialInterval: 10 * time.Second,
 		NextTrialAt:   now.Add(-time.Second),
 	}))
 
 	recorder := attachDebugEventRecorder(eng)
-	cancel, done := runWatchInBackground(t, eng, SyncUploadOnly, quietWatchOptions())
+	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 
-	receiveWithin(t, uploadStarted, "the due trial to dispatch bootstrap work before the observers start")
+	syncfixture.ReceiveWithin(t, uploadStarted, "the due trial to dispatch bootstrap work before the observers start")
 
-	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}), "bootstrap must not quiesce while the due trial action is still running")
-	assert.False(t, recorder.findEvent(func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}), "observers must not start before the due trial action drains")
 
 	close(allowUpload)
 
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventBootstrapQuiesced
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
-	recorder.waitUntilSeen(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventObserverStarted && event.Observer == EngineDebugObserverLocal
+	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
 	}, "local observer started")
 
-	stopWatch(t, cancel, done)
+	syncfixture.StopWatch(t, cancel, done)
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +312,7 @@ func TestPhase0_RunWatch_DueTrialDrainsDuringBootstrapBeforeObserversStart(t *te
 func TestWaitForQuiescence_EmptyGraph(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
+	mock := &syncfixture.EngineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
@@ -320,15 +325,15 @@ func TestWaitForQuiescence_EmptyGraph(t *testing.T) {
 func TestWaitForQuiescence_ContextCancel(t *testing.T) {
 	t.Parallel()
 
-	mock := &engineMockClient{}
+	mock := &syncfixture.EngineMockClient{}
 	eng, _ := newTestEngine(t, mock)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "stuck.txt",
-		DriveID: driveid.New(engineTestDriveID),
+		DriveID: driveid.New(syncfixture.EngineTestDriveID),
 		ItemID:  "stuck-item",
 	}, 1, nil)
 
@@ -342,10 +347,10 @@ func TestWaitForQuiescence_ContextCancel(t *testing.T) {
 func TestBootstrapSync_NoChanges(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 			}, "token-1"), nil
 		},
@@ -353,9 +358,9 @@ func TestBootstrapSync_NoChanges(t *testing.T) {
 
 	eng, _ := newTestEngine(t, mock)
 	ctx := t.Context()
-	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, SyncBidirectional, 1)
+	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, syncdomain.SyncBidirectional, 1)
 
-	err := testWatchRuntime(t, eng).bootstrapSync(ctx, SyncBidirectional, pipe)
+	err := testWatchRuntime(t, eng).bootstrapSync(ctx, syncdomain.SyncBidirectional, pipe)
 	require.NoError(t, err)
 }
 
@@ -363,10 +368,10 @@ func TestBootstrapSync_NoChanges(t *testing.T) {
 func TestBootstrapSync_WithChanges(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				{
 					ID:           "item-1",
@@ -374,7 +379,7 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 					DriveID:      driveID,
 					ParentID:     "root",
 					Size:         int64(len("downloaded-content")),
-					QuickXorHash: testQuickXor("downloaded-content"),
+					QuickXorHash: syncfixture.TestQuickXor("downloaded-content"),
 				},
 			}, "token-2"), nil
 		},
@@ -382,10 +387,10 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
-	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, SyncDownloadOnly, 2)
+	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, syncdomain.SyncDownloadOnly, 2)
 
-	err := runWithin(t, ctx, "bootstrap to finish the download", func(runCtx context.Context) error {
-		return testWatchRuntime(t, eng).bootstrapSync(runCtx, SyncDownloadOnly, pipe)
+	err := syncfixture.RunWithin(t, ctx, "bootstrap to finish the download", func(runCtx context.Context) error {
+		return testWatchRuntime(t, eng).bootstrapSync(runCtx, syncdomain.SyncDownloadOnly, pipe)
 	})
 	require.NoError(t, err)
 
@@ -399,12 +404,12 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 func TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			// The kept folder keeps the remote side from being empty, which
 			// the delete-safety hold would rightly refuse to act on.
-			return deltaPageWithItems([]graph.Item{
+			return syncfixture.DeltaPageWithItems([]graph.Item{
 				{ID: "root", IsRoot: true, DriveID: driveID},
 				{ID: "kept", Name: "kept", ParentID: "root", IsFolder: true, DriveID: driveID},
 			}, "token-1"), nil
@@ -414,15 +419,15 @@ func TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T
 	eng, syncRoot := newTestEngine(t, mock)
 	ctx := t.Context()
 
-	writeLocalFile(t, syncRoot, "gone.txt", "delete me")
-	deleteHash := hashContentQuickXor(t, "delete me")
-	seedBaseline(t, eng.baseline, ctx, []ActionOutcome{{
-		Action:          ActionDownload,
+	syncfixture.WriteLocalFile(t, syncRoot, "gone.txt", "delete me")
+	deleteHash := syncfixture.HashContentQuickXor(t, "delete me")
+	seedBaseline(t, eng.baseline, ctx, []syncdomain.ActionOutcome{{
+		Action:          syncdomain.ActionDownload,
 		Success:         true,
 		Path:            "gone.txt",
 		DriveID:         driveID,
 		ItemID:          "gone",
-		ItemType:        ItemTypeFile,
+		ItemType:        syncdomain.ItemTypeFile,
 		LocalHash:       deleteHash,
 		RemoteHash:      deleteHash,
 		LocalSize:       int64(len("delete me")),
@@ -433,10 +438,10 @@ func TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T
 		RemoteMtime:     time.Now().UnixNano(),
 	}}, "")
 
-	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, SyncBidirectional, 1)
+	pipe := newBootstrapWatchPipelineForTest(t, eng, ctx, syncdomain.SyncBidirectional, 1)
 
-	err := runWithin(t, ctx, "bootstrap to finish the local delete", func(runCtx context.Context) error {
-		return testWatchRuntime(t, eng).bootstrapSync(runCtx, SyncDownloadOnly, pipe)
+	err := syncfixture.RunWithin(t, ctx, "bootstrap to finish the local delete", func(runCtx context.Context) error {
+		return testWatchRuntime(t, eng).bootstrapSync(runCtx, syncdomain.SyncDownloadOnly, pipe)
 	})
 	require.NoError(t, err)
 
@@ -459,44 +464,44 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	recorder := attachDebugEventRecorder(eng)
 	rt := testWatchRuntime(t, eng)
 
-	setTestBlockScope(t, eng, &BlockScope{
-		Key:           SKService(),
+	setTestBlockScope(t, eng, &syncdomain.BlockScope{
+		Key:           syncdomain.SKService(),
 		TrialInterval: 30 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(30 * time.Millisecond),
 	})
 
-	ta := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	ta := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "trial.txt",
-		DriveID: driveid.New(engineTestDriveID),
+		DriveID: driveid.New(syncfixture.EngineTestDriveID),
 		ItemID:  "trial-item",
 	}, 99, nil)
 	require.NotNil(t, ta)
 
-	results <- ActionCompletion{
+	results <- syncdomain.ActionCompletion{
 		ActionID:      99,
 		Path:          "trial.txt",
-		ActionType:    ActionDownload,
-		DriveID:       driveid.New(engineTestDriveID),
+		ActionType:    syncdomain.ActionDownload,
+		DriveID:       driveid.New(syncfixture.EngineTestDriveID),
 		Success:       false,
 		HTTPStatus:    http.StatusInternalServerError,
 		Err:           graph.ErrServerError,
 		ErrMsg:        "trial failure",
 		IsTrial:       true,
-		TrialScopeKey: SKService(),
+		TrialScopeKey: syncdomain.SKService(),
 	}
 
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventTrialTimerArmed
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventTrialTimerArmed
 	}, "trial timer re-armed after trial failure")
 	cancel()
 
-	block, ok := getTestBlockScope(eng, SKService())
+	block, ok := getTestBlockScope(eng, syncdomain.SKService())
 	require.True(t, ok, "service scope should remain blocked after trial failure")
 	assert.NotZero(t, block.TrialInterval,
 		"trial failure should leave the scope timed and blocked")
 
-	assert.True(t, isTestBlockScopeed(eng, SKService()),
+	assert.True(t, isTestBlockScopeed(eng, syncdomain.SKService()),
 		"trial failure must not clear the blocked scope via the normal result path")
 }
 
@@ -512,35 +517,35 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	rt := testWatchRuntime(t, eng)
 
 	ctx := t.Context()
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []syncdomain.ObservedItem{{
 		DriveID:  driveID,
 		ItemID:   "blocked-item",
 		Path:     "blocked.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "blocked-hash",
 		Size:     42,
 	}}, "", driveID))
 
-	setTestBlockScope(t, eng, &BlockScope{
+	setTestBlockScope(t, eng, &syncdomain.BlockScope{
 		Key:           testThrottleScope(),
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
 	})
-	_, err := eng.baseline.RecordBlockedRetryWork(ctx, testRetryWorkKey(blockedPath, "", ActionDownload), testThrottleScope())
+	_, err := eng.baseline.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey(blockedPath, "", syncdomain.ActionDownload), testThrottleScope())
 	require.NoError(t, err)
-	blocked := rt.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	blocked := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    blockedPath,
 		DriveID: driveID,
 		ItemID:  "blocked-item",
-		View: &PathView{
+		View: &syncdomain.PathView{
 			Path: blockedPath,
-			Remote: &RemoteState{
+			Remote: &syncdomain.RemoteState{
 				DriveID:  driveID,
 				ItemID:   "blocked-item",
-				ItemType: ItemTypeFile,
+				ItemType: syncdomain.ItemTypeFile,
 				Hash:     "blocked-hash",
 				Size:     42,
 			},
@@ -549,32 +554,32 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	require.NotNil(t, blocked)
 	rt.holdAction(blocked, heldReasonScope, testThrottleScope(), time.Time{})
 
-	ta := rt.sched.graph.Add(&Action{
-		Type:    ActionUpload,
+	ta := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionUpload,
 		Path:    "trial.txt",
 		DriveID: driveID,
 		ItemID:  "trial-item",
 	}, 1, nil)
 	require.NotNil(t, ta)
 
-	results <- ActionCompletion{
+	results <- syncdomain.ActionCompletion{
 		ActionID:      1,
 		Path:          "trial.txt",
-		ActionType:    ActionUpload,
+		ActionType:    syncdomain.ActionUpload,
 		DriveID:       driveID,
 		Success:       true,
 		IsTrial:       true,
 		TrialScopeKey: testThrottleScope(),
 	}
 
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventScopeReleased && event.ScopeKey == testThrottleScope()
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventScopeReleased && event.ScopeKey == testThrottleScope()
 	}, "trial success released blocked scope")
 
 	retried := readReadyAction(t, rt.sched.dispatchCh)
 	require.Equal(t, blockedPath, retried.Action.Path,
 		"trial success should re-dispatch blocked retry work without external observation")
-	assert.Equal(t, ActionDownload, retried.Action.Type)
+	assert.Equal(t, syncdomain.ActionDownload, retried.Action.Type)
 
 	cancel()
 	assert.False(t, isTestBlockScopeed(eng, testThrottleScope()),
@@ -591,13 +596,13 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 	require.NoError(t, os.MkdirAll(filepath.Join(eng.syncRoot, "docs"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(eng.syncRoot, "docs", "file.txt"), []byte("ok"), 0o600))
 
-	seedObservationIssueRowForTest(t, eng.baseline, &ObservationIssue{
+	syncstoretest.SeedObservationIssueRowForTest(t, eng.baseline, &syncdomain.ObservationIssue{
 		Path:      "docs/file.txt",
 		DriveID:   eng.driveID,
-		IssueType: IssueLocalReadDenied,
+		IssueType: syncdomain.IssueLocalReadDenied,
 	})
 
-	retryRow := testRetryWorkRow("docs/file.txt", "", ActionUpload)
+	retryRow := syncfixture.TestRetryWorkRow("docs/file.txt", "", syncdomain.ActionUpload)
 	retryRow.AttemptCount = 3
 	retryRow.NextRetryAt = eng.nowFunc().Add(time.Minute).UnixNano()
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &retryRow))
@@ -616,7 +621,7 @@ func TestPhase0_ObserveLocalChanges_ClearsResolvedFilePermissionIssueWithoutDele
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "docs/file.txt", rows[0].Path)
-	assert.Equal(t, ActionUpload, rows[0].ActionType)
+	assert.Equal(t, syncdomain.ActionUpload, rows[0].ActionType)
 }
 
 // Validates: R-2.10.5
@@ -629,18 +634,18 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	rt := testWatchRuntime(t, eng)
 
 	ctx := t.Context()
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	parent := rt.sched.graph.Add(&Action{
-		Type:    ActionUpload,
+	parent := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionUpload,
 		Path:    "parent.txt",
 		DriveID: driveID,
 		ItemID:  "parent-item",
 	}, 1, nil)
 	require.NotNil(t, parent)
 
-	child := rt.sched.graph.Add(&Action{
-		Type:    ActionUpload,
+	child := rt.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionUpload,
 		Path:    "child.txt",
 		DriveID: driveID,
 		ItemID:  "child-item",
@@ -650,10 +655,10 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	rt.sched.dispatchCh <- parent
 	readReady(t, rt.sched.dispatchCh)
 
-	results <- ActionCompletion{
+	results <- syncdomain.ActionCompletion{
 		ActionID:   1,
 		Path:       "parent.txt",
-		ActionType: ActionUpload,
+		ActionType: syncdomain.ActionUpload,
 		DriveID:    driveID,
 		Success:    false,
 		HTTPStatus: http.StatusTooManyRequests,
@@ -662,8 +667,8 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 		ErrMsg:     "rate limited",
 	}
 
-	recorder.waitForEvent(t, func(event EngineDebugEvent) bool {
-		return event.Type == EngineDebugEventScopeActivated && event.ScopeKey == testThrottleScope()
+	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventScopeActivated && event.ScopeKey == testThrottleScope()
 	}, "block scope activated from action completion")
 
 	select {
@@ -685,9 +690,9 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispatch(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(testDriveID)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+	driveID := driveid.New(syncfixture.TestDriveID)
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
 			return &graph.DeltaPage{
 				Items: []graph.Item{
 					{ID: "root", IsRoot: true, DriveID: driveID},
@@ -713,7 +718,7 @@ func TestPhase0_RunFullReconciliationAsync_UsesBufferHandoffInsteadOfDirectDispa
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
 	rt.runFullRemoteRefreshAsync(ctx, bl)
 	waitForRefreshDone(t, t.Context(), eng)

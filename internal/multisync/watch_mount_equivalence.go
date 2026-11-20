@@ -3,7 +3,8 @@ package multisync
 import (
 	"slices"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 func mountSpecsEquivalentForWatchRestart(current *mountSpec, next *mountSpec) bool {
@@ -53,7 +54,7 @@ func childEngineSpecsEquivalent(current *mountSpec, next *mountSpec) bool {
 		return (current == nil || current.child == nil) && (next == nil || next.child == nil)
 	}
 	return current.child.mode == next.child.mode &&
-		syncengine.ShortcutChildEngineSpecsEqual(&current.child.engine, &next.child.engine)
+		syncshortcut.ShortcutChildEngineSpecsEqual(&current.child.engine, &next.child.engine)
 }
 
 func mountSpecTuningEquivalent(current *mountSpec, next *mountSpec) bool {
@@ -62,7 +63,7 @@ func mountSpecTuningEquivalent(current *mountSpec, next *mountSpec) bool {
 		current.minFreeSpace() == next.minFreeSpace()
 }
 
-func contentFilterConfigsEquivalent(current syncengine.ContentFilterConfig, next syncengine.ContentFilterConfig) bool {
+func contentFilterConfigsEquivalent(current syncdomain.ContentFilterConfig, next syncdomain.ContentFilterConfig) bool {
 	return slices.Equal(current.IgnoredDirs, next.IgnoredDirs) &&
 		slices.Equal(current.IncludedDirs, next.IncludedDirs) &&
 		slices.Equal(current.IgnoredPaths, next.IgnoredPaths) &&

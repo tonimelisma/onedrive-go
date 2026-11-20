@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"syscall"
 	"testing"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // stalledRequestKind is one way the transport gives up on a request to a
@@ -26,7 +28,7 @@ func stalledRequestKinds() []stalledRequestKind {
 		{name: "response header timeout", reachesServer: true, client: func(t *testing.T) *http.Client {
 			t.Helper()
 
-			transport := &http.Transport{ResponseHeaderTimeout: stalledRequestTimeout}
+			transport := &http.Transport{ResponseHeaderTimeout: syncfixture.StalledRequestTimeout}
 			t.Cleanup(transport.CloseIdleConnections)
 
 			return &http.Client{Transport: transport}
@@ -37,7 +39,7 @@ func stalledRequestKinds() []stalledRequestKind {
 			// The connect waits for the dial's own deadline, as a dial to an
 			// address that never answers does.
 			dialer := &net.Dialer{
-				Timeout: stalledRequestTimeout,
+				Timeout: syncfixture.StalledRequestTimeout,
 				ControlContext: func(ctx context.Context, _, _ string, _ syscall.RawConn) error {
 					<-ctx.Done()
 					return nil
@@ -57,6 +59,6 @@ func clientTimeoutKind() stalledRequestKind {
 	return stalledRequestKind{name: "client timeout", reachesServer: true, client: func(t *testing.T) *http.Client {
 		t.Helper()
 
-		return &http.Client{Timeout: stalledRequestTimeout}
+		return &http.Client{Timeout: syncfixture.StalledRequestTimeout}
 	}}
 }

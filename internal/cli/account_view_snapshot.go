@@ -9,7 +9,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // accountViewSnapshot is the shared validated account/auth snapshot used by
@@ -19,7 +19,7 @@ import (
 type accountViewSnapshot struct {
 	Config        *config.Config
 	Stored        *config.Catalog
-	ShortcutRoots map[driveid.CanonicalID][]syncengine.ShortcutRootStatusView
+	ShortcutRoots map[driveid.CanonicalID][]syncshortcut.ShortcutRootStatusView
 	Accounts      []accountView
 }
 

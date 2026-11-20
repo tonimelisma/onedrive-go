@@ -1,0 +1,279 @@
+package syncstore
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+)
+
+const sqlSelectObservationIssueCols = `path, issue_type, scope_key`
+
+// ReconcileObservationFindings makes the stored issues of the batch's managed
+// types match the batch, in one transaction (see
+// ReconcileObservationFindingsReportingChange).
+func (s *SyncStore) ReconcileObservationFindings(
+	ctx context.Context,
+	batch *syncdomain.ObservationFindingsBatch,
+) error {
+	_, err := s.ReconcileObservationFindingsReportingChange(ctx, batch)
+	return err
+}
+
+// ReconcileObservationFindingsReportingChange reconciles the batch and reports
+// whether the persisted issue set is different afterwards, so a watch replan
+// is scheduled for a finding that appeared or cleared and not for the
+// re-report every full scan makes of a persistent one (R-2.8.21). A batch
+// that reports an issue of a type it does not manage is refused before
+// anything is written (buildObservationReconcilePlan).
+func (s *SyncStore) ReconcileObservationFindingsReportingChange(
+	ctx context.Context,
+	batch *syncdomain.ObservationFindingsBatch,
+) (changed bool, err error) {
+	if batch == nil {
+		return false, nil
+	}
+
+	tx, err := BeginPerfTx(ctx, s.db)
+	if err != nil {
+		return false, fmt.Errorf("sync: begin observation findings reconcile: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "sync: rollback observation findings reconcile")
+	}()
+
+	if changed, err = s.reconcileObservationFindingsTx(ctx, tx, batch); err != nil {
+		return false, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("sync: commit observation findings reconcile: %w", err)
+	}
+
+	return changed, nil
+}
+
+// reconcileObservationFindingsTx reconciles the batch inside tx and reports
+// whether the persisted issue set changed.
+func (s *SyncStore) reconcileObservationFindingsTx(
+	ctx context.Context,
+	tx SqlTxRunner,
+	batch *syncdomain.ObservationFindingsBatch,
+) (bool, error) {
+	state, err := loadObservationReconcileStoreStateTx(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	plan, err := buildObservationReconcilePlan(batch, state)
+	if err != nil {
+		return false, err
+	}
+
+	if applyErr := s.applyObservationFindingsReconcilePlanTx(ctx, tx, plan); applyErr != nil {
+		return false, applyErr
+	}
+
+	return plan.changesIssues, nil
+}
+
+func (s *SyncStore) applyObservationFindingsReconcilePlanTx(
+	ctx context.Context,
+	tx SqlTxRunner,
+	plan observationReconcilePlan,
+) error {
+	if err := s.upsertObservationIssuesTx(ctx, tx, plan.issueUpserts); err != nil {
+		return err
+	}
+	if err := deleteObservationIssuesTx(ctx, tx, plan.issueDeletes); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func loadObservationReconcileStoreStateTx(
+	ctx context.Context,
+	tx SqlTxRunner,
+) (observationReconcileStoreState, error) {
+	issues, err := QueryObservationIssueRowsWithRunner(ctx, tx)
+	if err != nil {
+		return observationReconcileStoreState{}, fmt.Errorf("sync: listing observation issues for observation reconcile: %w", err)
+	}
+
+	return observationReconcileStoreState{
+		issues: issues,
+	}, nil
+}
+
+func QueryObservationIssueRowsWithRunner(
+	ctx context.Context,
+	runner SqlTxRunner,
+) ([]syncdomain.ObservationIssueRow, error) {
+	contentDriveID, err := contentDriveIDForDB(ctx, runner)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := runner.QueryContext(ctx,
+		`SELECT `+sqlSelectObservationIssueCols+` FROM observation_issues
+		ORDER BY path`)
+	if err != nil {
+		return nil, fmt.Errorf("query observation issues: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	return scanObservationIssueRows(rows, contentDriveID)
+}
+
+func (s *SyncStore) ListObservationIssues(ctx context.Context) ([]syncdomain.ObservationIssueRow, error) {
+	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
+	if err != nil {
+		return nil, fmt.Errorf("sync: reading content drive for observation issues: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+sqlSelectObservationIssueCols+` FROM observation_issues ORDER BY path`)
+	if err != nil {
+		return nil, fmt.Errorf("sync: listing observation issues: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	return scanObservationIssueRows(rows, contentDriveID)
+}
+
+type observationIssueScanner interface {
+	Scan(dest ...any) error
+}
+
+func (s *SyncStore) upsertObservationIssuesTx(
+	ctx context.Context,
+	tx SqlTxRunner,
+	issues []syncdomain.ObservationIssue,
+) error {
+	state, err := ReadObservationStateFromTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for i := range issues {
+		if issues[i].DriveID.IsZero() {
+			continue
+		}
+		if ensureErr := s.ensureContentDriveIDTx(ctx, tx, issues[i].DriveID, state); ensureErr != nil {
+			return ensureErr
+		}
+		break
+	}
+
+	if len(issues) == 0 {
+		return nil
+	}
+
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO observation_issues
+			(path, issue_type, scope_key)
+		VALUES (?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET
+			issue_type = excluded.issue_type,
+			scope_key = excluded.scope_key`)
+	if err != nil {
+		return fmt.Errorf("sync: prepare observation issue upsert: %w", err)
+	}
+	defer stmt.Close() //nolint:errcheck // statement handle release; the write itself is checked at Exec
+
+	for i := range issues {
+		issue := &issues[i]
+		if issue.Path == "" {
+			return fmt.Errorf("sync: upsert observation issue: missing path")
+		}
+		// Never write what scanObservationIssueRow would refuse to read.
+		if !issue.IssueType.IsMember() {
+			return fmt.Errorf("sync: upsert observation issue for %s: unknown issue type %q", issue.Path, issue.IssueType)
+		}
+
+		if _, execErr := stmt.ExecContext(ctx,
+			issue.Path,
+			string(issue.IssueType),
+			issue.ScopeKey.String(),
+		); execErr != nil {
+			return fmt.Errorf("sync: upsert observation issue for %s: %w", issue.Path, execErr)
+		}
+	}
+
+	return nil
+}
+
+func deleteObservationIssuesTx(
+	ctx context.Context,
+	tx SqlTxRunner,
+	deletes []managedObservationIssueKey,
+) error {
+	if len(deletes) == 0 {
+		return nil
+	}
+
+	stmt, err := tx.PrepareContext(ctx,
+		`DELETE FROM observation_issues WHERE path = ? AND issue_type = ?`)
+	if err != nil {
+		return fmt.Errorf("sync: prepare observation issue delete: %w", err)
+	}
+	defer stmt.Close() //nolint:errcheck // statement handle release; the write itself is checked at Exec
+
+	for i := range deletes {
+		deletePlan := deletes[i]
+		if _, execErr := stmt.ExecContext(ctx, deletePlan.path, string(deletePlan.issueType)); execErr != nil {
+			return fmt.Errorf("sync: deleting observation issue %s (%s): %w", deletePlan.path, deletePlan.issueType, execErr)
+		}
+	}
+
+	return nil
+}
+
+func scanObservationIssueRow(
+	scanner observationIssueScanner,
+	row *syncdomain.ObservationIssueRow,
+	contentDriveID driveid.ID,
+) error {
+	if row == nil {
+		return fmt.Errorf("sync: scanning observation issue row: nil destination")
+	}
+
+	var issueType, scopeKey string
+	if err := scanner.Scan(
+		&row.Path,
+		&issueType,
+		&scopeKey,
+	); err != nil {
+		return fmt.Errorf("sync: scanning observation issue row: %w", err)
+	}
+
+	// An unknown issue type fails the read rather than reaching truth
+	// availability, where no verdict for it exists (ParseIssueType).
+	parsed, err := syncdomain.ParseIssueType(issueType)
+	if err != nil {
+		return fmt.Errorf("sync: scanning observation issue row %s: %w", row.Path, err)
+	}
+
+	row.IssueType = parsed
+	row.DriveID = contentDriveID
+	row.ScopeKey = syncdomain.ParseScopeKey(scopeKey)
+	return nil
+}
+
+func scanObservationIssueRows(rows *sql.Rows, contentDriveID driveid.ID) ([]syncdomain.ObservationIssueRow, error) {
+	var result []syncdomain.ObservationIssueRow
+
+	for rows.Next() {
+		var row syncdomain.ObservationIssueRow
+		if err := scanObservationIssueRow(rows, &row, contentDriveID); err != nil {
+			return nil, fmt.Errorf("sync: scanning observation issue row: %w", err)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating observation issue rows: %w", err)
+	}
+
+	return result, nil
+}

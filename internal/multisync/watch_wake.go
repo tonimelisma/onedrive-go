@@ -3,7 +3,7 @@ package multisync
 import (
 	"time"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // watchRestartWake is the RunWatch loop's single timer for the earliest
@@ -107,8 +107,8 @@ func reconcileWatchInterval(pollInterval time.Duration) time.Duration {
 	if pollInterval <= 0 {
 		return defaultReconcileInterval
 	}
-	if pollInterval < syncengine.MinPollInterval {
-		return syncengine.MinPollInterval
+	if pollInterval < syncdomain.MinPollInterval {
+		return syncdomain.MinPollInterval
 	}
 
 	return pollInterval

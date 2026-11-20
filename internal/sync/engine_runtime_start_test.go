@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.10.5, R-6.8.9
@@ -19,24 +21,24 @@ func TestStartRuntimeStage_ReleasesDueHeldTrialImmediately(t *testing.T) {
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	scopeKey := SKService()
+	scopeKey := syncdomain.SKService()
 	runtime := &runtimePlan{
-		Plan: &ActionPlan{
-			Actions: []Action{{
-				Type: ActionUpload,
+		Plan: &syncdomain.ActionPlan{
+			Actions: []syncdomain.Action{{
+				Type: syncdomain.ActionUpload,
 				Path: "held.txt",
-				View: &PathView{Path: "held.txt"},
+				View: &syncdomain.PathView{Path: "held.txt"},
 			}},
 			Deps: [][]int{nil},
 		},
-		RetryRows: []RetryWorkRow{{
+		RetryRows: []syncdomain.RetryWorkRow{{
 			Path:         "held.txt",
-			ActionType:   ActionUpload,
+			ActionType:   syncdomain.ActionUpload,
 			ScopeKey:     scopeKey,
 			Blocked:      true,
 			AttemptCount: 1,
 		}},
-		BlockScopes: []*BlockScope{{
+		BlockScopes: []*syncdomain.BlockScope{{
 			Key:           scopeKey,
 			TrialInterval: 10 * time.Second,
 			NextTrialAt:   eng.nowFunc().Add(-time.Second),

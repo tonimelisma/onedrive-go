@@ -15,11 +15,13 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // newFollowSymlinksTestEngine is newTestEngine with follow_symlinks enabled,
 // which is the only configuration where content beneath an alias is observed.
-func newFollowSymlinksTestEngine(t *testing.T, mock *engineMockClient) (*testEngine, string) {
+func newFollowSymlinksTestEngine(t *testing.T, mock *syncfixture.EngineMockClient) (*testEngine, string) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -34,7 +36,7 @@ func newFollowSymlinksTestEngine(t *testing.T, mock *engineMockClient) (*testEng
 		DBPath:             filepath.Join(tmpDir, "test.db"),
 		SyncRoot:           syncRoot,
 		DataDir:            dataDir,
-		DriveID:            driveid.New(engineTestDriveID),
+		DriveID:            driveid.New(syncfixture.EngineTestDriveID),
 		AccountEmail:       engineTestEmail,
 		AccountCanonicalID: accountCID,
 		Fetcher:            mock,
@@ -46,8 +48,8 @@ func newFollowSymlinksTestEngine(t *testing.T, mock *engineMockClient) (*testEng
 		FolderDelta:        mock,
 		RecursiveLister:    mock,
 		PermChecker:        mock,
-		Logger:             testLogger(t),
-		ContentFilter:      ContentFilterConfig{FollowSymlinks: true},
+		Logger:             syncfixture.TestLogger(t),
+		ContentFilter:      syncdomain.ContentFilterConfig{FollowSymlinks: true},
 	})
 	require.NoError(t, err)
 	eng.assertInvariants = true
@@ -70,21 +72,21 @@ func newFollowSymlinksTestEngine(t *testing.T, mock *engineMockClient) (*testEng
 func TestRunOnce_FollowSymlinks_UploadsFileInsideDirectoryAliasOutsideRoot(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	var (
 		mu       gosync.Mutex
 		uploaded = map[string]string{}
 	)
-	mock := &engineMockClient{
-		deltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
-			return deltaPageWithItems([]graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}}, "token-1"), nil
+	mock := &syncfixture.EngineMockClient{
+		DeltaFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.DeltaPage, error) {
+			return syncfixture.DeltaPageWithItems([]graph.Item{{ID: "root", IsRoot: true, DriveID: driveID}}, "token-1"), nil
 		},
-		createFolderFn: func(_ context.Context, _ driveid.ID, parentID, name string) (*graph.Item, error) {
+		CreateFolderFn: func(_ context.Context, _ driveid.ID, parentID, name string) (*graph.Item, error) {
 			assert.Equal(t, "root", parentID)
 			assert.Equal(t, "alias", name)
 			return &graph.Item{ID: "alias-folder-id", Name: name, IsFolder: true, DriveID: driveID}, nil
 		},
-		uploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+		UploadFn: func(_ context.Context, _ driveid.ID, parentID, name string, content io.ReaderAt, size int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			buf := make([]byte, size)
 			if _, err := content.ReadAt(buf, 0); err != nil && size > 0 {
 				return nil, fmt.Errorf("reading upload content: %w", err)
@@ -104,7 +106,7 @@ func TestRunOnce_FollowSymlinks_UploadsFileInsideDirectoryAliasOutsideRoot(t *te
 		t.Skipf("symlink not available on this filesystem: %v", err)
 	}
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, 0, report.Failed, "failed; errors: %v", report.Errors)
 	assert.Equal(t, 1, report.Uploads)

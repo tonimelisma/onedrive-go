@@ -3,6 +3,7 @@ package cli
 import (
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // syncJSONEvent is one line of `sync --json` output. Sync streams, so --json
@@ -68,13 +69,13 @@ func activityJSONAction(kind syncengine.ActivityKind) string {
 	return "other"
 }
 
-func syncModeJSON(mode syncengine.SyncMode) string {
+func syncModeJSON(mode syncdomain.SyncMode) string {
 	switch mode {
-	case syncengine.SyncDownloadOnly:
+	case syncdomain.SyncDownloadOnly:
 		return "download_only"
-	case syncengine.SyncUploadOnly:
+	case syncdomain.SyncUploadOnly:
 		return "upload_only"
-	case syncengine.SyncBidirectional:
+	case syncdomain.SyncBidirectional:
 		return "bidirectional"
 	}
 
@@ -107,7 +108,7 @@ func (c *syncConsole) writeJSONEvent(event *syncJSONEvent) error {
 	return err
 }
 
-func (c *syncConsole) jsonMountEvents(event string, mounts []multisync.StandaloneMountConfig, mode syncengine.SyncMode, dryRun bool) {
+func (c *syncConsole) jsonMountEvents(event string, mounts []multisync.StandaloneMountConfig, mode syncdomain.SyncMode, dryRun bool) {
 	for i := range mounts {
 		m := &mounts[i]
 		c.emitJSON(&syncJSONEvent{

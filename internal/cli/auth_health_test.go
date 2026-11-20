@@ -17,7 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
@@ -28,7 +28,7 @@ func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
 			drive.RemoteDriveID = "drive-auth"
 		}
 	})
-	store, err := syncengine.NewSyncStore(t.Context(), config.DriveStatePath(cid), testDriveLogger(t))
+	store, err := syncstore.NewSyncStore(t.Context(), config.DriveStatePath(cid), testDriveLogger(t))
 	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
 

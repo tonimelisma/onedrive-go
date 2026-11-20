@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func newSyncCmd() *cobra.Command {
@@ -118,16 +118,16 @@ func resolveSyncDryRun(cfgDryRun bool, override *bool, watch bool) (bool, error)
 // false, so GetBool() would work identically. Changed() is preferred because
 // it directly expresses intent: "did the user explicitly set this flag?" This
 // is the standard Cobra pattern for flags where presence equals activation.
-func syncModeFromFlags(cmd *cobra.Command) syncengine.SyncMode {
+func syncModeFromFlags(cmd *cobra.Command) syncdomain.SyncMode {
 	if cmd.Flags().Changed("download-only") {
-		return syncengine.SyncDownloadOnly
+		return syncdomain.SyncDownloadOnly
 	}
 
 	if cmd.Flags().Changed("upload-only") {
-		return syncengine.SyncUploadOnly
+		return syncdomain.SyncUploadOnly
 	}
 
-	return syncengine.SyncBidirectional
+	return syncdomain.SyncBidirectional
 }
 
 const allowRootFlag = "allow-root"

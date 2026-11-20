@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 const (
@@ -16,18 +20,18 @@ const (
 // durable rows.
 func (rt *watchRuntime) releaseDueHeldTrialsNow(
 	ctx context.Context,
-	bl *Baseline,
-) ([]*TrackedAction, error) {
+	bl *syncdomain.Baseline,
+) ([]*syncdomain.TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed("releaseDueHeldTrialsNow", "release due held trials")
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventTrialHeldReleaseStarted})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventTrialHeldReleaseStarted})
 
 	dispatch, err := rt.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
 		return dispatch, err
 	}
 	rt.armHeldTimers()
-	rt.deps.emit(EngineDebugEvent{
-		Type:  EngineDebugEventTrialHeldReleaseCompleted,
+	rt.deps.emit(syncdomain.EngineDebugEvent{
+		Type:  syncdomain.EngineDebugEventTrialHeldReleaseCompleted,
 		Count: len(dispatch),
 	})
 	return dispatch, nil
@@ -38,18 +42,18 @@ func (rt *watchRuntime) releaseDueHeldTrialsNow(
 // durable rows.
 func (rt *watchRuntime) releaseDueHeldRetriesNow(
 	ctx context.Context,
-	bl *Baseline,
-) ([]*TrackedAction, error) {
+	bl *syncdomain.Baseline,
+) ([]*syncdomain.TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed("releaseDueHeldRetriesNow", "release due held retries")
-	rt.deps.emit(EngineDebugEvent{Type: EngineDebugEventRetryHeldReleaseStarted})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRetryHeldReleaseStarted})
 
 	dispatch, err := rt.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
 		return dispatch, err
 	}
 	rt.armHeldTimers()
-	rt.deps.emit(EngineDebugEvent{
-		Type:  EngineDebugEventRetryHeldReleaseCompleted,
+	rt.deps.emit(syncdomain.EngineDebugEvent{
+		Type:  syncdomain.EngineDebugEventRetryHeldReleaseCompleted,
 		Count: len(dispatch),
 	})
 	return dispatch, nil
@@ -61,19 +65,19 @@ func (rt *watchRuntime) releaseDueHeldRetriesNow(
 // failure is returned like any other store write failure in the completion
 // path: left behind, the row keeps `status` listing a file that just synced
 // as retrying and schedules a redundant retry.
-func (flow *engineFlow) clearRetryWorkOnSuccess(ctx context.Context, r *ActionCompletion) error {
+func (flow *engineFlow) clearRetryWorkOnSuccess(ctx context.Context, r *syncdomain.ActionCompletion) error {
 	if r == nil {
 		return nil
 	}
 
-	return flow.clearRetryWorkOnActionSuccess(ctx, &Action{
+	return flow.clearRetryWorkOnActionSuccess(ctx, &syncdomain.Action{
 		Path:    r.Path,
 		OldPath: r.OldPath,
 		Type:    r.ActionType,
 	})
 }
 
-func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, action *Action) error {
+func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, action *syncdomain.Action) error {
 	// The action has already succeeded, so recording that is bookkeeping of
 	// a finished effect: like the outcome commit it runs detached from
 	// cancellation, or a shutdown that lands between the effect and this
@@ -81,10 +85,10 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 	// outcome commit's bound too (RunDetachedStoreAccess), so a wedged store
 	// cannot hold a shutdown; in a stopping run's drain that is the drain's
 	// one bound.
-	if err := RunDetachedStoreAccess(ctx, OutcomeCommitTimeout, func(clearCtx context.Context) error {
+	if err := syncexec.RunDetachedStoreAccess(ctx, syncdomain.OutcomeCommitTimeout, func(clearCtx context.Context) error {
 		return flow.resolveRetryWorkAndLogResolution(
 			clearCtx,
-			RetryWorkKeyForAction(action),
+			syncdomain.RetryWorkKeyForAction(action),
 			retryResolutionSourceActionSuccess,
 		)
 	}); err != nil {
@@ -94,11 +98,11 @@ func (flow *engineFlow) clearRetryWorkOnActionSuccess(ctx context.Context, actio
 	return nil
 }
 
-func (flow *engineFlow) clearRetryWorkOnSuperseded(ctx context.Context, r *ActionCompletion, current *TrackedAction) error {
+func (flow *engineFlow) clearRetryWorkOnSuperseded(ctx context.Context, r *syncdomain.ActionCompletion, current *syncdomain.TrackedAction) error {
 	if current != nil {
 		return flow.resolveRetryWorkAndLogResolution(
 			ctx,
-			RetryWorkKeyForAction(&current.Action),
+			syncdomain.RetryWorkKeyForAction(&current.Action),
 			retryResolutionSourceActionSuperseded,
 		)
 	}
@@ -108,14 +112,14 @@ func (flow *engineFlow) clearRetryWorkOnSuperseded(ctx context.Context, r *Actio
 
 	return flow.resolveRetryWorkAndLogResolution(
 		ctx,
-		RetryWorkKeyForCompletion(r),
+		syncdomain.RetryWorkKeyForCompletion(r),
 		retryResolutionSourceActionSuperseded,
 	)
 }
 
 func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 	ctx context.Context,
-	work RetryWorkKey,
+	work syncdomain.RetryWorkKey,
 	resolutionSource string,
 ) error {
 	row, found, err := flow.retryWork.resolve(ctx, flow.deps.store, work)
@@ -130,7 +134,7 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 
 	flow.deps.logger.Debug("retry_work resolved",
 		slog.String("path", row.Path),
-		slog.String("condition_type", string(RetryConditionTypeForRow(row))),
+		slog.String("condition_type", string(syncstore.RetryConditionTypeForRow(row))),
 		slog.String("action_type", row.ActionType.String()),
 		slog.Int("attempt_count", row.AttemptCount),
 		slog.String("resolution_source", resolutionSource),

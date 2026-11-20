@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -60,7 +61,7 @@ func newIdentityReuseHarness(t *testing.T, remote *moveScenarioRemote, shim *syn
 func TestRunOnce_DeletedFolderAndNewFolderWithReusedInodeAreNotAMove(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-old", "root", "old")
 	remote.addFolder("item-elsewhere", "root", "elsewhere")
 	shim := synctest.NewIdentityShim(synctest.IdentityRule{Path: "old", BirthTime: reuseOldBirthTime})
@@ -102,14 +103,14 @@ func TestRunOnce_DeletedFileAndNewFileWithReusedInodeAreNotAMove(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFile(t, "item-old", "root", "old.txt", "old content\n")
 			shim := synctest.NewIdentityShim(synctest.IdentityRule{Path: "old.txt", BirthTime: reuseOldBirthTime})
 			h := newIdentityReuseHarness(t, remote, shim)
 
 			oldInode := realInode(t, h.syncRoot, "old.txt")
 			require.NoError(t, os.Remove(filepath.Join(h.syncRoot, "old.txt")))
-			writeLocalFile(t, h.syncRoot, "new.txt", tc.content)
+			syncfixture.WriteLocalFile(t, h.syncRoot, "new.txt", tc.content)
 			shim.Set(synctest.IdentityRule{Path: "new.txt", Inode: oldInode, BirthTime: reuseNewBirthTime})
 
 			h.beginRound(t)
@@ -143,7 +144,7 @@ func TestRunOnce_RenameWithMatchingBirthTimeIsStillAMove(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			if tc.isFolder {
 				remote.addFolder("item-old", "root", "old")
 			} else {
@@ -186,7 +187,7 @@ func TestRunOnce_WithoutBirthTimeIdentityIsDeviceAndInode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFolder("item-old", "root", "old")
 			remote.addFolder("item-elsewhere", "root", "elsewhere")
 			shim := synctest.NewIdentityShim(

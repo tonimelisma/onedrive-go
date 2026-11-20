@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // Validates: R-6.2.5
@@ -41,16 +43,16 @@ func TestHeldDeletesSummary_NamesSidesAndTheReleaseCommand(t *testing.T) {
 func TestStatusConditions_HeldDeletesAreDescribed(t *testing.T) {
 	t.Parallel()
 
-	snapshot := &syncengine.DriveStatusSnapshot{
-		HeldDeletes: []syncengine.HeldDeleteRow{
-			{Path: "Docs/a.txt", Side: "remote", Reason: "too_many", ItemType: syncengine.ItemTypeFile},
-			{Path: "Docs/b.txt", Side: "remote", Reason: "too_many", ItemType: syncengine.ItemTypeFile},
+	snapshot := &syncstore.DriveStatusSnapshot{
+		HeldDeletes: []syncstore.HeldDeleteRow{
+			{Path: "Docs/a.txt", Side: "remote", Reason: "too_many", ItemType: syncdomain.ItemTypeFile},
+			{Path: "Docs/b.txt", Side: "remote", Reason: "too_many", ItemType: syncdomain.ItemTypeFile},
 		},
 	}
 
 	conditions := buildStatusConditionJSON(snapshot, statusStoreRootDrive, true, 5)
 	require.Len(t, conditions, 1)
-	assert.Equal(t, string(syncengine.ConditionDeletesHeld), conditions[0].ConditionKey)
+	assert.Equal(t, string(syncdomain.ConditionDeletesHeld), conditions[0].ConditionKey)
 	assert.Equal(t, "Deletes held for confirmation", conditions[0].Title)
 	assert.Contains(t, conditions[0].Action, "sync --confirm-deletes")
 	assert.Equal(t, 2, conditions[0].Count)

@@ -15,13 +15,15 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-5.6.15
 func TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
 
@@ -31,7 +33,7 @@ func TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder(t *testing.T) {
 	remote.mu.Lock()
 	remote.interruptCreates = true
 	remote.mu.Unlock()
-	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"doc.txt": ""}, remote.tree(), "the placeholder is a real, empty OneDrive file")
 
@@ -64,7 +66,7 @@ func TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder(t *testing.T) {
 func TestRunOnce_UploadOnlyCreateFinishesIntoItsPlaceholderAfterItsETagMoved(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	runScenarioPass(t, eng)
 
@@ -73,7 +75,7 @@ func TestRunOnce_UploadOnlyCreateFinishesIntoItsPlaceholderAfterItsETagMoved(t *
 	remote.interruptCreates = true
 	remote.churnInterruptedCreates = true
 	remote.mu.Unlock()
-	_, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"doc.txt": ""}, remote.tree())
 	placeholder, ok := remote.itemAt("doc.txt")
@@ -83,7 +85,7 @@ func TestRunOnce_UploadOnlyCreateFinishesIntoItsPlaceholderAfterItsETagMoved(t *
 	remote.interruptCreates = false
 	remote.mu.Unlock()
 	expireRetryWork(t, eng)
-	_, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 
 	assert.Equal(t, map[string]string{"doc.txt": "version 2\n"}, remote.tree())
@@ -97,7 +99,7 @@ func TestRunOnce_UploadOnlyCreateFinishesIntoItsPlaceholderAfterItsETagMoved(t *
 func TestRunOnce_PlaceholderOfACreateWhoseFileWasDeletedIsRemoved(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	// A file both sides keep, so deleting doc.txt does not empty the local
 	// side, which the delete-safety hold would hold for confirmation.
 	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
@@ -109,7 +111,7 @@ func TestRunOnce_PlaceholderOfACreateWhoseFileWasDeletedIsRemoved(t *testing.T) 
 	remote.mu.Lock()
 	remote.interruptCreates = true
 	remote.mu.Unlock()
-	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
 	remote.mu.Lock()
@@ -129,14 +131,14 @@ func TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableColl
 
 	// Upload-only never downloads straße.txt, so the scanner cannot see the
 	// collision; OneDrive's 409 is the first evidence.
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "remote-strasse", "root", "straße.txt", "theirs\n")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
-	clock := newManualClock(time.Now())
+	clock := syncfixture.NewManualClock(time.Now())
 	installManualClockForTestEngine(eng, clock)
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "STRASSE.txt"), []byte("mine\n"), 0o600))
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Failed)
 	joined := ""
@@ -148,7 +150,7 @@ func TestRunOnce_UploadOnlyCreateOntoADifferentlySpelledRemoteNameIsADurableColl
 
 	uploads := remote.uploads
 	clock.Advance(durableRecheckDelay / 2)
-	report, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err = eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, uploads, remote.uploads, "held with backoff, not retried as is on the next pass")
 	assert.Zero(t, report.Failed+report.Succeeded, "nothing ran while the collision stands: %+v", report)
@@ -173,15 +175,15 @@ func TestRunOnce_RefusedCreateWaitsOnTheDurableCurveAndClearsItsIntent(t *testin
 	for _, tc := range []struct {
 		name      string
 		message   string
-		condition IssueType
+		condition syncdomain.IssueType
 	}{
-		{name: "path limit", message: scenarioPathLimitRefusal, condition: IssuePathTooLong},
+		{name: "path limit", message: scenarioPathLimitRefusal, condition: syncdomain.IssuePathTooLong},
 		{name: "bare invalid request", message: "Invalid request"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			var refusals atomic.Int32
 			remote.refuseCreate = func(string, string) error {
 				refusals.Add(1)
@@ -190,11 +192,11 @@ func TestRunOnce_RefusedCreateWaitsOnTheDurableCurveAndClearsItsIntent(t *testin
 				}
 			}
 			eng, syncRoot := newTestEngine(t, remote.client(t))
-			clock := newManualClock(time.Date(2026, 11, 2, 22, 23, 0, 0, time.UTC))
+			clock := syncfixture.NewManualClock(time.Date(2026, 11, 2, 22, 23, 0, 0, time.UTC))
 			installManualClockForTestEngine(eng, clock)
 			require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "doc.txt"), []byte("my words\n"), 0o600))
 
-			report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 			require.NoError(t, err)
 			require.Equal(t, 1, report.Failed, "errors: %v", report.Errors)
 			assert.Equal(t, int32(1), refusals.Load())
@@ -206,13 +208,13 @@ func TestRunOnce_RefusedCreateWaitsOnTheDurableCurveAndClearsItsIntent(t *testin
 			rows, err := eng.baseline.ListRetryWork(t.Context())
 			require.NoError(t, err)
 			require.Len(t, rows, 1)
-			assert.Equal(t, ActionUpload, rows[0].ActionType)
+			assert.Equal(t, syncdomain.ActionUpload, rows[0].ActionType)
 			assert.Equal(t, tc.condition, rows[0].ConditionType)
 			assert.GreaterOrEqual(t, rows[0].NextRetryAt-clock.Now().UnixNano(), int64(durableRecheckDelay),
 				"a refusal waits on the durable curve")
 
 			clock.Advance(durableRecheckDelay / 2)
-			report, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			report, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 			require.NoError(t, err)
 			assert.Zero(t, report.Failed+report.Succeeded, "held with backoff: %+v", report)
 			assert.Equal(t, int32(1), refusals.Load(), "not retried before the row is due")
@@ -235,7 +237,7 @@ func TestRunOnce_RefusedCreateWaitsOnTheDurableCurveAndClearsItsIntent(t *testin
 func TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "remote-strasse", "root", "straße.txt", "theirs\n")
 	remote.invisibleFor = map[string]int{"straße.txt": 1}
 	var creates atomic.Int32
@@ -244,10 +246,10 @@ func TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt(t 
 		return nil // counts the create, refuses nothing
 	}
 	eng, syncRoot := newTestEngine(t, remote.client(t))
-	installManualClockForTestEngine(eng, newManualClock(time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)))
+	installManualClockForTestEngine(eng, syncfixture.NewManualClock(time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "STRASSE.txt"), []byte("mine\n"), 0o600))
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	remote.mu.Lock()
 	lagLeft := remote.invisibleFor["straße.txt"]
@@ -265,7 +267,7 @@ func TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt(t 
 	rows, err := eng.baseline.ListRetryWork(t.Context())
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Equal(t, IssueCaseCollision, rows[0].ConditionType)
+	assert.Equal(t, syncdomain.IssueCaseCollision, rows[0].ConditionType)
 	assert.Equal(t, 1, rows[0].AttemptCount, "the stale attempt recorded no retry work of its own")
 	assert.Equal(t, map[string]string{"straße.txt": "theirs\n"}, remote.tree())
 }
@@ -286,7 +288,7 @@ const scenarioLargeFileSize = 4<<20 + 1
 func TestRunOnce_LargeFileWhoseSessionRequestFailedFinishesIntoItsPlaceholder(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	eng, syncRoot := newScenarioSessionEngine(t, remote.sessionClient(t))
 	runScenarioPass(t, eng)
 
@@ -297,7 +299,7 @@ func TestRunOnce_LargeFileWhoseSessionRequestFailedFinishesIntoItsPlaceholder(t 
 	remote.interruptCreates = true
 	remote.churnInterruptedCreates = true
 	remote.mu.Unlock()
-	report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	require.Len(t, report.Errors, 1)
 	assert.Contains(t, report.Errors[0].Error(), "creating upload session", "the create took the session route")
@@ -320,7 +322,7 @@ func TestRunOnce_LargeFileWhoseSessionRequestFailedFinishesIntoItsPlaceholder(t 
 	require.True(t, ok)
 	assert.Equal(t, placeholder.ID, finished.ID, "the content went into our own placeholder")
 	assert.Equal(t, int64(scenarioLargeFileSize), finished.Size)
-	assert.Equal(t, hashContentQuickXor(t, content), finished.QuickXorHash)
+	assert.Equal(t, syncfixture.HashContentQuickXor(t, content), finished.QuickXorHash)
 	remote.mu.Lock()
 	sessionsOpened, sessionsOpen := remote.sessionSeq, len(remote.sessions)
 	remote.mu.Unlock()
@@ -355,14 +357,14 @@ func expireRetryWork(t *testing.T, eng *testEngine) {
 func TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurableCollision(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("remote-docs", "root", "Docs")
 	eng, syncRoot := newTestEngine(t, remote.client(t))
-	clock := newManualClock(time.Now())
+	clock := syncfixture.NewManualClock(time.Now())
 	installManualClockForTestEngine(eng, clock)
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "docs"), 0o750))
 
-	report, err := eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Failed)
 	joined := ""
@@ -377,7 +379,7 @@ func TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurab
 	// second under -race, which outlasted the transient retry curve's first
 	// step and retried the collision).
 	clock.Advance(durableRecheckDelay / 2)
-	report, err = eng.RunOnce(t.Context(), SyncUploadOnly, RunOptions{})
+	report, err = eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
 	assert.Len(t, remote.folderCreates, creates, "held with backoff, not retried as is on the next pass")
 	assert.Zero(t, report.Failed+report.Succeeded, "nothing ran while the collision stands: %+v", report)

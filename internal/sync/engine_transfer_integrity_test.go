@@ -15,6 +15,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -40,7 +43,7 @@ func TestRunOnce_AcceptedServerTransformIsNotDownloadedAgain(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFile(t, "item-1", "root", tt.fileName, tt.reported)
 			remote.contents["item-1"] = tt.served
 
@@ -79,7 +82,7 @@ func TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing(t *testing.T) {
 		reported = "unprotected" // the content OneDrive's size and hash describe
 		served   = "protected!!" // the same-size bytes it serves
 	)
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-1", "root", fileName, reported)
 	remote.contents["item-1"] = served
 
@@ -92,10 +95,10 @@ func TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing(t *testing.T) {
 	acceptedEntry, ok := accepted.GetByPath(fileName)
 	require.True(t, ok)
 	before := *acceptedEntry
-	require.Equal(t, hashContentQuickXor(t, served), before.LocalHash, "the setup: the transform is accepted")
-	require.Equal(t, hashContentQuickXor(t, reported), before.RemoteHash)
+	require.Equal(t, syncfixture.HashContentQuickXor(t, served), before.LocalHash, "the setup: the transform is accepted")
+	require.Equal(t, syncfixture.HashContentQuickXor(t, reported), before.RemoteHash)
 
-	writeLocalFile(t, syncRoot, fileName, reported)
+	syncfixture.WriteLocalFile(t, syncRoot, fileName, reported)
 	second := runScenarioPass(t, eng)
 	assert.Zero(t, second.Uploads+second.Downloads, "equal content transfers nothing")
 	assert.Zero(t, remote.uploads)
@@ -109,7 +112,7 @@ func TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing(t *testing.T) {
 		`SELECT hash, size, mtime, ctime, local_birth_time, local_device, local_inode
 		FROM local_state WHERE path = ?`, fileName).Scan(
 		&observed.hash, &observed.size, &observed.mtime, &observed.ctime, &observed.birth, &observed.device, &observed.inode))
-	require.Equal(t, hashContentQuickXor(t, reported), observed.hash)
+	require.Equal(t, syncfixture.HashContentQuickXor(t, reported), observed.hash)
 
 	updated, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
@@ -137,37 +140,37 @@ func TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing(t *testing.T) {
 func TestUploadTransferError_InvalidatedSessionIsAStalePlan(t *testing.T) {
 	t.Parallel()
 
-	err := UploadTransferError(fmt.Errorf("uploading a.bin: %w", driveops.ErrUploadSessionInvalidated))
+	err := syncexec.UploadTransferError(fmt.Errorf("uploading a.bin: %w", driveops.ErrUploadSessionInvalidated))
 
 	// Another writer changed the item mid-upload: re-observe and replan,
 	// never upload over the change.
-	require.ErrorIs(t, err, ErrActionPreconditionChanged)
-	assert.Equal(t, resultSuperseded, classifyResult(&ActionCompletion{Err: err}).Class)
+	require.ErrorIs(t, err, syncdomain.ErrActionPreconditionChanged)
+	assert.Equal(t, resultSuperseded, classifyResult(&syncdomain.ActionCompletion{Err: err}).Class)
 }
 
 // Validates: R-6.7.34
 func TestExecutor_Download_RecordsObservedLocalMtime(t *testing.T) {
 	t.Parallel()
 
-	dl := &executorMockDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+	dl := &syncfixture.ExecutorMockDownloader{
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("data"))
 			return int64(n), err
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, dl, &syncfixture.ExecutorMockUploader{})
+	e := syncexec.NewExecution(cfg, syncfixture.EmptyBaseline())
 
 	// No remote mtime to apply: the file keeps the time it was written.
-	o := e.ExecuteDownload(t.Context(), &Action{
-		Type:    ActionDownload,
+	o := e.ExecuteDownload(t.Context(), &syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "observed.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Remote: &RemoteState{}},
+		View:    &syncdomain.PathView{Remote: &syncdomain.RemoteState{}},
 	})
-	requireOutcomeSuccess(t, &o)
+	syncfixture.RequireOutcomeSuccess(t, &o)
 
 	// The outcome used to record the intended (here: no) time instead of
 	// what the filesystem holds, so the next scan saw a local change.
@@ -184,39 +187,39 @@ func TestClassifyResult_StalledTransferIsRetryableNotShutdown(t *testing.T) {
 	// even if a caller wrapped it with a cancellation, it is retry work.
 	stalled := fmt.Errorf("downloading a.bin: %w: %w", graph.ErrTransferStalled, context.Canceled)
 
-	decision := classifyResult(&ActionCompletion{Err: stalled})
+	decision := classifyResult(&syncdomain.ActionCompletion{Err: stalled})
 
 	// A shutdown classification dropped the action and its dependents
 	// without recording anything to retry.
 	assert.Equal(t, resultRequeue, decision.Class)
-	assert.Equal(t, PersistRetryWork, decision.Persistence)
+	assert.Equal(t, syncdomain.PersistRetryWork, decision.Persistence)
 }
 
 // Validates: R-5.5.1
 func TestExecutor_Download_KnownEmptyItemRejectsNonEmptyBody(t *testing.T) {
 	t.Parallel()
 
-	dl := &executorMockDownloader{
-		downloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+	dl := &syncfixture.ExecutorMockDownloader{
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
 			n, err := w.Write([]byte("<html>not the empty file</html>"))
 			return int64(n), err
 		},
 	}
 
-	cfg, syncRoot := newTestExecutorConfig(t, &executorMockItemClient{}, dl, &executorMockUploader{})
-	e := NewExecution(cfg, emptyBaseline())
+	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, dl, &syncfixture.ExecutorMockUploader{})
+	e := syncexec.NewExecution(cfg, syncfixture.EmptyBaseline())
 
 	// remote_state holds a real size of 0 (not NULL) for this hashless item.
-	o := e.ExecuteDownload(t.Context(), &Action{
-		Type:    ActionDownload,
+	o := e.ExecuteDownload(t.Context(), &syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "empty.txt",
 		ItemID:  "item1",
 		DriveID: driveid.New(synctest.TestDriveID),
-		View:    &PathView{Remote: &RemoteState{Size: 0, SizeKnown: true, Mtime: 1}},
+		View:    &syncdomain.PathView{Remote: &syncdomain.RemoteState{Size: 0, SizeKnown: true, Mtime: 1}},
 	})
 
 	// A size of 0 used to read as "unknown", so any body was accepted.
-	requireOutcomeFailure(t, &o)
+	syncfixture.RequireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, driveops.ErrDownloadIntegrity)
 	assert.NoFileExists(t, filepath.Join(syncRoot, "empty.txt"))
 }

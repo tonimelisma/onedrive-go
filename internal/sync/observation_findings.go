@@ -5,14 +5,15 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func localObservationFindingsBatchFromSkippedItems(
 	driveID driveid.ID,
-	skipped []SkippedItem,
-) ObservationFindingsBatch {
-	batch := NewLocalObservationFindingsBatch()
-	batch.Issues = make([]ObservationIssue, 0, len(skipped))
+	skipped []syncdomain.SkippedItem,
+) syncdomain.ObservationFindingsBatch {
+	batch := syncdomain.NewLocalObservationFindingsBatch()
+	batch.Issues = make([]syncdomain.ObservationIssue, 0, len(skipped))
 
 	for i := range skipped {
 		appendSkippedObservationFinding(&batch, driveID, &skipped[i])
@@ -22,15 +23,15 @@ func localObservationFindingsBatchFromSkippedItems(
 }
 
 func appendSkippedObservationFinding(
-	batch *ObservationFindingsBatch,
+	batch *syncdomain.ObservationFindingsBatch,
 	driveID driveid.ID,
-	item *SkippedItem,
+	item *syncdomain.SkippedItem,
 ) {
 	if batch == nil || item == nil || item.Reason == "" || item.Path == "" {
 		return
 	}
 
-	issue := ObservationIssue{
+	issue := syncdomain.ObservationIssue{
 		Path:      item.Path,
 		DriveID:   driveID,
 		IssueType: item.Reason,
@@ -39,7 +40,7 @@ func appendSkippedObservationFinding(
 	// synced folder now out of reach, a mount boundary) is a read boundary:
 	// the planner treats everything beneath it as unavailable, not missing.
 	if item.BlocksReadBoundary {
-		issue.ScopeKey = SKPermLocalRead(item.Path)
+		issue.ScopeKey = syncdomain.SKPermLocalRead(item.Path)
 	}
 
 	batch.Issues = append(batch.Issues, issue)
@@ -51,14 +52,14 @@ func appendSkippedObservationFinding(
 // unavailable rather than absent.
 func rootReadFailureObservationFindingsBatch(
 	driveID driveid.ID,
-	issueType IssueType,
-) ObservationFindingsBatch {
-	batch := NewRemoteObservationFindingsBatch()
-	batch.Issues = []ObservationIssue{{
+	issueType syncdomain.IssueType,
+) syncdomain.ObservationFindingsBatch {
+	batch := syncdomain.NewRemoteObservationFindingsBatch()
+	batch.Issues = []syncdomain.ObservationIssue{{
 		Path:      "/",
 		DriveID:   driveID,
 		IssueType: issueType,
-		ScopeKey:  SKPermRemoteRead(""),
+		ScopeKey:  syncdomain.SKPermRemoteRead(""),
 	}}
 	return batch
 }
@@ -69,12 +70,12 @@ func rootReadFailureObservationFindingsBatch(
 // answer, which the observation returns as its error. The two are told apart
 // only for the user: what the folder is, gone or not allowed, decides the
 // next step, while sync treats both as a tree it cannot read.
-func rootReadFailureIssueType(err error) (issueType IssueType, ok bool) {
+func rootReadFailureIssueType(err error) (issueType syncdomain.IssueType, ok bool) {
 	switch {
 	case errors.Is(err, graph.ErrNotFound):
-		return IssueRemoteRootNotFound, true
+		return syncdomain.IssueRemoteRootNotFound, true
 	case errors.Is(err, graph.ErrForbidden):
-		return IssueRemoteReadDenied, true
+		return syncdomain.IssueRemoteReadDenied, true
 	default:
 		return "", false
 	}

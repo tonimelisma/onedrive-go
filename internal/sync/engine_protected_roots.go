@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
 // refreshProtectedRootsFromStore rederives the protected roots from the
@@ -23,12 +25,12 @@ func (e *Engine) refreshProtectedRootsFromStore(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	e.setProtectedRoots(ProtectedRootsForShortcutRoots(records, e.shortcutNamespaceID))
+	e.setProtectedRoots(syncshortcut.ProtectedRootsForShortcutRoots(records, e.shortcutNamespaceID))
 	return nil
 }
 
 // setProtectedRoots replaces the protected roots under protectedRootsMu.
-func (e *Engine) setProtectedRoots(roots []ProtectedRoot) {
+func (e *Engine) setProtectedRoots(roots []syncshortcut.ProtectedRoot) {
 	e.protectedRootsMu.Lock()
 	defer e.protectedRootsMu.Unlock()
 	e.protectedRoots = roots
@@ -36,12 +38,12 @@ func (e *Engine) setProtectedRoots(roots []ProtectedRoot) {
 
 // currentProtectedRoots returns a copy of the protected roots, so a reader
 // keeps a stable list while a concurrent refresh replaces the engine's.
-func (e *Engine) currentProtectedRoots() []ProtectedRoot {
+func (e *Engine) currentProtectedRoots() []syncshortcut.ProtectedRoot {
 	e.protectedRootsMu.Lock()
 	defer e.protectedRootsMu.Unlock()
 	if e.protectedRoots == nil {
 		return nil
 	}
 
-	return append([]ProtectedRoot(nil), e.protectedRoots...)
+	return append([]syncshortcut.ProtectedRoot(nil), e.protectedRoots...)
 }

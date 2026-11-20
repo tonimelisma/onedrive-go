@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/tonimelisma/onedrive-go/internal/retry"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.8.10
@@ -18,14 +20,14 @@ import (
 func TestRetryDelayForCondition_ConditionsThatDoNotClearByThemselvesWaitOnTheDurableCurve(t *testing.T) {
 	t.Parallel()
 
-	for _, condition := range []IssueType{IssueCaseCollision, IssueRemoteFolderUnverifiable} {
+	for _, condition := range []syncdomain.IssueType{syncdomain.IssueCaseCollision, syncdomain.IssueRemoteFolderUnverifiable} {
 		delay := retryDelayForCondition(condition)
 		assert.Equal(t, durableRecheckDelay, delay(0), condition)
 		assert.Equal(t, 2*durableRecheckDelay, delay(1), condition)
 		assert.Equal(t, time.Hour, delay(20), "%s caps at an hour", condition)
 	}
 
-	transient := retryDelayForCondition(IssueRequestTimeout)
+	transient := retryDelayForCondition(syncdomain.IssueRequestTimeout)
 	assert.Less(t, transient(0), durableRecheckDelay, "a condition that clears by itself keeps the transient curve, which starts at a second")
 	assert.LessOrEqual(t, transient(0), 2*retry.ReconcilePolicy().Delay(0)+time.Second)
 }
@@ -40,35 +42,35 @@ func TestRetryDelayForCondition_ConditionsThatDoNotClearByThemselvesWaitOnTheDur
 func TestRetryDelayForCondition_EveryMemberIsDecided(t *testing.T) {
 	t.Parallel()
 
-	waitsOnTheDurableCurve := func(condition IssueType) bool {
+	waitsOnTheDurableCurve := func(condition syncdomain.IssueType) bool {
 		return retryDelayForCondition(condition)(0) == durableRecheckDelay
 	}
 
-	requireEveryIssueTypeDecided(t, issueTypeVerdicts(t,
-		issueTypeVerdictGroup[bool]{
-			verdict: true,
-			members: []IssueType{IssueCaseCollision, IssueRemoteFolderUnverifiable},
+	syncfixture.RequireEveryIssueTypeDecided(t, syncfixture.IssueTypeVerdicts(t,
+		syncfixture.IssueTypeVerdictGroup[bool]{
+			Verdict: true,
+			Members: []syncdomain.IssueType{syncdomain.IssueCaseCollision, syncdomain.IssueRemoteFolderUnverifiable},
 		},
-		issueTypeVerdictGroup[bool]{
+		syncfixture.IssueTypeVerdictGroup[bool]{
 			// Every other condition clears by itself, is held under its block
 			// scope until the scope's trial passes, is recorded as
 			// ClassActionable, which retryDelayForDecision already puts on the
 			// durable curve, or never becomes retry work.
-			verdict: false,
-			members: []IssueType{
-				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueHashPanic,
-				IssueUnauthorized, IssueRemoteWriteDenied, IssueRemoteReadDenied, IssueRemoteRootNotFound, IssueQuotaExceeded,
-				IssueRateLimited, IssueLocalReadDenied, IssueLocalWriteDenied, IssueRemoteNameTwin,
-				IssueDiskFull, IssueServiceOutage, IssueFileTooLargeForSpace, IssueLocalNameTooLong,
-				IssueLocalReadOnly, IssueDeletesHeld, IssueLocalUnsyncableReplacement, IssueLocalMountBoundary,
-				IssueLocalMountMissing, IssueLocalInterruptedRemoval, IssueRemovedFolderKept, IssueLocalFileTooLarge, IssueLocalBusy, IssueLocalCrossDevice,
-				IssueUnsupportedOperation, IssueMalwareDetected, IssueLocalDatabaseOpen, IssueUploadVerification,
-				IssueDownloadIntegrity, IssueRequestTimeout, IssueTransientConflict, IssueTransientNotFound,
-				IssueResourceLocked, IssueTransferURLRejected,
+			Verdict: false,
+			Members: []syncdomain.IssueType{
+				syncdomain.IssueInvalidFilename, syncdomain.IssuePathTooLong, syncdomain.IssueFileTooLarge, syncdomain.IssueHashPanic,
+				syncdomain.IssueUnauthorized, syncdomain.IssueRemoteWriteDenied, syncdomain.IssueRemoteReadDenied, syncdomain.IssueRemoteRootNotFound, syncdomain.IssueQuotaExceeded,
+				syncdomain.IssueRateLimited, syncdomain.IssueLocalReadDenied, syncdomain.IssueLocalWriteDenied, syncdomain.IssueRemoteNameTwin,
+				syncdomain.IssueDiskFull, syncdomain.IssueServiceOutage, syncdomain.IssueFileTooLargeForSpace, syncdomain.IssueLocalNameTooLong,
+				syncdomain.IssueLocalReadOnly, syncdomain.IssueDeletesHeld, syncdomain.IssueLocalUnsyncableReplacement, syncdomain.IssueLocalMountBoundary,
+				syncdomain.IssueLocalMountMissing, syncdomain.IssueLocalInterruptedRemoval, syncdomain.IssueRemovedFolderKept, syncdomain.IssueLocalFileTooLarge, syncdomain.IssueLocalBusy, syncdomain.IssueLocalCrossDevice,
+				syncdomain.IssueUnsupportedOperation, syncdomain.IssueMalwareDetected, syncdomain.IssueLocalDatabaseOpen, syncdomain.IssueUploadVerification,
+				syncdomain.IssueDownloadIntegrity, syncdomain.IssueRequestTimeout, syncdomain.IssueTransientConflict, syncdomain.IssueTransientNotFound,
+				syncdomain.IssueResourceLocked, syncdomain.IssueTransferURLRejected,
 			},
 		},
 	), waitsOnTheDurableCurve)
 
-	assert.True(t, waitsOnTheDurableCurve(issueTypeOutsideTheEnum), "a value outside the enum")
+	assert.True(t, waitsOnTheDurableCurve(syncfixture.IssueTypeOutsideTheEnum), "a value outside the enum")
 	assert.False(t, waitsOnTheDurableCurve(""), "a failure with no condition is transient")
 }

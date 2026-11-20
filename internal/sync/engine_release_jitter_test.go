@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // dispatchTrace records when (engine clock) each action was handed to a
@@ -20,8 +22,8 @@ type dispatchTrace struct {
 }
 
 //nolint:gocritic // Value semantics match SetDebugEventHook, so the hook cannot mutate engine-owned events.
-func (tr *dispatchTrace) record(event DebugEvent) {
-	if event.Type != EngineDebugEventActionDispatched {
+func (tr *dispatchTrace) record(event syncdomain.DebugEvent) {
+	if event.Type != syncdomain.EngineDebugEventActionDispatched {
 		return
 	}
 	tr.mu.Lock()
@@ -72,26 +74,26 @@ func TestReleaseJitter_OneShotBatchIsAdmittedOverAWindow(t *testing.T) {
 		window       = time.Second
 	)
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
-	clock := newManualClock(time.Date(2026, 11, 1, 9, 7, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 1, 9, 7, 0, 0, time.UTC))
 	clock.SetJitterFunc(distinctJitter())
 	limiter := newThrottleWindowClient(clock.Now, windowBudget, window)
 	eng, syncRoot := newTestEngine(t, limiter.wrap(remote.client(t)))
 	eng.transferWorkers = workers
 	installManualClockForTestEngine(eng, clock)
-	scopeKey := SKThrottleDrive(driveID)
+	scopeKey := syncdomain.SKThrottleDrive(driveID)
 	trace := &dispatchTrace{}
 	eng.SetDebugEventHook(trace.record)
 	h := &syncHarness{eng: eng, remote: remote, syncRoot: syncRoot}
 	for i := range files {
-		writeLocalFile(t, syncRoot, "file-"+string(rune('a'+i))+".txt", "content\n")
+		syncfixture.WriteLocalFile(t, syncRoot, "file-"+string(rune('a'+i))+".txt", "content\n")
 	}
 	h.beginRound(t)
 
 	// Pass 1 draws the 429 that blocks the drive.
 	trace.beginPass()
-	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	block, ok := getTestBlockScope(eng, scopeKey)
 	require.True(t, ok, "the 429 activated the throttle scope")
@@ -104,9 +106,9 @@ func TestReleaseJitter_OneShotBatchIsAdmittedOverAWindow(t *testing.T) {
 	limiter.setBudget(1000)
 	clock.Advance(block.NextTrialAt.Sub(clock.Now()))
 	trialAt := clock.Now()
-	clock.autoAdvanceTimers(t)
+	clock.AutoAdvanceTimers(t)
 	trace.beginPass()
-	_, err = eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, files, remote.uploads, "the pass completes the backlog")
 	_, ok = getTestBlockScope(eng, scopeKey)
@@ -137,7 +139,7 @@ func TestReleaseJitter_OneShotBatchIsAdmittedOverAWindow(t *testing.T) {
 // frontier order. A variant of the targeted test above, so it runs in the
 // full profiles only.
 func TestReleaseJitter_OneShotBatchUnderReverseDispatch(t *testing.T) {
-	skipInShort(t)
+	syncfixture.SkipInShort(t)
 	runUnderDispatchOrder(t, "reverse", TestReleaseJitter_OneShotBatchIsAdmittedOverAWindow)
 }
 
@@ -146,17 +148,17 @@ func TestWatchRuntime_ParkedBatchMembersWaitForTheirAdmitInstant(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	clock, ok := eng.clock.(*manualClock)
+	clock, ok := eng.clock.(*syncfixture.ManualClock)
 	require.True(t, ok)
 	rt := testWatchRuntime(t, eng)
 	// No plan is installed, so the slow start (R-6.8.25) does not gate; the
 	// test is about admission instants alone.
 	now := clock.Now()
 
-	actions := make([]*TrackedAction, 0, 4)
+	actions := make([]*syncdomain.TrackedAction, 0, 4)
 	for i := range 4 {
-		ta := rt.sched.graph.Add(&Action{
-			Type:    ActionUpload,
+		ta := rt.sched.graph.Add(&syncdomain.Action{
+			Type:    syncdomain.ActionUpload,
 			Path:    "file-" + string(rune('a'+i)) + ".txt",
 			DriveID: eng.driveID,
 		}, int64(i+1), nil)

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
-	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 const (
@@ -20,7 +20,7 @@ const (
 	// one-shot mode alike. Close does not take its context into the session
 	// sweep, so the bound is on the wait, not on the call; the store's
 	// checkpoint has its own, shorter bound inside it.
-	engineCloseTimeout = syncengine.StoreCloseCheckpointTimeout + engineCloseSlack
+	engineCloseTimeout = syncstore.StoreCloseCheckpointTimeout + engineCloseSlack
 
 	// initialStackDumpBytes and maxStackDumpBytes size the buffer for the
 	// goroutine dump logged with a stuck sync; a dump that does not fit in

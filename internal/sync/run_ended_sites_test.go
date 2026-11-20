@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // sourceSite is one function of one product file: the file as the scan finds
@@ -69,7 +71,7 @@ func shapeReads(file *ast.File) []shapeRead {
 	for _, decl := range file.Decls {
 		function := ""
 		if fn, ok := decl.(*ast.FuncDecl); ok {
-			function = funcDeclName(fn)
+			function = syncfixture.FuncDeclName(fn)
 		}
 		ast.Inspect(decl, func(node ast.Node) bool {
 			switch {

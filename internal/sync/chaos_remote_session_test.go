@@ -13,6 +13,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
 // The chaos Graph layer on the session route (D-092). A file above 4 MiB goes
@@ -51,7 +53,7 @@ const (
 // chaos layer: the small-file calls as wrap's do, and the session route's.
 func (c *chaosGraph) wrapSessions(inner *scenarioSessionClient) *scenarioSessionClient {
 	out := *inner
-	out.engineMockClient = c.wrap(inner.engineMockClient)
+	out.EngineMockClient = c.wrap(inner.EngineMockClient)
 	out.chaos = c
 
 	return &out
@@ -183,7 +185,7 @@ type chaosSessionOutcomes struct {
 func TestChaosGraph_SessionRouteDrawsFaults(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	c := newChaosGraph(1)
 	c.churnPlaceholder = remote.churnETag
 	c.startStep(true)
@@ -192,7 +194,7 @@ func TestChaosGraph_SessionRouteDrawsFaults(t *testing.T) {
 	var seen chaosSessionOutcomes
 	for i := range chaosSessionAttempts {
 		name := fmt.Sprintf("big-%d.bin", i)
-		session, err := client.CreateUploadSession(t.Context(), remote.driveID, GraphRootID, name, int64(len(chaosSessionContent)), time.Time{})
+		session, err := client.CreateUploadSession(t.Context(), remote.driveID, syncexec.GraphRootID, name, int64(len(chaosSessionContent)), time.Time{})
 		if err != nil {
 			seen.createFailed(t, remote, name, err)
 			continue
@@ -306,7 +308,7 @@ func TestChaosGraph_FragmentFaultLeavesAPartUploadedSessionToResume(t *testing.T
 		fragmentsInAFile  = 3
 		lastFragmentBytes = 1
 	)
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	c := newChaosGraph(1)
 	client := c.wrapSessions(remote.sessionClient(t))
 	content := strings.Repeat("p", (fragmentsInAFile-1)*scenarioSessionFragmentSize+lastFragmentBytes)
@@ -316,7 +318,7 @@ func TestChaosGraph_FragmentFaultLeavesAPartUploadedSessionToResume(t *testing.T
 	for i := range attempts {
 		name := fmt.Sprintf("part-%d.bin", i)
 		c.startStep(true)
-		session, err := client.CreateUploadSession(t.Context(), remote.driveID, GraphRootID, name, size, time.Time{})
+		session, err := client.CreateUploadSession(t.Context(), remote.driveID, syncexec.GraphRootID, name, size, time.Time{})
 		if err != nil {
 			continue
 		}

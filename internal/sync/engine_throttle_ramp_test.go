@@ -15,6 +15,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // throttleWindowClient wraps a scenario remote's client with the request
@@ -112,37 +114,37 @@ func (c *throttleWindowClient) counts() (requests, throttled, penalized int) {
 
 // wrap puts the budget in front of every mutating call of inner. Observation
 // (delta, lookups) stays free so the test is about execution.
-func (c *throttleWindowClient) wrap(inner *engineMockClient) *engineMockClient {
+func (c *throttleWindowClient) wrap(inner *syncfixture.EngineMockClient) *syncfixture.EngineMockClient {
 	out := *inner
-	out.uploadFn = func(
+	out.UploadFn = func(
 		ctx context.Context, driveID driveid.ID, parentID, name string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error) {
 		if err := c.admit(); err != nil {
 			return nil, err
 		}
-		return inner.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
+		return inner.UploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
 	}
-	out.uploadCreatingFn = func(
+	out.UploadCreatingFn = func(
 		ctx context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc,
 	) (*graph.Item, error) {
 		if err := c.admit(); err != nil {
 			return nil, err
 		}
-		return inner.uploadCreatingFn(ctx, parentID, name, content, size, onCreated)
+		return inner.UploadCreatingFn(ctx, parentID, name, content, size, onCreated)
 	}
-	out.uploadToItemFn = func(
+	out.UploadToItemFn = func(
 		ctx context.Context, driveID driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error) {
 		if err := c.admit(); err != nil {
 			return nil, err
 		}
-		return inner.uploadToItemFn(ctx, driveID, itemID, ifMatch, content, size, mtime, progress)
+		return inner.UploadToItemFn(ctx, driveID, itemID, ifMatch, content, size, mtime, progress)
 	}
-	out.createFolderFn = func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
+	out.CreateFolderFn = func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
 		if err := c.admit(); err != nil {
 			return nil, err
 		}
-		return inner.createFolderFn(ctx, driveID, parentID, name)
+		return inner.CreateFolderFn(ctx, driveID, parentID, name)
 	}
 
 	return &out
@@ -154,7 +156,7 @@ func (c *throttleWindowClient) wrap(inner *engineMockClient) *engineMockClient {
 // number of releases. The hook must never block (the recorder's channel
 // would, with nobody reading it), so it only appends under a mutex.
 type throttleScopeTrace struct {
-	key ScopeKey
+	key syncdomain.ScopeKey
 
 	mu       stdsync.Mutex // guards the fields below
 	pass     int
@@ -164,7 +166,7 @@ type throttleScopeTrace struct {
 }
 
 //nolint:gocritic // Value semantics match SetDebugEventHook, so the hook cannot mutate engine-owned events.
-func (tr *throttleScopeTrace) record(event DebugEvent) {
+func (tr *throttleScopeTrace) record(event syncdomain.DebugEvent) {
 	if event.ScopeKey != tr.key {
 		return
 	}
@@ -174,17 +176,17 @@ func (tr *throttleScopeTrace) record(event DebugEvent) {
 		tr.batches = append(tr.batches, nil)
 	}
 	line, isBatch := "", false
-	if event.Type == EngineDebugEventScopeReleased {
+	if event.Type == syncdomain.EngineDebugEventScopeReleased {
 		tr.releases++
 		line, isBatch = fmt.Sprintf("released(%d)", event.Count), true
 	}
-	if event.Type == EngineDebugEventScopeBatchReleased {
+	if event.Type == syncdomain.EngineDebugEventScopeBatchReleased {
 		line, isBatch = fmt.Sprintf("batch(%d)", event.Count), true
 	}
-	if event.Type == EngineDebugEventScopeActivated {
+	if event.Type == syncdomain.EngineDebugEventScopeActivated {
 		line = "activated"
 	}
-	if event.Type == EngineDebugEventAdmittedWorkRetired {
+	if event.Type == syncdomain.EngineDebugEventAdmittedWorkRetired {
 		line = fmt.Sprintf("retired(%d)", event.Count)
 	}
 	if line == "" {
@@ -209,9 +211,9 @@ func (tr *throttleScopeTrace) beginPass() {
 type throttledPassRun struct {
 	h        *syncHarness
 	limiter  *throttleWindowClient
-	clock    *manualClock
+	clock    *syncfixture.ManualClock
 	trace    *throttleScopeTrace
-	scopeKey ScopeKey
+	scopeKey syncdomain.ScopeKey
 	window   time.Duration
 
 	// checkedDeadline records that one pass was started inside the
@@ -229,7 +231,7 @@ func (run *throttledPassRun) syncUntilConverged(t *testing.T, maxPasses int) []i
 	for len(throttledPerPass) < maxPasses {
 		_, throttledBefore, _ := run.limiter.counts()
 		run.trace.beginPass()
-		_, err := run.h.eng.RunOnce(ctx, SyncBidirectional, RunOptions{})
+		_, err := run.h.eng.RunOnce(ctx, syncdomain.SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 		_, throttledAfter, _ := run.limiter.counts()
 		throttledPerPass = append(throttledPerPass, throttledAfter-throttledBefore)
@@ -260,7 +262,7 @@ func (run *throttledPassRun) requireSilentBeforeDeadline(t *testing.T, deadline 
 	run.checkedDeadline = true
 	requestsBefore, _, _ := run.limiter.counts()
 	run.clock.Advance(deadline.Sub(run.clock.Now()) / 2)
-	_, err := run.h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := run.h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	requestsAfter, _, _ := run.limiter.counts()
 	assert.Equal(t, requestsBefore, requestsAfter, "nothing may be sent to the drive before the Retry-After deadline")
@@ -293,21 +295,21 @@ func TestRunOnce_ThrottledBacklogRampsInsteadOfFlooding(t *testing.T) {
 		throttledNote = "429s must stay a small fraction of the requests"
 	)
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	remote := newMoveScenarioRemote(driveID)
-	clock := newManualClock(time.Date(2026, 11, 1, 9, 7, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 1, 9, 7, 0, 0, time.UTC))
 	limiter := newThrottleWindowClient(clock.Now, windowBudget, window)
-	logger, logs := newCapturedLogger()
+	logger, logs := syncfixture.NewCapturedLogger()
 	eng, syncRoot := newTestEngineWithLogger(t, limiter.wrap(remote.client(t)), logger)
 	eng.transferWorkers = workers
 	installManualClockForTestEngine(eng, clock)
-	scopeKey := SKThrottleDrive(driveID)
+	scopeKey := syncdomain.SKThrottleDrive(driveID)
 	trace := &throttleScopeTrace{key: scopeKey}
 	eng.SetDebugEventHook(trace.record)
 	h := &syncHarness{eng: eng, remote: remote, syncRoot: syncRoot}
 
 	for i := range files {
-		writeLocalFile(t, syncRoot, fmt.Sprintf("bulk/file-%03d.txt", i), fmt.Sprintf("content %d\n", i))
+		syncfixture.WriteLocalFile(t, syncRoot, fmt.Sprintf("bulk/file-%03d.txt", i), fmt.Sprintf("content %d\n", i))
 	}
 	h.beginRound(t)
 

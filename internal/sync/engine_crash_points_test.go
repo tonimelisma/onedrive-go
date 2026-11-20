@@ -18,6 +18,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -69,10 +72,10 @@ func (c *crashCapture) captureDatabase() error {
 	src := filepath.Join(c.srcDir, crashTestDBName)
 	dst := filepath.Join(c.dstDir, crashTestDBName)
 	if c.lostWAL {
-		return copyFileContent(src, dst)
+		return syncfixture.CopyFileContent(src, dst)
 	}
 
-	db, err := sql.Open("sqlite", SqliteFileURI(src, url.Values{SqlitePragmaParam: {"busy_timeout(5000)"}}))
+	db, err := sql.Open("sqlite", syncstore.SqliteFileURI(src, url.Values{syncstore.SqlitePragmaParam: {"busy_timeout(5000)"}}))
 	if err != nil {
 		return fmt.Errorf("open state for snapshot: %w", err)
 	}
@@ -166,7 +169,7 @@ func (c *treeCopier) copyEntry(p, target, rel string, info fs.FileInfo, old sync
 			return fmt.Errorf("link %s: %w", target, err)
 		}
 	default:
-		if err := copyFileContent(p, target); err != nil {
+		if err := syncfixture.CopyFileContent(p, target); err != nil {
 			return err
 		}
 		if err := os.Chtimes(target, info.ModTime(), info.ModTime()); err != nil {
@@ -207,7 +210,7 @@ func (c *crashCapture) reopen(t *testing.T) *syncHarness {
 	require.True(t, c.captured, "crash point %s was never reached", c.point)
 
 	dbPath := filepath.Join(c.dstDir, crashTestDBName)
-	db, err := sql.Open("sqlite", SqliteFileURI(dbPath, nil))
+	db, err := sql.Open("sqlite", syncstore.SqliteFileURI(dbPath, nil))
 	require.NoError(t, err)
 	for _, update := range []string{
 		`UPDATE baseline SET local_device = ?, local_inode = ?
@@ -226,7 +229,7 @@ func (c *crashCapture) reopen(t *testing.T) *syncHarness {
 		placeholders = placeholdersWithoutIntentIn(t, db, c.remoteCopy)
 	}
 	require.NoError(t, db.Close())
-	require.NoError(t, RebindSyncRoot(t.Context(), dbPath, testLogger(t)))
+	require.NoError(t, syncstore.RebindSyncRoot(t.Context(), dbPath, syncfixture.TestLogger(t)))
 
 	eng, syncRoot := newTestEngineInDir(t, t.Context(), c.remoteCopy.client(t), c.dstDir)
 
@@ -263,7 +266,7 @@ func placeholdersWithoutIntentIn(t *testing.T, db *sql.DB, remote *moveScenarioR
 func crashRecoveryScenario(t *testing.T) (*moveScenarioRemote, *syncHarness) {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFile(t, "item-a", "item-docs", "a.txt", "a\n")
 	remote.addFile(t, "item-b", "item-docs", "b.txt", "b\n")
@@ -283,7 +286,7 @@ func crashRecoveryScenario(t *testing.T) (*moveScenarioRemote, *syncHarness) {
 
 	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "docs", "a.txt"), filepath.Join(h.syncRoot, "docs", "a2.txt")))
 	remote.moveAt(t, "docs/b.txt", "docs/b2.txt")
-	writeLocalFile(t, h.syncRoot, crashCreatedLocallyPath, crashCreatedLocallyContent)
+	syncfixture.WriteLocalFile(t, h.syncRoot, crashCreatedLocallyPath, crashCreatedLocallyContent)
 	remote.putFileAt(t, "d.txt", "d remote\n")
 	remote.putFileAt(t, "e.txt", "e edited\n")
 	remote.deleteRemotely("item-f")
@@ -327,7 +330,7 @@ func crashAndRecover(t *testing.T, point string, lostWAL bool) (*crashCapture, *
 	h.eng.execCfg.SetCrashHookForTest(capture.hook)
 	h.eng.baseline.SetCrashHookForTest(capture.hook)
 	h.beginRound(t)
-	_, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
 	recovered := capture.reopen(t)
@@ -342,7 +345,7 @@ func syncHarnessUntilQuiet(t *testing.T, h *syncHarness) {
 	t.Helper()
 
 	for range modelMaxSyncPasses {
-		report, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		report, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 		if report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes+report.FolderCreates+report.Moves+
 			report.ConflictCopies+report.BaselineUpdates+report.Failed+report.HeldLocalDeletes+report.HeldRemoteDeletes == 0 {
@@ -383,14 +386,14 @@ func crashCaseName(point string, lostWAL bool) string {
 func TestCrashRecovery_EveryCrashPointConverges(t *testing.T) {
 	t.Parallel()
 
-	for _, point := range allCrashPoints() {
+	for _, point := range syncfixture.AllCrashPoints() {
 		for _, lostWAL := range []bool{false, true} {
 			t.Run(crashCaseName(point, lostWAL), func(t *testing.T) {
 				t.Parallel()
 
 				_, recovered := crashAndRecover(t, point, lostWAL)
 				assertSyncInvariants(t, recovered)
-				if point == CrashPointUploadCreatedUnrecorded && !lostWAL {
+				if point == syncdomain.CrashPointUploadCreatedUnrecorded && !lostWAL {
 					// The kept intent claims the cut create's empty item, so the
 					// upload finishes into it instead of meeting a create conflict.
 					assert.Equal(t, crashCreatedLocallyContent,
@@ -416,7 +419,7 @@ func TestCrashRecovery_EveryCrashPointConverges(t *testing.T) {
 func TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry(t *testing.T) {
 	t.Parallel()
 
-	for _, point := range []string{CrashPointLocalDeleteTrashed, CrashPointRemoteDeleteDone} {
+	for _, point := range []string{syncdomain.CrashPointLocalDeleteTrashed, syncdomain.CrashPointRemoteDeleteDone} {
 		for _, lostWAL := range []bool{false, true} {
 			t.Run(crashCaseName(point, lostWAL), func(t *testing.T) {
 				t.Parallel()
@@ -432,11 +435,11 @@ func TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry(t *testing
 				// The crashed engine finished its pass after the snapshot, so it
 				// deleted g.txt once; the recovered engine deletes it only when
 				// the snapshot still held it, never after the DELETE succeeded.
-				assert.Equal(t, 1, countOf(capture.remote.deletes, crashDeletedLocallyItemID),
+				assert.Equal(t, 1, syncfixture.CountOf(capture.remote.deletes, crashDeletedLocallyItemID),
 					"the crashed engine deleted the locally deleted file on OneDrive exactly once")
-				recoveredDeletes := countOf(recovered.remote.deletes, crashDeletedLocallyItemID)
+				recoveredDeletes := syncfixture.CountOf(recovered.remote.deletes, crashDeletedLocallyItemID)
 				assert.LessOrEqual(t, recoveredDeletes, 1, "the recovered engine deletes it at most once")
-				if point == CrashPointRemoteDeleteDone {
+				if point == syncdomain.CrashPointRemoteDeleteDone {
 					assert.Zero(t, recoveredDeletes, "a delete that reached OneDrive is not sent again")
 				}
 				bl, err := recovered.eng.baseline.Load(t.Context())

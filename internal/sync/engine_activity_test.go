@@ -9,6 +9,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-6.6.18
@@ -20,15 +22,15 @@ func TestEmitActivity_ClassifiesOutcomesForDisplay(t *testing.T) {
 	eng.SetActivityHook(func(a Activity) { got = append(got, a) })
 
 	failure := errors.New("boom")
-	emit := func(r *ActionCompletion, class errclass.Class) {
-		eng.emitActivity(r, &ResultDecision{Class: class}, true)
+	emit := func(r *syncdomain.ActionCompletion, class errclass.Class) {
+		eng.emitActivity(r, &syncdomain.ResultDecision{Class: class}, true)
 	}
-	emit(&ActionCompletion{Path: "a.txt", ActionType: ActionDownload, Size: 5, SizeKnown: true}, errclass.ClassSuccess)
-	emit(&ActionCompletion{Path: "b.txt", ActionType: ActionUpload, Err: failure}, errclass.ClassRetryableTransient)
-	emit(&ActionCompletion{Path: "c.txt", ActionType: ActionRemoteDelete, Err: failure}, errclass.ClassActionable)
-	emit(&ActionCompletion{Path: "d.txt", ActionType: ActionUpload}, errclass.ClassShutdown)
-	emit(&ActionCompletion{Path: "e.txt", ActionType: ActionUpload}, errclass.ClassSuperseded)
-	emit(&ActionCompletion{Path: "f.txt", ActionType: ActionBaselineUpdate}, errclass.ClassSuccess)
+	emit(&syncdomain.ActionCompletion{Path: "a.txt", ActionType: syncdomain.ActionDownload, Size: 5, SizeKnown: true}, errclass.ClassSuccess)
+	emit(&syncdomain.ActionCompletion{Path: "b.txt", ActionType: syncdomain.ActionUpload, Err: failure}, errclass.ClassRetryableTransient)
+	emit(&syncdomain.ActionCompletion{Path: "c.txt", ActionType: syncdomain.ActionRemoteDelete, Err: failure}, errclass.ClassActionable)
+	emit(&syncdomain.ActionCompletion{Path: "d.txt", ActionType: syncdomain.ActionUpload}, errclass.ClassShutdown)
+	emit(&syncdomain.ActionCompletion{Path: "e.txt", ActionType: syncdomain.ActionUpload}, errclass.ClassSuperseded)
+	emit(&syncdomain.ActionCompletion{Path: "f.txt", ActionType: syncdomain.ActionBaselineUpdate}, errclass.ClassSuccess)
 
 	require.Len(t, got, 3, "shutdown, superseded and bookkeeping completions are not user activity")
 
@@ -51,15 +53,15 @@ func TestEmitActivity_ClassifiesOutcomesForDisplay(t *testing.T) {
 func TestRunOnce_ActivityHookNamesEachCompletedFile(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	mock := newRunOnceBidirectionalMock(driveID)
 	eng, syncRoot := newTestEngine(t, mock)
-	writeLocalFile(t, syncRoot, "local.txt", "local-content")
+	syncfixture.WriteLocalFile(t, syncRoot, "local.txt", "local-content")
 
 	var got []Activity
 	eng.SetActivityHook(func(a Activity) { got = append(got, a) })
 
-	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
 	byPath := map[string]Activity{}
@@ -80,15 +82,15 @@ func TestRunOnce_ActivityHookNamesEachCompletedFile(t *testing.T) {
 func TestRunOnce_DryRunActivityListsPlannedActions(t *testing.T) {
 	t.Parallel()
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	mock := newRunOnceBidirectionalMock(driveID)
 	eng, syncRoot := newTestEngine(t, mock)
-	writeLocalFile(t, syncRoot, "local.txt", "local-content")
+	syncfixture.WriteLocalFile(t, syncRoot, "local.txt", "local-content")
 
 	var got []Activity
 	eng.SetActivityHook(func(a Activity) { got = append(got, a) })
 
-	_, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{DryRun: true})
+	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{DryRun: true})
 	require.NoError(t, err)
 
 	require.NotEmpty(t, got)

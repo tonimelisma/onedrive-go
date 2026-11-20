@@ -19,6 +19,9 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // scenarioRunLimit bounds the one-shot runs runScenarioUntilDone makes.
@@ -134,7 +137,7 @@ func (tc *recreatedFolderMoveCase) wantTree(moved, renamed string) map[string]st
 func runMoveThroughRecreatedFolder(t *testing.T, tc *recreatedFolderMoveCase) {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", "docs")
 	if tc.folder {
 		remote.addFolder("item-moved", "item-docs", tc.fileName)
@@ -190,7 +193,7 @@ func runMoveThroughRecreatedFolder(t *testing.T, tc *recreatedFolderMoveCase) {
 func TestRunOnce_SubfolderMovedOnOneDriveToThePathItsMovedParentLeftConverges(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFolder("item-sub", "item-docs", "sub")
 	remote.addFile(t, "item-inner", "item-sub", "inner.txt", "inner\n")
@@ -256,7 +259,7 @@ func TestRunOnce_FileMovedOnOneDriveOutOfAFolderMadeHereConverges(t *testing.T) 
 func runFileMovedOutOfAFolderMadeHere(t *testing.T, tc *folderMadeHereCase) {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFile(t, "item-moved", "item-docs", "a.txt", "moved\n")
 	remote.addFile(t, "item-kept", "item-docs", "kept.txt", "kept\n")
@@ -385,7 +388,7 @@ func TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverge
 func TestRunOnce_FolderMovedOnOneDriveIntoAFolderMadeWhereAFileLeftConverges(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-x", "root", "x", "x\n")
 	remote.addFolder("item-f", "root", "f")
 	remote.addFile(t, "item-c", "item-f", "c.txt", "c\n")
@@ -1098,10 +1101,10 @@ func TestRunOnce_AFileRenamedHereOntoAPathAWaitingMoveLeavesStaysOnOneDriveWhile
 			t.Parallel()
 
 			remote := newRenamedOntoAWaitingMovesPathRemote(t)
-			logs := &syncLockedBuffer{}
+			logs := &syncfixture.SyncLockedBuffer{}
 			logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
 			eng, syncRoot := newTestEngineWithLogger(t, remote.client(t), logger)
-			clock := newManualClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
+			clock := syncfixture.NewManualClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
 			installManualClockForTestEngine(eng, clock)
 			runScenarioPass(t, eng)
 			tc.makeChangesHere(t, scenarioLocalPath(syncRoot))
@@ -1121,7 +1124,7 @@ func TestRunOnce_AFileRenamedHereOntoAPathAWaitingMoveLeavesStaysOnOneDriveWhile
 			}
 			remote.mu.Unlock()
 
-			report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 			require.NoError(t, err)
 			assert.Equal(t, 1, report.Failed, "the refused create: %v", report.Errors)
 			assertOneDriveHolds(t, remote, "z\n", "after the sync whose create OneDrive refused")
@@ -1160,7 +1163,7 @@ func TestRunOnce_AFileRenamedHereOntoADeletedFileInAFolderMovedOnOneDriveStaysTh
 		t.Run("P moved to "+movedTo, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFolder("item-x", "root", "x")
 			remote.addFile(t, "item-keep", "item-x", "keep.txt", "keep\n")
 			remote.addFolder("item-P", "root", "P")
@@ -1266,7 +1269,7 @@ func TestRunOnce_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *testing
 func TestRunOnce_AFolderMovedIntoTheFolderThatTakesItsPathConvergesWithAnEditInIt(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-x", "root", "x")
 	remote.addFile(t, "item-keep", "item-x", "keep.txt", "keep\n")
 	remote.addFolder("item-P", "root", "P")
@@ -1370,8 +1373,8 @@ func ownLandingCases() []ownLandingCase {
 func (tc *ownLandingCase) remote(t *testing.T) *moveScenarioRemote {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-	parentID := StrRoot
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	parentID := syncdomain.StrRoot
 	if tc.parents != "" {
 		for _, name := range strings.Split(tc.parents, "/") {
 			remote.addFolder("item-"+name, parentID, name)
@@ -1411,17 +1414,17 @@ func runNothingMadeInTheOldF(t *testing.T, tc *ownLandingCase, refused bool) {
 	t.Helper()
 
 	remote := tc.remote(t)
-	logs := &syncLockedBuffer{}
+	logs := &syncfixture.SyncLockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
 	eng, syncRoot := newTestEngineWithLogger(t, remote.client(t), logger)
-	clock := newManualClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	runScenarioPass(t, eng)
 	tc.makeChangesHere(t, scenarioLocalPath(syncRoot))
 	madeInTheOldF := watchCreatesIn(remote, "item-f")
 	if refused {
 		refuseMoveAsideOnce(remote, "item-f")
-		report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 		assert.Equal(t, 1, report.Failed, "the refused move: %v", report.Errors)
 		remote.mu.Lock()
@@ -1449,7 +1452,7 @@ func refuseMoveAsideOnce(remote *moveScenarioRemote, itemID string) {
 	remote.mu.Lock()
 	defer remote.mu.Unlock()
 	remote.refuseMove = func(id, newName string) error {
-		if id != itemID || !strings.Contains(newName, MoveSwapInfix) || parks.Add(1) > 1 {
+		if id != itemID || !strings.Contains(newName, syncplan.MoveSwapInfix) || parks.Add(1) > 1 {
 			return nil
 		}
 		return &graph.GraphError{StatusCode: http.StatusBadRequest, Code: "invalidRequest", Err: graph.ErrBadRequest}
@@ -1508,13 +1511,13 @@ func TestRunOnce_AFileMovedUpOntoItsRenamedFoldersPathStaysOnOneDriveUntilItsUpl
 		t.Run(fmt.Sprintf("upload refused once: %v", refuse), func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFolder("item-P", "root", "P")
 			remote.addFile(t, "item-f", "item-P", "f", "f\n")
-			logs := &syncLockedBuffer{}
+			logs := &syncfixture.SyncLockedBuffer{}
 			logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
 			eng, syncRoot := newTestEngineWithLogger(t, remote.client(t), logger)
-			clock := newManualClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
+			clock := syncfixture.NewManualClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
 			installManualClockForTestEngine(eng, clock)
 			runScenarioPass(t, eng)
 			local := scenarioLocalPath(syncRoot)
@@ -1531,7 +1534,7 @@ func TestRunOnce_AFileMovedUpOntoItsRenamedFoldersPathStaysOnOneDriveUntilItsUpl
 			}
 			remote.mu.Unlock()
 
-			report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+			report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 			require.NoError(t, err)
 			assertOneDriveHolds(t, remote, "f\n", "after the first sync")
 			for run := 1; report.LeftWork().Any(); run++ {
@@ -1588,7 +1591,7 @@ func TestRunOnce_AFileEditedInASubfolderMovedWithItsRenamedFolderIsUploadedOnce(
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			remote.addFolder("item-P", "root", "P")
 			remote.addFolder("item-S", "item-P", "S")
 			remote.addFile(t, "item-f", "item-S", "f", "f\n")
@@ -1630,13 +1633,13 @@ func TestRunOnce_AFileEditedInASubfolderMovedWithItsRenamedFolderIsUploadedOnce(
 func TestRunOnce_NamesTradedHereInAnotherCaseAreMovedOnOneDrive(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
-	remote.addFile(t, "item-a", StrRoot, "a.txt", "a\n")
-	remote.addFile(t, "item-b", StrRoot, "b.txt", "b\n")
-	logs := &syncLockedBuffer{}
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFile(t, "item-a", syncdomain.StrRoot, "a.txt", "a\n")
+	remote.addFile(t, "item-b", syncdomain.StrRoot, "b.txt", "b\n")
+	logs := &syncfixture.SyncLockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
 	eng, syncRoot := newTestEngineWithLogger(t, remote.client(t), logger)
-	clock := newManualClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
+	clock := syncfixture.NewManualClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	runScenarioPass(t, eng)
 	local := scenarioLocalPath(syncRoot)
@@ -1646,7 +1649,7 @@ func TestRunOnce_NamesTradedHereInAnotherCaseAreMovedOnOneDrive(t *testing.T) {
 
 	for run := 1; ; run++ {
 		require.LessOrEqual(t, run, scenarioRunLimit, "the syncs never finish")
-		report, err := eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+		report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 		require.NoError(t, err)
 		if !report.LeftWork().Any() && report.Failed == 0 {
 			break
@@ -1780,7 +1783,7 @@ type sentOnce struct {
 // uploaded, no plan dropping an action as a dependency cycle, and a quiet next
 // plan.
 func assertOneSyncSends(
-	t *testing.T, eng *testEngine, remote *moveScenarioRemote, syncRoot string, logs *syncLockedBuffer,
+	t *testing.T, eng *testEngine, remote *moveScenarioRemote, syncRoot string, logs *syncfixture.SyncLockedBuffer,
 	sent *sentOnce,
 ) {
 	t.Helper()
@@ -1855,7 +1858,7 @@ type collisionHold struct {
 // OneDrive, nothing uploaded, no plan dropping an action as a dependency
 // cycle, and a quiet next plan.
 func assertHeldUntilTheCollisionClears(
-	t *testing.T, eng *testEngine, remote *moveScenarioRemote, syncRoot string, logs *syncLockedBuffer,
+	t *testing.T, eng *testEngine, remote *moveScenarioRemote, syncRoot string, logs *syncfixture.SyncLockedBuffer,
 	hold *collisionHold,
 ) {
 	t.Helper()
@@ -2000,7 +2003,7 @@ func moveEachIntoANewFolderAtTheOthersPath(t *testing.T, syncRoot, first, second
 func TestRunOnce_ThreeFoldersMovedHereInARingOfNewFoldersConverge(t *testing.T) {
 	t.Parallel()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	ring := [][2]string{{"a", "b/a"}, {"b", "c/b"}, {"c", "a/c"}}
 	for _, move := range ring {
 		remote.addFolder("item-"+move[0], "root", move[0])
@@ -2029,7 +2032,7 @@ func TestRunOnce_ThreeFoldersMovedHereInARingOfNewFoldersConverge(t *testing.T) 
 func newFolderPairScenarioRemote(t *testing.T) *moveScenarioRemote {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-x", "root", "x")
 	remote.addFile(t, "item-keep", "item-x", "keep.txt", "keep\n")
 	remote.addFolder("item-f", "root", "f")
@@ -2117,7 +2120,7 @@ func (tc *movedBackCase) steps(t *testing.T, remote *moveScenarioRemote, syncRoo
 func runFileMovedBackOutOfAMovedFolder(t *testing.T, tc *movedBackCase) {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-x", "root", "x")
 	remote.addFile(t, "item-keep", "item-x", "keep.txt", "keep\n")
 	remote.addFolder("item-f", "root", "f")
@@ -2170,7 +2173,7 @@ func runFileMovedBackOutOfAMovedFolder(t *testing.T, tc *movedBackCase) {
 func newSubfolderScenarioRemote(t *testing.T) *moveScenarioRemote {
 	t.Helper()
 
-	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-docs", "root", "docs")
 	remote.addFolder("item-sub", "item-docs", "sub")
 	remote.addFile(t, "item-inner", "item-sub", "inner.txt", "inner\n")
@@ -2187,7 +2190,7 @@ func newSubfolderScenarioRemote(t *testing.T) *moveScenarioRemote {
 // action as a dependency cycle, and that the next plan is empty. It returns
 // the actions the sync superseded.
 func assertOneSyncLeavesTree(
-	t *testing.T, eng *testEngine, remote *moveScenarioRemote, syncRoot string, logs *syncLockedBuffer,
+	t *testing.T, eng *testEngine, remote *moveScenarioRemote, syncRoot string, logs *syncfixture.SyncLockedBuffer,
 	want map[string]string,
 ) (superseded int) {
 	t.Helper()
@@ -2212,10 +2215,10 @@ func scenarioLocalPath(syncRoot string) func(rel string) string {
 
 // newRecreateScenarioEngine syncs remote's tree to a new engine once and
 // returns the engine, its sync root and the errors it logs.
-func newRecreateScenarioEngine(t *testing.T, remote *moveScenarioRemote) (*testEngine, string, *syncLockedBuffer) {
+func newRecreateScenarioEngine(t *testing.T, remote *moveScenarioRemote) (*testEngine, string, *syncfixture.SyncLockedBuffer) {
 	t.Helper()
 
-	logs := &syncLockedBuffer{}
+	logs := &syncfixture.SyncLockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
 	eng, syncRoot := newTestEngineWithLogger(t, remote.client(t), logger)
 	runScenarioPass(t, eng)

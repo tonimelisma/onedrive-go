@@ -19,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // failingTerminal is a status writer isWriterTTY takes for a terminal, since
@@ -175,7 +176,7 @@ func runWatchThatWarnsAtStart(t *testing.T, ctx context.Context, logger *slog.Lo
 		ctx,
 		holder,
 		nil,
-		syncengine.SyncBidirectional,
+		syncdomain.SyncBidirectional,
 		syncengine.WatchOptions{},
 		logger,
 		errWriter{},

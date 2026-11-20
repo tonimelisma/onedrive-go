@@ -8,6 +8,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Validates: R-2.8.9, R-6.6.17
@@ -17,35 +21,35 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	eng := newSingleOwnerEngine(t)
 	eng.perfCollector = perf.NewCollector(nil)
 	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = NewDirtyBuffer(eng.logger)
+	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
-	remoteDriveID := driveid.New(testDriveID)
+	remoteDriveID := driveid.New(syncfixture.TestDriveID)
 
-	require.NoError(t, eng.baseline.CommitObservation(ctx, []ObservedItem{{
+	require.NoError(t, eng.baseline.CommitObservation(ctx, []syncdomain.ObservedItem{{
 		DriveID:  remoteDriveID,
 		ItemID:   "remote-1",
 		Path:     "download.txt",
-		ItemType: ItemTypeFile,
+		ItemType: syncdomain.ItemTypeFile,
 		Hash:     "changed",
 		Size:     12,
 		ETag:     "etag-changed",
 	}}, "delta-1", remoteDriveID))
 
 	flow.initializeRuntimeState(&runtimePlan{})
-	flow.sched.graph = NewDepGraph(eng.logger)
+	flow.sched.graph = syncexec.NewDepGraph(eng.logger)
 
-	root := flow.sched.graph.Add(&Action{
-		Type:    ActionDownload,
+	root := flow.sched.graph.Add(&syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
 		Path:    "download.txt",
 		ItemID:  "remote-1",
 		DriveID: remoteDriveID,
-		View: &PathView{
+		View: &syncdomain.PathView{
 			Path: "download.txt",
-			Remote: &RemoteState{
+			Remote: &syncdomain.RemoteState{
 				DriveID:  remoteDriveID,
 				ItemID:   "remote-1",
-				ItemType: ItemTypeFile,
+				ItemType: syncdomain.ItemTypeFile,
 				Hash:     "planned",
 				Size:     12,
 				ETag:     "etag-planned",
@@ -54,14 +58,14 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := flow.sched.graph.Add(&Action{
-		Type: ActionUpload,
+	child := flow.sched.graph.Add(&syncdomain.Action{
+		Type: syncdomain.ActionUpload,
 		Path: "dependent.txt",
-		View: &PathView{Path: "dependent.txt"},
+		View: &syncdomain.PathView{Path: "dependent.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
-	outbox, err := flow.admitReady(ctx, []*TrackedAction{root})
+	outbox, err := flow.admitReady(ctx, []*syncdomain.TrackedAction{root})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 	assert.Equal(t, 0, flow.sched.graph.InFlightCount())

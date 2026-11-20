@@ -9,6 +9,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // The sync store records each transaction on the collector the run context
@@ -23,12 +25,12 @@ func TestRunOnce_StoreTransactionsCountOnTheRunContextCollector(t *testing.T) {
 
 	const content = "alpha!!"
 
-	driveID := driveid.New(engineTestDriveID)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	mock := newDownloadDeltaMock(
 		driveID,
 		&graph.Item{
 			ID: "item-a", Name: "alpha.txt", ParentID: "root",
-			DriveID: driveID, Size: int64(len(content)), QuickXorHash: testQuickXor(content),
+			DriveID: driveID, Size: int64(len(content)), QuickXorHash: syncfixture.TestQuickXor(content),
 		},
 		"token-perf",
 		[]byte(content),
@@ -39,7 +41,7 @@ func TestRunOnce_StoreTransactionsCountOnTheRunContextCollector(t *testing.T) {
 		inputs.PerfCollector = mountCollector
 	})
 
-	report, err := eng.RunOnce(perf.WithCollector(t.Context(), mountCollector), SyncBidirectional, RunOptions{})
+	report, err := eng.RunOnce(perf.WithCollector(t.Context(), mountCollector), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err, "RunOnce")
 	require.Equal(t, 1, report.Downloads, "the pass downloaded the file and committed it to the store")
 
