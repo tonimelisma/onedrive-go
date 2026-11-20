@@ -446,6 +446,35 @@ func TestSyncNotifier_ReloadStatusFollowsTheStatedOutcome(t *testing.T) {
 	assert.Equal(t, "READY=1\nSTATUS=Watching /new; couldn't reload the config, kept the previous settings", socket.next())
 }
 
+// Validates: R-6.8.26, R-6.6.32
+//
+// While a refreshed sign-in cannot be saved, every status of the ready watch
+// names its file after what the watch says today; once the save succeeds,
+// the status is the watch's own again.
+func TestSyncNotifier_StatusNamesAnUnsavedSignInWhileItIsSet(t *testing.T) {
+	socket := newFakeNotifySocket(t)
+	s := newSyncNotifier(socket.notifier(map[string]string{}), slog.New(slog.DiscardHandler), nil)
+
+	s.lifecycle(multisync.WatchLifecycleEvent{Phase: multisync.WatchReady, SyncRoots: []string{"/sync"}})
+	assert.Equal(t, "READY=1\nSTATUS=Watching /sync", socket.next())
+
+	s.lifecycle(multisync.WatchLifecycleEvent{
+		Phase:          multisync.WatchSignInSaveChanged,
+		UnsavedSignIns: []string{"/tokens/sign-in.json"},
+	})
+	assert.Equal(t, "STATUS=Watching /sync; couldn't save the refreshed sign-in to /tokens/sign-in.json", socket.next())
+
+	s.lifecycle(multisync.WatchLifecycleEvent{
+		Phase: multisync.WatchReloaded, Reload: multisync.ReloadApplied, SyncRoots: []string{"/sync", "/other"},
+	})
+	assert.Equal(t,
+		"READY=1\nSTATUS=Watching /sync, /other; couldn't save the refreshed sign-in to /tokens/sign-in.json",
+		socket.next(), "a reload's status keeps naming it")
+
+	s.lifecycle(multisync.WatchLifecycleEvent{Phase: multisync.WatchSignInSaveChanged})
+	assert.Equal(t, "STATUS=Watching /sync, /other", socket.next())
+}
+
 // Validates: R-6.6.32
 func TestOpenSyncNotifier_BadSocketWarnsAndContinues(t *testing.T) {
 	t.Parallel()

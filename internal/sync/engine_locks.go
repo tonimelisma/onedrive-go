@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/filelock"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -190,20 +191,6 @@ func statDeviceNumber[T ~int32 | ~uint64](dev T) uint64 {
 	return uint64(dev)
 }
 
-// isUnsupportedLockErrno reports flock failures that mean "this filesystem
-// cannot lock", as opposed to "someone holds the lock".
-func isUnsupportedLockErrno(err error) bool {
-	for _, errno := range []syscall.Errno{
-		syscall.ENOTSUP, syscall.EOPNOTSUPP, syscall.ENOLCK, syscall.EINVAL, syscall.EBADF, syscall.ENOSYS,
-	} {
-		if errors.Is(err, errno) {
-			return true
-		}
-	}
-
-	return false
-}
-
 // acquireSyncRootLock takes the lock of the folder root. flock is the
 // syscall (a test seam; nil is syscall.Flock).
 func acquireSyncRootLock(
@@ -248,14 +235,14 @@ func lockDataDirFile(
 		return nil, fmt.Errorf("open %s lock: %w", target.noun, err)
 	}
 
-	lockErr := flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	locked, lockErr := filelock.TryLock(flock, int(file.Fd()))
 	switch {
-	case lockErr == nil:
+	case locked:
 		return &dataDirLock{file: file, flock: flock}, nil
-	case errors.Is(lockErr, syscall.EWOULDBLOCK):
+	case lockErr == nil:
 		closeErr := file.Close()
 		return nil, errors.Join(fmt.Errorf("%w: %s", target.inUse, target.name), closeErr)
-	case isUnsupportedLockErrno(lockErr):
+	case filelock.IsUnsupported(lockErr):
 		if logger != nil {
 			logger.Warn("onedrive-go cannot lock its data folder, so it cannot stop a second sync from using this "+
 				target.noun+" at the same time; make sure only one sync runs here",
@@ -626,7 +613,7 @@ func (l *dataDirLock) release() error {
 
 	var err error
 	if l.flock != nil {
-		if unlockErr := l.flock(int(l.file.Fd()), syscall.LOCK_UN); unlockErr != nil {
+		if unlockErr := filelock.Unlock(l.flock, int(l.file.Fd())); unlockErr != nil {
 			err = fmt.Errorf("unlock: %w", unlockErr)
 		}
 	}

@@ -283,7 +283,7 @@ func exchangeAndSave(
 		slog.Time("expiry", tok.Expiry),
 	)
 
-	return newTokenBridge(cfg, authHTTP, tok, logger), nil
+	return newTokenBridge(cfg, authHTTP, tokenPath, tok, logger), nil
 }
 
 // generateState produces a cryptographically random hex string for the OAuth2

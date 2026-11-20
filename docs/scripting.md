@@ -137,7 +137,7 @@ onedrive-go sync --json | jq -c 'select(.event == "activity" and (.status == "fa
 | Code | Meaning | Retry unchanged? |
 | --- | --- | --- |
 | 0 | Success, or `sync --watch` stopped normally, unless stderr refused a write | |
-| 1 | Any other failure, including network, throttling and server errors, a one-shot `sync` that left a file unsynced, or a command that worked but could not write to stderr | May work |
+| 1 | Any other failure, including network, throttling and server errors, a one-shot `sync` that left a file unsynced, a command that worked but could not write to stderr, or one that could not save a refreshed sign-in to its file | May work |
 | 2 | Command-line mistake: unknown command or flag, wrong arguments, conflicting flags | No |
 | 77 | Sign-in required: no saved login, or Microsoft rejected or revoked it (sysexits `EX_NOPERM`) | No: run `onedrive-go login` |
 | 78 | Invalid configuration: unreadable or invalid file, a `--drive` that matches nothing, no drives configured (sysexits `EX_CONFIG`) | No: fix the config |

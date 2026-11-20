@@ -190,7 +190,7 @@ func TestTokenBridge_ForceRefreshRedeemsRefreshTokenOncePerBurst(t *testing.T) {
 	cached := &oauth2.Token{AccessToken: "cached", RefreshToken: "rt", Expiry: time.Now().Add(time.Hour)}
 	var clock atomic.Int64
 	clock.Store(time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC).UnixNano())
-	bridge := newTokenBridge(cfg, testAuthClient(), cached, slog.Default())
+	bridge := newTokenBridge(cfg, testAuthClient(), savedSignInPath(t, cached), cached, slog.Default())
 	bridge.now = func() time.Time { return time.Unix(0, clock.Load()) }
 
 	got, err := bridge.Token(t.Context())
@@ -253,7 +253,7 @@ func TestTokenBridge_InteractionRequiredIsPlainSignInRequired(t *testing.T) {
 
 	cfg := &oauth2.Config{ClientID: "test", Endpoint: oauth2.Endpoint{TokenURL: tokenSrv.URL + "/token"}}
 	tok := &oauth2.Token{AccessToken: "old", RefreshToken: "rt", Expiry: time.Now().Add(-time.Hour)}
-	bridge := newTokenBridge(cfg, testAuthClient(), tok, slog.Default())
+	bridge := newTokenBridge(cfg, testAuthClient(), savedSignInPath(t, tok), tok, slog.Default())
 
 	_, err := bridge.Token(t.Context())
 	require.ErrorIs(t, err, ErrLoginInteractionRequired)

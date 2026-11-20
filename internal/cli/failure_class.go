@@ -110,3 +110,21 @@ func withCommandPanic(ctx context.Context, err error) error {
 		return errors.Join(cause, err)
 	}
 }
+
+// withTokenSaveFailure is the command's final error once a refreshed sign-in
+// it could not save is counted (R-6.8.26). The command's work is done and its
+// requests had the token in memory; what is at risk is the next run. So the
+// save failure replaces the nil result of a command that worked, and the
+// cancellation of one the user stopped (a watch stopped while a save is
+// failing exits 1, not 0), and joins any other failure, which keeps its own
+// exit status.
+func withTokenSaveFailure(saveErr, err error) error {
+	switch {
+	case saveErr == nil:
+		return err
+	case err == nil, errors.Is(err, context.Canceled):
+		return saveErr
+	default:
+		return errors.Join(err, saveErr)
+	}
+}

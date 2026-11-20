@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -153,24 +154,25 @@ type cliSeams struct {
 type CLIContext struct {
 	Flags            CLIFlags
 	Logger           *slog.Logger
-	OutputWriter     io.Writer                // destination for primary command output (default: os.Stdout)
-	StatusWriter     io.Writer                // destination for status, warning and progress lines (default: os.Stderr)
-	CfgPath          string                   // resolved config file path (set for every account command)
-	Env              config.EnvOverrides      // environment overrides read at startup (zero when no account is needed)
-	GraphBaseURL     string                   // Graph root of the command's clients; empty means graph.DefaultBaseURL
-	SharedTarget     *sharedTarget            // nil for ordinary drive/path commands
-	Cfg              *config.ResolvedDrive    // the resolved drive; nil until a data command resolves one
-	Runtime          *driveops.SessionRuntime // every account command's runtime, with the config once a drive resolves
-	PerfSession      *perf.Session            // command-scoped performance collector/logging session
-	seams            cliSeams                 // test injection points; see cliSeams
-	logCloser        io.Closer                // log file closer; nil when no log file is configured
-	fileLogLevel     *slog.LevelVar           // the log file's level; nil when no log file is configured
-	logging          config.LoggingConfig     // logging settings the command logger was last built from
-	hasLogging       bool                     // logging holds settings from a config file (not just the bootstrap flags)
-	statusMu         sync.Mutex               // guards statusErr and progressShown for concurrent progress callbacks
-	statusErr        error                    // the first write StatusWriter refused; main reads it once the command returned
-	progressShown    bool                     // a redrawn progress line is on screen and must be cleared before other output
-	reconcileMu      sync.Mutex               // guards reconcileNotices and selector mutation
+	OutputWriter     io.Writer                  // destination for primary command output (default: os.Stdout)
+	StatusWriter     io.Writer                  // destination for status, warning and progress lines (default: os.Stderr)
+	CfgPath          string                     // resolved config file path (set for every account command)
+	Env              config.EnvOverrides        // environment overrides read at startup (zero when no account is needed)
+	GraphBaseURL     string                     // Graph root of the command's clients; empty means graph.DefaultBaseURL
+	SharedTarget     *sharedTarget              // nil for ordinary drive/path commands
+	Cfg              *config.ResolvedDrive      // the resolved drive; nil until a data command resolves one
+	Runtime          *driveops.SessionRuntime   // every account command's runtime, with the config once a drive resolves
+	PerfSession      *perf.Session              // command-scoped performance collector/logging session
+	runtimes         []*driveops.SessionRuntime // every runtime newSessionRuntime built for the command, in order
+	seams            cliSeams                   // test injection points; see cliSeams
+	logCloser        io.Closer                  // log file closer; nil when no log file is configured
+	fileLogLevel     *slog.LevelVar             // the log file's level; nil when no log file is configured
+	logging          config.LoggingConfig       // logging settings the command logger was last built from
+	hasLogging       bool                       // logging holds settings from a config file (not just the bootstrap flags)
+	statusMu         sync.Mutex                 // guards statusErr and progressShown for concurrent progress callbacks
+	statusErr        error                      // the first write StatusWriter refused; main reads it once the command returned
+	progressShown    bool                       // a redrawn progress line is on screen and must be cleared before other output
+	reconcileMu      sync.Mutex                 // guards reconcileNotices and selector mutation
 	reconcileNotices map[string]struct{}
 	lastBadLogLevel  string // the unknown log_level last warned about on a reload
 }
@@ -336,7 +338,7 @@ func (cc *CLIContext) runtime() *driveops.SessionRuntime {
 	}
 
 	if cc.Runtime == nil {
-		cc.Runtime = driveops.NewSessionRuntime(nil, graph.UserAgent(version), cc.Logger)
+		cc.Runtime = cc.newSessionRuntime(nil, cc.Logger)
 	}
 
 	if cc.GraphBaseURL != "" && cc.Runtime.GraphBaseURL != cc.GraphBaseURL {
@@ -344,6 +346,52 @@ func (cc *CLIContext) runtime() *driveops.SessionRuntime {
 	}
 
 	return cc.Runtime
+}
+
+// newSessionRuntime builds a session runtime for the command over holder
+// (nil for a command without a resolved config) and keeps it, so main asks
+// every runtime the command used for the sign-ins it could not save
+// (tokenSaveFailure). Call it from the command goroutine. A nil cc builds a
+// runtime nobody keeps.
+func (cc *CLIContext) newSessionRuntime(holder *config.Holder, logger *slog.Logger) *driveops.SessionRuntime {
+	runtime := driveops.NewSessionRuntime(holder, graph.UserAgent(version), logger)
+	if cc == nil {
+		return runtime
+	}
+
+	cc.runtimes = append(cc.runtimes, runtime)
+
+	return runtime
+}
+
+// tokenSaveFailure is the save failures of the refreshed sign-ins every
+// runtime of the command still holds, joined, or nil. A runtime a test set
+// as Runtime directly is asked too.
+func (cc *CLIContext) tokenSaveFailure() error {
+	if cc == nil {
+		return nil
+	}
+
+	runtimes := cc.runtimes
+	if cc.Runtime != nil && !slices.Contains(runtimes, cc.Runtime) {
+		runtimes = append(slices.Clip(runtimes), cc.Runtime)
+	}
+
+	// Two runtimes of one command can hold a source for the same file; its
+	// failure is reported once.
+	var errs []error
+	seen := make(map[string]struct{})
+	for _, runtime := range runtimes {
+		for _, failure := range runtime.TokenSaveFailures() {
+			if _, dup := seen[failure.Err.Error()]; dup {
+				continue
+			}
+			seen[failure.Err.Error()] = struct{}{}
+			errs = append(errs, failure.Err)
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // cliContextKey is the context key for CLIContext.
@@ -544,7 +592,7 @@ func initializeCLIContext(
 		return err
 	}
 	bootstrapLog.replayInto(ctx, cc.Logger.Handler())
-	cc.Runtime = driveops.NewSessionRuntime(nil, graph.UserAgent(version), cc.Logger)
+	cc.Runtime = cc.newSessionRuntime(nil, cc.Logger)
 
 	perfSession, perfCtx := newCommandPerfSession(ctx, cmd, cc.Logger)
 	cc.PerfSession = perfSession
@@ -595,7 +643,7 @@ func initializeResolvedCLIContext(cmd *cobra.Command, cc *CLIContext) error {
 		return err
 	}
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
-	cc.Runtime = driveops.NewSessionRuntime(holder, graph.UserAgent(version), cc.Logger)
+	cc.Runtime = cc.newSessionRuntime(holder, cc.Logger)
 
 	return nil
 }
@@ -806,6 +854,7 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) (exitC
 	executed, err := cmd.ExecuteContextC(ctx)
 	err = asUsageError(executed, err)
 	err = withCommandPanic(cmd.Context(), err)
+	err = withTokenSaveFailure(rootCLIContext(cmd).tokenSaveFailure(), err)
 	completeRootCommandPerf(cmd, err)
 	// Read while the log file is open, so the failure reaches it.
 	statusErr := statusStreamFailure(cmd)

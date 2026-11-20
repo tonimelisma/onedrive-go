@@ -227,6 +227,36 @@ func TestLogoutPurge_NotifiesTheWatchBeforeDeleting(t *testing.T) {
 	assert.Contains(t, out.String(), "Purged config and state for "+cid.String()+".")
 }
 
+// A logout that removes only a saved login, with no drive of the account
+// configured, still tells a running watch: its reload drops the token
+// sources it holds, so it does not go on refreshing the removed sign-in.
+//
+// Validates: R-3.1.3, R-6.8.30
+func TestLogout_NotifiesDaemon(t *testing.T) {
+	setTestDriveHome(t)
+
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_notified@example.com.json")
+	var reloads atomic.Int32
+	startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != synccontrol.PathReload {
+				http.Error(w, "unexpected path", http.StatusNotFound)
+				return
+			}
+			reloads.Add(1)
+			assert.NoFileExists(t, filepath.Join(config.DefaultDataDir(), "token_personal_notified@example.com.json"),
+				"the watch is told after the sign-in is gone")
+			w.Header().Set("Content-Type", "application/json")
+			assert.NoError(t, json.NewEncoder(w).Encode(synccontrol.MutationResponse{Status: synccontrol.StatusReloaded}))
+		})
+
+	var out bytes.Buffer
+	cc := newCommandContext(&out, filepath.Join(t.TempDir(), "config.toml"))
+	require.NoError(t, runLogoutWithContext(t.Context(), cc, false))
+	assert.Equal(t, int32(1), reloads.Load())
+	assert.Contains(t, out.String(), "Token removed for notified@example.com.")
+}
+
 // A drive on its default folder has no sync_dir in the config; `drive remove`
 // names the folder it synced, not the empty setting.
 //

@@ -12,6 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 // resolveLogoutAccountWithCatalog determines the account email for logout
@@ -111,7 +112,7 @@ func executeLogout(
 		result.Drives = append(result.Drives, cid.String())
 	}
 
-	removedToken, err := removeLogoutToken(w, stored, account, affected, purge, logger)
+	removedToken, err := removeLogoutToken(ctx, w, stored, account, affected, purge, logger)
 	if err != nil {
 		return result, err
 	}
@@ -129,9 +130,10 @@ func executeLogout(
 	}
 
 	removedDrives, configErr := removeAccountDriveConfigs(cc.CfgPath, affected, logger)
-	if len(removedDrives) > 0 {
+	if len(removedDrives) > 0 || result.TokenRemoved {
 		// The reload retires the drives' runners, which closes their stores
-		// before a purge deletes them.
+		// before a purge deletes them, and drops the running watch's token
+		// sources, so none of them refreshes the removed sign-in.
 		notifyDaemonIfRunning(ctx, cc)
 	}
 
@@ -156,6 +158,7 @@ func logoutPurgeCommand(account string) string {
 // canonical ID the token was found by, a drive of the account or the account
 // itself, or zero when there was no token to delete.
 func removeLogoutToken(
+	ctx context.Context,
 	w io.Writer,
 	stored *config.Catalog,
 	account string,
@@ -174,8 +177,13 @@ func removeLogoutToken(
 
 	tokenPath := config.DriveTokenPath(tokenCanonicalID)
 	if tokenPath != "" {
-		if err := graph.Logout(tokenPath, logger); err != nil {
+		if err := graph.Logout(ctx, tokenPath, logger); err != nil {
 			return driveid.CanonicalID{}, fmt.Errorf("remove token file: %w", err)
+		}
+		if purge {
+			if err := tokenfile.RemoveLock(tokenPath); err != nil {
+				return driveid.CanonicalID{}, fmt.Errorf("remove token lock file: %w", err)
+			}
 		}
 		return tokenCanonicalID, writef(w, "Token removed for %s.\n", account)
 	}

@@ -405,6 +405,49 @@ func (r *SessionRuntime) graphBaseURL() string {
 	return graph.DefaultBaseURL
 }
 
+// TokenSaveFailure is a refreshed sign-in a token source of the runtime holds
+// in memory but could not write to its file.
+type TokenSaveFailure struct {
+	TokenPath string
+	// Err wraps graph.ErrTokenNotSaved and names the file and the cause.
+	Err error
+}
+
+// TokenSaveFailures lists, sorted by sign-in file, the refreshed sign-ins
+// the runtime's token sources could not write to their files. It covers the
+// sources loaded since the last FlushTokenCache: a failing source a flush let
+// go of still retries its write whenever a session built before the flush
+// uses it, but is no longer listed. The owner reports them: a command when it
+// ends, a watch on its periodic tick (R-6.8.26).
+func (r *SessionRuntime) TokenSaveFailures() []TokenSaveFailure {
+	r.mu.Lock()
+	loaded := make([]TokenSaveFailure, 0, len(r.tokenSources))
+	sources := make(map[string]graph.TokenSource, len(r.tokenSources))
+	for path, load := range r.tokenSources {
+		select {
+		case <-load.done:
+		default:
+			// A load under way has refreshed nothing yet.
+			continue
+		}
+		if load.err == nil {
+			loaded = append(loaded, TokenSaveFailure{TokenPath: path})
+			sources[path] = load.ts
+		}
+	}
+	r.mu.Unlock()
+
+	slices.SortFunc(loaded, func(a, b TokenSaveFailure) int { return strings.Compare(a.TokenPath, b.TokenPath) })
+	failures := loaded[:0]
+	for _, failure := range loaded {
+		if failure.Err = graph.TokenSaveError(sources[failure.TokenPath]); failure.Err != nil {
+			failures = append(failures, failure)
+		}
+	}
+
+	return failures
+}
+
 // FlushTokenCache clears the cached TokenSources and the per-sign-in
 // bootstrap clients beside them, forcing the next Session() call to re-read
 // token files from disk. Called during daemon control-socket reload to pick
