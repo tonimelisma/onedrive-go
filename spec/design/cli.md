@@ -151,8 +151,8 @@ scripts and service managers:
 
 | Status | Meaning | Chosen by |
 | --- | --- | --- |
-| 0 | success (also `sync --watch` stopped by a signal: the watch finishes cleanly, including one that idled because every drive was paused), unless stderr refused a write | `err == nil` and no refused stderr write recorded |
-| 1 | any other failure, transient or not, a one-shot `sync` that finished but left a file unsynced, a recovered panic, also one that ended a stop the user asked for or travels with a sign-in or configuration failure, and a command that worked but could not write to stderr | default (`errSyncLeftWork` carries no sentinel); `panicguard.ErrPanic` is checked first, before usage, sign-in, configuration and cancellation; a refused stderr write turns 0 into 1 (`exitCodeAfterStatusStream`) |
+| 0 | success (also `sync --watch` stopped by a signal: the watch finishes cleanly, including one that idled because every drive was paused), unless stderr refused a write or a refreshed sign-in is still unsaved | `err == nil` and no refused stderr write recorded |
+| 1 | any other failure, transient or not, a one-shot `sync` that finished but left a file unsynced, a recovered panic, also one that ended a stop the user asked for or travels with a sign-in or configuration failure, a command that worked but could not write to stderr, and a command (a stopped watch included) that worked but holds a refreshed sign-in it could not save | default (`errSyncLeftWork` carries no sentinel); `panicguard.ErrPanic` is checked first, before usage, sign-in, configuration and cancellation; a refused stderr write turns 0 into 1 (`exitCodeAfterStatusStream`); an unsaved sign-in replaces a nil or canceled result (`withTokenSaveFailure`) |
 | 2 | command-line mistake | `*usageError` |
 | 77 (EX_NOPERM) | sign-in required | `graph.ErrNotLoggedIn` or `graph.ErrUnauthorized` (`ErrLoginExpired` travels with it) |
 | 78 (EX_CONFIG) | invalid configuration | `config.ErrInvalidConfig` |
@@ -161,6 +161,19 @@ scripts and service managers:
 77 and 78 mean "running again unchanged fails the same way", so a unit can set
 `RestartPreventExitStatus=77 78`. A sign-in the user declined or let expire
 during `login` exits 1: rerunning `login` is the fix.
+
+A refreshed sign-in that could not be written to its file is an error once the
+command's work is done (R-6.8.26): `mainWithWriters` asks every session runtime
+the command built (`CLIContext.newSessionRuntime`, which the root command, a
+data command's resolved config and both `sync` flows go through) for its
+token sources' save failures, and `withTokenSaveFailure` makes them the
+command's error, "couldn't save the refreshed sign-in to <file>; the next run
+may ask you to sign in again: <cause>", exit 1, or joins them to a failure the
+command already had, which keeps its own status. A failure a later write
+cleared is no error. A watch stopped while a save is failing therefore exits 1,
+not 0; with `Restart=on-failure` systemd does not restart a unit it was asked
+to stop, and the unit shows as failed until it next starts
+(`TestCommandExitCode`, `TestCLIContext_TokenSaveFailureIsTheCommandsError`).
 
 What the CLI could not tell the user changes the exit status, as it does for
 the GNU tools when standard error fails: `Statusf`, `warnf`, `Progressf`,
@@ -298,6 +311,12 @@ its own goroutine:
   It is never inferred from `Err`
   (`TestSyncNotifier_ReloadStatusFollowsTheStatedOutcome`).
 - `WatchStopping` sends `STOPPING=1` before the runners drain.
+- `WatchSignInSaveChanged` (the watch's reconcile tick found the set of
+  sign-in files with an unsaved refreshed sign-in changed) sends `STATUS=`
+  with the ready status followed by "couldn't save the refreshed sign-in to
+  <file>"; every later ready status carries that suffix until the event with
+  no files clears it (R-6.8.26,
+  `TestSyncNotifier_StatusNamesAnUnsavedSignInWhileItIsSet`).
 
 A watch that ends with an error sets a final `STATUS=` ("Sign-in required: run
 'onedrive-go login'", "Invalid config: ...", "Failed: ..."). When the unit sets
@@ -1045,7 +1064,14 @@ logout are purged anyway, and the logout still removes the account and its
 drives from the catalog; `drive remove` keeps a kept drive's catalog record
 until the finishing purge prunes it. Deleting first, as before, removed a
 store under a runner still writing it. Plain `logout` tells the watch too,
-after removing the sections.
+after removing the sections, and so does a logout that removed only the
+saved login: the reload drops the watch's token sources, so none goes on
+refreshing the removed sign-in (`TestLogout_NotifiesDaemon`). Logout deletes
+the sign-in file under its lock (`graph.Logout`), and a purge removes the
+lock file too; `login` installs its pending sign-in under the same lock
+(`tokenfile.Install`) and undoes it under the lock on a failed enrollment
+(`TestLogin_InstallsTokenUnderLock`; graph-client.md, Refresh Across
+Processes, R-6.8.30).
 
 `status` says, on stderr, when a sync holds the socket but its live state is
 missing: "the running sync did not answer in time" for an unresponsive owner,

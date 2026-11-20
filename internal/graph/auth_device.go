@@ -18,6 +18,8 @@ const (
 	oauthErrAccessDenied          = "access_denied"
 	oauthErrAuthorizationDeclined = "authorization_declined"
 	oauthErrExpiredToken          = "expired_token"
+	// oauthErrInvalidGrant is a refresh token the sign-in service refuses.
+	oauthErrInvalidGrant = "invalid_grant"
 )
 
 type (
@@ -110,7 +112,7 @@ func doLoginWithFlow(
 		slog.Time("expiry", tok.Expiry),
 	)
 
-	return newTokenBridge(cfg, authHTTP, tok, logger), nil
+	return newTokenBridge(cfg, authHTTP, tokenPath, tok, logger), nil
 }
 
 // deviceLoginError turns the token endpoint's answer for the common user-side

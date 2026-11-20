@@ -17,7 +17,8 @@ import (
 )
 
 // TokenSourceFromPath loads a saved token from the given path and returns a
-// TokenSource with auto-refresh and auto-persistence via OnTokenChange.
+// TokenSource that refreshes it and writes each refreshed sign-in back to the
+// path (tokenSaver).
 // Returns ErrNotLoggedIn if no token file exists at the path, and an error if
 // authHTTP is nil or has no Timeout.
 //
@@ -52,7 +53,7 @@ func TokenSourceFromPath(
 		slog.Bool("expired", expired),
 	)
 
-	return newTokenBridge(oauthConfig(tokenPath, logger), authHTTP, tok, logger), nil
+	return newTokenBridge(oauthConfig(), authHTTP, tokenPath, tok, logger), nil
 }
 
 // CheckSavedLogin reports whether tokenPath holds a usable saved login,
@@ -82,23 +83,35 @@ func loadSavedToken(tokenPath string) (*oauth2.Token, error) {
 	return tok, nil
 }
 
-// Logout removes the saved token file at the given path.
-// Returns nil if the token file does not exist (already logged out).
+// Logout removes the saved token file at the given path, under the sign-in
+// file's lock, so a refresh in another process either finished its write
+// before or finds the file gone and writes nothing (R-6.8.30). ctx bounds the
+// wait for the lock. Returns nil if the token file does not exist (already
+// logged out).
 //
 // The caller is responsible for computing tokenPath (via config.DriveTokenPath).
 // This decouples graph/ from config/ — graph/ has no config import.
-func Logout(tokenPath string, logger *slog.Logger) error {
-	err := tokenfile.Delete(tokenPath)
-	if errors.Is(err, tokenfile.ErrNotFound) {
+func Logout(ctx context.Context, tokenPath string, logger *slog.Logger) error {
+	var removed bool
+	err := tokenfile.WithLock(ctx, tokenPath, func() error {
+		err := tokenfile.Delete(tokenPath)
+		if errors.Is(err, tokenfile.ErrNotFound) {
+			return nil
+		}
+		removed = err == nil
+
+		return err //nolint:wrapcheck // Logout wraps every failure of the locked step once, below
+	})
+	if err != nil {
+		return fmt.Errorf("remove token file: %w", err)
+	}
+
+	if !removed {
 		logger.Info("logout: no token file to remove (already logged out)",
 			slog.String("path", tokenPath),
 		)
 
 		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("remove token file: %w", err)
 	}
 
 	logger.Info("logout: removed token file",
@@ -108,30 +121,13 @@ func Logout(tokenPath string, logger *slog.Logger) error {
 	return nil
 }
 
-// oauthConfig builds an oauth2.Config with OnTokenChange wired to persist
-// refreshed tokens.
-func oauthConfig(tokenPath string, logger *slog.Logger) *oauth2.Config {
+// oauthConfig is the application's OAuth2 configuration for the Microsoft
+// identity platform.
+func oauthConfig() *oauth2.Config {
 	return &oauth2.Config{
 		ClientID: defaultClientID,
 		Scopes:   defaultScopes(),
 		Endpoint: microsoft.AzureADEndpoint("common"),
-		// Called on tokenBridge's refresh goroutine once the token endpoint
-		// has answered a refresh with a token, before any caller is given it.
-		OnTokenChange: func(tok *oauth2.Token) {
-			if err := tokenfile.Save(tokenPath, tok); err != nil {
-				logger.Warn("couldn't save the refreshed sign-in; the next run may ask you to sign in again. Check the permissions on this file",
-					slog.String("path", tokenPath),
-					slog.Any("error", err),
-				)
-
-				return
-			}
-
-			logger.Info("refreshed sign-in",
-				slog.String("path", tokenPath),
-				slog.Time("expiry", tok.Expiry),
-			)
-		},
 	}
 }
 
@@ -147,12 +143,19 @@ func oauthConfig(tokenPath string, logger *slog.Logger) *oauth2.Config {
 // from nobody; when nobody waits any more it still ends, by the sign-in
 // client's Timeout (checkAuthClient), and its outcome serves the next caller.
 // Only a refresh the token endpoint answered with a token writes the token
-// file (OnTokenChange), and it does so before any caller is given the token.
+// file (saver), and it does so before any caller is given the token. A write
+// that failed does not fail the refresh: the token is in memory, the failure
+// is reported through SaveError, and the write is tried again at the next
+// token use.
 type tokenBridge struct {
 	cfg      *oauth2.Config
 	authHTTP *http.Client
+	saver    *tokenSaver
 	logger   *slog.Logger
-	now      func() time.Time // injectable for tests
+	// lockUnsupported reports, once per source, a filesystem that cannot
+	// lock the sign-in file.
+	lockUnsupported stdsync.Once
+	now             func() time.Time // injectable for tests
 
 	// mu guards tok, refreshing and lastForced. It is never held while a
 	// refresh request is out or while a caller waits for one.
@@ -180,20 +183,38 @@ type tokenRefresh struct {
 // another 401 may force the next one.
 const forcedRefreshMinInterval = 30 * time.Second
 
-func newTokenBridge(cfg *oauth2.Config, authHTTP *http.Client, tok *oauth2.Token, logger *slog.Logger) *tokenBridge {
+// newTokenBridge is the source over tok, which the sign-in file at tokenPath
+// holds; every token a refresh produces is written back there.
+func newTokenBridge(
+	cfg *oauth2.Config,
+	authHTTP *http.Client,
+	tokenPath string,
+	tok *oauth2.Token,
+	logger *slog.Logger,
+) *tokenBridge {
 	return &tokenBridge{
 		cfg:      cfg,
 		authHTTP: authHTTP,
+		saver:    newTokenSaver(tokenPath, tok, logger),
 		logger:   logger,
 		now:      time.Now,
 		tok:      tok,
 	}
 }
 
+// SaveError is the failure of the last write of the newest refreshed
+// sign-in, wrapping ErrTokenNotSaved, or nil once the file holds it.
+func (b *tokenBridge) SaveError() error {
+	return b.saver.saveError()
+}
+
 // Token returns the cached access token while it is valid, and otherwise the
 // token a refresh produces, waiting for that refresh no longer than ctx
-// allows. A wait ctx ended fails with context.Cause(ctx).
+// allows. A wait ctx ended fails with context.Cause(ctx). A refreshed
+// sign-in whose write failed is written again first.
 func (b *tokenBridge) Token(ctx context.Context) (string, error) {
+	b.saver.retry(ctx)
+
 	b.mu.Lock()
 	if b.tok.Valid() {
 		tok := b.tok
@@ -219,8 +240,8 @@ func (b *tokenBridge) Token(ctx context.Context) (string, error) {
 // token has not expired. A refresh driven by expiry alone never redeems a
 // valid token, so a 401 against a token the server revoked early (or one
 // minted moments before an RPS fault) used to retry with the same rejected
-// token and fail fatally (D-072). The new token is persisted through the
-// same OnTokenChange hook as any silent refresh. A burst of 401s from
+// token and fail fatally (D-072). The new token is written by the same
+// saver as any silent refresh. A burst of 401s from
 // parallel workers makes one token-endpoint call: each joins the refresh
 // under way, and for forcedRefreshMinInterval after a forced refresh
 // succeeded, ForceRefresh hands out its token instead of forcing another.
@@ -260,7 +281,9 @@ func (b *tokenBridge) refreshLocked(ctx context.Context, forced bool) (*tokenRef
 		b.refreshing = &tokenRefresh{done: make(chan struct{})}
 		// Detached from the caller's cancellation, not from its values: the
 		// refresh is everyone's, and the sign-in client's Timeout bounds it.
-		go b.redeem(context.WithoutCancel(ctx), b.tok.RefreshToken, b.refreshing)
+		// The wait for another process's refresh keeps the starting
+		// caller's deadline (lockWaitFor).
+		go b.redeem(context.WithoutCancel(ctx), b.lockWaitFor(ctx), b.tok, forced, b.refreshing)
 	}
 	if forced {
 		b.refreshing.forced = true
@@ -291,14 +314,16 @@ func (b *tokenBridge) await(ctx context.Context, refresh *tokenRefresh) (*oauth2
 	return refresh.tok, nil
 }
 
-// redeem is the goroutine of one token refresh: it redeems refreshToken and
-// gives every waiter the outcome. The token endpoint's answer is saved by
-// OnTokenChange inside the oauth2 source's Token call, so a token is on disk
-// before any caller gets it. A panic in oauth2 or the sign-in transport is
+// redeem is the goroutine of one token refresh: it refreshes held under the
+// sign-in file's lock (refreshShared), writing the answer to the file, and
+// gives every waiter the outcome, so a token is on disk, or its failed write
+// recorded, before any caller gets it. A panic in oauth2 or the sign-in transport is
 // recovered at this goroutine's boundary through panicguard: it is logged
 // once, with its stack, and every waiter gets the error, so the process goes
 // on and no later caller waits on a refresh that will never finish.
-func (b *tokenBridge) redeem(ctx context.Context, refreshToken string, refresh *tokenRefresh) {
+func (b *tokenBridge) redeem(
+	ctx context.Context, lockWait time.Duration, held *oauth2.Token, forced bool, refresh *tokenRefresh,
+) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err := panicguard.Recovered(b.logger, "while refreshing the sign-in", recovered)
@@ -306,7 +331,7 @@ func (b *tokenBridge) redeem(ctx context.Context, refreshToken string, refresh *
 		}
 	}()
 
-	tok, err := b.requestToken(ctx, refreshToken)
+	tok, err := b.refreshShared(ctx, lockWait, held, forced)
 	b.finish(refresh, tok, err)
 }
 
@@ -366,7 +391,7 @@ func (b *tokenBridge) tokenError(err error) error {
 			return fmt.Errorf("refreshing access token: %w: %w: %w: %w", plain, ErrLoginExpired, ErrUnauthorized, err)
 		}
 	}
-	if errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant" {
+	if errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == oauthErrInvalidGrant {
 		// The caller reports this as "sign-in required"; logging it as a
 		// warning as well would only repeat the same fact less clearly.
 		b.logger.Debug("saved login rejected", slog.Any("error", err))

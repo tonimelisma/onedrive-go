@@ -354,7 +354,6 @@ able to scan this table and place every top-level code area.
 | `e2e` | Live provider coverage, fixture preflight, and CLI/sync end-to-end behavior |
 | `scripts/bootstrap-test-credentials.sh` | One-time live-test credential bootstrap that rebuilds `.testdata/` with token files, `catalog.json`, and `config.toml` |
 | `scripts/migrate-test-data-to-ci.sh` | Move local `.testdata/` tokens, `catalog.json`, `config.toml`, and fixture env into CI secrets storage |
-| `scripts/check-oauth2-fork.sh` | OAuth dependency fork checks |
 | `scripts/dev-env.sh` | Local development environment helper |
 
 Live-test note: `.testdata/` should contain `token_*.json`, `catalog.json`,

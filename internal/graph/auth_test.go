@@ -79,10 +79,10 @@ func newMockOAuthServer(t *testing.T, tokenHandler http.HandlerFunc) *oauth2.End
 }
 
 // testOAuthConfig builds a test config pointing at a mock server.
-func testOAuthConfig(t *testing.T, tokenPath string, endpoint *oauth2.Endpoint) *oauth2.Config {
+func testOAuthConfig(t *testing.T, endpoint *oauth2.Endpoint) *oauth2.Config {
 	t.Helper()
 
-	cfg := oauthConfig(tokenPath, slog.Default())
+	cfg := oauthConfig()
 	cfg.Endpoint = *endpoint
 
 	return cfg
@@ -107,7 +107,7 @@ func TestDoLogin_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
 
-	cfg := testOAuthConfig(t, tokenPath, endpoint)
+	cfg := testOAuthConfig(t, endpoint)
 
 	var displayed DeviceAuth
 	ts, err := doLogin(t.Context(), tokenPath, testAuthClient(), cfg, func(da DeviceAuth) {
@@ -155,7 +155,7 @@ func TestDoLogin_TokenEndpointErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
-			cfg := oauthConfig(tokenPath, slog.Default())
+			cfg := oauthConfig()
 
 			_, err := doLoginWithFlow(
 				t.Context(),
@@ -197,7 +197,7 @@ func TestDoLogin_UserSideOAuthOutcomesArePlain(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
-			cfg := oauthConfig(tokenPath, slog.Default())
+			cfg := oauthConfig()
 
 			_, err := doLoginWithFlow(
 				t.Context(),
@@ -240,7 +240,7 @@ func TestBrowserAuthorizationError_AccessDeniedIsPlain(t *testing.T) {
 func TestDoLogin_ContextCancel(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "test.json")
-	cfg := oauthConfig(tokenPath, slog.Default())
+	cfg := oauthConfig()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
@@ -267,7 +267,7 @@ func TestDoLogin_ContextCancel(t *testing.T) {
 func TestDoLogin_ExchangeSuccess(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "pending.json")
-	cfg := oauthConfig(tokenPath, slog.Default())
+	cfg := oauthConfig()
 
 	var displayed DeviceAuth
 	ts, err := doLoginWithFlow(
@@ -473,7 +473,7 @@ func TestLogout_RemovesFile(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete via the public Logout function.
-	err = Logout(path, slog.Default())
+	err = Logout(t.Context(), path, slog.Default())
 	require.NoError(t, err)
 
 	// Verify it's gone.
@@ -485,7 +485,7 @@ func TestLogout_NoFile(t *testing.T) {
 	// Removing a nonexistent file should not be an error (idempotent).
 	path := filepath.Join(t.TempDir(), "nonexistent.json")
 
-	err := Logout(path, slog.Default())
+	err := Logout(t.Context(), path, slog.Default())
 	assert.NoError(t, err)
 }
 
@@ -495,7 +495,7 @@ func TestTokenBridge(t *testing.T) {
 		Expiry:      time.Now().Add(time.Hour),
 	}
 
-	bridge := newTokenBridge(&oauth2.Config{}, offlineAuthClient(t), tok, slog.Default())
+	bridge := newTokenBridge(&oauth2.Config{}, offlineAuthClient(t), savedSignInPath(t, tok), tok, slog.Default())
 
 	got, err := bridge.Token(t.Context())
 	require.NoError(t, err)
@@ -518,7 +518,7 @@ func TestTokenBridge_Error(t *testing.T) {
 		Endpoint: oauth2.Endpoint{TokenURL: tokenURL},
 	}
 
-	bridge := newTokenBridge(cfg, testAuthClient(), tok, slog.Default())
+	bridge := newTokenBridge(cfg, testAuthClient(), savedSignInPath(t, tok), tok, slog.Default())
 
 	_, err := bridge.Token(t.Context())
 	require.Error(t, err)
@@ -543,7 +543,7 @@ func TestTokenBridge_InvalidGrantIsLoginExpired(t *testing.T) {
 		Endpoint: oauth2.Endpoint{TokenURL: tokenSrv.URL + "/token"},
 	}
 	tok := &oauth2.Token{AccessToken: "expired", RefreshToken: "stale", Expiry: time.Now().Add(-time.Hour)}
-	bridge := newTokenBridge(cfg, testAuthClient(), tok, slog.Default())
+	bridge := newTokenBridge(cfg, testAuthClient(), savedSignInPath(t, tok), tok, slog.Default())
 
 	_, err := bridge.Token(t.Context())
 	require.Error(t, err)
@@ -551,58 +551,13 @@ func TestTokenBridge_InvalidGrantIsLoginExpired(t *testing.T) {
 	require.ErrorIs(t, err, ErrUnauthorized, "an expired login must also take every existing unauthorized path")
 }
 
-func TestOAuthConfig_OnTokenChange(t *testing.T) {
-	tmpDir := t.TempDir()
-	tokenPath := filepath.Join(tmpDir, "tokens", "callback.json")
-
-	cfg := oauthConfig(tokenPath, slog.Default())
-
-	// Verify the callback is set.
-	require.NotNil(t, cfg.OnTokenChange)
-
-	// Simulate what ReuseTokenSource does: call OnTokenChange with a new token.
-	newTok := &oauth2.Token{
-		AccessToken:  "refreshed-access",
-		RefreshToken: "refreshed-refresh",
-		Expiry:       time.Now().Add(time.Hour),
-	}
-
-	cfg.OnTokenChange(newTok)
-
-	// Verify the token was persisted to disk.
-	loaded, err := tokenfile.Load(tokenPath)
-	require.NoError(t, err)
-	require.NotNil(t, loaded)
-	assert.Equal(t, "refreshed-access", loaded.AccessToken)
-	assert.Equal(t, "refreshed-refresh", loaded.RefreshToken)
-}
-
 func TestOAuthConfig_Defaults(t *testing.T) {
-	cfg := oauthConfig("/tmp/test.json", slog.Default())
+	cfg := oauthConfig()
 
 	assert.Equal(t, defaultClientID, cfg.ClientID)
 	assert.Equal(t, defaultScopes(), cfg.Scopes)
 	assert.NotEmpty(t, cfg.Endpoint.DeviceAuthURL)
 	assert.NotEmpty(t, cfg.Endpoint.TokenURL)
-}
-
-func TestTokenPath_UsesDriveName(t *testing.T) {
-	// Verify that oauthConfig passes through the token path correctly
-	// by checking that OnTokenChange writes to the expected location.
-	tmpDir := t.TempDir()
-
-	paths := []string{"personal", "work", "shared"}
-	for _, name := range paths {
-		path := filepath.Join(tmpDir, "tokens", name+".json")
-		cfg := oauthConfig(path, slog.Default())
-
-		tok := &oauth2.Token{AccessToken: "tok-" + name}
-		cfg.OnTokenChange(tok)
-
-		loaded, err := tokenfile.Load(path)
-		require.NoError(t, err, "token path %s", name)
-		assert.Equal(t, "tok-"+name, loaded.AccessToken, "token path %s", name)
-	}
 }
 
 func TestDoLogin_SaveError(t *testing.T) {
@@ -615,7 +570,7 @@ func TestDoLogin_SaveError(t *testing.T) {
 	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenfile.FilePerms))
 
 	tokenPath := filepath.Join(blocker, "tokens", "test.json")
-	cfg := testOAuthConfig(t, tokenPath, endpoint)
+	cfg := testOAuthConfig(t, endpoint)
 
 	_, err := doLogin(t.Context(), tokenPath, testAuthClient(), cfg, noopDisplay, slog.Default())
 	require.Error(t, err)
@@ -691,27 +646,6 @@ func TestSaveToken_MkdirAllError(t *testing.T) {
 	assert.Contains(t, err.Error(), "creating root directory")
 }
 
-func TestOAuthConfig_OnTokenChangeError(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create a file where the tokens directory should be, so saveToken fails.
-	blocker := filepath.Join(tmpDir, "blocked")
-	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenfile.FilePerms))
-
-	tokenPath := filepath.Join(blocker, "sub", "callback.json")
-
-	cfg := oauthConfig(tokenPath, slog.Default())
-
-	// OnTokenChange should log a warning but not panic.
-	newTok := &oauth2.Token{AccessToken: "will-fail"}
-	cfg.OnTokenChange(newTok)
-
-	// Verify nothing was written (since it failed). The token file's parent
-	// can't be created (blocked by a regular file), so the path can't exist.
-	_, statErr := os.Stat(tokenPath)
-	assert.Error(t, statErr)
-}
-
 func TestSaveToken_JSONFormat(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "format.json")
@@ -747,7 +681,7 @@ func TestLogin_Success(t *testing.T) {
 
 	// We need to override the endpoint used by Login. Since Login calls
 	// oauthConfig internally, we test via doLogin (which is what Login delegates to).
-	cfg := testOAuthConfig(t, tokenPath, endpoint)
+	cfg := testOAuthConfig(t, endpoint)
 
 	ts, err := doLogin(t.Context(), tokenPath, testAuthClient(), cfg, noopDisplay, slog.Default())
 	require.NoError(t, err)
@@ -798,10 +732,10 @@ func newMockAuthCodeServer(t *testing.T, tokenHandler http.HandlerFunc) *oauth2.
 }
 
 // testAuthCodeConfig builds a test config for auth code flow.
-func testAuthCodeConfig(t *testing.T, tokenPath string, endpoint *oauth2.Endpoint) *oauth2.Config {
+func testAuthCodeConfig(t *testing.T, endpoint *oauth2.Endpoint) *oauth2.Config {
 	t.Helper()
 
-	cfg := oauthConfig(tokenPath, slog.Default())
+	cfg := oauthConfig()
 	cfg.Endpoint = *endpoint
 
 	return cfg
@@ -849,7 +783,7 @@ func TestDoAuthCodeLogin_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "authcode.json")
 
-	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	cfg := testAuthCodeConfig(t, endpoint)
 	openURL := simulateBrowserCallback(t)
 
 	ts, err := doAuthCodeLogin(t.Context(), tokenPath, testAuthClient(), cfg, openURL, slog.Default())
@@ -894,7 +828,7 @@ func TestDoAuthCodeLogin_InvalidState(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "csrf.json")
-	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	cfg := testAuthCodeConfig(t, endpoint)
 	openURL := simulateBrowserCallback(t)
 
 	_, err := doAuthCodeLogin(t.Context(), tokenPath, testAuthClient(), cfg, openURL, slog.Default())
@@ -925,7 +859,7 @@ func TestDoAuthCodeLogin_ContextCancel(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "cancel.json")
-	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	cfg := testAuthCodeConfig(t, endpoint)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
@@ -976,7 +910,7 @@ func TestDoAuthCodeLogin_MissingCode(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "nocode.json")
-	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	cfg := testAuthCodeConfig(t, endpoint)
 	openURL := simulateBrowserCallback(t)
 
 	_, err := doAuthCodeLogin(t.Context(), tokenPath, testAuthClient(), cfg, openURL, slog.Default())
@@ -995,7 +929,7 @@ func TestDoAuthCodeLogin_ExchangeError(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "exchange-fail.json")
-	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	cfg := testAuthCodeConfig(t, endpoint)
 	openURL := simulateBrowserCallback(t)
 
 	_, err := doAuthCodeLogin(t.Context(), tokenPath, testAuthClient(), cfg, openURL, slog.Default())
@@ -1013,7 +947,7 @@ func TestDoAuthCodeLogin_SaveError(t *testing.T) {
 	require.NoError(t, os.WriteFile(blocker, []byte("x"), tokenfile.FilePerms))
 
 	tokenPath := filepath.Join(blocker, "tokens", "test.json")
-	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	cfg := testAuthCodeConfig(t, endpoint)
 	openURL := simulateBrowserCallback(t)
 
 	_, err := doAuthCodeLogin(t.Context(), tokenPath, testAuthClient(), cfg, openURL, slog.Default())
@@ -1028,7 +962,7 @@ func TestDoAuthCodeLogin_OpenURLFails(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenPath := filepath.Join(tmpDir, "tokens", "fallback.json")
 
-	cfg := testAuthCodeConfig(t, tokenPath, endpoint)
+	cfg := testAuthCodeConfig(t, endpoint)
 
 	// openURL fails, but we still need to simulate the browser hitting the
 	// callback. Parse the auth URL and do the redirect manually.
@@ -1080,8 +1014,8 @@ func TestTokenBridge_RefreshFailureIsReturnedNotWarned(t *testing.T) {
 	var logBuf bytes.Buffer
 	cfg := &oauth2.Config{ClientID: "test", Endpoint: oauth2.Endpoint{TokenURL: "https://" + signInHost + signInGrantPath}}
 	tok := &oauth2.Token{AccessToken: "expired", RefreshToken: savedRefreshToken, Expiry: time.Now().Add(-time.Hour)}
-	bridge := newTokenBridge(cfg, &http.Client{Timeout: testSignInTimeout, Transport: offlineHost{}}, tok,
-		slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	bridge := newTokenBridge(cfg, &http.Client{Timeout: testSignInTimeout, Transport: offlineHost{}},
+		savedSignInPath(t, tok), tok, slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	for range 3 {
 		_, err := bridge.Token(t.Context())

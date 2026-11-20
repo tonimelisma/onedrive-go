@@ -15,14 +15,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/graph"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 const (
@@ -286,29 +287,81 @@ func TestDeviceLoginInstructions_OneMinuteLeftIsSingular(t *testing.T) {
 	assert.Contains(t, text, "\n\nThe code expires at 22:01 (in 1 minute).\n")
 }
 
-func TestMoveToken_Success(t *testing.T) {
-	srcDir := t.TempDir()
-	dstDir := t.TempDir()
-	src := filepath.Join(srcDir, "pending.json")
-	dst := filepath.Join(dstDir, "nested", "token.json")
+// Validates: R-6.8.30
+//
+// Login installs its sign-in under the sign-in file's lock: while another
+// process holds it (a refresh of the same account), the install waits and
+// writes nothing; once it is released the final file holds the sign-in and
+// the pending file is gone. The undo of a failed enrollment takes the lock
+// as well.
+func TestLogin_InstallsTokenUnderLock(t *testing.T) {
+	dir := t.TempDir()
+	pending := filepath.Join(dir, "pending.json")
+	final := filepath.Join(dir, "nested", "token_personal_installed@example.com.json")
+	require.NoError(t, tokenfile.Save(pending, &oauth2.Token{AccessToken: "made-up-access", RefreshToken: "made-up-refresh"}))
 
-	require.NoError(t, os.WriteFile(src, []byte("token"), 0o600))
-	require.NoError(t, moveToken(src, dst))
-
-	data, err := localpath.ReadFile(dst)
+	release, err := tokenfile.AcquireLock(t.Context(), final)
 	require.NoError(t, err)
-	assert.Equal(t, "token", string(data))
+	waitEnds, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = installLoginToken(waitEnds, pending, final)
+	require.ErrorIs(t, err, tokenfile.ErrLockWaitEnded)
+	_, statErr := os.Stat(final)
+	require.ErrorIs(t, statErr, fs.ErrNotExist, "nothing is written while another process holds the lock")
 
-	_, statErr := os.Stat(src)
-	assert.ErrorIs(t, statErr, fs.ErrNotExist)
+	require.NoError(t, release())
+	undo, err := installLoginToken(t.Context(), pending, final)
+	require.NoError(t, err)
+	installed, err := tokenfile.Load(final)
+	require.NoError(t, err)
+	assert.Equal(t, "made-up-refresh", installed.RefreshToken)
+	_, statErr = os.Stat(pending)
+	require.ErrorIs(t, statErr, fs.ErrNotExist)
+
+	require.NoError(t, undo())
+	_, statErr = os.Stat(final)
+	require.ErrorIs(t, statErr, fs.ErrNotExist, "the undo removes a sign-in that was not there before")
 }
 
-func TestMoveToken_MissingSourceReturnsError(t *testing.T) {
-	dst := filepath.Join(t.TempDir(), "nested", "token.json")
+// Validates: R-6.8.30
+//
+// The undo of a failed enrollment puts back the sign-in the install
+// replaced, read under the install's lock: a refresh another process saved
+// while the install waited for the lock is what comes back, not the copy the
+// file held before, whose refresh token that refresh replaced.
+func TestLogin_UndoRestoresTheSignInTheInstallReplaced(t *testing.T) {
+	dir := t.TempDir()
+	pending := filepath.Join(dir, "pending.json")
+	final := filepath.Join(dir, "token_personal_relogin@example.com.json")
+	require.NoError(t, tokenfile.Save(final, madeUpSignIn("old")))
+	require.NoError(t, tokenfile.Save(pending, madeUpSignIn("new")))
 
-	err := moveToken(filepath.Join(t.TempDir(), "missing.json"), dst)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "moving token to final path")
+	// Another process refreshes under the lock while the login waits for it.
+	release, err := tokenfile.AcquireLock(t.Context(), final)
+	require.NoError(t, err)
+	type installResult struct {
+		undo func() error
+		err  error
+	}
+	installed := make(chan installResult, 1)
+	go func() {
+		undo, installErr := installLoginToken(t.Context(), pending, final)
+		installed <- installResult{undo: undo, err: installErr}
+	}()
+	require.NoError(t, tokenfile.Save(final, madeUpSignIn("refreshed")))
+	require.NoError(t, release())
+
+	result := <-installed
+	require.NoError(t, result.err)
+	require.NoError(t, result.undo())
+	restored, err := tokenfile.Load(final)
+	require.NoError(t, err)
+	assert.Equal(t, madeUpSignIn("refreshed").RefreshToken, restored.RefreshToken)
+}
+
+// madeUpSignIn is a sign-in of made-up tokens named after name.
+func madeUpSignIn(name string) *oauth2.Token {
+	return &oauth2.Token{AccessToken: "made-up-access-" + name, RefreshToken: "made-up-refresh-" + name}
 }
 
 func TestValidateBrowserAuthURL(t *testing.T) {

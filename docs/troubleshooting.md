@@ -70,6 +70,19 @@ If the device-code sign-in is blocked by your organization, try
 `onedrive-go login --browser`. A systemd unit stops restarting on exit 77; run
 `systemctl --user restart onedrive-go` after signing in.
 
+## Couldn't save the refreshed sign-in
+
+Microsoft replaces the saved sign-in from time to time, and onedrive-go writes
+the new one to its file. When that write fails (a full disk, a read-only or
+wrongly owned folder), the command still finishes its work, then prints
+"couldn't save the refreshed sign-in to <file>; the next run may ask you to
+sign in again" with the cause, and exits 1. A running `sync --watch` keeps
+syncing and keeps trying the write: it logs the failure once, `systemctl
+--user status onedrive-go` names the file while it lasts, and it exits 1 if
+it is stopped before a write succeeds. Fix the cause shown (free space, or
+make the folder writable by you); if a later run asks you to sign in, run
+`onedrive-go login`.
+
 ## Invalid configuration (exit 78)
 
 Status 78 means the configuration cannot be used as it is: the file cannot be

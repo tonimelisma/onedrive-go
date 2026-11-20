@@ -27,6 +27,9 @@ const (
 	// The sign-in service (token refresh, device code, code exchange) answers
 	// with a small JSON body, so its client bounds the whole request too:
 	// nothing about a sign-in request legitimately takes a minute (R-6.8.27).
+	// graph's signInLockWait, the wait for another process's refresh of a
+	// sign-in file, is longer than authRequestTimeout, so a holder stuck in
+	// its request releases the lock before a waiter gives up.
 	authResponseHeaderTimeout = 30 * time.Second
 	authRequestTimeout        = 60 * time.Second
 )

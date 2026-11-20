@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
@@ -107,11 +108,86 @@ func TestCommandExitCode(t *testing.T) {
 			err:  errors.Join(panicguard.ErrPanic, fmt.Errorf("loading config: %w", config.ErrInvalidConfig)),
 			want: exitFailure,
 		},
+		// Validates: R-6.8.26
+		// A command whose token source could not save a refreshed sign-in
+		// did its work, but the next run may need a new sign-in: exit 1. A
+		// watch stopped while the save is failing exits 1 too, and a failure
+		// beside it keeps its own status.
+		{name: "refreshed sign-in not saved", err: withTokenSaveFailure(testTokenSaveError(), nil), want: exitFailure},
+		{
+			name:          "watch stopped with a sign-in not saved",
+			err:           withTokenSaveFailure(testTokenSaveError(), nil),
+			stopRequested: true,
+			want:          exitFailure,
+		},
+		{
+			name:          "command stopped with a sign-in not saved",
+			err:           withTokenSaveFailure(testTokenSaveError(), context.Canceled),
+			stopRequested: true,
+			want:          exitFailure,
+		},
+		{
+			name: "sign-in failure beside a sign-in not saved",
+			err:  withTokenSaveFailure(testTokenSaveError(), fmt.Errorf("session: %w", graph.ErrNotLoggedIn)),
+			want: exitSignInRequired,
+		},
 	}
 
 	for _, tt := range tests {
 		assert.Equal(t, tt.want, commandExitCode(tt.err, tt.stopRequested), tt.name)
 	}
+}
+
+// testTokenSaveError is a token source's report of a refreshed sign-in it
+// could not write.
+func testTokenSaveError() error {
+	return fmt.Errorf("%w to /tokens/sign-in.json; the next run may ask you to sign in again: disk full",
+		graph.ErrTokenNotSaved)
+}
+
+// unsavedSignInSource is a token source whose refreshed sign-in could not be
+// written; err is what its SaveError reports, nil once a write succeeded.
+type unsavedSignInSource struct {
+	err error
+}
+
+func (*unsavedSignInSource) Token(context.Context) (string, error) {
+	return "made-up-access-token", nil
+}
+
+func (s *unsavedSignInSource) SaveError() error { return s.err }
+
+// Validates: R-6.8.26
+//
+// After the command's work, main asks every runtime the command built for
+// the sign-ins it could not save: a failing one is the command's error, with
+// the file and the cause in its text, and one whose later write succeeded is
+// no error. A watch stopped with one failing exits 1, not 0.
+func TestCLIContext_TokenSaveFailureIsTheCommandsError(t *testing.T) {
+	t.Parallel()
+
+	cc := &CLIContext{Logger: slog.New(slog.DiscardHandler)}
+	source := &unsavedSignInSource{err: testTokenSaveError()}
+	first := cc.newSessionRuntime(nil, cc.Logger)
+	first.TokenSourceFn = func(string, *slog.Logger) (graph.TokenSource, error) { return source, nil }
+	// The runtime a data command builds once its config resolves holds a
+	// source for the same file: the failure is reported once.
+	second := cc.newSessionRuntime(nil, cc.Logger)
+	second.TokenSourceFn = first.TokenSourceFn
+	for _, runtime := range []*driveops.SessionRuntime{first, second} {
+		_, err := runtime.BootstrapClient("/tokens/sign-in.json")
+		require.NoError(t, err)
+	}
+
+	err := withTokenSaveFailure(cc.tokenSaveFailure(), nil)
+	require.ErrorIs(t, err, graph.ErrTokenNotSaved)
+	assert.Equal(t, testTokenSaveError().Error(), err.Error())
+	assert.Equal(t, exitFailure, commandExitCode(err, true))
+
+	source.err = nil
+	require.NoError(t, withTokenSaveFailure(cc.tokenSaveFailure(), nil))
+	assert.Equal(t, exitSuccess, commandExitCode(withTokenSaveFailure(cc.tokenSaveFailure(), nil), true),
+		"a failure a later save cleared changes nothing")
 }
 
 // Validates: R-6.6.31

@@ -44,6 +44,10 @@ type syncNotifier struct {
 	// readyStatus is the last "Watching ..." line, reused after a reload
 	// that kept the previous settings. Only the watch loop writes it.
 	readyStatus string
+	// unsavedSignIns are the sign-in files whose refreshed sign-in the watch
+	// could not save; every status a ready watch sends names them while it
+	// is set. Only the watch loop writes it.
+	unsavedSignIns []string
 }
 
 func newSyncNotifier(notifier *sdnotify.Notifier, logger *slog.Logger, console *syncConsole) *syncNotifier {
@@ -60,14 +64,32 @@ func (s *syncNotifier) lifecycle(event multisync.WatchLifecycleEvent) {
 	switch event.Phase {
 	case multisync.WatchReady:
 		s.readyStatus = s.watchingStatus(event)
-		s.report(s.notifier.Ready(s.readyStatus))
+		s.report(s.notifier.Ready(s.withUnsavedSignIns(s.readyStatus)))
 	case multisync.WatchReloading:
 		s.report(s.notifier.Reloading("Reloading the config"))
 	case multisync.WatchReloaded:
 		s.reloaded(event)
 	case multisync.WatchStopping:
 		s.report(s.notifier.Stopping("Stopping"))
+	case multisync.WatchSignInSaveChanged:
+		s.unsavedSignIns = event.UnsavedSignIns
+		s.report(s.notifier.Status(s.withUnsavedSignIns(s.readyStatus)))
 	}
+}
+
+// withUnsavedSignIns is status followed by the sign-in files whose refreshed
+// sign-in could not be saved, while there are any (R-6.8.26).
+func (s *syncNotifier) withUnsavedSignIns(status string) string {
+	if len(s.unsavedSignIns) == 0 {
+		return status
+	}
+
+	shown := make([]string, 0, len(s.unsavedSignIns))
+	for _, path := range s.unsavedSignIns {
+		shown = append(shown, s.displayPath(path))
+	}
+
+	return status + "; couldn't save the refreshed sign-in to " + strings.Join(shown, ", ")
 }
 
 // reloaded answers a finished reload. systemd waits for READY=1 after
@@ -77,12 +99,12 @@ func (s *syncNotifier) reloaded(event multisync.WatchLifecycleEvent) {
 	switch event.Reload {
 	case multisync.ReloadApplied:
 		s.readyStatus = s.watchingStatus(event)
-		s.report(s.notifier.Ready(s.readyStatus))
+		s.report(s.notifier.Ready(s.withUnsavedSignIns(s.readyStatus)))
 	case multisync.ReloadKeptPreviousSettings:
-		s.report(s.notifier.Ready(s.readyStatus + "; couldn't reload the config, kept the previous settings"))
+		s.report(s.notifier.Ready(s.withUnsavedSignIns(s.readyStatus + "; couldn't reload the config, kept the previous settings")))
 	default:
 		// An outcome this side does not name changes nothing it can describe.
-		s.report(s.notifier.Ready(s.readyStatus))
+		s.report(s.notifier.Ready(s.withUnsavedSignIns(s.readyStatus)))
 	}
 }
 

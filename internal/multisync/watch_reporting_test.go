@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
@@ -601,4 +602,115 @@ func (e *panicIsolationEngines) factory(_ context.Context, req engineFactoryRequ
 			return ctx.Err()
 		},
 	}, nil
+}
+
+// unsavedSignInSource is a token source whose refreshed sign-in the test
+// says could not be written; the watch loop reads it while the test sets it.
+type unsavedSignInSource struct {
+	stubTokenSource
+	mu  gosync.Mutex
+	err error
+}
+
+func (s *unsavedSignInSource) SaveError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.err
+}
+
+func (s *unsavedSignInSource) set(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
+}
+
+// unsavedSignInErrors is the error of every ERROR record, each of which must
+// be the unsaved sign-in report.
+func unsavedSignInErrors(t *testing.T, capture *synctest.LogCapture) []string {
+	t.Helper()
+
+	var logged []string
+	for _, record := range capture.AtLeast(slog.LevelError) {
+		assert.Equal(t, unsavedSignInMessage, record.Message)
+		logged = append(logged, record.Attrs["error"])
+	}
+
+	return logged
+}
+
+// Validates: R-6.8.26
+//
+// On its periodic tick the watch asks the runtime for refreshed sign-ins it
+// could not save: each distinct failure is logged once at ERROR, the
+// lifecycle hook hears when the set of unsaved files changes (the service
+// status names them while it is set), and the drives keep syncing.
+func TestRunWatch_UnsavedSignInIsLoggedOncePerDistinctFailure(t *testing.T) {
+	rd := testStandaloneMount(t, "personal:unsaved-sign-in@example.com", "UnsavedSignIn")
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	capture, logger := synctest.NewLogCapture()
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.Logger = logger
+	source := &unsavedSignInSource{}
+	const signInPath = "/sign-ins/unsaved.json"
+	cfg.Runtime.TokenSourceFn = func(path string, logger *slog.Logger) (graph.TokenSource, error) {
+		if path == signInPath {
+			return source, nil
+		}
+
+		return stubTokenSourceFn(path, logger)
+	}
+	_, err := cfg.Runtime.BootstrapClient(signInPath)
+	require.NoError(t, err)
+
+	events := make(chan WatchLifecycleEvent, 16)
+	cfg.WatchLifecycle = func(event WatchLifecycleEvent) { events <- event }
+	orch := NewOrchestrator(cfg)
+	ticks := make(chan time.Time)
+	orch.reconcileTicks = func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} }
+	orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ syncengine.SyncMode, _ syncengine.WatchOptions) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}, nil
+	}
+
+	cancel, done := runWatchInBackground(t, orch)
+	require.Equal(t, WatchReady, nextLifecycleEvent(t, events).Phase)
+
+	// An unbuffered tick is received only once the loop finished the one
+	// before it, so each send also waits for the previous tick's report.
+	tick := func() { ticks <- time.Now() }
+
+	diskFull := fmt.Errorf("%w to %s: disk full", graph.ErrTokenNotSaved, signInPath)
+	source.set(diskFull)
+	tick()
+	changed := nextLifecycleEvent(t, events)
+	assert.Equal(t, WatchSignInSaveChanged, changed.Phase)
+	assert.Equal(t, []string{signInPath}, changed.UnsavedSignIns)
+	tick()
+
+	readOnly := fmt.Errorf("%w to %s: read-only file system", graph.ErrTokenNotSaved, signInPath)
+	source.set(readOnly)
+	for range 2 {
+		tick()
+	}
+
+	source.set(nil)
+	tick()
+	cleared := nextLifecycleEvent(t, events)
+	assert.Equal(t, WatchSignInSaveChanged, cleared.Phase)
+	assert.Empty(t, cleared.UnsavedSignIns, "the status stops naming the file once its save succeeded")
+
+	assert.Equal(t, []string{diskFull.Error(), readOnly.Error()}, unsavedSignInErrors(t, capture),
+		"one ERROR per distinct failure")
+	select {
+	case event := <-events:
+		require.FailNow(t, "no other lifecycle event while the drives sync on", "got phase %d", event.Phase)
+	default:
+	}
+
+	stopWatch(t, cancel, done)
 }

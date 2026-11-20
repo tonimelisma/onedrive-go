@@ -103,7 +103,7 @@ func Login(
 	display func(DeviceAuth),
 	logger *slog.Logger,
 ) (TokenSource, error) {
-	return doLogin(ctx, tokenPath, authHTTP, oauthConfig(tokenPath, logger), display, logger)
+	return doLogin(ctx, tokenPath, authHTTP, oauthConfig(), display, logger)
 }
 
 // stateTokenBytes is the number of random bytes for the OAuth2 state parameter.
@@ -152,5 +152,5 @@ func LoginWithBrowser(
 	openURL func(context.Context, string) error,
 	logger *slog.Logger,
 ) (TokenSource, error) {
-	return doAuthCodeLogin(ctx, tokenPath, authHTTP, oauthConfig(tokenPath, logger), openURL, logger)
+	return doAuthCodeLogin(ctx, tokenPath, authHTTP, oauthConfig(), openURL, logger)
 }

@@ -56,14 +56,14 @@ func TestSignInRequestError_MarksEveryRequestToTheSignInService(t *testing.T) {
 	})
 
 	t.Run("device-code poll", func(t *testing.T) {
-		cfg := oauthConfig(filepath.Join(t.TempDir(), "poll.json"), logger)
+		cfg := oauthConfig()
 		_, err := exchangeDeviceAccessToken(signInContext(t.Context(), offlineSignInClient()), cfg, testDeviceAuthResponse())
 		requireSignInFailure(t, err)
 	})
 
 	t.Run("browser code exchange", func(t *testing.T) {
 		authHTTP := offlineSignInClient()
-		cfg := oauthConfig(filepath.Join(t.TempDir(), "browser.json"), logger)
+		cfg := oauthConfig()
 		_, err := exchangeAndSave(signInContext(t.Context(), authHTTP), authHTTP, cfg,
 			filepath.Join(t.TempDir(), "browser.json"), "code", oauth2.GenerateVerifier(), logger)
 		requireSignInFailure(t, err)

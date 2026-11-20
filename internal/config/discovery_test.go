@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
 func TestDiscoverCIDFiles_EmptyDir(t *testing.T) {
@@ -38,6 +40,21 @@ func TestDiscoverCIDFiles_SortedOutput(t *testing.T) {
 	require.Len(t, ids, 2)
 	assert.Equal(t, "personal:a@example.com", ids[0].String())
 	assert.Equal(t, "personal:z@example.com", ids[1].String())
+}
+
+// Validates: R-6.8.30
+//
+// The lock file beside a sign-in file is never read as a sign-in.
+func TestDiscoverCIDFiles_SkipsTheSignInLockFile(t *testing.T) {
+	dir := t.TempDir()
+	signIn := filepath.Join(dir, "token_personal_locked@example.com.json")
+	require.NoError(t, os.WriteFile(signIn, []byte(`{}`), 0o600))
+	require.NoError(t, os.WriteFile(signIn+tokenfile.LockSuffix, nil, 0o600))
+
+	ids, err := discoverCIDFiles(dir, slog.Default())
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	assert.Equal(t, "personal:locked@example.com", ids[0].String())
 }
 
 func TestDiscoverStateDBsForEmail_EmptyInputs(t *testing.T) {

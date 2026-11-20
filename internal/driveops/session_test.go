@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -377,6 +378,54 @@ func TestSessionRuntime_SyncSession_UsesMountSessionConfig(t *testing.T) {
 	require.NotNil(t, session)
 	assert.Equal(t, config.DriveTokenPath(ownerCID), tokenPath)
 	assert.Equal(t, "owner@example.com", session.AccountEmail())
+}
+
+// unsavedTokenSource is a token source whose refreshed sign-in could not be
+// written; err is what its SaveError reports.
+type unsavedTokenSource struct {
+	stubTokenSource
+	err error
+}
+
+func (s *unsavedTokenSource) SaveError() error { return s.err }
+
+// Validates: R-6.8.26
+//
+// The runtime lists the save failures of the token sources it created, one
+// per sign-in file, sorted by file; sources that save fine, or write no
+// file, add nothing, and a flush forgets the sources it let go of.
+func TestSessionRuntime_TokenSaveErrors(t *testing.T) {
+	p := NewSessionRuntime(config.NewHolder(config.DefaultConfig(), ""), "test/1.0", discardLogger())
+	pathA, pathB := "/sign-ins/a.json", "/sign-ins/b.json"
+	failures := map[string]error{
+		pathB: fmt.Errorf("%w to %s: disk full", graph.ErrTokenNotSaved, pathB),
+		pathA: fmt.Errorf("%w to %s: read-only", graph.ErrTokenNotSaved, pathA),
+	}
+	p.TokenSourceFn = func(path string, _ *slog.Logger) (graph.TokenSource, error) {
+		if failure, failing := failures[path]; failing {
+			return &unsavedTokenSource{err: failure}, nil
+		}
+		if path == "/sign-ins/saved.json" {
+			return &unsavedTokenSource{}, nil
+		}
+
+		return &stubTokenSource{}, nil
+	}
+
+	assert.Empty(t, p.TokenSaveFailures(), "no source, no failure")
+
+	for _, path := range []string{pathB, "/sign-ins/saved.json", "/sign-ins/plain.json", pathA} {
+		_, err := p.BootstrapClient(path)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, []TokenSaveFailure{
+		{TokenPath: pathA, Err: failures[pathA]},
+		{TokenPath: pathB, Err: failures[pathB]},
+	}, p.TokenSaveFailures())
+
+	p.FlushTokenCache()
+	assert.Empty(t, p.TokenSaveFailures())
 }
 
 // --- Thread safety ---
