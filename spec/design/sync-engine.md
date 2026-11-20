@@ -64,11 +64,11 @@ removed shared folder that cannot be read reconciles the same batch empty.
 - Mutable Runtime Owner: `engineFlow` is the single per-run mutable owner.
   One-shot and watch both execute through that same runtime state; watch keeps
   it alive across timer ticks and observation batches. The `Engine` itself is
-  fixed after construction apart from the fields it guards itself: the
-  protected roots live under `protectedRootsMu`, read through
-  `currentProtectedRoots` (a copy: by every observer build, which the loop,
-  the full-refresh goroutine and the expired-delta recovery each do, and by
-  housekeeping) and written through `setProtectedRoots`, because `refreshProtectedRootsFromStore` runs on the
+  fixed after construction apart from the owners it holds: the protected
+  roots are a `protectedRootSet` (`engine_protected_roots.go`) that guards
+  itself, read through `current` (a copy: by every observer build, which the
+  loop, the full-refresh goroutine and the expired-delta recovery each do, and
+  by housekeeping), because its `refresh` runs on the
   loop goroutine before every observation and off it on three goroutines: the
   full-refresh goroutine, the remote observer's expired-delta recovery, and
   the multisync orchestrator's goroutine, whose final-drain acknowledgement
@@ -294,10 +294,10 @@ production; a test sets `engineHooks.ownerCheckFactory`, which `beginRun` calls 
 the run's goroutine, and the run's scope ledger, timers and every dependency
 graph it builds carry the check it returns, which counts a call from another
 goroutine. The
-engine's housekeeping streak flags, its trash purge time and its run counter
-are plain fields for the same reason; the release streak flags stay atomic
+engine's housekeeping streak flags and trash purge time (owned by its
+`housekeeper`) and its run counter are plain fields for the same reason; the release streak flags stay atomic
 because the orchestrator's final-drain acknowledgement writes them too, and
-`protectedRoots` keeps its mutex for the goroutines its comment names. What
+the `protectedRootSet` keeps its mutex for the goroutines its comment names. What
 changes is that the compiler now shows
 which owner a method touches, so "this decision is about scheduling" or "this
 decision is about retry timing" is visible in the code rather than inferred
@@ -636,7 +636,8 @@ but a removed shared folder's final drain is clean only when
 
 ### Post-Sync Housekeeping
 
-`postSyncHousekeeping` (`engine_housekeeping.go`) runs once when a one-shot
+The engine's `housekeeper` (`engine_housekeeping.go`) owns this cleanup, the
+trash purge time and every step's failure streak. Its `afterSync` runs once when a one-shot
 run that executed something ends, once when a final drain that releases its
 tree ends, executed or not, so a partial an earlier run left never keeps the
 tree (`TestRunOnce_FinalDrainRemovesALeftoverDownloadPartialFirst`), and once
@@ -646,31 +647,33 @@ sessions) and the local-trash purge. Watch maintenance then repeats only the
 purge. All of it is best effort, and an engine can run a step many times, so a
 failure that stays would warn each time. Each step therefore reports a
 persistent failure once per streak (R-6.6.30) through one helper,
-`Engine.reportStreakOutcome`, which the release of a removed shared folder's
+`reportStreakOutcome`, which the release of a removed shared folder's
 local copy uses too: one Warn when the streak starts, Debug on
 repeats, Info once when the step works again. What a step did remove is a
 separate Info with the count, failure or not:
 
 - the artifact cleanup removes every owned partial outside the protected
   roots with no age check, so it runs only when
-  `refreshProtectedRootsFromStore` succeeded for this pass. A refresh failure
+  the protected-root refresh succeeded for this pass. A refresh failure
   skips the cleanup for the pass instead of walking with a stale list, which
   could delete a child mount's in-flight partials
-  (`Engine.protectedRootRefreshFailing`)
+  (`housekeeper.rootRefreshFailing`)
 - the partial cleanup and the session cleanup each go on past what they cannot
   remove and hand every failure back, joined, beside the count they did
   remove; `driveops` logs no failure itself, because only the engine knows
-  whether one is new (`Engine.partialCleanupFailing`,
-  `Engine.sessionCleanupFailing`). The partial cleanup used to warn once per
+  whether one is new (`housekeeper.partialCleanupFailing`,
+  `housekeeper.sessionCleanupFailing`). The partial cleanup used to warn once per
   stuck file and return nothing; each cleanup is now one line with every
   failure joined. A partial that is gone by the time the cleanup reaches it is
   neither a failure nor counted
   (`TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved`,
   `TestCleanStalePartials_ReturnsEveryPartialItCannotRemove`)
 - `purgeExpiredTrash` names the trash directory on each of its lines
-  (`Engine.trashPurgeFailing`); the trash would otherwise grow without bound
+  (`housekeeper.trashPurgeFailing`); the trash would otherwise grow without bound
   with nothing saying so. Watch maintenance purges at most once per
   `trashPurgeInterval`
+- a watch's bootstrap runs `afterSync` before it arms its first full remote
+  refresh timer (`TestRunWatch_HousekeepingRunsBeforeTheFirstRefreshTimerIsArmed`)
 
 `Engine.Close` removes expired upload sessions too. A session it cannot
 remove does not stop the close, but it is one Warn with the count removed: an

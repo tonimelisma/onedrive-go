@@ -145,7 +145,7 @@ func (e *Engine) endOneShotRun(
 	executed bool,
 ) error {
 	if executed || opts.ReleaseLocalTree {
-		runner.postSyncHousekeeping(ctx)
+		runner.engine.upkeep.afterSync(ctx)
 	}
 	if err := e.reportWhatTheRunLeft(ctx, total, last, stoppedAtPassBound); err != nil {
 		return err
@@ -643,10 +643,10 @@ func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
 	obs := eng.buildRemoteObserver(bl, flow.deps.logger)
 	obs.SetItemClient(eng.itemsClient)
 	obs.SetRemotePathLookup(eng.remotePathLookup(ctx))
-	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
+	if err := eng.protectedRoots.refresh(ctx); err != nil {
 		return fullRemoteObservation{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
-	obs.SetShortcutTopology(flow.cfg.shortcutNamespaceID, eng.currentProtectedRoots())
+	obs.SetShortcutTopology(flow.cfg.shortcutNamespaceID, eng.protectedRoots.current())
 
 	// Full enumeration: empty token returns ALL items as create/modify
 	// events, plus the raw ID of every live item Graph returned. The seen set

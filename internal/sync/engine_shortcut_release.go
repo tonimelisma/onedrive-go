@@ -575,7 +575,7 @@ func (e *Engine) reportReleaseRefusals(notRemoved []releaseRefusal) {
 		cause = fmt.Errorf("%s: %w", first.path, cmp.Or(first.err, errReleaseKeptWithoutCause))
 		attrs = append(attrs, slog.Int("entries", len(notRemoved)))
 	}
-	e.reportStreakOutcome(streakReport{
+	reportStreakOutcome(e.logger, streakReport{
 		failing: &e.releaseRefusalFailing,
 		warn: "Could not move a synced entry of a removed shared folder to the trash or delete it; " +
 			"the folder stays until it can be removed",
@@ -708,7 +708,7 @@ func (e *Engine) emptyReleasedRoot(bl *syncdomain.Baseline) (releaseSurvey, erro
 	err = exec.RemoveDisposableChildren("", junk)
 	// Every drain of a folder whose junk stays fails the same way: one Warn
 	// per streak, repeats at Debug (R-6.6.30); status names the junk.
-	e.reportStreakOutcome(streakReport{
+	reportStreakOutcome(e.logger, streakReport{
 		failing: &e.releasedRootJunkFailing,
 		warn: "Could not remove junk from the local folder of a removed shared folder; " +
 			"the folder stays until it can be removed",

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	stdsync "sync"
 	"sync/atomic"
 	"time"
 
@@ -61,26 +60,15 @@ type Engine struct {
 	perfCollector          *perf.Collector
 	sessionStore           *driveops.SessionStore // for CleanStale() housekeeping
 	trash                  *localtrash.Trash      // local deletes and replaced files (R-6.4.9)
-	// trashPurgedAt is when housekeeping last purged expired trash entries,
-	// in Unix nanoseconds; watch maintenance purges at most once per
-	// trashPurgeInterval. Only the goroutine running the engine's RunOnce or
-	// RunWatch reads and writes it.
-	trashPurgedAt   int64
-	transferWorkers int // goroutine count for the worker pool
-	checkWorkers    int // goroutine limit for parallel file hashing
-	contentFilter   syncdomain.ContentFilterConfig
-	// protectedRootsMu guards protectedRoots. The loop goroutine reads them
-	// each time it builds an observer and when housekeeping cleans up; the
-	// full-refresh goroutine and the remote observer's expired-delta recovery
-	// read them when they build theirs.
-	// refreshProtectedRootsFromStore rewrites them from the loop, from the
-	// full-refresh goroutine and the remote observer's expired-delta recovery,
-	// which run beside the loop, and from the multisync orchestrator's
-	// goroutine, whose final-drain acknowledgement through the ack handle
-	// (ShortcutChildAckHandle) reconciles the shortcut roots. Read through
-	// currentProtectedRoots, write through setProtectedRoots (R-6.3.4).
-	protectedRootsMu stdsync.Mutex
-	protectedRoots   []syncshortcut.ProtectedRoot
+	transferWorkers        int                    // goroutine count for the worker pool
+	checkWorkers           int                    // goroutine limit for parallel file hashing
+	contentFilter          syncdomain.ContentFilterConfig
+	// protectedRoots are the shortcut child roots below this mount, which
+	// observation and housekeeping leave alone; the set guards itself.
+	protectedRoots *protectedRootSet
+	// upkeep runs the cleanup after a sync pass and the watch's hourly trash
+	// purge, and keeps their failure streaks.
+	upkeep *housekeeper
 
 	// accountCanonicalID names the catalog record of the account the engine
 	// syncs with, the one whose sign-in requirement a 401 marks and the
@@ -118,16 +106,6 @@ type Engine struct {
 	// because one-shot and watch observation can run on different goroutines.
 	mountRootDeltaFallbackReported atomic.Bool
 
-	// These keep each housekeeping failure to one Warn per failure streak
-	// (R-6.6.30): a protected-root refresh, a leftover download file cleanup,
-	// an expired upload session cleanup and a trash purge that keeps failing.
-	// Each clears when its operation succeeds again, so the next streak is
-	// reported once more. Only the goroutine running the engine's RunOnce or
-	// RunWatch reads and writes them.
-	protectedRootRefreshFailing ownedStreak
-	partialCleanupFailing       ownedStreak
-	sessionCleanupFailing       ownedStreak
-	trashPurgeFailing           ownedStreak
 	// releasedRootJunkFailing and releaseRefusalFailing keep the same one Warn
 	// per streak for a removed shared folder's release that cannot remove the
 	// junk left in its emptied sync folder (emptyReleasedRoot) or a synced
@@ -224,9 +202,19 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		enableWebsocket:        cfg.EnableWebsocket,
 		wallClock:              syncdomain.NewRealClock(cfg.Logger, &syncdomain.TimerPanics{}),
 		hooks:                  cfg.hooks,
+		protectedRoots:         newProtectedRootSet(bm, cfg.ShortcutNamespaceID),
+	}
+	e.upkeep = &housekeeper{
+		syncTree:      syncTree,
+		sessionStore:  sessionStore,
+		trash:         trash,
+		contentFilter: cfg.ContentFilter,
+		roots:         e.protectedRoots,
+		logger:        cfg.Logger,
+		now:           e.nowFunc,
 	}
 
-	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
+	if err := e.protectedRoots.refresh(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading parent shortcut protected roots: %w", err)
 	}
 

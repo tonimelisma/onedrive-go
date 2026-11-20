@@ -68,7 +68,7 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 	if err := e.baseline.ReplaceShortcutRoots(ctx, nextRecords); err != nil {
 		return false, fmt.Errorf("sync: persist shortcut root local lifecycle: %w", err)
 	}
-	if err := e.refreshProtectedRootsFromStore(ctx); err != nil {
+	if err := e.protectedRoots.refresh(ctx); err != nil {
 		return false, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
 	for i := range newlyBlocked {

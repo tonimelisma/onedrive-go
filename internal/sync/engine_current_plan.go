@@ -260,7 +260,7 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	if !remoteChanged && !localChanged {
 		return nil
 	}
-	if refreshErr := flow.engine.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
+	if refreshErr := flow.engine.protectedRoots.refresh(ctx); refreshErr != nil {
 		return fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
 	parentRoots, err := flow.deps.store.ListShortcutRoots(ctx)
@@ -322,10 +322,10 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	obs := eng.buildRemoteObserver(bl, flow.deps.logger)
 	obs.SetItemClient(eng.itemsClient)
 	obs.SetRemotePathLookup(eng.remotePathLookup(ctx))
-	if refreshErr := eng.refreshProtectedRootsFromStore(ctx); refreshErr != nil {
+	if refreshErr := eng.protectedRoots.refresh(ctx); refreshErr != nil {
 		return nil, "", syncshortcut.ShortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
-	obs.SetShortcutTopology(flow.cfg.shortcutNamespaceID, eng.currentProtectedRoots())
+	obs.SetShortcutTopology(flow.cfg.shortcutNamespaceID, eng.protectedRoots.current())
 
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, savedToken)
 	if err != nil {
@@ -354,7 +354,7 @@ func (flow *engineFlow) observeLocal(
 	recordHashes bool,
 ) (syncobserve.ScanResult, error) {
 	eng := flow.engine
-	if err := eng.refreshProtectedRootsFromStore(ctx); err != nil {
+	if err := eng.protectedRoots.refresh(ctx); err != nil {
 		return syncobserve.ScanResult{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
 
@@ -372,7 +372,7 @@ func (flow *engineFlow) observeLocal(
 		obs.SetLocalHashCache(cache)
 	}
 	obs.SetFilterConfig(flow.cfg.contentFilter)
-	obs.SetProtectedRoots(eng.currentProtectedRoots())
+	obs.SetProtectedRoots(eng.protectedRoots.current())
 	obs.SetObservationRules(flow.cfg.localRules)
 	obs.SetSyncRootIdentity(eng.syncRootIdentity)
 	mountFlags, err := flow.deps.store.ListMountBoundaries(ctx)
@@ -759,7 +759,7 @@ func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *syncdom
 // never holds such a path, which says nothing about a file there.
 func (flow *engineFlow) localScanCoverage() func(path string) bool {
 	filter := syncdomain.NewContentFilter(flow.cfg.contentFilter)
-	protectedRoots := flow.engine.currentProtectedRoots()
+	protectedRoots := flow.engine.protectedRoots.current()
 
 	return func(path string) bool {
 		if _, reserved := syncshortcut.ProtectedRootPathReservation(path, protectedRoots); reserved {

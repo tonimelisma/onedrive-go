@@ -34,7 +34,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	remoteObs := rt.engine.buildRemoteObserver(bl, rt.deps.logger)
 	remoteObs.SetItemClient(rt.engine.itemsClient)
 	remoteObs.SetRemotePathLookup(rt.engine.remotePathLookup(ctx))
-	remoteObs.SetShortcutTopology(rt.cfg.shortcutNamespaceID, rt.engine.currentProtectedRoots())
+	remoteObs.SetShortcutTopology(rt.cfg.shortcutNamespaceID, rt.engine.protectedRoots.current())
 	remoteObs.SetDeltaExpiredRecovery(func(ctx context.Context, kind syncdomain.ResyncKind) (syncobserve.RemoteObservationBatch, error) {
 		batch, err := rt.executeDriveRootFullObservation(ctx, bl, kind)
 		if err != nil {

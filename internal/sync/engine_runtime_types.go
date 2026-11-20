@@ -13,7 +13,7 @@ import (
 // watch coordinators. It reads the engine's configuration, hooks and ambient
 // capabilities from the copies flowInputs took when the run started; the
 // engine pointer remains for its collaborators and the state it owns
-// (protectedRoots under protectedRootsMu, the housekeeping streaks).
+// (the protected-root set, the housekeeper).
 type engineFlow struct {
 	// engine is the collaborators and engine-owned state this flow still
 	// reaches; its configuration and hooks it reads from cfg and hooks.

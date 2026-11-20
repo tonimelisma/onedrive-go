@@ -156,8 +156,7 @@ func TestRunWatch_ObserverThatIgnoresItsContextIsNamedAfterTheBound(t *testing.T
 func TestAckHandle_ConcurrentWithFullRefresh_IsRaceFree(t *testing.T) {
 	t.Parallel()
 
-	eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
 	seedRemovedSharedFolders(t, eng.Engine, syncRoot)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)

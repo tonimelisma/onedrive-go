@@ -533,3 +533,9 @@ func refreshTestFlowInputs(eng *testEngine) {
 		flow.cfg, flow.deps, flow.hooks = in.cfg, in.deps, in.hooks
 	}
 }
+
+// withTestShortcutNamespace gives a test engine the test shortcut namespace,
+// so it protects the shortcut child roots its store holds.
+func withTestShortcutNamespace(inputs *engineInputs) {
+	inputs.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+}

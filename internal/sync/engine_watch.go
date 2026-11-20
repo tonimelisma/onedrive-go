@@ -101,7 +101,7 @@ func (e *Engine) runWatch(ctx context.Context, rt *watchRuntime, mode syncdomain
 	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
-	if err := rt.engine.refreshProtectedRootsFromStore(ctx); err != nil {
+	if err := rt.engine.protectedRoots.refresh(ctx); err != nil {
 		return fmt.Errorf("sync: refresh shortcut protected roots before watch observers: %w", err)
 	}
 	if err := rt.startObservers(ctx, pipe.bl, opts); err != nil {
@@ -327,7 +327,7 @@ func (rt *watchRuntime) finishBootstrapAfterActions(
 ) error {
 	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventBootstrapQuiesced})
 	rt.scheduleFollowUpIfSettled()
-	rt.postSyncHousekeeping(ctx)
+	rt.engine.upkeep.afterSync(ctx)
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
 		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
 	}
@@ -393,7 +393,7 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 	}
 	localObs.SetLocalHashCache(hashCache)
 	localObs.SetFilterConfig(rt.cfg.contentFilter)
-	localObs.SetProtectedRoots(rt.engine.currentProtectedRoots())
+	localObs.SetProtectedRoots(rt.engine.protectedRoots.current())
 	localObs.SetObservationRules(rt.cfg.localRules)
 	localObs.SetSyncRootIdentity(rt.engine.syncRootIdentity)
 	mountFlags, err := rt.deps.store.ListMountBoundaries(ctx)
