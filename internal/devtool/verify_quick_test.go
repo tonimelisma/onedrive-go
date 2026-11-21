@@ -203,7 +203,7 @@ func TestRunVerifyPRRunsLintThenQuick(t *testing.T) {
 	assert.Equal(t, []string{"test", "-short", testShortUnitTimeoutArg, "./..."}, unit.args)
 	for _, command := range runner.outputCommands {
 		assert.Contains(t, []string{"git", "go"}, command.name, "pr runs no race tier and reports no coverage")
-		if command.name == "go" {
+		if command.name == goCommandName {
 			assert.Equal(t, "list", command.args[0], "the only go command pr reads is the package list")
 		}
 	}
@@ -231,7 +231,7 @@ func changedPackagesRunner(t *testing.T, repoRoot string, changed string) *fakeR
 			return []byte("base\n"), nil
 		case name == "git" && args[0] == "diff":
 			return []byte(changed), nil
-		case name == "go" && args[0] == "list":
+		case name == goCommandName && args[0] == "list":
 			return []byte(listed), nil
 		default:
 			return nil, nil
