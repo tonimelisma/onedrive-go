@@ -89,7 +89,7 @@ intent; multisync receives only that child work intent.
 | A delete waits for the create on its side that writes the deleted file's content at another path, so a failed create, or a failure of what it waits for, skips the delete and the content stays on that side; an edge that would close a cycle, given the edges kept before it, is left out (R-2.17.2). | `TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent`, `TestBuildDependencies_ADeleteDoesNotWaitForACreateThatWaitsForIt`, `TestBuildDependencies_OfTwoContentEdgesThatCloseACycleOnlyTogetherTheFirstIsKept`, `TestRunOnce_AFileRenamedHereOntoAPathAWaitingMoveLeavesStaysOnOneDriveWhileACreateBeforeItsUploadFails` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/internal/syncplan/planner_actions_test.go`, `internal/sync/internal/syncplan/planner_move_composition_test.go` (`TestBuildDependencies_NestedMoveEdges`, `TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove`), `internal/sync/internal/syncplan/planner_delete_safety_test.go` (`TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`) |
 | Every single-path combination of baseline, local and remote state (absent, file A/B/C, folder), and the move combinations of one synced file, has its plan checked in as `testdata/reconcile/matrix.golden` (refresh with `-update`); with `ONEDRIVE_GO_RECONCILE_CONVERGE=1` each cell is also run to convergence on a pure model and must end at the reference planner's content set. A planner-level model test applies random edits to both sides of a pure model, plans it through the real comparison SQL and planner, applies the plan without an executor (items addressed by ID, a create onto a taken name failing as a 409), and must converge with every written content kept (D-093). | `TestReconcileMatrix_Golden`, `TestPlannerModel_RandomTriplesConverge` |
-| The decision table's kinds are typed enums whose names the SQL literals match exactly, and a name the enum lacks fails the row scan naming the path. Every reachable state is classified (stage 1 over all 131,072 comparison inputs, stage 2 over 442,368 reconciliation inputs); a row outside the table, or a folder planned as a content transfer, fails the plan before the unavailable-truth suppression can plan it as nothing, naming the path; so does a built action whose type or folder create side is outside its enum, before any rule reads it, and every decision on the action type panics on such a value instead of answering it (R-6.2.16). Content proven equal on both sides never transfers, whichever side changed: a local edit equal to OneDrive's unchanged content is a baseline update that records the new local facts beside the remote ones, and the next plan is empty (R-2.2.3). | `TestPlannerKindCases_LiteralsAreExactlyTheKinds`, `TestPlannerKinds_ParseRoundTripsEveryMemberAndRefusesOthers`, `TestQueryPlannerRows_UnknownKindFailsTheScanNamingThePath`, `TestComparisonKindCase_ClassifiesEveryReachableState`, `TestReconciliationKindCase_ReconcilesEveryClassifiedComparison`, `TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable`, `TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan`, `TestPlanCurrentState_FolderTransferFailsThePlan`, `TestPlanCurrentState_UnlistedActionTypeFailsThePlan`, `TestActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpdate`, `TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing`, `TestRunOnce_UnclassifiedRowFailsThePassNamingThePath`, `TestDecide_ComparisonMatchesTheSQLCaseOnEveryInput`, `TestReconcile_MatchesTheSQLCaseOnEveryInput`, `TestDecide_EveryValidStateHasTheTableProperties`, `TestDecide_ARootOnlyOneSideHoldsIsUnclassified`, `TestDecisionState_ValidNamesTheBrokenRule`, `TestRunOnce_GoAndSQLDecisionDisagreementFailsThePass` |
+| The decision table is Go and its kinds are typed enums; a side type the enum lacks fails the row scan naming the path. Every valid state a side holds is classified, except a drive root only one side holds (all 8,388,608 normalized states); a row outside the table, or a folder planned as a content transfer, fails the plan before the unavailable-truth suppression can plan it as nothing, naming the path; so does a built action whose type or folder create side is outside its enum, before any rule reads it, and every decision on the action type panics on such a value instead of answering it (R-6.2.16). Content proven equal on both sides never transfers, whichever side changed: a local edit equal to OneDrive's unchanged content is a baseline update that records the new local facts beside the remote ones, and the next plan is empty (R-2.2.3). | `TestPlannerKinds_ParseRoundTripsEveryMemberAndRefusesOthers`, `TestQueryPlannerRows_UnknownSideTypeFailsTheScanNamingThePath`, `TestQueryPlannerRows_GoDecidesEveryRowOfOneQuery`, `TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable`, `TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan`, `TestPlanCurrentState_FolderTransferFailsThePlan`, `TestPlanCurrentState_UnlistedActionTypeFailsThePlan`, `TestActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpdate`, `TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing`, `TestRunOnce_UnclassifiedRowFailsThePassNamingThePath`, `TestDecide_EveryValidStateHasTheTableProperties`, `TestDecide_ARootOnlyOneSideHoldsIsUnclassified`, `TestDecisionState_ValidNamesTheBrokenRule` |
 | Planner decisions stay row-driven and action-shaped across conflict and folder-parent preservation cases. | `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred`, `internal/sync/syncstore/store_planner_visible_test.go` |
 
 ## Inputs
@@ -108,8 +108,8 @@ The engine first materializes transaction-local planner-visible current-state
 tables from `local_state` and `remote_state` using the compiled `contentFilter`.
 It then removes same-side descendants below baseline folders that are absent
 from that side's visible current table. Raw `baseline` is not filtered or
-mutated. Those views feed `comparison_state` and `reconciliation_state`,
-including the invariant that a baseline row absent from both planner-visible
+mutated. Those views feed the comparison facts (`comparison_flags`) the Go
+decision table reads, including the invariant that a baseline row absent from both planner-visible
 current snapshots becomes `baseline_remove`.
 
 Before Go emits actions, a shared derivation step computes one per-path
@@ -267,59 +267,38 @@ folder the user deleted, and a delete would remove it with its content.
 
 ## Decision Table Kinds
 
-The SQL decision table has two stages, one `CASE` expression each in
-`sqlite_compare.go`: `sqlComparisonKindCase` gives every path a comparison kind
-(which of baseline, local and remote hold it, and how the sides relate to the
-baseline), and `sqlReconciliationKindCase` turns that kind and the path's flags
-into a reconciliation kind, the decision `buildActionsForReconciliation` maps
-to actions. Both vocabularies are Go enums in `domain_compare_kinds.go`
-(`ComparisonKind`, `ReconciliationKind`), the source of truth. They sit in the
-store layer, next to the SQL that carries their names, because the row scans
-parse them; `planner_kinds.go` holds the planner's check of them and its error.
-The SQL carries the names as literals, and
-`TestPlannerKindCases_LiteralsAreExactlyTheKinds` holds literals and enums to
-the same set. The row scans parse each kind and
-fail on a name the enum lacks, naming the path: the SQL and the enum drifted
-apart. Every `switch` over a kind lists every member (the `exhaustive` linter),
-so Go cannot forget a new kind. The reconciliation enum owns its names; some
-equal action-type names, which are a persisted wire format
+The decision table is Go (`domain_decide.go`) and has two stages:
+`classify` gives every path a comparison kind (which of baseline, local and
+remote hold it, and how the sides relate to the baseline), and `Reconcile`
+turns that kind and the path's flags into a reconciliation kind, the decision
+`buildActionsForReconciliation` maps to actions. `Decide(DecisionState)` is
+the two in a row, pure and total. `DecisionState` is what each side holds at
+the path (`SideType`: absent, file, folder, root) and the 17 per-path facts
+the comparison query derives (content changes, replacements, move pairing,
+the ancestor-move waits); the path's item type and the two type-changed flags
+are derived from the side types. Both vocabularies are Go enums in
+`domain_compare_kinds.go` (`ComparisonKind`, `ReconciliationKind`);
+`planner_kinds.go` holds the planner's check of them and its error. Every
+`switch` over a kind lists every member (the `exhaustive` linter), so Go
+cannot forget a new kind. The reconciliation enum owns its names; some equal
+action-type names, which are a persisted wire format
 (`retry_work.action_type`), by choice rather than by definition.
 
-Every genuine "nothing to do" is an explicit `noop` rule, and both `ELSE`
-branches return `unclassified`, the zero value of both enums: a row no rule
-covers. No reachable state gets there today.
-`TestComparisonKindCase_ClassifiesEveryReachableState` evaluates the comparison
-stage over all 131,072 combinations of its 17 inputs: only the combination with
-no side present is unclassified, and no path can have it (the rows are the
-union of the three tables' paths).
-`TestReconciliationKindCase_ReconcilesEveryClassifiedComparison` evaluates the
-reconciliation stage over 442,368 combinations of its inputs (18 comparison
-kinds, 3 item types, 4 local and 4 remote item types, 9 flags): every
-classified comparison is reconciled except a diverged row that changed on
-neither side, which the comparison stage never produces. Both stages are
-exhaustive tests (`skipInShort`: seconds without the race detector, minutes
-with it), run by the full profiles and nightly CI. The guard is for the
-next change to the table, a comparison kind added without a reconciliation
-rule or a flag expression that yields NULL; the old fallback planned such a
-row as `noop`, so its path silently stopped syncing.
+SQL keeps what is set-valued and per-path facts: the path universe, local and
+remote move pairing, the ancestor-move sets, the descendant probes and the
+scalar flags (`sqlComparisonStateCTEs`). One query per plan
+(`sqlQueryPlannerState`) returns every input of the table for every path, and
+`QueryPlannerRows` decides each row in Go. Until 2026-11-20 two SQL `CASE`
+expressions decided, and the comparison chain ran twice per plan, once for
+each; the Go table was first proven equal to them stage by stage over every
+SQL input (131,072 comparison inputs, 442,368 reconciliation inputs) and run
+beside them on every plan, then they were deleted. The reconciliation matrix
+golden did not change (`TestReconcileMatrix_Golden`).
 
-### The decision table in Go
-
-`domain_decide.go` holds the same table in Go: `Decide(DecisionState)` is
-`classify` then `Reconcile`, pure and total. `DecisionState` is what each side
-holds at the path (`SideType`: absent, file, folder, root) and the 17
-per-path facts the comparison query derives (content changes, replacements,
-move pairing, the ancestor-move waits); the item type and the two
-type-changed flags are derived from the side types. The comparison query
-returns every input of the table, and `SQLiteComparisonRow.DecisionState`
-reads them, so every pass decides each row twice, by SQL and by Go, and
-`CheckDecisionsAgree` fails the pass on a disagreement, naming the path and
-both answers (`TestRunOnce_GoAndSQLDecisionDisagreementFailsThePass`). The
-two tables are proven equal stage by stage over every SQL input
-(`TestDecide_ComparisonMatchesTheSQLCaseOnEveryInput`, 131,072 inputs;
-`TestReconcile_MatchesTheSQLCaseOnEveryInput`, 442,368 inputs), and the
-planner tests, the reconciliation matrix and the planner model check
-agreement and `DecisionState.Valid` on every row they plan.
+Every genuine "nothing to do" is an explicit `noop`, and a state no rule
+covers is `unclassified`, the zero value of both enums. The planner tests,
+the reconciliation matrix and the planner model check `DecisionState.Valid`
+on every row they plan.
 
 `Valid` states the flag definitions as rules (a flag about an absent side is
 false, a type change is a content change, a folder has no content to change,
@@ -360,13 +339,10 @@ An unclassified row fails the plan (R-6.2.16). `PlanCurrentState` checks every r
 before it plans any (`validatePlannerKinds`), ahead of the unavailable-truth
 suppression that would otherwise return early for the path, and returns
 `unclassifiedPlanError` (`errUnclassifiedPlan`): the first unclassified path,
-its two kinds, and how many other rows are unclassified. When the engine loads
-the rows (`queryPlannerRowsTx`, `sync-engine.md`) and one is unclassified, it
-reads that row's decision inputs in the same read transaction
-(`sqlQueryPlannerDecisionInputs`: the comparison stage's 17 inputs, the
-reconciliation stage's three item types and six further flags, a NULL shown as
-`NULL`), so the error says which inputs no rule matched; a classified plan
-never runs that query. A folder planned as a content transfer
+its two kinds, and how many other rows are unclassified. An unclassified row
+carries its decision state (`DecisionState.Inputs`: each side's presence and
+item type, then the 17 flags as 0 or 1), so the error says which inputs no
+rule matched; a flag the query yields as NULL fails the row scan instead. A folder planned as a content transfer
 (`errFolderTransferPlanned`) fails the plan the same way. Either error stops
 that drive's sync pass before anything executes: one-shot `sync` returns it,
 and in watch mode the replan ends with it, which ends the drive's runner; the

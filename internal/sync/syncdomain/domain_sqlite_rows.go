@@ -72,8 +72,8 @@ type SQLiteReconciliationRow struct {
 	RemoteMoveTarget   string
 	RemoteMoveSource   string
 	// DecisionInputs are the decision-table inputs of an unclassified row,
-	// read by the engine for the plan error (QueryPlannerDecisionInputs);
-	// nil for every classified row.
+	// for the plan error (DecisionState.Inputs); nil for every classified
+	// row.
 	DecisionInputs []PlannerDecisionInput
 }
 

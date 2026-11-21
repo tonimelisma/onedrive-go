@@ -174,7 +174,6 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 	require.NoError(t, err)
 	observationIssues, err := syncstore.QueryObservationIssueRowsWithRunner(ctx, tx)
 	require.NoError(t, err)
-	require.NoError(t, syncstore.CheckDecisionsAgree(comparisons, reconciliations), "the Go and SQL decision tables agree")
 	for i := range comparisons {
 		require.NoError(t, comparisons[i].DecisionState().Valid(), "the decision state of %q", comparisons[i].Path)
 	}

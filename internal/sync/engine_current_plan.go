@@ -565,59 +565,26 @@ func (flow *engineFlow) loadCurrentInputsTx(
 	}, nil
 }
 
-// queryPlannerRowsTx reads the comparison and reconciliation rows over the
-// planner-visible tables and holds every classified row's kinds to the Go
-// decision table (syncstore.CheckDecisionsAgree). When a row came back unclassified, it also reads
-// that row's decision-table inputs in the same transaction, the only place
-// they can be read (the planner-visible tables are transaction-local), so the
-// plan error PlanCurrentState returns names them (R-6.2.16). A plan whose
-// rows are all classified pays nothing for it.
+// queryPlannerRowsTx reads every path's decision-table inputs over the
+// planner-visible tables, in one query, and decides each in Go
+// (syncdomain.Decide). An unclassified row carries its inputs, so the plan
+// error PlanCurrentState returns names them (R-6.2.16).
 func (flow *engineFlow) queryPlannerRowsTx(
 	ctx context.Context,
 	tx syncstore.SqlTxRunner,
 ) ([]syncdomain.SQLiteComparisonRow, []syncdomain.SQLiteReconciliationRow, error) {
-	comparisons, err := syncstore.QueryComparisonStateWithRunnerForTables(
-		ctx,
-		tx,
-		syncstore.PlannerVisibleLocalStateTable,
-		syncstore.PlannerVisibleRemoteStateTable,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	reconciliationQuery := syncstore.SqlQueryReconciliationState
-	if flow.engine.reconciliationQueryOverride != "" {
-		reconciliationQuery = flow.engine.reconciliationQueryOverride
-	}
-	reconciliations, err := syncstore.QueryReconciliationRows(ctx, tx, syncstore.SqlQueryForStateTables(
-		reconciliationQuery,
-		syncstore.PlannerVisibleLocalStateTable,
-		syncstore.PlannerVisibleRemoteStateTable,
-	))
-	if err != nil {
-		return nil, nil, err
-	}
-	first := syncplan.FirstUnclassifiedRow(reconciliations)
-	if first < 0 {
-		// Every classified row is decided twice, by SQL and by Go, until
-		// the Go table replaces the SQL one; a disagreement fails the pass.
-		if err := syncstore.CheckDecisionsAgree(comparisons, reconciliations); err != nil {
-			return nil, nil, err
-		}
-		return comparisons, reconciliations, nil
-	}
-	reconciliations[first].DecisionInputs, err = syncstore.QueryPlannerDecisionInputs(
-		ctx,
-		tx,
-		reconciliations[first].Path,
-		syncstore.PlannerVisibleLocalStateTable,
-		syncstore.PlannerVisibleRemoteStateTable,
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("sync: reading the decision inputs of unclassified %q: %w", reconciliations[first].Path, err)
+	decide := syncstore.Decider(syncdomain.Decide)
+	if flow.engine.decideOverride != nil {
+		decide = flow.engine.decideOverride
 	}
 
-	return comparisons, reconciliations, nil
+	return syncstore.QueryPlannerRows(
+		ctx,
+		tx,
+		syncstore.PlannerVisibleLocalStateTable,
+		syncstore.PlannerVisibleRemoteStateTable,
+		decide,
+	)
 }
 
 // buildCurrentPlanStage is the shared planning stage after an entrypoint has

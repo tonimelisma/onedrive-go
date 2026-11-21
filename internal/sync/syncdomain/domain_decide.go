@@ -530,3 +530,63 @@ func placementRules() []decisionStateRule {
 		}},
 	}
 }
+
+// Inputs lists the state as the plan error prints it: each side's presence
+// and type, then every flag, as 0 or 1.
+func (s DecisionState) Inputs() []PlannerDecisionInput {
+	bit := func(b bool) string {
+		if b {
+			return "1"
+		}
+		return "0"
+	}
+	inputs := make([]PlannerDecisionInput, 0, len(decisionInputColumns()))
+	for _, column := range decisionInputColumns() {
+		var value string
+		switch {
+		case column.side != nil:
+			value = column.side(s).String()
+		default:
+			value = bit(column.flag(s))
+		}
+		inputs = append(inputs, PlannerDecisionInput{Column: column.name, Value: value})
+	}
+
+	return inputs
+}
+
+// decisionInputColumn is one printed input of a decision state: a side type
+// or a flag.
+type decisionInputColumn struct {
+	name string
+	side func(DecisionState) SideType
+	flag func(DecisionState) bool
+}
+
+func decisionInputColumns() []decisionInputColumn {
+	return []decisionInputColumn{
+		{name: "baseline_present", flag: func(s DecisionState) bool { return s.Baseline.Present() }},
+		{name: "local_present", flag: func(s DecisionState) bool { return s.Local.Present() }},
+		{name: "remote_present", flag: func(s DecisionState) bool { return s.Remote.Present() }},
+		{name: "baseline_item_type", side: func(s DecisionState) SideType { return s.Baseline }},
+		{name: "local_item_type", side: func(s DecisionState) SideType { return s.Local }},
+		{name: "remote_item_type", side: func(s DecisionState) SideType { return s.Remote }},
+		{name: "local_move_source", flag: func(s DecisionState) bool { return s.LocalMoveSource }},
+		{name: "local_move_dest", flag: func(s DecisionState) bool { return s.LocalMoveDest }},
+		{name: "remote_move_source", flag: func(s DecisionState) bool { return s.RemoteMoveSource }},
+		{name: "remote_move_dest", flag: func(s DecisionState) bool { return s.RemoteMoveDest }},
+		{name: "local_item_replaced", flag: func(s DecisionState) bool { return s.LocalItemReplaced }},
+		{name: "remote_item_replaced", flag: func(s DecisionState) bool { return s.RemoteItemReplaced }},
+		{name: "delete_awaits_ancestor_move", flag: func(s DecisionState) bool { return s.DeleteAwaitsAncestorMove }},
+		{name: "local_copy_awaits_ancestor_move", flag: func(s DecisionState) bool { return s.LocalCopyAwaitsAncestorMove }},
+		{name: "remote_create_awaits_ancestor_move", flag: func(s DecisionState) bool { return s.RemoteCreateAwaitsAncestorMove }},
+		{name: "kept_local_folder", flag: func(s DecisionState) bool { return s.KeptLocalFolder }},
+		{name: "remote_move_shadowed", flag: func(s DecisionState) bool { return s.RemoteMoveShadowed }},
+		{name: "current_equal", flag: func(s DecisionState) bool { return s.CurrentEqual }},
+		{name: "local_changed", flag: func(s DecisionState) bool { return s.LocalChanged }},
+		{name: "remote_changed", flag: func(s DecisionState) bool { return s.RemoteChanged }},
+		{name: "local_subtree_changed", flag: func(s DecisionState) bool { return s.LocalSubtreeChanged }},
+		{name: "remote_subtree_changed", flag: func(s DecisionState) bool { return s.RemoteSubtreeChanged }},
+		{name: "metadata_drift", flag: func(s DecisionState) bool { return s.MetadataDrift }},
+	}
+}
