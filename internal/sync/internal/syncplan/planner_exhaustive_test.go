@@ -102,9 +102,13 @@ const (
 	exResolvedName   = "r"
 	// exWorkers is how many stores run pairs in parallel.
 	exWorkers = 4
-	// exRaceStride is the share of pairs a run under the race detector
-	// plans: the planner is single-goroutine apart from the store.
+	// exRaceStride is the share of pairs a run of the full tier under the
+	// race detector plans: the planner is single-goroutine apart from the
+	// store.
 	exRaceStride = 40
+	// exSampleStride is the share of pairs any run outside the full tier
+	// plans (syncfixture.FullTier).
+	exSampleStride = 400
 )
 
 // exKind is one kind of user action.
@@ -1559,7 +1563,11 @@ func TestPlannerExhaustive_ShortHistoriesOnBothSidesKeepContentAndConverge(t *te
 
 	registerExCachingDriver(t)
 	stride := 1
-	if syncfixture.RaceDetectorEnabled && !*updateGolden {
+	switch {
+	case *updateGolden:
+	case !syncfixture.FullTier():
+		stride = exSampleStride
+	case syncfixture.RaceDetectorEnabled:
 		stride = exRaceStride
 	}
 	requireExhaustiveGolden(t, exRunPairs(t, exPairs(t), stride), stride == 1)

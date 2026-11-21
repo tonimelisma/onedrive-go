@@ -984,6 +984,18 @@ func SkipInShort(tb testing.TB) {
 	}
 }
 
+// FullTier reports whether this test binary is the full unit tier's: one
+// built with coverage, which only the full verify profiles ask for
+// (`verify default` and `verify public`, which nightly CI runs; their
+// `go test -race -coverpkg=./... -coverprofile`, devtool's runUnitTests). An
+// exhaustive test whose full breadth costs more than a per-PR run can carry
+// runs all of it there and a fixed sample of it in every other non-short run:
+// the race profile on every push to main, the stress lane and a plain
+// `go test`. `go test -cover` runs the whole of it by hand.
+func FullTier() bool {
+	return testing.CoverMode() != ""
+}
+
 // SeedVars names the environment variables of one seeded model family: one
 // seed, which wins over the other two, or a run of count consecutive seeds
 // from start.
