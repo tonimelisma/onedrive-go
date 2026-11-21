@@ -634,7 +634,7 @@ type fullRemoteObservation struct {
 // means. A refresh this client chose is ResyncKindApplyDifferences: an item
 // OneDrive no longer has was deleted. A resync that asked for local items to
 // be uploaded again, or did not say, turns orphans into re-uploads instead.
-func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
+func (flow *observation) observeRemoteFullWithShortcutTopology(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 	kind syncdomain.ResyncKind,

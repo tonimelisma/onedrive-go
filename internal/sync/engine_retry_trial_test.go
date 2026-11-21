@@ -178,7 +178,7 @@ func TestClearRetryWorkOnSuccess_StoreFailureIsReturned(t *testing.T) {
 	t.Parallel()
 
 	flow := &engineFlow{
-		deps: runtimeDeps{store: closedTestStore(t), logger: syncfixture.TestLogger(t)},
+		observation: observation{deps: runtimeDeps{store: closedTestStore(t), logger: syncfixture.TestLogger(t)}},
 	}
 
 	err := flow.clearRetryWorkOnSuccess(t.Context(), &syncdomain.ActionCompletion{

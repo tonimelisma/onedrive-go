@@ -440,15 +440,17 @@ func (rt *watchRuntime) startLocalObserver(
 	protectedRootEvents chan<- syncshortcut.ProtectedRootEvent,
 	errs chan<- error,
 ) {
+	// The goroutine holds the observation and its send-only outputs only.
+	obs := &rt.observation
 	rt.resources.goroutines.start(ctx, watchGoroutineLocalObserver, func(ctx context.Context) {
-		defer rt.deps.emit(syncdomain.EngineDebugEvent{
+		defer obs.deps.emit(syncdomain.EngineDebugEvent{
 			Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverLocal,
 		})
 		defer close(localBatches)
 		defer close(protectedRootEvents)
-		defer recoverObserverPanic(rt.deps.logger, observerNameLocal, errs)
+		defer recoverObserverPanic(obs.deps.logger, observerNameLocal, errs)
 
-		errs <- rt.watchLocalWithFallback(ctx, localObs)
+		errs <- obs.watchLocalWithFallback(ctx, localObs)
 	})
 }
 
@@ -464,7 +466,7 @@ func (rt *watchRuntime) startLocalObserver(
 // were simply lost. Now the fallback scans at once, then at the normal
 // safety-scan interval, and tries to watch again after 10 minutes, doubling
 // to an hour while the limit persists.
-func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *syncobserve.LocalObserver) error {
+func (rt *observation) watchLocalWithFallback(ctx context.Context, localObs *syncobserve.LocalObserver) error {
 	tree := rt.cfg.syncTree
 	retryDelay := syncobserve.LocalWatchRetryInitialDelay
 	var warnedCause syncobserve.WatchUnavailableCause
@@ -542,8 +544,9 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 		LifecycleHook: rt.emitSocketIOLifecycleEvent,
 	})
 
+	obs := &rt.observation
 	rt.resources.goroutines.start(ctx, watchGoroutineWakeSource, func(ctx context.Context) {
-		rt.runSocketIOWakeSource(ctx, wakeSource, wakeCh)
+		obs.runSocketIOWakeSource(ctx, wakeSource, wakeCh)
 	})
 
 	return wakeCh
@@ -555,7 +558,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 // leaves watch polling on its interval and nothing else changes. The panic
 // itself is still logged at Error with its stack, because it is a bug.
 // Unrecovered, it would end the process and every mount with it.
-func (rt *watchRuntime) runSocketIOWakeSource(
+func (rt *observation) runSocketIOWakeSource(
 	ctx context.Context,
 	wakeSource socketIOWakeSourceRunner,
 	wakeCh chan<- struct{},
@@ -574,14 +577,14 @@ func (rt *watchRuntime) runSocketIOWakeSource(
 
 // reportSocketIOWakeSourceStop says, at Info, that the wake source ended with
 // err: watch keeps polling on its interval regardless.
-func (rt *watchRuntime) reportSocketIOWakeSourceStop(err error) {
+func (rt *observation) reportSocketIOWakeSourceStop(err error) {
 	rt.deps.logger.Info("Instant change notifications from OneDrive stopped; still checking on the poll interval",
 		slog.String("drive_id", rt.cfg.driveID.String()),
 		slog.Any("error", err),
 	)
 }
 
-func (rt *watchRuntime) emitSocketIOLifecycleEvent(event syncobserve.SocketIOLifecycleEvent) {
+func (rt *observation) emitSocketIOLifecycleEvent(event syncobserve.SocketIOLifecycleEvent) {
 	debugEvent := syncdomain.EngineDebugEvent{
 		DriveID: event.DriveID,
 		Note:    event.Note,
@@ -622,7 +625,7 @@ func (rt *watchRuntime) emitSocketIOLifecycleEvent(event syncobserve.SocketIOLif
 // unavailable: one at once (it also covers whatever the stopped watcher had
 // pending), then every interval. It returns true when retryAfter has passed
 // and the caller should try to watch again, false when the context ended.
-func (rt *watchRuntime) runPeriodicFullScan(
+func (rt *observation) runPeriodicFullScan(
 	ctx context.Context, obs *syncobserve.LocalObserver, tree *synctree.Root,
 	interval time.Duration, retryAfter time.Duration,
 ) bool {
@@ -673,7 +676,7 @@ func (rt *watchRuntime) runPeriodicFullScan(
 // set together, to the runtime. The scan stands in for both the watcher and
 // the safety scan, so its findings go exactly as a safety scan's do, the
 // empty set included. It returns false when the context ended.
-func (rt *watchRuntime) runFallbackScan(
+func (rt *observation) runFallbackScan(
 	ctx context.Context, obs *syncobserve.LocalObserver, tree *synctree.Root, scanFailing *bool,
 ) bool {
 	result, err := obs.FullScan(ctx, tree)

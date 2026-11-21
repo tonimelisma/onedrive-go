@@ -309,7 +309,7 @@ func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 	return localResult, nil
 }
 
-func (flow *engineFlow) observeRemoteWithShortcutTopology(
+func (flow *observation) observeRemoteWithShortcutTopology(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 ) ([]syncdomain.RemoteItem, string, syncshortcut.ShortcutTopologyBatch, error) {

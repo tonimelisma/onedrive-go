@@ -74,7 +74,7 @@ func (e *Engine) preferredMountRootObservationMode() syncdomain.RemoteObservatio
 	return syncdomain.RemoteObservationModeEnumerate
 }
 
-func (flow *engineFlow) executePrimaryRootObservation(
+func (flow *observation) executePrimaryRootObservation(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 	fullReconcile bool,
@@ -89,7 +89,7 @@ func (flow *engineFlow) executePrimaryRootObservation(
 // rootReadFailureBatch is the observation batch of a root OneDrive refused
 // to read: no events and no new cursor, only the root's read issue, so the
 // whole tree is unavailable rather than absent.
-func (flow *engineFlow) rootReadFailureBatch(
+func (flow *observation) rootReadFailureBatch(
 	mode syncdomain.RemoteObservationMode, issueType syncdomain.IssueType,
 ) syncobserve.RemoteObservationBatch {
 	return buildRemoteObservationBatch(
@@ -102,7 +102,7 @@ func (flow *engineFlow) rootReadFailureBatch(
 	)
 }
 
-func (flow *engineFlow) executeDriveRootObservation(
+func (flow *observation) executeDriveRootObservation(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 	fullReconcile bool,
@@ -167,7 +167,7 @@ func deltaWindowDeletesSyncedFolder(bl syncdomain.BaselineView, events []syncdom
 
 // executeDriveRootFullObservation runs the full refresh with orphan detection
 // and marks it as one, which also restarts the full-refresh cadence.
-func (flow *engineFlow) executeDriveRootFullObservation(
+func (flow *observation) executeDriveRootFullObservation(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 	kind syncdomain.ResyncKind,
@@ -194,7 +194,7 @@ func (flow *engineFlow) executeDriveRootFullObservation(
 	return batch, err
 }
 
-func (flow *engineFlow) executeMountRootObservation(
+func (flow *observation) executeMountRootObservation(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 	fullReconcile bool,
