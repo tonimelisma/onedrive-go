@@ -51,51 +51,37 @@ func TestDirNames_ProbeCorpus(t *testing.T) {
 	others, sameForm := twins.rivals("café.txt")
 	assert.Empty(t, others)
 	assert.True(t, sameForm)
-	assert.Len(t, twins.spellings("café.txt"), 2)
-
-	twins.remove("café.txt")
-	_, sameForm = twins.rivals("café.txt")
-	assert.False(t, sameForm, "one spelling left is no twin")
 }
 
 // Validates: R-2.12.3
-// One directory listing gives one verdict per name, asked through the full
-// scan's detector or through the watch's check.
-func TestLocalCollisions_ScanAndWatchAgree(t *testing.T) {
+// The full scan is the one local collision detector: the names a directory
+// holds on disk give one verdict per name, whichever entries changed. Watch
+// mode detects nothing itself; a collider's event wakes the replan whose scan
+// judges it.
+func TestLocalCollisions_ScanJudgesTheNamesOnDisk(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	disk := []string{"Report.txt", "report.txt", "notes.txt", "STRASSE.md", "straße.md", "solo.md"}
-	created := make([]string, 0, len(disk))
 	for _, name := range disk {
-		path := filepath.Join(dir, name)
-		if _, err := os.Lstat(path); err == nil {
-			continue // a case-insensitive filesystem folded it into an earlier name
-		}
-		require.NoError(t, os.WriteFile(path, []byte(name), 0o600))
-		created = append(created, name)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(name), 0o600))
 	}
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
-
-	names := ScanNames{".": dirNamesOf(entries)}
-	events := make([]syncdomain.ChangeEvent, 0, len(entries))
-	for _, e := range entries {
-		events = append(events, syncdomain.ChangeEvent{Path: e.Name()})
-	}
-	_, collisions := DetectCaseCollisions(events, names)
-	scanVerdict := make(map[string]bool, len(collisions))
-	for i := range collisions {
-		scanVerdict[collisions[i].Path] = true
+	if len(entries) != len(disk) {
+		t.Skip("case-insensitive filesystem: colliding names fold into one file")
 	}
 
-	obs := &LocalObserver{}
-	tree := syncfixture.MustOpenSyncTree(t, dir)
-	for _, e := range entries {
-		_, watchVerdict := obs.HasCaseCollisionCached(tree, dir, e.Name())
-		assert.Equal(t, scanVerdict[e.Name()], watchVerdict, "%s: scan and watch disagree", e.Name())
+	result, err := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0).
+		FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
+	require.NoError(t, err)
+
+	assert.ElementsMatch(t, []string{"Report.txt", "report.txt", "STRASSE.md", "straße.md"}, collisionPaths(&result))
+	events := make([]string, 0, len(result.Events))
+	for i := range result.Events {
+		events = append(events, result.Events[i].Path)
 	}
-	assert.NotEmpty(t, created)
+	assert.ElementsMatch(t, []string{"notes.txt", "solo.md"}, events)
 }
 
 // syncedScanRoot writes files, scans them once, and returns the sync root

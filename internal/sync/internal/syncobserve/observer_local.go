@@ -96,18 +96,6 @@ type localWatchState struct {
 	// unstable-file backoff (D-081b). Watch-loop only; pruned at safety scans.
 	writeChurn map[string]*pathWriteChurn
 
-	// dirNameCache caches namespace key→original name mappings per directory
-	// for O(1) collision lookups. Built lazily on first check; invalidated
-	// by Create/Delete events. Single-goroutine access (watchLoop) — no mutex.
-	DirNameCache map[string]DirNames // dirPath → its names on disk
-
-	// collisionPeers tracks N-way collision relationships detected in watch
-	// mode. When a collider is deleted, all surviving peers are re-emitted
-	// via handleCreate (which re-checks and re-records any remaining collisions).
-	// Cleared on safety scan (authoritative DetectCaseCollisions replaces this).
-	// Single-goroutine access (watchLoop) — no mutex.
-	CollisionPeers map[string]map[string]struct{} // dbRelPath → set of peer dbRelPaths
-
 	// excludedSymlinkPaths tracks alias paths that local observation excluded
 	// under the built-in symlink safety rules. Delete detection consults this set so a
 	// silently excluded symlink does not later reappear as a synthetic delete.
@@ -152,8 +140,6 @@ func newLocalWatchState() localWatchState {
 	return localWatchState{
 		PendingTimers:        make(map[string]syncdomain.SyncTimer),
 		HashRequests:         make(chan HashRequest, HashRequestBufSize),
-		DirNameCache:         make(map[string]DirNames),
-		CollisionPeers:       make(map[string]map[string]struct{}),
 		excludedSymlinkPaths: make(map[string]struct{}),
 		recoveryScanRequests: make(chan struct{}, 1),
 		recoveryScanDue:      make(chan uint64, 1),

@@ -16,8 +16,6 @@ import (
 type watchObserverTestOptions struct {
 	Baseline              syncdomain.BaselineView
 	WriteCoalesceCooldown time.Duration
-	CollisionPeers        map[string]map[string]struct{}
-	DirNameCache          map[string]DirNames
 	HashFunc              func(ctx context.Context, path string) (string, error)
 	AfterFunc             func(time.Duration, func()) syncdomain.SyncTimer
 	AfterSafetyScan       func()
@@ -51,12 +49,6 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 
 	if opts.WriteCoalesceCooldown != 0 {
 		obs.hooks.WriteCoalesceCooldown = opts.WriteCoalesceCooldown
-	}
-	if opts.CollisionPeers != nil {
-		obs.CollisionPeers = opts.CollisionPeers
-	}
-	if opts.DirNameCache != nil {
-		obs.DirNameCache = opts.DirNameCache
 	}
 	if opts.HashFunc != nil {
 		obs.hooks.HashFile = opts.HashFunc
@@ -271,14 +263,6 @@ func patchRowPaths(patches []LocalObservation) []string {
 	}
 
 	return paths
-}
-
-// collisionSkipOf matches the local observer's report that it skipped the
-// entry at path for a case collision.
-func collisionSkipOf(path string) func(syncdomain.EngineDebugEvent) bool {
-	return func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventLocalCaseCollisionSkipped && event.Path == path
-	}
 }
 
 // startMockWatch runs obs.Watch on dir in the background (runInBackground)

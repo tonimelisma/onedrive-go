@@ -15,11 +15,6 @@ type EngineDebugEventType string
 // is the observer's report that it handled the input, so a test waits for it
 // instead of waiting out a window in which nothing should happen.
 const (
-	// EngineDebugEventLocalCaseCollisionSkipped: the local observer skipped
-	// an entry whose name OneDrive treats as a sibling's (R-2.12.2): a watch
-	// create, an entry of a new directory's scan, or the hash of a coalesced
-	// write. Path is the skipped entry, Note the name it collides with.
-	EngineDebugEventLocalCaseCollisionSkipped EngineDebugEventType = "local_case_collision_skipped"
 	// EngineDebugEventRemoteWakesCoalesced: the remote observer dropped Count
 	// wake signals that were waiting when a poll began; that poll covers them.
 	EngineDebugEventRemoteWakesCoalesced EngineDebugEventType = "remote_wakes_coalesced"

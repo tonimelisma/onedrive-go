@@ -1,7 +1,6 @@
 package syncobserve
 
 import (
-	"os"
 	"path/filepath"
 	"slices"
 
@@ -10,23 +9,14 @@ import (
 
 // DirNames is the set of names one directory holds on disk, grouped by the
 // name OneDrive gives them (namekey.Of). It is the one collision rule of
-// local observation: the full scan and the watch handlers both ask it, and
-// both count only rivals that are on disk (R-2.12.1, R-2.12.3). A synced name
+// local observation, asked by the full scan every replan runs: only rivals on
+// disk count (R-2.12.1, R-2.12.3). Watch mode detects nothing itself; a
+// collider's event wakes the replan, whose scan judges it. A synced name
 // that is gone from disk is the old name of a rename or a delete, not a
 // rival, so no baseline lookup is needed.
 //
 // Each key holds the on-disk spellings under it.
 type DirNames map[namekey.Key][]string
-
-// dirNamesOf is the listing of entries.
-func dirNamesOf(entries []os.DirEntry) DirNames {
-	d := make(DirNames, len(entries))
-	for _, e := range entries {
-		d.Add(e.Name())
-	}
-
-	return d
-}
 
 // Add records disk, an entry's spelling on disk. Adding one spelling twice
 // (a followed symlink visiting a folder again) records it once.
@@ -36,40 +26,6 @@ func (d DirNames) Add(disk string) {
 		return
 	}
 	d[key] = append(d[key], disk)
-}
-
-// addUnlessStored records disk unless an entry with its stored form is
-// already there, possibly in another spelling: a watch create reports the
-// stored name of an entry the listing holds in its on-disk spelling.
-func (d DirNames) addUnlessStored(disk string) {
-	key := namekey.Of(disk)
-	stored := namekey.Stored(disk)
-	if slices.ContainsFunc(d[key], func(existing string) bool { return namekey.Stored(existing) == stored }) {
-		return
-	}
-	d[key] = append(d[key], disk)
-}
-
-// remove drops the entry whose stored form is name's.
-func (d DirNames) remove(name string) {
-	key := namekey.Of(name)
-	stored := namekey.Stored(name)
-	names := d[key]
-	for i, n := range names {
-		if namekey.Stored(n) == stored {
-			d[key] = append(names[:i], names[i+1:]...)
-			if len(d[key]) == 0 {
-				delete(d, key)
-			}
-
-			return
-		}
-	}
-}
-
-// spellings is every on-disk spelling OneDrive treats as name.
-func (d DirNames) spellings(name string) []string {
-	return d[namekey.Of(name)]
 }
 
 // rivals returns the other on-disk spellings that collide with the entry
