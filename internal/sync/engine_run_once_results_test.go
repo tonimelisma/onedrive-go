@@ -448,7 +448,7 @@ func TestOneShotRunner_ReleaseIdleDueHeldWork_ClearsShutdownCompletedOutboxOnRed
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	err, handled := runner.releaseIdleDueHeldWork(t.Context(), &syncdomain.Baseline{})
+	err, handled := runner.releaseIdleDueHeldWork(t.Context(), syncdomain.NewBaselineSnapshot(nil))
 	require.True(t, handled)
 	require.ErrorContains(t, err, "reading observation state for action freshness")
 	assert.Empty(t, runner.outbox, "shutdown-completed releases must not be queued for a second completion pass")

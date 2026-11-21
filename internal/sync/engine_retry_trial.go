@@ -18,11 +18,9 @@ const (
 // releaseDueHeldTrialsNow releases due held scope trials that are already
 // present in the runtime. It never rebuilds plan structure or revalidates
 // durable rows.
-//
-//nolint:dupl // the retry twin differs in its events alone; the split's package qualifiers took both over the token threshold
 func (rt *watchRuntime) releaseDueHeldTrialsNow(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) ([]*syncdomain.TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed("releaseDueHeldTrialsNow", "release due held trials")
 	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventTrialHeldReleaseStarted})
@@ -42,11 +40,9 @@ func (rt *watchRuntime) releaseDueHeldTrialsNow(
 // releaseDueHeldRetriesNow releases due held retry entries that are already
 // present in the runtime. It never rebuilds plan structure or revalidates
 // durable rows.
-//
-//nolint:dupl // the trial twin differs in its events alone; the split's package qualifiers took both over the token threshold
 func (rt *watchRuntime) releaseDueHeldRetriesNow(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) ([]*syncdomain.TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed("releaseDueHeldRetriesNow", "release due held retries")
 	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRetryHeldReleaseStarted})

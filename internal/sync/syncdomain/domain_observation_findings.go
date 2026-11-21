@@ -15,7 +15,7 @@ func LocalObservationManagedIssueTypes() []IssueType {
 		IssueFileTooLarge,
 		IssueCaseCollision,
 		IssueLocalReadDenied,
-		IssueHashPanic,
+		IssueHashError,
 		// A boundary the scan proved last time (a synced path now holding a
 		// symlink or FIFO, a mount point of another filesystem) is managed
 		// too: when a later full scan finds the path representable again, the

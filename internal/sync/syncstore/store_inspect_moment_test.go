@@ -72,6 +72,7 @@ func commitIssueAndRetryRowTogether(ctx context.Context, store *SyncStore) (err 
 		Path:         "busy.txt",
 		ActionType:   syncdomain.ActionUpload,
 		AttemptCount: syncfixture.UnresolvedTestRetryingAttempts,
+		NextRetryAt:  1,
 	}); err != nil {
 		return fmt.Errorf("insert retry row: %w", err)
 	}

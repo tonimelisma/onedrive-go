@@ -187,7 +187,7 @@ func TestRunWatch_TimedOutRequestIsRetriedAndItsDependentRuns(t *testing.T) {
 // pass of an empty folder, whose next folder poll fails.
 type mountRootPollTest struct {
 	rt    *watchRuntime
-	bl    *syncdomain.Baseline
+	bl    syncdomain.BaselineView
 	clock *syncfixture.ManualClock
 	polls atomic.Int32
 	fail  atomic.Bool

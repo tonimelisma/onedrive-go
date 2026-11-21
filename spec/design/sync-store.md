@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/syncstore/store_remote_twins.go, internal/sync/syncstore/store_pending_creates.go, internal/sync/syncstore/store_held_deletes.go, internal/sync/syncstore/store_delete_ledger.go, internal/sync/syncstore/store_local_hash_cache.go, internal/sync/syncstore/block_scope_rows.go, internal/sync/syncstore/blocked_retry_projection.go, internal/sync/syncstore/condition_projection.go, internal/sync/syncstore/observation_reconcile_policy.go, internal/sync/syncstore/schema.go, internal/sync/syncstore/scope_lifecycle_policy.go, internal/sync/syncstore/sqlite_compare.go, internal/sync/syncstore/store.go, internal/sync/syncstore/store_compatibility.go, internal/sync/syncstore/store_inspect.go, internal/sync/syncstore/store_local_state.go, internal/sync/syncstore/store_observation_issues.go, internal/sync/syncstore/store_observation_state.go, internal/sync/syncstore/store_planner_visible.go, internal/sync/syncstore/store_read_remote_state.go, internal/sync/syncstore/store_reset.go, internal/sync/syncstore/store_retry_work.go, internal/sync/syncstore/store_scope_admin.go, internal/sync/syncstore/store_scratch.go, internal/sync/syncstore/store_sql_encoding.go, internal/sync/syncstore/store_write_baseline.go, internal/sync/syncstore/store_write_block_scopes.go, internal/sync/syncstore/store_write_observation.go, internal/sync/syncstore/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go, internal/sync/syncstore/store_sync_root.go, internal/sync/syncstore/store_test_seams.go, internal/sync/syncstore/doc.go
+GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/syncstore/store_remote_twins.go, internal/sync/syncstore/store_pending_creates.go, internal/sync/syncstore/store_held_deletes.go, internal/sync/syncstore/store_delete_ledger.go, internal/sync/syncstore/store_local_hash_cache.go, internal/sync/syncstore/block_scope_rows.go, internal/sync/syncstore/blocked_retry_projection.go, internal/sync/syncstore/condition_projection.go, internal/sync/syncstore/observation_reconcile_policy.go, internal/sync/syncstore/schema.go, internal/sync/syncstore/scope_lifecycle_policy.go, internal/sync/syncstore/sqlite_compare.go, internal/sync/syncstore/store.go, internal/sync/syncstore/store_compatibility.go, internal/sync/syncstore/store_inspect.go, internal/sync/syncstore/store_local_state.go, internal/sync/syncstore/store_observation_issues.go, internal/sync/syncstore/store_observation_state.go, internal/sync/syncstore/store_planner_visible.go, internal/sync/syncstore/store_read_remote_state.go, internal/sync/syncstore/store_reset.go, internal/sync/syncstore/store_retry_work.go, internal/sync/syncstore/store_scope_admin.go, internal/sync/syncstore/store_scratch.go, internal/sync/syncstore/store_sql_encoding.go, internal/sync/syncstore/store_write_baseline.go, internal/sync/syncstore/baseline_cache.go, internal/sync/syncstore/store_write_block_scopes.go, internal/sync/syncstore/store_write_observation.go, internal/sync/syncstore/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go, internal/sync/syncstore/store_sync_root.go, internal/sync/syncstore/store_test_seams.go, internal/sync/syncstore/doc.go
 
 Implements: R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.10.50 [verified], R-2.10.49 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -127,13 +127,13 @@ and every other significant type in the tree already matched its own name
 
 | Behavior | Evidence |
 | --- | --- |
-| The store's test seams are one `Hooks` value (`store_test_seams.go`), passed to `OpenEngineSyncStore`; its zero value opens through the SQLite driver and makes every crash point a no-op (R-6.10.29). | `TestHooks_ZeroValueIsProduction` |
+| The store's test seams are one `Hooks` value (`store_test_seams.go`), passed to `OpenEngineSyncStore`; its zero value opens through the SQLite driver with `synchronous(FULL)` and makes every crash point a no-op, and only `SkipFsync`, which tests set, turns synchronous off (R-6.10.29). | `TestHooks_ZeroValueIsProduction`, `TestHooks_SkipFsyncTurnsSynchronousOff` |
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 | A store write that fails part-way (a statement inside the transaction, or the commit itself) leaves the database and the in-memory baseline cache agreeing, with the failed outcome in neither, and the same write succeeds once the fault is gone; a failed read is returned, never answered as an empty result. Proven through `openSyncStoreWithDriver`, the seam the tests use to open the store through a fault-injecting wrapper of the SQLite driver that fails the next statement matching a SQL fragment or the next commit. | `TestFault_CommitMutationFailureLeavesCacheAndDatabaseAgreeing`, `TestFault_RefreshLocalBaselineCommitFailureLeavesTheOldRow`, `TestFault_ReadFailureIsReturnedNotEmpty` |
 | Baseline, local observation truth, remote mirror truth, observation cursor/confidence, observation issues, retry work, and block scopes survive close/reopen as one restart authority. | `TestSyncStore_ReopenPreservesDurableRecoveryTruth` |
-| Dry-run current-plan scratch stores are temporary SQLite stores seeded from committed truth and removed after preview planning. | `TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp` |
+| Dry-run current-plan scratch stores are temporary SQLite stores seeded from committed truth, read from the database in one transaction and never from the baseline cache, and removed after preview planning. | `TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp`, `TestCreateScratchPlanningStore_CopiesTheDatabaseNotAStaleCache` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens; shortcut status leaves the store through sync-owned status views instead of raw shortcut-root rows. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreIsReportedAsUnavailable`, `TestBuildChildStatusDrive_RendersLifecycleState` |
-| The baseline cache stays the one object callers hold across full rebuilds, and planning uses the baseline of its own comparison snapshot. | `TestCommitMutation_FolderMoveKeepsHeldBaselinePointerCurrent`, `TestPlanning_UsesBaselineFromTheComparisonSnapshot` |
+| The baseline cache stays the one object callers hold across full rebuilds, and planning uses the baseline of its own comparison snapshot. | `TestCommitMutation_FolderMoveKeepsHeldBaselineViewCurrent`, `TestPlanning_UsesBaselineFromTheComparisonSnapshot` |
 | A folder re-created online (new item ID, same path) rebinds the baseline and its children's parent, and uploads land in the live folder; a full rescan where every item has a new ID plans no transfers (R-2.10.49). | `TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate`, `TestCommitMutation_FolderReboundAtSamePathRebindsItsChildren`, `TestCommitMutation_FolderRebindUpdatesCachedChildren`, `TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem`, `TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers` |
 | One observation window converges to the same remote_state whatever its order: swaps, renames onto a freed name, create-before-move-away, delete and re-create across pages, a folder moved out of a deleted folder, and a full rescan's late orphan delete raise no remote name twin (R-2.12.7). | `TestCommitObservation_PathSwapInOneWindow`, `TestCommitObservation_CreateAtPathBeforeOccupantRenamedAway`, `TestCommitObservation_DeleteAndRecreateSamePathAcrossPages`, `TestCommitObservation_FolderMovedOutOfADeletedFolderKeepsItsSubtree`, `TestCommitObservation_RepeatedItemInOneWindowUsesItsLastObservation`, `TestCommitObservation_SubtreeRepathOntoAHeldPathKeepsBothApart`, `TestCommitObservation_WindowResultIsOrderIndependent`, `TestCommitObservation_UnplacedChildOfAParkedFolderFollowsTheFolder`, `TestRequireNoParkedRemoteRows_FailsTheWindow`, `TestRunOnce_FullRescanWithItemReplacedAtSamePath` |
 | Engine startup refuses a state DB that fails `PRAGMA quick_check` with the `corrupt` reason and reset guidance, instead of planning from a damaged `remote_state`; a check that fails for any other reason is an ordinary failure (R-2.5.8). | `TestNewEngine_RequiresResetForCorruptStateDB`, `TestIntegrityCheckFailure_OnlyDamageIsCorrupt`, `TestCheckStoreIntegrity_CanceledCheckIsNotDamage` |
@@ -147,7 +147,7 @@ and every other significant type in the tree already matched its own name
 | Shortcut alias mutation is a parent-engine-internal operation by binding item ID and updates parent shortcut-root state. | `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain` |
 | An issue type or condition type that no `IssueType` member names is refused at the store boundary on read and on write (R-2.5.6); every member has a stated verdict on local and remote truth and on the remote subtree, and a value outside the enum leaves both sides of its path unavailable; a remote twin's subtree is unavailable on OneDrive's side by its type alone. | `TestSyncStore_ListObservationIssues_RefusesUnknownStoredIssueType`, `TestSyncStore_ReconcileObservationFindings_RefusesToWriteAnUnknownIssueType`, `TestScanRetryWorkRow_ConditionTypeMustBeEmptyOrAMember`, `TestUpsertRetryWork_RefusesAConditionTypeNoMemberHas`, `TestObservationIssueBlocksTruth_VerdictForEveryIssueType`, `TestObservationIssueBlocksLocalTruth_ValueOutsideTheEnumIsUnavailable`, `TestObservationIssueBlocksRemoteTruth_ValueOutsideTheEnumIsUnavailable`, `TestTruthAvailabilityIndex_OnlyASubtreeBoundingTypeBlocksDescendants` |
 | An observation findings batch replaces the stored issues of exactly the types it manages, and a batch that reports an issue of a type it does not manage is refused before anything is written, naming the type and the path: such a row would outlive every later batch that stops reporting it, as an interrupted removal's report outlived the file (R-2.10.10, R-6.4.9). | `TestBuildObservationReconcilePlan_RefusesAnIssueOfATypeTheBatchDoesNotManage`, `TestSyncStore_ReconcileObservationFindings_RefusesAnIssueOfATypeTheBatchDoesNotManage`, `TestSyncStore_ReconcileObservationFindings_OnlyClearsManagedFamilies`, `TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover` |
-| Debug invariant checks reject malformed retry/block durable state before runtime handoff. | `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutPath`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutTiming`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutAttempts`, `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkWithTiming`, `TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockScope` |
+| The schema refuses malformed retry/block durable state (an empty path, no attempt, retry timing on a blocked row or none on a ready one, a blocked row without its scope row, a scope row deleted under its blocked work); the debug invariant checks reject what it cannot, a scope row with no blocked work. | `TestRetryWorkSchema_ChecksRefuseTheStatesTheEngineUsedToAssert`, `TestRetryWorkSchema_BlockedRowsReferenceTheirScopeRow`, `TestRecordBlockedRetryWork_RefusesABlockedRowWithoutItsScope`, `TestBlockScopeRows_CannotGoWhileBlockedWorkReferencesThem`, `TestEngineFlow_AssertPersistedInvariants_RejectsOrphanBlockScope`, `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkWithTiming`, `TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockScope` |
 | Stored times compared by order saturate at the ends of the int64 range, so a trial a saturated `Retry-After` puts past 2262 is not due after a restart; readers take only zero as "no time". | `TestStoredTimeNano_SaturatesAtBothEndsOfTheRange`, `TestUpsertBlockScope_SaturatedTrialSurvivesAReload`, `TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange`, `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkAtBothEndsOfTheStoredRange` |
 | The store and the inspector open the file they name when its folder's name holds `?` or `#`, with every pragma applied. | `TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters`, `TestSQLiteFileURI_EscapesTheDatabasePath` |
 | Remote modification times saturate through the same encoder at every writer and come back through one decoder, so an item dated 2300 or 1601 is downloaded with the last or first storable time and the next pass plans nothing; a time re-dated to the epoch on either side converges. | `TestStoredTimeNano_RemoteModificationTimeWritersAgree`, `TestRunOnce_ARemoteFileDated2300DownloadsWithTheLastStorableTime`, `TestRunOnce_ARemoteFileDated1601DownloadsWithTheFirstStorableTime`, `TestRunOnce_AFileRedatedToTheEpochConverges`, `TestStoredTimes_EveryDecodeIsDeclared` |
@@ -156,18 +156,34 @@ and every other significant type in the tree already matched its own name
 
 ### Retry and block state invariants
 
-`retry_work` rows are exact retry obligations. Every row must carry a non-empty
-path, a valid `ActionType`, and a positive attempt count. Delayed retry rows
-must have `next_retry_at`; blocked rows must not have retry timing and must
-reference an existing `block_scopes` row. Every persisted block scope must in
-turn have at least one blocked retry row. These invariants are asserted by the
-engine debug invariant pass so malformed durable state is caught at the store
-ownership boundary instead of becoming silent runtime debt.
+`retry_work` rows are exact retry obligations. Since generation 29 the schema
+refuses the malformed ones (`schema.go`): a row carries a non-empty path and
+a positive attempt count; a delayed row has `next_retry_at` and a blocked row
+has none; a blocked row has a scope; and a row blocked under a scope kept in
+`block_scopes` (`ScopeKey.PersistsInBlockScopes`) names it in
+`blocked_scope_key`, a foreign key to `block_scopes(scope_key)` that is set
+on exactly those rows and equals their `scope_key`. A row blocked under a read
+boundary leaves the key NULL: observation owns that boundary, and it has no
+`block_scopes` row to reference. The key has no cascade, so a scope row
+cannot be deleted while blocked work references it: `DiscardScope` deletes
+the blocked rows first, a release clears the key of each row it makes ready,
+and `UpsertBlockScope` updates a scope row in place rather than replacing it.
+What the database cannot hold, a valid `ActionType` and every persisted block
+scope having at least one blocked row, the engine debug invariant pass
+asserts (`TestRetryWorkSchema_BlockedRowsReferenceTheirScopeRow`,
+`TestRetryWorkSchema_ChecksRefuseTheStatesTheEngineUsedToAssert`,
+`TestBlockScopeRows_CannotGoWhileBlockedWorkReferencesThem`).
 
 A blocked row exists only under an active scope: a failure whose scope
 detection has not crossed its window is written as a delayed row with the
-scope as evidence, and `ReleaseOrphanBlockedRetryWork` makes any blocked row
-whose scope has no `block_scopes` row due again at startup. The status
+scope as evidence. The failure that activates a scope is recorded blocked
+under it in the transaction that writes the scope row
+(`RecordBlockedRetryWork` with the activation), so neither is ever stored
+without the other
+(`TestRecordBlockedRetryWork_AFailedBlockedRowLeavesNoScopeRow`). At startup
+`ReleaseOrphanBlockedRetryWork` makes the blocked rows that reference no
+scope row, those under read boundaries, due again
+(`TestRecordBlockedRetryWork_UnderAReadBoundaryCarriesNoKey`). The status
 snapshot read in the same pass carries `NeverSynced`, a store with no delta
 cursor and an empty baseline, which status shows as not synced yet
 (`TestReadDriveStatusSnapshot_AFreshStoreIsNeverSynced`,
@@ -1021,6 +1037,37 @@ delete-and-recreate action.
 optimization. If the store detects impossible cache state, it drops and reloads
 from SQLite instead of creating a second authority.
 
+The cache (`baselineCache`, `baseline_cache.go`) is the only writable
+baseline in memory, and only the store writes it: its indexes and its `put`,
+`delete` and `swap` are unexported. `Load` hands every run the same cache as a
+`syncdomain.BaselineView`, whose lookups return entries by value, so no holder
+can change an entry another holder reads, and a commit never rewrites a value a
+reader already has. A reload swaps the indexes in place, because watch holds
+its startup view for the whole run
+(`TestCommitMutation_FolderMoveKeepsHeldBaselineViewCurrent`).
+`LoadBaselineWithRunner` returns an immutable `syncdomain.BaselineSnapshot` of
+the rows a transaction sees.
+
+Nothing that can fail follows `COMMIT`. Each writing transaction decides
+what the cache must change (`baselineCachePatch`) inside the transaction:
+one entry put or deleted, or, after a folder move, a folder rebind, a
+forgotten reupload subtree or an identity backfill, a rebuild read through
+the transaction itself. After `COMMIT` the patch is applied, which cannot
+fail, so an error from `CommitMutation`, `CommitObservation` or
+`CommitLocalSnapshot` always means nothing was committed
+(`TestFault_FolderMoveCacheReloadFailureCommitsNothing`,
+`TestCommitMutation_UnknownActionChangesNeitherDatabaseNorCache`).
+`CheckCacheConsistency` compares every field of every entry with the table and
+returns `ErrBaselineCacheDiverged` naming the paths; the sync invariant suite
+runs it after every scenario, model round and crash recovery
+(`TestCheckCacheConsistency_ReportsAMismatchInAnyColumn`).
+
+Planning reads its baseline as a snapshot taken in the plan's own read
+transaction (`currentInputs.baseline`); `PlanCurrentState` and the delete
+safety hold take `*syncdomain.BaselineSnapshot`, a type the cache is not, so
+the cache cannot be handed to the planner
+(`TestPlanning_UsesBaselineFromTheComparisonSnapshot`).
+
 ## Schema And Open Semantics
 
 `NewSyncStore()`:
@@ -1037,8 +1084,17 @@ fragment. Interpolated unescaped, a data folder named `data?v=1#part` opened
 a database file `data` beside the folder, and the pragma after the `?` was
 lost. The URI carries the pragmas every pooled connection applies: WAL,
 `synchronous(FULL)`, foreign keys, a busy timeout of `storeBusyTimeout`
-(5 s) and a journal size limit of `storeJournalSizeLimitBytes` (64 MiB). The
-inspector's read-only URI (`mode=ro`, `query_only`, `inspectorBusyTimeout`,
+(5 s) and a journal size limit of `storeJournalSizeLimitBytes` (64 MiB).
+A test's store, opened through the test helpers (`syncstoretest.TestStoreHooks`,
+the engine tests' `newTestEngineInputs`, the planner's exhaustive check),
+sets `Hooks.SkipFsync` and opens with `synchronous(OFF)`: it is thrown away
+with its temp directory and no test cuts the power, and the waits for the
+disk were most of what a test's commit cost. A store opened with zero hooks,
+which is every production store, keeps `synchronous(FULL)`
+(`TestHooks_ZeroValueIsProduction`, `TestEngineHooks_ZeroValueIsProduction`),
+and the delete-boundary crash test runs on it
+(`TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry`,
+`TestTestEngines_SkipFsyncUnlessTheTestKeepsIt`). The inspector's read-only URI (`mode=ro`, `query_only`, `inspectorBusyTimeout`,
 1 s) is built the same way
 (`TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters`,
 `TestSQLiteFileURI_EscapesTheDatabasePath`). Tests in other packages open a

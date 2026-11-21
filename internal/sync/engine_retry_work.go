@@ -68,14 +68,17 @@ func (w *retryWork) recordFailure(
 }
 
 // recordBlocked records work blocked under scope and returns the row the
-// store holds afterwards.
+// store holds afterwards. activates, when not nil, is the scope row this
+// failure activates: the store writes it in the same transaction as the
+// blocked row.
 func (w *retryWork) recordBlocked(
 	ctx context.Context,
 	store *syncstore.SyncStore,
 	work syncdomain.RetryWorkKey,
 	scope syncdomain.ScopeKey,
+	activates *syncdomain.BlockScope,
 ) (*syncdomain.RetryWorkRow, error) {
-	row, err := store.RecordBlockedRetryWork(ctx, work, scope)
+	row, err := store.RecordBlockedRetryWork(ctx, work, scope, activates)
 	if err != nil {
 		return nil, fmt.Errorf("persist blocked retry_work for %s under %s: %w", work.Path, scope.String(), err)
 	}

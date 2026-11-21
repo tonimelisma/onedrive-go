@@ -3,6 +3,7 @@ package devtool
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -181,7 +182,7 @@ func TestRunVerifyPRRunsLintThenQuick(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
-	runner := &fakeRunner{}
+	runner := changedPackagesRunner(t, repoRoot, "internal/a/a.go\n")
 	stdout := &bytes.Buffer{}
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
@@ -195,12 +196,89 @@ func TestRunVerifyPRRunsLintThenQuick(t *testing.T) {
 
 	expected := append([]string{"golangci-lint run --allow-parallel-runners"}, quickCommandSequence()...)
 	assert.Equal(t, expected, recordedCommandSequence(runner))
-	assert.Equal(t, hostLintCommandArgs(), runner.runCommands[0].args)
+	assert.Equal(t, append(hostLintCommandArgs(), "./internal/a", "./internal/b"), runner.runCommands[0].args,
+		"pr lints the changed package and its direct importer, not the one that imports neither")
 
 	unit := runner.runCommands[len(runner.runCommands)-1]
 	assert.Equal(t, []string{"test", "-short", testShortUnitTimeoutArg, "./..."}, unit.args)
-	assert.Empty(t, runner.outputCommands, "pr runs no race tier and reports no coverage")
+	for _, command := range runner.outputCommands {
+		assert.Contains(t, []string{"git", "go"}, command.name, "pr runs no race tier and reports no coverage")
+		if command.name == goCommandName {
+			assert.Equal(t, "list", command.args[0], "the only go command pr reads is the package list")
+		}
+	}
 	assert.NotContains(t, stdout.String(), "==> coverage")
+}
+
+// changedPackagesRunner is a fake runner whose git reports changed as the
+// files changed against origin/main, on a tree of three packages: a, b
+// importing a, and c importing neither.
+func changedPackagesRunner(t *testing.T, repoRoot string, changed string) *fakeRunner {
+	t.Helper()
+
+	for _, dir := range []string{"a", "b", "c"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, "internal", dir), 0o750))
+	}
+	listed := strings.Join([]string{
+		filepath.Join(repoRoot, "internal", "a") + "\texample/internal/a\tfmt ",
+		filepath.Join(repoRoot, "internal", "b") + "\texample/internal/b\tfmt example/internal/a ",
+		filepath.Join(repoRoot, "internal", "c") + "\texample/internal/c\tfmt  testing",
+	}, "\n")
+
+	return &fakeRunner{outputFunc: func(_ string, _ []string, name string, args ...string) ([]byte, error) {
+		switch {
+		case name == nightlyTestGit && args[0] == nightlyTestMergeBase:
+			return []byte("base\n"), nil
+		case name == "git" && args[0] == "diff":
+			return []byte(changed), nil
+		case name == goCommandName && args[0] == "list":
+			return []byte(listed), nil
+		default:
+			return nil, nil
+		}
+	}}
+}
+
+// Validates: R-6.10.22
+//
+// A change to the build or the lint config lints every package, and a change
+// with no Go package in it lints none.
+func TestRunVerifyPRLintScopeFollowsTheChange(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		changed string
+		want    []string
+	}{
+		{name: "go.mod", changed: "go.mod\ninternal/a/a.go\n", want: hostLintCommandArgs()},
+		{name: "lint config", changed: ".golangci.yml\n", want: hostLintCommandArgs()},
+		{name: "importer only", changed: "internal/b/b_test.go\n", want: append(hostLintCommandArgs(), "./internal/b")},
+		{name: "docs", changed: "README.md\n", want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			repoRoot := t.TempDir()
+			runner := changedPackagesRunner(t, repoRoot, tc.changed)
+			err := RunVerify(context.Background(), runner, &VerifyOptions{
+				RepoRoot:         repoRoot,
+				Profile:          VerifyPR,
+				ShortUnitTimeout: testShortUnitTimeout,
+				Stdout:           &bytes.Buffer{},
+				Stderr:           &bytes.Buffer{},
+			})
+			require.NoError(t, err)
+
+			var lint []string
+			for _, command := range runner.runCommands {
+				if command.name == lintBinaryName {
+					lint = command.args
+				}
+			}
+			assert.Equal(t, tc.want, lint)
+		})
+	}
 }
 
 // Validates: R-6.10.22

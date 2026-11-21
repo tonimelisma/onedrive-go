@@ -4,17 +4,14 @@ import (
 	"fmt"
 )
 
-// kindUnclassified is the name both kind enums give their zero member, and the
-// literal both SQL CASE expressions return from their ELSE.
+// kindUnclassified is the name both kind enums give their zero member.
 const kindUnclassified = "unclassified"
 
-// ComparisonKind is the per-path comparison the SQL decision table computes
-// (sqlComparisonKindCase): which of baseline, local and remote hold the path,
-// and how the sides relate to the baseline. The enum is the vocabulary; the
-// SQL carries its names as literals, which
-// TestPlannerKindCases_LiteralsAreExactlyTheKinds holds to the enum.
+// ComparisonKind is the per-path comparison the decision table computes
+// (Decide, its first stage): which of baseline, local and remote hold the
+// path, and how the sides relate to the baseline.
 //
-// The zero value is ComparisonUnclassified, the CASE's ELSE: a state no rule
+// The zero value is ComparisonUnclassified: a state no rule
 // covers, which planning refuses (validatePlannerKinds). Members are never
 // persisted, so their numbers may change; ComparisonDiverged stays last,
 // because AllComparisonKinds and ParseComparisonKind range up to it.
@@ -110,8 +107,8 @@ func ParseComparisonKind(s string) (ComparisonKind, error) {
 	return ComparisonUnclassified, fmt.Errorf("sync: unknown comparison kind %q", s)
 }
 
-// ReconciliationKind is the decision the SQL decision table takes for a path
-// (sqlReconciliationKindCase), which the planner maps to actions
+// ReconciliationKind is the decision the decision table takes for a path
+// (Reconcile, its second stage), which the planner maps to actions
 // (buildActionsForReconciliation). It owns its names: some equal action-type
 // names (local_delete, upload, ...), but those are a persisted wire format
 // (retry_work.action_type) and coincide by choice, not by definition.
@@ -210,11 +207,10 @@ func ParseReconciliationKind(s string) (ReconciliationKind, error) {
 	return ReconcileUnclassified, fmt.Errorf("sync: unknown reconciliation kind %q", s)
 }
 
-// PlannerDecisionInput is one input column of the SQL decision table as the
-// planning transaction's diagnostic read found it (sqlQueryPlannerDecisionInputs).
+// PlannerDecisionInput is one input of the decision table as the plan error
+// prints it (DecisionState.Inputs).
 type PlannerDecisionInput struct {
 	Column string
-	// Value is the column's value as text, or "NULL": no rule tests for a
-	// NULL, so a flag expression that yields one leaves the row unclassified.
+	// Value is a side's item type (empty when absent) or a flag as 0 or 1.
 	Value string
 }

@@ -44,11 +44,11 @@ type engineHooks struct {
 	// pass (oneShotScopeWait); nil waits on a real timer, a test advances its
 	// manual clock instead.
 	wait func(ctx context.Context, d time.Duration) error
-	// reconciliationQuery, when set, replaces SqlQueryReconciliationState in
-	// planning. No reachable state is outside the decision table, so a test
-	// removes one rule from it to prove the pass fails closed on the row that
-	// rule classified (R-6.2.16).
-	reconciliationQuery string
+	// decideOverride, when set, replaces syncdomain.Decide in planning. No
+	// reachable state is outside the decision table, so a test removes one
+	// rule from it to prove the pass fails closed on the row that rule
+	// classified (R-6.2.16).
+	decideOverride syncstore.Decider
 	// clearAccountAuthRequirement replaces config.ClearAccountAuthRequirement
 	// for the startup proof's clear. Tests return a held catalog lock
 	// through it without waiting out the lock's timeout.

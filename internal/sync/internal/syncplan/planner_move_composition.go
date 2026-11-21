@@ -1807,7 +1807,7 @@ func buildComposedMoveActions(
 	composition *moveComposition,
 	inputs *moveInputs,
 	views map[string]*syncdomain.PathView,
-	baseline *syncdomain.Baseline,
+	baseline syncdomain.BaselineView,
 ) (actions, waiting []syncdomain.Action) {
 	nodes := inputs.nodes
 	nodeByKey := make(map[string]*moveNode, len(nodes))
@@ -1830,10 +1830,10 @@ func buildComposedMoveActions(
 		}
 		remote := viewAt(node.paths[moveCoordRemote]).Remote
 		if move.side == moveCoordLocal {
-			actions = append(actions, composedLocalMoveActions(move, entry, remote, viewAt)...)
+			actions = append(actions, composedLocalMoveActions(move, &entry, remote, viewAt)...)
 			continue
 		}
-		actions = append(actions, composedRemoteMoveActions(move, entry, remote, viewAt)...)
+		actions = append(actions, composedRemoteMoveActions(move, &entry, remote, viewAt)...)
 	}
 
 	creates, waiting := recreatedSourceCreates(composition, inputs, nodeByKey, viewAt)
@@ -1850,7 +1850,7 @@ func buildComposedMoveActions(
 			Path:        rekey.newPath,
 			Remote:      viewAt(node.paths[moveCoordRemote]).Remote,
 			Local:       viewAt(node.paths[moveCoordLocal]).Local,
-			Baseline:    entry,
+			Baseline:    &entry,
 			TruthStatus: viewAt(rekey.newPath).TruthStatus,
 		}
 		action := makeAction(syncdomain.ActionBaselineUpdate, view)

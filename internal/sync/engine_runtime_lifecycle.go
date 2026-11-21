@@ -263,8 +263,8 @@ func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, scopeKey syncdo
 
 // detectScope feeds an action completion into scope detection's sliding
 // windows and reports whether it calls for a block scope. The caller
-// persists the completion's work blocked under that scope before activating
-// it (persistFailureWithScopeEffects). A completion with no status is fed
+// persists the completion's work blocked under that scope, together with the
+// scope row, before activating it (persistFailureWithScopeEffects). A completion with no status is fed
 // too: a request OneDrive never answered is outage evidence.
 func (flow *engineFlow) detectScope(r *syncdomain.ActionCompletion) syncdomain.ScopeUpdateResult {
 	if flow.scopes.state == nil {
@@ -274,48 +274,94 @@ func (flow *engineFlow) detectScope(r *syncdomain.ActionCompletion) syncdomain.S
 	return flow.scopes.state.UpdateScope(r)
 }
 
-// applyBlockScope persists and activates a new block scope using the same
-// timing policy as trial extension and rearm.
-func (flow *engineFlow) applyBlockScope(ctx context.Context, sr syncdomain.ScopeUpdateResult) error {
-	now := flow.deps.now()
+// blockActivation is a block scope a failure activates, prepared before the
+// failure's work is recorded blocked under it: the store writes the scope row
+// and the blocked row in one transaction (RecordBlockedRetryWork), so a crash
+// between them cannot leave a scope with nothing to trial or a blocked row
+// that references no scope. It uses the same timing policy as trial extension
+// and rearm.
+type blockActivation struct {
+	update    syncdomain.ScopeUpdateResult
+	block     *syncdomain.ActiveScope
+	row       *syncdomain.BlockScope
+	interval  time.Duration
+	wasActive bool
+}
+
+// prepareBlockActivation is the activation sr calls for, before anything is
+// written. It changes no state.
+func (flow *engineFlow) prepareBlockActivation(sr syncdomain.ScopeUpdateResult) (*blockActivation, error) {
 	interval := syncstore.ComputeTrialInterval(sr.RetryAfter)
-
-	block := flow.newBlockActivation(sr.ScopeKey, interval, now)
-	wasActive := flow.scopes.hasActiveScope(sr.ScopeKey)
-	if err := flow.activateScope(ctx, block); err != nil {
-		// activateScope already names the operation and the scope.
-		return err
-	}
-	flow.handOverColdStart(sr.ScopeKey)
-	if err := flow.retireAdmittedWorkBlockedBy(ctx, sr.ScopeKey); err != nil {
-		return err
+	block := flow.newBlockActivation(sr.ScopeKey, interval, flow.deps.now())
+	row, err := syncdomain.BlockScopeRowFromActiveScope(*block)
+	if err != nil {
+		return nil, fmt.Errorf("sync: activating scope %s: %w", sr.ScopeKey.String(), err)
 	}
 
-	flow.logBlockScopeActivated(sr.ScopeKey, sr.ConditionType, interval, wasActive)
+	return &blockActivation{
+		update:    sr,
+		block:     block,
+		row:       row,
+		interval:  interval,
+		wasActive: flow.scopes.hasActiveScope(sr.ScopeKey),
+	}, nil
+}
+
+// storeRow is the scope row the blocked row's transaction writes: none for
+// no activation.
+func (a *blockActivation) storeRow() *syncdomain.BlockScope {
+	if a == nil {
+		return nil
+	}
+
+	return a.row
+}
+
+// recordActivatingBlockedRetryWork records work blocked under activation's
+// scope together with the scope row, and returns the row the store holds.
+func (flow *engineFlow) recordActivatingBlockedRetryWork(
+	ctx context.Context,
+	work syncdomain.RetryWorkKey,
+	activation *blockActivation,
+) (*syncdomain.RetryWorkRow, error) {
+	return flow.retryWork.recordBlocked(ctx, flow.deps.store, work, activation.update.ScopeKey, activation.row)
+}
+
+// applyBlockActivation makes a prepared activation, whose scope row the store
+// wrote with its first blocked row, active: the ledger takes the scope, the
+// admitted work it blocks is taken back, and its trial is armed.
+func (flow *engineFlow) applyBlockActivation(ctx context.Context, activation *blockActivation) error {
+	key := activation.update.ScopeKey
+	flow.scopes.upsertActiveScope(activation.block)
+	flow.deps.emit(syncdomain.EngineDebugEvent{
+		Type:     syncdomain.EngineDebugEventScopeActivated,
+		ScopeKey: key,
+	})
+	flow.mustAssertInvariants(ctx, "activate scope")
+
+	flow.handOverColdStart(key)
+	if err := flow.retireAdmittedWorkBlockedBy(ctx, key); err != nil {
+		return err
+	}
+
+	flow.logBlockScopeActivated(key, activation.update.ConditionType, activation.interval, activation.wasActive)
 
 	flow.signals.armTrialTimer()
 
 	return nil
 }
 
+// transitionTrialScopeToPersistedBlock moves a failed trial from its scope to
+// the scope its failure activated, whose row the store wrote with the trial's
+// blocked row: the new scope becomes active, and the trial's scope is rearmed
+// while it still has blocked work, or discarded.
 func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 	ctx context.Context,
 	from syncdomain.ScopeKey,
-	to syncdomain.ScopeKey,
-	conditionType syncdomain.IssueType,
-	retryAfter time.Duration,
+	activation *blockActivation,
 ) error {
-	if to.IsZero() {
-		return nil
-	}
-
-	now := flow.deps.now()
-	interval := syncstore.ComputeTrialInterval(retryAfter)
-	block := flow.newBlockActivation(to, interval, now)
-	wasActive := flow.scopes.hasActiveScope(to)
-	if err := flow.persistActiveScope(ctx, block); err != nil {
-		return fmt.Errorf("transition blocked scope %s -> %s: %w", from.String(), to.String(), err)
-	}
+	to := activation.update.ScopeKey
+	flow.scopes.upsertActiveScope(activation.block)
 	flow.deps.emit(syncdomain.EngineDebugEvent{
 		Type:     syncdomain.EngineDebugEventScopeActivated,
 		ScopeKey: to,
@@ -339,7 +385,7 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 		}
 	}
 
-	flow.logBlockScopeActivated(to, conditionType, interval, wasActive)
+	flow.logBlockScopeActivated(to, activation.update.ConditionType, activation.interval, activation.wasActive)
 
 	flow.mustAssertInvariants(ctx, "transition blocked scope")
 	return nil
@@ -416,7 +462,7 @@ func blockScopeActivationWording(key syncdomain.ScopeKey, conditionType syncdoma
 	case syncdomain.IssueInvalidFilename,
 		syncdomain.IssuePathTooLong,
 		syncdomain.IssueFileTooLarge,
-		syncdomain.IssueHashPanic,
+		syncdomain.IssueHashError,
 		syncdomain.IssueUnauthorized,
 		syncdomain.IssueRemoteWriteDenied,
 		syncdomain.IssueRemoteReadDenied,
@@ -502,7 +548,7 @@ func (flow *engineFlow) persistBlockedRetryWork(
 		return fmt.Errorf("persist blocked retry_work for %s: missing scope key", work.Path)
 	}
 
-	_, err := flow.retryWork.recordBlocked(ctx, flow.deps.store, work, scopeKey)
+	_, err := flow.retryWork.recordBlocked(ctx, flow.deps.store, work, scopeKey, nil)
 	return err
 }
 

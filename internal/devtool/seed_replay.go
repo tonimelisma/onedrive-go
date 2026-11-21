@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+// goCommandName is the go command, as a runner is asked to start it, and
+// goTestSubcommand its first argument for a test run.
+const (
+	goCommandName    = "go"
+	goTestSubcommand = "test"
+)
+
 // A seeded model test of internal/sync whose seed fails logs one line: the
 // prefix and the command that reruns that seed (logSeedReplayOnFailure),
 //
@@ -114,7 +121,7 @@ func parseSeedReplay(command string) (seedReplay, bool) {
 		words = words[1:]
 	}
 	if len(replay.assignments) == 0 || len(words) < seedReplayGoTestWords+seedReplayTailWords ||
-		words[0] != "go" || words[1] != "test" {
+		words[0] != goCommandName || words[1] != goTestSubcommand {
 		return seedReplay{}, false
 	}
 	words = words[seedReplayGoTestWords:]

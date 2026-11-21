@@ -18,7 +18,7 @@ import (
 func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	completions <-chan syncdomain.ActionCompletion,
 	initialOutbox []*syncdomain.TrackedAction,
 ) error {
@@ -37,7 +37,7 @@ func (r *oneShotRunner) runResultsLoopWithInitialOutbox(
 func (r *oneShotRunner) runResultsLoop(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	completions <-chan syncdomain.ActionCompletion,
 ) error {
 	var fatalErr error
@@ -83,7 +83,7 @@ func (r *oneShotRunner) runResultsLoop(
 func (r *oneShotRunner) pollImmediateCompletion(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	completions <-chan syncdomain.ActionCompletion,
 	fatalErr error,
 ) (error, bool) {
@@ -120,7 +120,7 @@ func (r *oneShotRunner) finishResultsLoopIfSettled(fatalErr error) (bool, error)
 func (r *oneShotRunner) runResultsLoopIdle(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	completions <-chan syncdomain.ActionCompletion,
 	fatalErr error,
 ) (error, bool) {
@@ -145,7 +145,7 @@ func (r *oneShotRunner) runResultsLoopIdle(
 // completed as shutdown and the error is returned.
 func (r *oneShotRunner) releaseIdleDueHeldWork(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (error, bool) {
 	if r.stop != nil || r.sched.runningCount != 0 || !r.hasDueHeldWork(r.deps.now()) {
 		return nil, false
@@ -164,7 +164,7 @@ func (r *oneShotRunner) releaseIdleDueHeldWork(
 func (r *oneShotRunner) runResultsLoopWithOutbox(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	completions <-chan syncdomain.ActionCompletion,
 	fatalErr error,
 ) (error, bool) {
@@ -233,7 +233,7 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 func (r *oneShotRunner) handleOneShotCompletion(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	fatalErr error,
 	completion *syncdomain.ActionCompletion,
 ) error {

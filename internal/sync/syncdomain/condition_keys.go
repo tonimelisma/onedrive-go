@@ -245,7 +245,7 @@ func ConditionKeyForIssueType(issueType IssueType) (ConditionKey, bool) {
 		return ConditionPathTooLong, true
 	case IssueFileTooLarge:
 		return ConditionFileTooLarge, true
-	case IssueHashPanic:
+	case IssueHashError:
 		// The stored name is narrower than its use (issue_types.go).
 		return ConditionHashError, true
 	case IssueUnauthorized:

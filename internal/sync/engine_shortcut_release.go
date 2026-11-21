@@ -262,7 +262,7 @@ func (s *releaseSurvey) addUnmatched(filter syncdomain.ContentFilter, storedPath
 // the sync folder and each synced folder, that cannot be written to. A synced
 // file counts as removable while its stat facts match the baseline
 // (releaseFileLooksUnchanged); its content is verified by the delete itself.
-func (e *Engine) surveyReleaseTree(bl *syncdomain.Baseline) (releaseSurvey, error) {
+func (e *Engine) surveyReleaseTree(bl syncdomain.BaselineView) (releaseSurvey, error) {
 	walk := releaseSurveyWalk{
 		engine:   e,
 		exec:     syncexec.NewExecution(e.execCfg, bl),
@@ -280,7 +280,7 @@ type releaseSurveyWalk struct {
 	engine   *Engine
 	exec     *syncexec.Executor
 	filter   syncdomain.ContentFilter
-	baseline *syncdomain.Baseline
+	baseline syncdomain.BaselineView
 	survey   releaseSurvey
 }
 
@@ -335,7 +335,7 @@ func (w *releaseSurveyWalk) entry(stored, onDisk, name string) error {
 		w.survey.addUnmatched(w.filter, storedPath, syncdomain.ItemTypeFolder)
 	case info.Mode().IsRegular():
 		if synced && row.ItemType == syncdomain.ItemTypeFile {
-			if !releaseFileLooksUnchanged(row, info) {
+			if !releaseFileLooksUnchanged(&row, info) {
 				w.survey.unsynced = append(w.survey.unsynced, storedPath)
 			}
 			return nil
@@ -414,7 +414,11 @@ func displayReleasePath(stored string) string {
 // ends the release: the rest of its batch gets its rows back, in the same
 // restore as the refused row, and no later batch starts. What left before it
 // stays gone: the next drain creates nothing new locally.
-func (e *Engine) releaseBaselineRows(ctx context.Context, bl *syncdomain.Baseline, stopAtFirstRefusal bool) (int, []releaseRefusal, error) {
+func (e *Engine) releaseBaselineRows(
+	ctx context.Context,
+	bl syncdomain.BaselineView,
+	stopAtFirstRefusal bool,
+) (int, []releaseRefusal, error) {
 	rows := releaseRowsDeepestFirst(bl)
 	if len(rows) == 0 {
 		return 0, nil, nil
@@ -471,13 +475,13 @@ type releaseRefusal struct {
 
 // releaseRowsDeepestFirst copies the baseline's rows below the sync folder,
 // children before their folder.
-func releaseRowsDeepestFirst(bl *syncdomain.Baseline) []syncdomain.BaselineEntry {
+func releaseRowsDeepestFirst(bl syncdomain.BaselineView) []syncdomain.BaselineEntry {
 	var rows []syncdomain.BaselineEntry
-	bl.ForEachPath(func(_ string, entry *syncdomain.BaselineEntry) {
+	bl.ForEachPath(func(_ string, entry syncdomain.BaselineEntry) {
 		if entry.Path == "" || entry.ItemType == syncdomain.ItemTypeRoot {
 			return
 		}
-		rows = append(rows, *entry)
+		rows = append(rows, entry)
 	})
 	slices.SortFunc(rows, func(a, b syncdomain.BaselineEntry) int {
 		if depth := cmp.Compare(strings.Count(b.Path, "/"), strings.Count(a.Path, "/")); depth != 0 {
@@ -689,7 +693,7 @@ func (e *Engine) restoreForgottenRows(ctx context.Context, rows []*syncdomain.Ba
 // after a release, under the rule a folder delete applies to junk, and
 // returns what still stands that no survey names: an entry the release could
 // not remove, which keeps the folder like any other.
-func (e *Engine) emptyReleasedRoot(bl *syncdomain.Baseline) (releaseSurvey, error) {
+func (e *Engine) emptyReleasedRoot(bl syncdomain.BaselineView) (releaseSurvey, error) {
 	entries, err := e.syncTree.ReadDir("")
 	if err != nil {
 		return releaseSurvey{}, fmt.Errorf("sync: reading the sync folder after releasing it: %w", err)

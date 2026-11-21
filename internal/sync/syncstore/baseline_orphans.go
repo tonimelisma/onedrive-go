@@ -9,10 +9,15 @@ import (
 
 // FindBaselineOrphans identifies baseline entries that are not present in the
 // seen set from a full enumeration and synthesizes a deleted row for each.
-func FindBaselineOrphans(bl *syncdomain.Baseline, seen map[string]struct{}, driveID driveid.ID, pathPrefix string) []syncdomain.RemoteItem {
+func FindBaselineOrphans(
+	bl syncdomain.BaselineView,
+	seen map[string]struct{},
+	driveID driveid.ID,
+	pathPrefix string,
+) []syncdomain.RemoteItem {
 	var orphans []syncdomain.RemoteItem
 
-	bl.ForEachPath(func(path string, entry *syncdomain.BaselineEntry) {
+	bl.ForEachPath(func(path string, entry syncdomain.BaselineEntry) {
 		if entry.DriveID != driveID {
 			return
 		}

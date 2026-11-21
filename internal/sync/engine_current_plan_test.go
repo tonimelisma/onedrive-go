@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -449,14 +448,11 @@ func TestReconcileRuntimeStateStage_PrunesAndLoadsDurableRuntimeState(t *testing
 	seedStaleRetryAndBlockScopeForCurrentPlanTest(t, ctx, eng)
 
 	setupWatchEngine(t, eng)
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-
 	rt := testWatchRuntime(t, eng)
 	observed, err := rt.loadCommittedCurrentObservation(ctx, nil)
 	require.NoError(t, err)
 
-	build, err := rt.buildCurrentPlanStage(ctx, bl, syncdomain.SyncBidirectional, RunOptions{}, observed)
+	build, err := rt.buildCurrentPlanStage(ctx, syncdomain.SyncBidirectional, RunOptions{}, observed)
 	require.NoError(t, err)
 
 	runtime, err := rt.reconcileRuntimeStateStage(ctx, build, syncstore.PassRefreshedLocalOnly)
@@ -490,7 +486,7 @@ func TestKeepCurrentPlanBuild_LeavesDurableRuntimeStateUntouched(t *testing.T) {
 	observed, err := runner.loadDryRunCurrentObservation(ctx, bl, false)
 	require.NoError(t, err)
 
-	build, err := runner.buildCurrentPlanStage(ctx, bl, syncdomain.SyncBidirectional, RunOptions{DryRun: true}, observed)
+	build, err := runner.buildCurrentPlanStage(ctx, syncdomain.SyncBidirectional, RunOptions{DryRun: true}, observed)
 	require.NoError(t, err)
 
 	runtime := runner.keepBuiltCurrentPlan(build)
@@ -509,17 +505,17 @@ func TestKeepCurrentPlanBuild_LeavesDurableRuntimeStateUntouched(t *testing.T) {
 	assert.Equal(t, syncdomain.SKService(), blockScopes[0].Key)
 }
 
-// reconciliationQueryWithoutLocalUploadRule is the reconciliation query with
-// one rule of the decision table removed: a new local file no longer has a
-// reconciliation. It stands in for the gap the next change to the table could
-// leave, since no reachable state is unclassified today.
-func reconciliationQueryWithoutLocalUploadRule(t *testing.T) string {
-	t.Helper()
+// decideWithoutLocalUploadRule is the decision table with one rule removed:
+// a new local file no longer has a reconciliation. It stands in for the gap
+// the next change to the table could leave, since no reachable state is
+// unclassified today.
+func decideWithoutLocalUploadRule(s syncdomain.DecisionState) syncdomain.Decision {
+	decision := syncdomain.Decide(s)
+	if decision.Comparison == syncdomain.ComparisonLocalOnlyCreate && decision.Reconciliation == syncdomain.ReconcileUpload {
+		decision.Reconciliation = syncdomain.ReconcileUnclassified
+	}
 
-	const rule = "WHEN comparison_kind = 'local_only_create' THEN 'upload'"
-	require.Contains(t, syncstore.SqlQueryReconciliationState, rule)
-
-	return strings.Replace(syncstore.SqlQueryReconciliationState, rule, "", 1)
+	return decision
 }
 
 func newUnclassifiedPlanTestEngine(t *testing.T) (*testEngine, string, *atomic.Int32) {
@@ -539,7 +535,7 @@ func newUnclassifiedPlanTestEngine(t *testing.T) (*testEngine, string, *atomic.I
 		},
 	}
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.hooks.reconciliationQuery = reconciliationQueryWithoutLocalUploadRule(t)
+	eng.hooks.decideOverride = decideWithoutLocalUploadRule
 
 	return eng, syncRoot, &uploads
 }

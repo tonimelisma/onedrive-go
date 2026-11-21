@@ -52,7 +52,7 @@ func startDrainLoop(t *testing.T) (chan syncdomain.ActionCompletion, func(), *te
 func runResultDrainLoopForTest(
 	ctx context.Context,
 	rt *watchRuntime,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	results <-chan syncdomain.ActionCompletion,
 ) {
 	var outbox []*syncdomain.TrackedAction
@@ -78,7 +78,7 @@ func runResultDrainLoopForTest(
 func runResultDrainLoopIdleForTest(
 	ctx context.Context,
 	rt *watchRuntime,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	results <-chan syncdomain.ActionCompletion,
 ) ([]*syncdomain.TrackedAction, bool) {
 	select {
@@ -103,7 +103,7 @@ func runResultDrainLoopIdleForTest(
 func runResultDrainLoopWithOutboxForTest(
 	ctx context.Context,
 	rt *watchRuntime,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	results <-chan syncdomain.ActionCompletion,
 	outbox []*syncdomain.TrackedAction,
 ) ([]*syncdomain.TrackedAction, bool) {
@@ -131,7 +131,7 @@ func runResultDrainLoopWithOutboxForTest(
 func appendDrainOutcome(
 	rt *watchRuntime,
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	outbox []*syncdomain.TrackedAction,
 	workerResult *syncdomain.ActionCompletion,
 ) ([]*syncdomain.TrackedAction, bool) {

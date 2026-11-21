@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -25,6 +26,12 @@ type Hooks struct {
 	// through; empty is the SQLite driver. Tests name a fault-injecting
 	// wrapper of it.
 	Driver string
+	// SkipFsync opens the store with synchronous=OFF: a commit is written
+	// to the database and its write-ahead log but SQLite does not wait for
+	// the disk to hold it. A test's store dies with its temp directory and
+	// no test cuts the power, so the waits buy a test nothing and were most
+	// of what its commits cost. Production keeps synchronous=FULL.
+	SkipFsync bool
 }
 
 // driverName is the database/sql driver the store opens its database
@@ -35,6 +42,17 @@ func (h Hooks) driverName() string {
 	}
 
 	return h.Driver
+}
+
+// synchronousPragma is the synchronous setting the store opens its
+// connections with: FULL, which makes a commit durable before it returns,
+// unless a test skips the waits for the disk.
+func (h Hooks) synchronousPragma() string {
+	if h.SkipFsync {
+		return "synchronous(OFF)"
+	}
+
+	return "synchronous(FULL)"
 }
 
 // RawDBForTest is the store's database, for tests that read or seed tables
@@ -55,7 +73,24 @@ func (s *SyncStore) SetLoggerForTest(logger *slog.Logger) {
 
 // ReloadBaselineCacheForTest reloads the cached baseline from the database.
 func (s *SyncStore) ReloadBaselineCacheForTest(ctx context.Context) error {
-	return s.reloadBaselineCache(ctx)
+	patch, err := s.reloadPatchTx(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	s.applyBaselineCachePatch(patch)
+
+	return nil
+}
+
+// BaselineSnapshotForTest reads the baseline table as a snapshot, the form
+// planning takes it in.
+func (s *SyncStore) BaselineSnapshotForTest(ctx context.Context) (*syncdomain.BaselineSnapshot, error) {
+	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
+	if err != nil {
+		return nil, err
+	}
+
+	return LoadBaselineWithRunner(ctx, s.db, contentDriveID)
 }
 
 // UpdateObservationStateForTest applies update to the stored observation

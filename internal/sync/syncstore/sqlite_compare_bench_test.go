@@ -13,8 +13,9 @@ import (
 )
 
 // Benchmarks of the comparison SQL at drive scale (D-098): every plan runs
-// QueryComparisonState and QueryReconciliationState over the whole state, so
-// their cost bounds how fast a pass over a large drive can be. Shapes:
+// QueryPlannerRows over the whole state (one query, then the Go decision
+// table on every row), so its cost bounds how fast a pass over a large drive
+// can be. Shapes:
 //
 //   - steady: everything synced, nothing changed (a quiet pass);
 //   - remote-rename: OneDrive renamed a folder holding half the items, the
@@ -46,9 +47,8 @@ func BenchmarkComparisonQueries(b *testing.B) {
 
 				b.ResetTimer()
 				for b.Loop() {
-					comparisons, err := store.QueryComparisonState(ctx)
-					require.NoError(b, err)
-					reconciliations, err := store.QueryReconciliationState(ctx)
+					comparisons, reconciliations, err := QueryPlannerRows(ctx, store.RawDBForTest(),
+						"local_state", "remote_state", syncdomain.Decide)
 					require.NoError(b, err)
 					b.ReportMetric(float64(len(comparisons)), "comparison-rows")
 					b.ReportMetric(float64(len(reconciliations)), "reconciliation-rows")

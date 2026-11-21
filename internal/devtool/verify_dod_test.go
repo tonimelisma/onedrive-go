@@ -490,7 +490,9 @@ func TestDODPrePRRunsThePRProfileByDefault(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	expected := append([]string{"golangci-lint run --allow-parallel-runners"}, quickCommandSequence()...)
+	// The fake repository has no change against origin/main, so the pr
+	// profile's changed-package lint has nothing to run.
+	expected := quickCommandSequence()
 	expected = append(expected, "git fetch origin", "git merge-base --is-ancestor")
 	assert.Equal(t, expected, recordedCommandSequence(runner.fakeRunner))
 	assert.False(t, slices.ContainsFunc(runner.outputCommands, func(command recordedCommand) bool {

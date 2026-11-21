@@ -27,7 +27,7 @@ func (flow *engineFlow) failAfterControlStateError(current *syncdomain.TrackedAc
 func (flow *engineFlow) applyRuntimeCompletionStage(
 	ctx context.Context,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) ([]*syncdomain.TrackedAction, error) {
 	if r == nil {
 		return nil, nil
@@ -73,7 +73,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 	decision *syncdomain.ResultDecision,
 	current *syncdomain.TrackedAction,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) ([]*syncdomain.TrackedAction, error) {
 	handled, err := flow.maybeHandlePermissionFailure(ctx, decision, current, r, bl)
 	if err != nil {
@@ -85,7 +85,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 
 	switch decision.Class {
 	case errclass.ClassInvalid:
-		if err := flow.applyResultPersistence(ctx, decision, r); err != nil {
+		if err := flow.applyResultPersistence(ctx, decision, r, nil); err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
 		}
 		flow.sched.markFinished(current)
@@ -124,7 +124,7 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 	decision *syncdomain.ResultDecision,
 	current *syncdomain.TrackedAction,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) ([]*syncdomain.TrackedAction, error) {
 	if decision.Class == errclass.ClassSuperseded {
 		flow.noteProbationMemberFinished(trialScopeKey, r.TrialScopeGeneration)
@@ -299,16 +299,20 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	return nil
 }
 
+// persistAndHoldFailure persists a failure's retry_work and holds its action.
+// activation, when not nil, is the block scope the failure activates: its
+// row is written in the blocked row's transaction.
 func (flow *engineFlow) persistAndHoldFailure(
 	ctx context.Context,
 	current *syncdomain.TrackedAction,
 	decision *syncdomain.ResultDecision,
 	r *syncdomain.ActionCompletion,
+	activation *blockActivation,
 ) (bool, error) {
 	if decision.Persistence != syncdomain.PersistRetryWork {
 		return false, nil
 	}
-	if err := flow.applyResultPersistence(ctx, decision, r); err != nil {
+	if err := flow.applyResultPersistence(ctx, decision, r, activation); err != nil {
 		return false, err
 	}
 	if err := flow.holdActionFromPersistedRetryState(current, syncdomain.RetryWorkKeyForCompletion(r)); err != nil {
@@ -328,7 +332,9 @@ func (flow *engineFlow) persistAndHoldFailure(
 // work, recorded blocked under it and held for the scope's trial. Recorded as
 // ordinary retry work first, it left the new scope with no blocked work at
 // all, which the persisted invariants forbid (found by the chaos Graph layer,
-// D-092): a scope with nothing to trial is dead state.
+// D-092): a scope with nothing to trial is dead state. The scope row and the
+// blocked row are written in one transaction, the scope row first, since the
+// blocked row references it.
 func (flow *engineFlow) persistFailureWithScopeEffects(
 	ctx context.Context,
 	current *syncdomain.TrackedAction,
@@ -354,21 +360,33 @@ func (flow *engineFlow) persistFailureWithScopeEffects(
 		persistAs = decisionAsScopeEvidence(decision)
 	}
 
-	persisted, err := flow.persistAndHoldFailure(ctx, current, persistAs, r)
-	if err != nil || !persisted {
-		return persisted, persistAs, err
-	}
-
+	activates := syncdomain.ScopeUpdateResult{}
 	switch {
 	case detected.Block:
-		err = flow.applyBlockScope(ctx, detected)
+		activates = detected
 	case !decision.RunScopeDetection &&
 		decision.Class == errclass.ClassScopeBlockingTransient && !decision.ScopeKey.IsZero():
-		err = flow.applyBlockScope(ctx, syncdomain.ScopeUpdateResult{
+		activates = syncdomain.ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      decision.ScopeKey,
 			ConditionType: decision.ScopeKey.ConditionType(),
-		})
+		}
+	}
+	var activation *blockActivation
+	if activates.Block && persistAs.Persistence == syncdomain.PersistRetryWork {
+		prepared, err := flow.prepareBlockActivation(activates)
+		if err != nil {
+			return false, persistAs, err
+		}
+		activation = prepared
+	}
+
+	persisted, err := flow.persistAndHoldFailure(ctx, current, persistAs, r, activation)
+	if err != nil || !persisted {
+		return persisted, persistAs, err
+	}
+	if activation != nil {
+		err = flow.applyBlockActivation(ctx, activation)
 	}
 
 	return true, persistAs, err
@@ -521,7 +539,7 @@ func partitionPublicationFrontier(ready []*syncdomain.TrackedAction) ([]*syncdom
 
 func (flow *engineFlow) failPublicationDrainAction(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	current *syncdomain.TrackedAction,
 	cause error,
 ) ([]*syncdomain.TrackedAction, error) {
@@ -534,7 +552,7 @@ func (flow *engineFlow) failPublicationDrainAction(
 
 func (flow *engineFlow) applyPublicationDrainAction(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	current *syncdomain.TrackedAction,
 ) ([]*syncdomain.TrackedAction, error) {
 	if err := flow.applyPublicationMutation(ctx, current); err != nil {
@@ -564,7 +582,7 @@ func (flow *engineFlow) completePublicationDrainAction(
 // (reduceReadyFrontier).
 func (flow *engineFlow) runPublicationDrainStage(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	ready []*syncdomain.TrackedAction,
 ) ([]*syncdomain.TrackedAction, error) {
 	concrete, publication := partitionPublicationFrontier(ready)
@@ -587,14 +605,22 @@ func (flow *engineFlow) runPublicationDrainStage(
 	return concrete, nil
 }
 
+// recordRetryWork records a failure's retry_work. activation, when not nil,
+// is the block scope the failure activates; the failure must then be blocked
+// under that scope, and its row is written with the scope row.
 func (flow *engineFlow) recordRetryWork(
 	ctx context.Context,
 	decision *syncdomain.ResultDecision,
 	r *syncdomain.ActionCompletion,
 	delayFn func(int) time.Duration,
+	activation *blockActivation,
 ) error {
 	scopeKey := decision.RetryWorkScope()
 	blocked := flow.retryWorkShouldBeBlocked(decision.Class, scopeKey)
+	if activation != nil && (!blocked || activation.update.ScopeKey != scopeKey) {
+		return fmt.Errorf("record retry_work for %s: activating scope %s, but the work is not blocked under it",
+			r.Path, activation.update.ScopeKey.String())
+	}
 
 	if decision.Class == errclass.ClassActionable {
 		fields := append(flow.resultLogFields(decision, r),
@@ -616,7 +642,8 @@ func (flow *engineFlow) recordRetryWork(
 	var row *syncdomain.RetryWorkRow
 	var recErr error
 	if blocked {
-		row, recErr = flow.retryWork.recordBlocked(ctx, flow.deps.store, syncdomain.RetryWorkKeyForCompletion(r), scopeKey)
+		row, recErr = flow.retryWork.recordBlocked(ctx, flow.deps.store, syncdomain.RetryWorkKeyForCompletion(r), scopeKey,
+			activation.storeRow())
 	} else {
 		failure := &syncdomain.RetryWorkFailure{
 			Work:     syncdomain.RetryWorkKeyForCompletion(r),
@@ -679,12 +706,13 @@ func (flow *engineFlow) applyResultPersistence(
 	ctx context.Context,
 	decision *syncdomain.ResultDecision,
 	r *syncdomain.ActionCompletion,
+	activation *blockActivation,
 ) error {
 	switch decision.Persistence {
 	case syncdomain.PersistNone:
 		return nil
 	case syncdomain.PersistRetryWork:
-		return flow.recordRetryWork(ctx, decision, r, retryDelayForDecision(decision))
+		return flow.recordRetryWork(ctx, decision, r, retryDelayForDecision(decision), activation)
 	default:
 		panic(fmt.Sprintf("unknown failure persistence mode %d", decision.Persistence))
 	}
@@ -747,7 +775,7 @@ func retryDelayForCondition(condition syncdomain.IssueType) func(int) time.Durat
 	case syncdomain.IssueInvalidFilename,
 		syncdomain.IssuePathTooLong,
 		syncdomain.IssueFileTooLarge,
-		syncdomain.IssueHashPanic,
+		syncdomain.IssueHashError,
 		syncdomain.IssueUnauthorized,
 		syncdomain.IssueRemoteWriteDenied,
 		syncdomain.IssueRemoteReadDenied,

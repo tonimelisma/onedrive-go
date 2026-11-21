@@ -157,7 +157,7 @@ func isWatchShutdownError(ctx context.Context, err error) bool {
 // Created by initWatchInfra; cleaned up by its cleanup method.
 type watchPipeline struct {
 	runtime      *watchRuntime
-	bl           *syncdomain.Baseline
+	bl           syncdomain.BaselineView
 	replanReady  <-chan syncobserve.DirtyBatch
 	completions  <-chan syncdomain.ActionCompletion
 	maintenanceC <-chan time.Time
@@ -339,7 +339,7 @@ func (rt *watchRuntime) finishBootstrapAfterActions(
 // their channels on the watch runtime. The watch loop owns local and remote
 // batch application and dirty marking; observers do not commit SQLite directly.
 func (rt *watchRuntime) startObservers(
-	ctx context.Context, bl *syncdomain.Baseline, opts WatchOptions,
+	ctx context.Context, bl syncdomain.BaselineView, opts WatchOptions,
 ) error {
 	// Bootstrap uses loop termination to mean "quiesced"; the observer-backed
 	// loop must always start from steady-state running ownership.
@@ -382,7 +382,7 @@ const watchObserverCount = 2
 // nothing.
 func (rt *watchRuntime) buildWatchLocalObserver(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	localBatches chan<- syncobserve.LocalObservation,
 	protectedRootEvents chan<- syncshortcut.ProtectedRootEvent,
 ) (*syncobserve.LocalObserver, error) {
@@ -505,7 +505,7 @@ func (rt *watchRuntime) watchLocalWithFallback(ctx context.Context, localObs *sy
 
 func (rt *watchRuntime) startRemoteObserver(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	remoteBatches chan<- syncobserve.RemoteObservationBatch,
 	errs chan<- error,
 	opts WatchOptions,

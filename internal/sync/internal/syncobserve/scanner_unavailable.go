@@ -138,16 +138,16 @@ type deviceInode struct {
 }
 
 func (a *scanAvailability) baselineEntryWithIdentity(
-	baseline *syncdomain.Baseline, identity synctree.FileIdentity,
+	baseline syncdomain.BaselineView, identity synctree.FileIdentity,
 ) *syncdomain.BaselineEntry {
 	if a.baselineByIdentity == nil {
 		a.baselineByIdentity = make(map[deviceInode]*syncdomain.BaselineEntry)
 		if baseline != nil {
-			baseline.ForEachPath(func(_ string, entry *syncdomain.BaselineEntry) {
-				if entry == nil || !entry.LocalHasIdentity {
+			baseline.ForEachPath(func(_ string, entry syncdomain.BaselineEntry) {
+				if !entry.LocalHasIdentity {
 					return
 				}
-				a.baselineByIdentity[deviceInode{device: entry.LocalDevice, inode: entry.LocalInode}] = entry
+				a.baselineByIdentity[deviceInode{device: entry.LocalDevice, inode: entry.LocalInode}] = &entry
 			})
 		}
 	}

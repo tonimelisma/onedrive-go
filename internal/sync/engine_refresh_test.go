@@ -312,11 +312,10 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline with 2 files (file1 + file2).
-	bl, err := e.baseline.Load(ctx)
-	require.NoError(t, err)
-
-	bl.Put(&syncdomain.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: syncdomain.ItemTypeFile})
-	bl.Put(&syncdomain.BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: syncdomain.ItemTypeFile})
+	bl := syncfixture.BaselineWith(
+		&syncdomain.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: syncdomain.ItemTypeFile},
+		&syncdomain.BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: syncdomain.ItemTypeFile},
+	)
 
 	full, err := testEngineFlow(t, e).observeRemoteFullWithShortcutTopology(ctx, bl, syncdomain.ResyncKindApplyDifferences)
 	require.NoError(t, err)
@@ -463,11 +462,10 @@ func TestObserveAndCommitRemoteFull(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline with file1 + file2 (file2 will become an orphan).
-	bl, err := e.baseline.Load(ctx)
-	require.NoError(t, err)
-
-	bl.Put(&syncdomain.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: syncdomain.ItemTypeFile})
-	bl.Put(&syncdomain.BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: syncdomain.ItemTypeFile})
+	bl := syncfixture.BaselineWith(
+		&syncdomain.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: syncdomain.ItemTypeFile},
+		&syncdomain.BaselineEntry{Path: "file2.txt", DriveID: driveID, ItemID: "f2", ItemType: syncdomain.ItemTypeFile},
+	)
 
 	require.NoError(t, e.baseline.CommitObservation(ctx, []syncdomain.ObservedItem{
 		{DriveID: driveID, ItemID: "f1", Path: "file1.txt", ItemType: syncdomain.ItemTypeFile},
@@ -612,10 +610,9 @@ func TestRunFullRemoteRefreshAsync_NoChanges(t *testing.T) {
 	ctx := t.Context()
 
 	// Seed baseline matching delta exactly — no orphans.
-	bl, err := e.baseline.Load(ctx)
-	require.NoError(t, err)
-
-	bl.Put(&syncdomain.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: syncdomain.ItemTypeFile})
+	bl := syncfixture.BaselineWith(
+		&syncdomain.BaselineEntry{Path: "file1.txt", DriveID: driveID, ItemID: "f1", ItemType: syncdomain.ItemTypeFile},
+	)
 
 	ready := setupWatchEngine(t, e)
 	testWatchRuntime(t, e).resources.dirtyBuf = syncobserve.NewDirtyBuffer(e.logger)

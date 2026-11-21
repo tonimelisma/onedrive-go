@@ -15,7 +15,7 @@ import (
 
 // An engine built with zero hooks behaves as production does: the real
 // clock, the real websocket wake source, the full worker pool and pass
-// bound and no invariant checks. The executor's, store's and observer's
+// bound, no invariant checks and a store that waits for the disk. The executor's, store's and observer's
 // hooks prove their own zero value.
 //
 // Validates: R-6.10.29
@@ -26,6 +26,7 @@ func TestEngineHooks_ZeroValueIsProduction(t *testing.T) {
 	const configuredWorkers = 9
 
 	inputs := newTestEngineInputs(t, &syncfixture.EngineMockClient{}, t.TempDir())
+	inputs.hooks = engineHooks{}
 	inputs.TransferWorkers = configuredWorkers
 	eng, err := newEngine(t.Context(), inputs)
 	require.NoError(t, err)
@@ -38,6 +39,7 @@ func TestEngineHooks_ZeroValueIsProduction(t *testing.T) {
 	assert.Equal(t, configuredWorkers, eng.workerPoolSize(), "the pool runs the configured workers")
 	assert.Equal(t, oneShotMaxPasses, eng.oneShotPasses(), "one-shot runs make the full pass bound")
 	assert.False(t, newEngineFlow(eng.flowInputs()).invariantChecksEnabled(), "invariant checks are off")
+	assert.Equal(t, sqliteSynchronousFull, storeSynchronous(t, eng), "the store commits with synchronous=FULL")
 
 	wake := eng.newSocketIOWakeSource(syncobserve.SocketIOWakeSourceOptions{})
 	assert.Equal(t, "*syncobserve.socketIOWakeSource", fmt.Sprintf("%T", wake), "the wake source is the real one")

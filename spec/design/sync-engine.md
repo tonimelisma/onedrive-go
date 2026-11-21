@@ -84,8 +84,8 @@ removed shared folder that cannot be read reconciles the same batch empty.
 | A one-shot sync runs further passes while the previous pass's plan left work for the next (moves, re-keys, conflict copies, deferred or dropped work), up to four, never in dry-run and never after a pass that made no progress or failed an action; its report adds up every pass. Watch replans by itself once such a plan settles (R-2.1.7). | `TestRunOnce_OneShotUploadsLocalEditInsideFolderRenamedOnline`, `TestRunOnce_OneShotDryRunPlansOnePass`, `TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads`, `TestRunOnce_SwapOfTwoNamesConverges`, `TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending`, `TestRunWatch_FinishesWorkTheBootstrapMovesLeaveForTheNextPass`, `TestRunWatch_FinishesTheRemoteEditBehindARekey`, `TestReport_WithPassAddsWorkAndKeepsTheLastHeldState`, `TestOneShotFollowUp_StopsWithoutProgressOnFailureAndAtTheBound` |
 | One-shot sync remains a bounded observe-plan-execute run without a live user-intent mailbox. | `TestBootstrapSync_NoChanges`, `TestBootstrapSync_WithChanges`, `TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork`, `TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady` |
 | Dry-run one-shot sync builds a preview without executor, durable cursor commits, durable observation-findings writes, or shortcut child publication, while normal engine startup/store/close housekeeping still runs. | `TestRunOnce_DryRun_NoExecution`, `TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly`, `TestLoadDryRunCurrentInputs_LocalObservationFindingsStayScratchOnly`, `TestRunOnce_DryRun_MountRootDoesNotSaveScopedDeltaToken` |
-| A plan with a row outside the decision table stops that drive's pass before anything executes (R-6.2.16, `sync-planning.md` Decision Table Kinds). The planning read transaction reads the first unclassified row's decision inputs (`queryPlannerRowsTx`), so one-shot `sync` returns `sync: planning actions: sync: planner state is outside the decision table: "<path>" (comparison ..., reconciliation unclassified; <input>=<value> ...)`, and a watch replan ends with `sync: watch replan build_current_plan: ` before the same text, which ends the drive's runner for the R-2.8.11 restart backoff. No reachable state is unclassified, so the tests remove one rule from the table through the test-only `engineHooks.reconciliationQuery` (empty in production). | `TestRunOnce_UnclassifiedRowFailsThePassNamingThePath`, `TestRunSteadyStateReplan_UnclassifiedRowEndsTheReplanNamingThePath` |
-| A failure that names a scope whose detection window is not crossed yet, and whose scope is not active, is persisted as timed retry work carrying the scope as evidence (`decisionAsScopeEvidence`), never blocked under a scope that does not exist; the activating failure alone is recorded blocked first. At startup, after empty scopes are discarded, blocked rows whose scope has no `block_scopes` row are made due (`ReleaseOrphanBlockedRetryWork`), which heals stores earlier builds left with such rows (R-2.10.33; live on 2026-11-03: one 507 below the quota window left two rows blocked across a restart). | `TestRunOnce_AQuotaRefusalBelowTheWindowIsTimedRetryWorkNotABlock`, `TestRunOnce_ThreeQuotaRefusalsActivateTheScopeAndBlockTheRows`, `TestRunOnce_ABlockedRowWhoseScopeIsGoneIsReleasedAtStartup` |
+| A plan with a row outside the decision table stops that drive's pass before anything executes (R-6.2.16, `sync-planning.md` Decision Table Kinds). Every unclassified row carries its decision inputs (`queryPlannerRowsTx`, `DecisionState.Inputs`), so one-shot `sync` returns `sync: planning actions: sync: planner state is outside the decision table: "<path>" (comparison ..., reconciliation unclassified; <input>=<value> ...)`, and a watch replan ends with `sync: watch replan build_current_plan: ` before the same text, which ends the drive's runner for the R-2.8.11 restart backoff. No reachable state is unclassified, so the tests remove one rule from the table through the test-only `decideOverride` (nil in production). | `TestRunOnce_UnclassifiedRowFailsThePassNamingThePath`, `TestRunSteadyStateReplan_UnclassifiedRowEndsTheReplanNamingThePath` |
+| A failure that names a scope whose detection window is not crossed yet, and whose scope is not active, is persisted as timed retry work carrying the scope as evidence (`decisionAsScopeEvidence`), never blocked under a scope that does not exist; the activating failure alone is recorded blocked first. At startup, after empty scopes are discarded, blocked rows that reference no `block_scopes` row (since generation 29 only rows under a read boundary can) are made due (`ReleaseOrphanBlockedRetryWork`), which healed stores earlier builds left with such rows (R-2.10.33; live on 2026-11-03: one 507 below the quota window left two rows blocked across a restart). | `TestRunOnce_AQuotaRefusalBelowTheWindowIsTimedRetryWorkNotABlock`, `TestRunOnce_ThreeQuotaRefusalsActivateTheScopeAndBlockTheRows`, `TestRunOnce_ABlockedRowWhoseScopeIsGoneIsReleasedAtStartup` |
 | A one-shot sync whose pass left work under a pause OneDrive asked for (a drive throttle or the service scope still blocking, `earliestPauseTrialAt`; the pass counts the refused requests as failed and holds the rest, so the held work is counted from the blocked retry rows, `countWorkBlockedUnderPause`) waits for that scope's trial when it is within `oneShotScopeWaitLimit` (ten minutes) and passes again within the four-pass bound (`oneShotScopeWait`, through the `engineHooks.wait` seam: tests on a manual clock skip the wait unless they advance their clock in it); a longer pause is logged and left to the next sync (R-2.1.7). | `TestRunOnce_WaitsOutAShortPauseBeforeTheNextPass`, `TestRunOnce_LeavesWorkBehindAPauseLongerThanTenMinutes` |
 | A one-shot sync whose pass gave up on an action as superseded (`applySupersededCompletion`, counted in `runResults.superseded` and reported as `Report.Superseded`) passes again within the pass bound even when nothing succeeded (`oneShotFollowUp`), since the next plan sees the fresh truth; a 412 on a folder move while a file inside changed online used to leave both for the next sync (R-2.1.7). | `TestRunOnce_ReplansASupersededMoveInTheSameRun` |
 | One page of the change list is fetched through `fetchDeltaPageWithRetry` (`retry.DeltaPagePolicy`, four attempts, 2 s doubling to 8 s on the observer's clock): a 5xx, a transport failure (a request that timed out among them, R-6.8.29) or a 429 with a Retry-After within `deltaPageRetryAfterLimit` (two minutes, waited as given) is tried again before `fetchPage` returns the error; other 4xx, an expired cursor and a longer Retry-After surface at once, and the loop stops only when its run has ended (`RunEnded`). The sync client set dispatches once by design, which is right for actions the engine retries itself but made one 504 on page 2 of 32 fail a whole one-shot run (R-2.15.5). | `TestFullDelta_RetriesAServerErrorOnAPage`, `TestFullDelta_WaitsAShortRetryAfterOnAPage`, `TestFullDelta_ALongRetryAfterOnAPageIsLeftToTheCaller`, `TestFullDelta_AClientErrorOnAPageIsNotRetried`, `TestFullDelta_GivesUpAPageAfterItsAttempts`, `TestFullDelta_RetriesATimedOutPageUpToItsPolicy` |
@@ -257,7 +257,15 @@ D-092):
 - scope detection runs before a failure is persisted, so the failure that
   activates a scope (a 429, a 503 with Retry-After, or the failure that
   crosses the service window) is recorded once, blocked under that scope, as
-  its first trial candidate
+  its first trial candidate. The activation is prepared first
+  (`prepareBlockActivation`) and the store writes the scope row and the
+  blocked row in one transaction; the ledger, the retirement of admitted
+  work and the trial timer follow (`applyBlockActivation`). The five paths
+  that activate a scope with a failure all do this: an ordinary failure
+  (`persistFailureWithScopeEffects`, both arms), a failed trial that names a
+  scope of its own (`applyTrialRetryFallback`), a trial reclassified as a
+  full local disk (`applyTrialReclassification`), and a permission write
+  boundary found by a failure or a trial (`recordPermissionBoundaryDenied`)
   (`TestEngineFlow_ProcessNormalDecision_ServiceRetryAfterBlocksTheTriggeringWork`,
   `TestEngineFlow_ProcessNormalDecision_ServiceWindowBlocksTheCrossingWork`)
 - a failed trial whose failure names a scope of its own moves its work there
@@ -1377,7 +1385,7 @@ each delivers the panic through the error path it already had:
 - A worker recovers per action (`safeExecuteAction`): the action fails with
   the panic as its error and the engine decides, as for any failed action
   (`TestWorkerPool_PanicRecovery`). A hash worker of a scan records the file
-  as a `hash_panic` skipped item and the scan completes
+  as a `hash_error` skipped item and the scan completes
   (`TestHashPhase_PanicRecovery`).
 - A timer callback runs on a goroutine of its own, on the engine's one real
   clock (`wallClock`, built in `newEngine` and handed to every observer the
@@ -1783,7 +1791,7 @@ minutes against one announced activation. Two rules fix both halves:
   run started inside the `Retry-After` holds everything the scope blocks and
   sends nothing to the drive before `next_trial_at`.
 - **Activation retires admitted work.** Each block activation
-  (`applyBlockScope`, `extendScopeTrial`,
+  (`applyBlockActivation`, `extendScopeTrial`,
   `transitionTrialScopeToPersistedBlock`) bumps the scope's `Generation` and
   then asks the runtime for the admitted, not yet dispatched work the scope
   blocks (`admittedWorkOwner.takeAdmittedWorkBlockedBy`: the watch loop's
@@ -1823,7 +1831,7 @@ Two follow-ups measured on the same live account after the ramp landed.
   dependents are waiting counts as one in flight and nothing more, and
   dependency order is never starved: the dispatch picker takes the first
   admissible outbox entry, not necessarily the head. A block activation
-  (`applyBlockScope`, `extendScopeTrial`,
+  (`applyBlockActivation`, `extendScopeTrial`,
   `transitionTrialScopeToPersistedBlock`) hands the target over
   (`handOverColdStart`): a throttle scope takes its drive, a service scope
   every target, and from then on the scope's ramp paces admission and the

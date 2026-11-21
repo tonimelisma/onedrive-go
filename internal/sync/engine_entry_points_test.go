@@ -148,7 +148,7 @@ func TestEngineStartup_LockedCatalogWarnsAndStarts(t *testing.T) {
 }
 
 // faultComparisonQuery is a fragment of the planner's comparison query alone.
-const faultComparisonQuery = "FROM comparison_state\nORDER BY path"
+const faultComparisonQuery = "FROM comparison_flags\nORDER BY path"
 
 // A planning-state load error reads the same in a one-shot pass, the watch's
 // bootstrap and a watch replan, keeps its cause, and names the failed query
@@ -173,7 +173,7 @@ func TestPlanningLoadError_SameTextInOneShotAndWatch(t *testing.T) {
 	_, bootstrapErr := rt.runBootstrapCurrentPlan(ctx, bl, syncdomain.SyncBidirectional)
 	require.ErrorIs(t, bootstrapErr, syncfixture.ErrInjectedFault, "watch bootstrap")
 	fault.Arm(faultComparisonQuery, syncfixture.ErrInjectedFault)
-	_, replanErr := rt.runSteadyStateCurrentPlan(ctx, bl, syncdomain.SyncBidirectional)
+	_, replanErr := rt.runSteadyStateCurrentPlan(ctx, syncdomain.SyncBidirectional)
 	require.ErrorIs(t, replanErr, syncfixture.ErrInjectedFault, "watch replan")
 
 	assert.Equal(t, oneShotErr.Error(), bootstrapErr.Error(), "one-shot and watch bootstrap")

@@ -86,7 +86,7 @@ func TestObservationIssueBlocksTruth_VerdictForEveryIssueType(t *testing.T) {
 			verdict: observationIssueTruthVerdict{blocksLocal: true},
 			members: []IssueType{
 				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueCaseCollision,
-				IssueHashPanic, IssueLocalReadDenied, IssueLocalUnsyncableReplacement, IssueLocalMountBoundary,
+				IssueHashError, IssueLocalReadDenied, IssueLocalUnsyncableReplacement, IssueLocalMountBoundary,
 				IssueLocalMountMissing,
 			},
 		},

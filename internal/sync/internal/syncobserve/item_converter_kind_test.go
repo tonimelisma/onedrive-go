@@ -15,7 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
-func kindTestObserver(t *testing.T, bl *syncdomain.Baseline, items []graph.Item, getItem func(string) (*graph.Item, error)) *RemoteObserver {
+func kindTestObserver(t *testing.T, bl syncdomain.BaselineView, items []graph.Item, getItem func(string) (*graph.Item, error)) *RemoteObserver {
 	t.Helper()
 
 	driveID := driveid.New(syncfixture.EngineTestDriveID)

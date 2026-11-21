@@ -17,7 +17,7 @@ import (
 
 func (r *oneShotRunner) runLiveCurrentPlan(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) (*runtimePlan, error) {
@@ -32,7 +32,7 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 	}
 	r.deps.perf.RecordObserve(observation.observedPaths, r.deps.since(observeStart))
 
-	build, err := r.buildCurrentPlanStage(ctx, bl, mode, opts, observation)
+	build, err := r.buildCurrentPlanStage(ctx, mode, opts, observation)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func (r *oneShotRunner) runLiveCurrentPlan(
 
 func (r *oneShotRunner) runDryRunCurrentPlan(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) (*runtimePlan, error) {
@@ -53,7 +53,7 @@ func (r *oneShotRunner) runDryRunCurrentPlan(
 	}
 	r.deps.perf.RecordObserve(observation.observedPaths, r.deps.since(observeStart))
 
-	build, err := r.buildCurrentPlanStage(ctx, bl, mode, opts, observation)
+	build, err := r.buildCurrentPlanStage(ctx, mode, opts, observation)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func (r *oneShotRunner) runDryRunCurrentPlan(
 
 func (rt *watchRuntime) runBootstrapCurrentPlan(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 ) (*runtimePlan, error) {
 	fullRefresh, err := rt.engine.shouldRunFullRemoteRefresh(ctx, false)
@@ -82,7 +82,7 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 	}
 	rt.deps.perf.RecordObserve(observation.observedPaths, rt.deps.since(observeStart))
 
-	build, err := rt.buildCurrentPlanStage(ctx, bl, mode, RunOptions{}, observation)
+	build, err := rt.buildCurrentPlanStage(ctx, mode, RunOptions{}, observation)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,6 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 // observed the local tree only.
 func (rt *watchRuntime) runSteadyStateCurrentPlan(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
 	mode syncdomain.SyncMode,
 ) (*runtimePlan, error) {
 	observation, err := rt.loadCommittedCurrentObservation(ctx, nil)
@@ -103,7 +102,7 @@ func (rt *watchRuntime) runSteadyStateCurrentPlan(
 		return nil, err
 	}
 
-	build, err := rt.buildCurrentPlanStage(ctx, bl, mode, RunOptions{}, observation)
+	build, err := rt.buildCurrentPlanStage(ctx, mode, RunOptions{}, observation)
 	if err != nil {
 		return nil, err
 	}
@@ -182,14 +181,16 @@ type currentInputs struct {
 	remoteRows        []syncdomain.RemoteStateRow
 	observationIssues []syncdomain.ObservationIssueRow
 	// baseline is read in the same transaction as the comparison rows, so a
-	// baseline_present row always has its entry. The run's cached baseline
-	// can lag or lead that snapshot when a commit lands between them.
-	baseline *syncdomain.Baseline
+	// baseline_present row always has its entry. It is a snapshot, a type the
+	// run's live baseline view is not: the planner cannot be handed the cache,
+	// which can lag or lead the comparison rows when a commit lands between
+	// them.
+	baseline *syncdomain.BaselineSnapshot
 }
 
 func (flow *engineFlow) observeAndCommitCurrentState(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	fullReconcile bool,
 ) (*syncobserve.RemoteObservationBatch, error) {
 	pendingRemoteObservation, err := flow.observeAndCommitRemoteCurrentState(ctx, bl, fullReconcile)
@@ -206,7 +207,7 @@ func (flow *engineFlow) observeAndCommitCurrentState(
 
 func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	fullReconcile bool,
 ) (*syncobserve.RemoteObservationBatch, error) {
 	observationBatch, err := flow.executePrimaryRootObservation(ctx, bl, fullReconcile)
@@ -280,7 +281,7 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 
 func (flow *engineFlow) observeLocalCurrentState(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	recordHashes bool,
 ) (syncobserve.ScanResult, error) {
 	localResult, err := flow.observeLocal(ctx, bl, recordHashes)
@@ -293,7 +294,7 @@ func (flow *engineFlow) observeLocalCurrentState(
 
 func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (syncobserve.ScanResult, error) {
 	localResult, err := flow.observeLocalCurrentState(ctx, bl, true)
 	if err != nil {
@@ -310,7 +311,7 @@ func (flow *engineFlow) refreshAndCommitLocalCurrentState(
 
 func (flow *engineFlow) observeRemoteWithShortcutTopology(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) ([]syncdomain.RemoteItem, string, syncshortcut.ShortcutTopologyBatch, error) {
 	eng := flow.engine
 	state, err := flow.deps.store.ReadObservationState(ctx)
@@ -350,7 +351,7 @@ func (flow *engineFlow) observeRemoteWithShortcutTopology(
 // false, since it must leave the store as it found it.
 func (flow *engineFlow) observeLocal(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	recordHashes bool,
 ) (syncobserve.ScanResult, error) {
 	eng := flow.engine
@@ -396,7 +397,7 @@ const errReadingPlanningState = "sync: reading sync state: %w"
 
 func (flow *engineFlow) loadDryRunCurrentObservation(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 	fullReconcile bool,
 ) (result *currentObservation, err error) {
 	observationBatch, err := flow.executePrimaryRootObservation(ctx, bl, fullReconcile)
@@ -409,7 +410,7 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 		return nil, err
 	}
 
-	scratchStore, cleanup, err := flow.deps.store.CreateScratchPlanningStore(ctx, bl)
+	scratchStore, cleanup, err := flow.deps.store.CreateScratchPlanningStore(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -564,53 +565,26 @@ func (flow *engineFlow) loadCurrentInputsTx(
 	}, nil
 }
 
-// queryPlannerRowsTx reads the comparison and reconciliation rows over the
-// planner-visible tables. When a row came back unclassified, it also reads
-// that row's decision-table inputs in the same transaction, the only place
-// they can be read (the planner-visible tables are transaction-local), so the
-// plan error PlanCurrentState returns names them (R-6.2.16). A plan whose
-// rows are all classified pays nothing for it.
+// queryPlannerRowsTx reads every path's decision-table inputs over the
+// planner-visible tables, in one query, and decides each in Go
+// (syncdomain.Decide). An unclassified row carries its inputs, so the plan
+// error PlanCurrentState returns names them (R-6.2.16).
 func (flow *engineFlow) queryPlannerRowsTx(
 	ctx context.Context,
 	tx syncstore.SqlTxRunner,
 ) ([]syncdomain.SQLiteComparisonRow, []syncdomain.SQLiteReconciliationRow, error) {
-	comparisons, err := syncstore.QueryComparisonStateWithRunnerForTables(
-		ctx,
-		tx,
-		syncstore.PlannerVisibleLocalStateTable,
-		syncstore.PlannerVisibleRemoteStateTable,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	reconciliationQuery := syncstore.SqlQueryReconciliationState
-	if flow.hooks.reconciliationQuery != "" {
-		reconciliationQuery = flow.hooks.reconciliationQuery
-	}
-	reconciliations, err := syncstore.QueryReconciliationRows(ctx, tx, syncstore.SqlQueryForStateTables(
-		reconciliationQuery,
-		syncstore.PlannerVisibleLocalStateTable,
-		syncstore.PlannerVisibleRemoteStateTable,
-	))
-	if err != nil {
-		return nil, nil, err
-	}
-	first := syncplan.FirstUnclassifiedRow(reconciliations)
-	if first < 0 {
-		return comparisons, reconciliations, nil
-	}
-	reconciliations[first].DecisionInputs, err = syncstore.QueryPlannerDecisionInputs(
-		ctx,
-		tx,
-		reconciliations[first].Path,
-		syncstore.PlannerVisibleLocalStateTable,
-		syncstore.PlannerVisibleRemoteStateTable,
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("sync: reading the decision inputs of unclassified %q: %w", reconciliations[first].Path, err)
+	decide := syncstore.Decider(syncdomain.Decide)
+	if flow.hooks.decideOverride != nil {
+		decide = flow.hooks.decideOverride
 	}
 
-	return comparisons, reconciliations, nil
+	return syncstore.QueryPlannerRows(
+		ctx,
+		tx,
+		syncstore.PlannerVisibleLocalStateTable,
+		syncstore.PlannerVisibleRemoteStateTable,
+		decide,
+	)
 }
 
 // buildCurrentPlanStage is the shared planning stage after an entrypoint has
@@ -618,7 +592,6 @@ func (flow *engineFlow) queryPlannerRowsTx(
 // does not touch durable retry/scope state.
 func (flow *engineFlow) buildCurrentPlanStage(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 	observation *currentObservation,
@@ -631,7 +604,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	}
 
 	planStart := flow.deps.now()
-	plan, err := flow.engine.buildCurrentActionPlanFromInputs(&observation.inputs, bl, mode, opts)
+	plan, err := flow.engine.buildCurrentActionPlanFromInputs(&observation.inputs, mode, opts)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
@@ -651,7 +624,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 		return nil, fmt.Errorf("sync: reading the recorded mount points the hold guards: %w", err)
 	}
 	if err := syncplan.ApplyDeleteSafetyHold(plan, &syncplan.DeleteSafetyInput{
-		Baseline:        planningBaseline(&observation.inputs, bl),
+		Baseline:        observation.inputs.baseline,
 		LocalRows:       observation.inputs.localRows,
 		RemoteRows:      observation.inputs.remoteRows,
 		Approved:        approved,
@@ -784,35 +757,22 @@ func (flow *engineFlow) loadRuntimeState(ctx context.Context) ([]syncdomain.Retr
 	return retryRows, blockScopes, nil
 }
 
-// planningBaseline is the baseline the planner read: the snapshot loaded in
-// the same transaction as the comparison rows when there is one.
-func planningBaseline(inputs *currentInputs, fallback *syncdomain.Baseline) *syncdomain.Baseline {
-	if inputs != nil && inputs.baseline != nil {
-		return inputs.baseline
-	}
-	return fallback
-}
-
 // buildCurrentActionPlanFromInputs plans the run's actions from the inputs
 // one transaction read. A removed shared folder's final drain
 // (RunOptions.ReleaseLocalTree) plans for a mount that releases its local
 // tree, so it creates nothing new locally (leaveOutNewLocalItems).
 func (e *Engine) buildCurrentActionPlanFromInputs(
 	inputs *currentInputs,
-	bl *syncdomain.Baseline,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) (*syncdomain.ActionPlan, error) {
-	if inputs.baseline != nil {
-		bl = inputs.baseline
-	}
 	return e.planner.PlanCurrentState(
 		inputs.comparisons,
 		inputs.reconciliations,
 		inputs.localRows,
 		inputs.remoteRows,
 		inputs.observationIssues,
-		bl,
+		inputs.baseline,
 		syncplan.PlannerMountContext{
 			DriveID:           e.driveID,
 			ReleasesLocalTree: opts.ReleaseLocalTree,

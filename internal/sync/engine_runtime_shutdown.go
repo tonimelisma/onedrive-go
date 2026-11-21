@@ -122,7 +122,7 @@ func unrecordedResultsMessage(count int) string {
 func (flow *engineFlow) processShutdownCompletion(
 	ctx context.Context,
 	completion *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) error {
 	flow.beginStopDrain()
 	drain := flow.stop

@@ -67,7 +67,7 @@ func TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "fresh.txt"), []byte("fresh"), 0o600))
 
-	baseline := syncdomain.NewBaselineForTest(nil)
+	baseline := syncdomain.NewBaselineSnapshot(nil)
 	obs := NewLocalObserver(baseline, syncfixture.TestLogger(t), 1)
 	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
@@ -122,7 +122,7 @@ func TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet(t *testing.T) {
 	leftover := filepath.Join(root, leftoverName)
 	require.NoError(t, os.WriteFile(leftover, []byte("half-removed\n"), 0o600))
 
-	obs := NewLocalObserver(syncdomain.NewBaselineForTest(nil), syncfixture.TestLogger(t), 1)
+	obs := NewLocalObserver(syncdomain.NewBaselineSnapshot(nil), syncfixture.TestLogger(t), 1)
 	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 	tree := syncfixture.MustOpenSyncTree(t, root)
@@ -142,7 +142,7 @@ func TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet(t *testing.T) {
 func TestLocalObserver_AFullScanSendsItsFindingsWithItsRows(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncdomain.NewBaselineForTest(nil), syncfixture.TestLogger(t), 1)
+	obs := NewLocalObserver(syncdomain.NewBaselineSnapshot(nil), syncfixture.TestLogger(t), 1)
 	batches := make(chan LocalObservation, 1)
 	obs.SetLocalObservationBatchChannel(batches)
 	scan := ScanResult{

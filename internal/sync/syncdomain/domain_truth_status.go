@@ -145,7 +145,7 @@ func truthVerdictForIssueType(issueType IssueType) observationIssueTruthVerdict 
 		IssuePathTooLong,
 		IssueFileTooLarge,
 		IssueCaseCollision,
-		IssueHashPanic,
+		IssueHashError,
 		IssueLocalReadDenied,
 		IssueLocalUnsyncableReplacement,
 		IssueLocalMountBoundary,

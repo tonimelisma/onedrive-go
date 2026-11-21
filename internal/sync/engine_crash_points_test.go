@@ -414,8 +414,12 @@ func TestCrashRecovery_EveryCrashPointConverges(t *testing.T) {
 // recovered engine does not delete it again, re-upload it from the trash
 // or bring it back down; and both baseline rows are gone.
 //
+// It runs on the production store setting, synchronous=FULL, where every
+// other engine test skips the waits for the disk.
+//
 // Validates: R-6.5.2, R-6.4.9
 func TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry(t *testing.T) {
+	keepRealFsync(t)
 	t.Parallel()
 
 	for _, point := range []string{syncdomain.CrashPointLocalDeleteTrashed, syncdomain.CrashPointRemoteDeleteDone} {
@@ -424,6 +428,7 @@ func TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry(t *testing
 				t.Parallel()
 
 				capture, recovered := crashAndRecover(t, point, lostWAL)
+				require.Equal(t, sqliteSynchronousFull, storeSynchronous(t, recovered.eng.Engine), "the recovered store waits for the disk")
 				require.True(t, assertSyncInvariants(t, recovered), "state:%s", syncStateDump(t, recovered.eng))
 
 				local := harnessLocalTree(t, recovered.syncRoot)

@@ -16,7 +16,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
-func parentChecksFolderBaseline() *syncdomain.Baseline {
+func parentChecksFolderBaseline() syncdomain.BaselineView {
 	return syncfixture.BaselineWith(&syncdomain.BaselineEntry{
 		Path:     "folder",
 		ItemID:   "parent-id",
