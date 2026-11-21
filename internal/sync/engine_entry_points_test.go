@@ -148,7 +148,7 @@ func TestEngineStartup_LockedCatalogWarnsAndStarts(t *testing.T) {
 }
 
 // faultComparisonQuery is a fragment of the planner's comparison query alone.
-const faultComparisonQuery = "FROM comparison_state\nORDER BY path"
+const faultComparisonQuery = "FROM comparison_flags\nORDER BY path"
 
 // A planning-state load error reads the same in a one-shot pass, the watch's
 // bootstrap and a watch replan, keeps its cause, and names the failed query

@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -506,40 +505,17 @@ func TestKeepCurrentPlanBuild_LeavesDurableRuntimeStateUntouched(t *testing.T) {
 	assert.Equal(t, syncdomain.SKService(), blockScopes[0].Key)
 }
 
-// reconciliationQueryWithoutLocalUploadRule is the reconciliation query with
-// one rule of the decision table removed: a new local file no longer has a
-// reconciliation. It stands in for the gap the next change to the table could
-// leave, since no reachable state is unclassified today.
-func reconciliationQueryWithoutLocalUploadRule(t *testing.T) string {
-	t.Helper()
+// decideWithoutLocalUploadRule is the decision table with one rule removed:
+// a new local file no longer has a reconciliation. It stands in for the gap
+// the next change to the table could leave, since no reachable state is
+// unclassified today.
+func decideWithoutLocalUploadRule(s syncdomain.DecisionState) syncdomain.Decision {
+	decision := syncdomain.Decide(s)
+	if decision.Comparison == syncdomain.ComparisonLocalOnlyCreate && decision.Reconciliation == syncdomain.ReconcileUpload {
+		decision.Reconciliation = syncdomain.ReconcileUnclassified
+	}
 
-	require.Contains(t, syncstore.SqlQueryReconciliationState, localUploadRule)
-
-	return strings.Replace(syncstore.SqlQueryReconciliationState, localUploadRule, "", 1)
-}
-
-// localUploadRule is the decision table's rule for a new local file.
-const localUploadRule = "WHEN comparison_kind = 'local_only_create' AND item_type = 'file' THEN 'upload'"
-
-// Validates: R-6.2.16
-//
-// Until the Go decision table replaces the SQL one, every pass decides each
-// row with both and fails on a disagreement, naming the path and both
-// answers, and runs none of the plan. The SQL table here decides a new local
-// file is nothing to do; Go says upload.
-func TestRunOnce_GoAndSQLDecisionDisagreementFailsThePass(t *testing.T) {
-	t.Parallel()
-
-	eng, syncRoot, uploads := newUnclassifiedPlanTestEngine(t)
-	require.Contains(t, syncstore.SqlQueryReconciliationState, localUploadRule)
-	eng.reconciliationQueryOverride = strings.Replace(syncstore.SqlQueryReconciliationState, localUploadRule,
-		"WHEN comparison_kind = 'local_only_create' AND item_type = 'file' THEN 'noop'", 1)
-	syncfixture.WriteLocalFile(t, syncRoot, "new.txt", "local content")
-
-	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
-	require.ErrorIs(t, err, syncstore.ErrDecisionDisagreement)
-	require.ErrorContains(t, err, `"new.txt": SQL local_only_create/noop, Go local_only_create/upload`)
-	assert.Zero(t, uploads.Load())
+	return decision
 }
 
 func newUnclassifiedPlanTestEngine(t *testing.T) (*testEngine, string, *atomic.Int32) {
@@ -559,7 +535,7 @@ func newUnclassifiedPlanTestEngine(t *testing.T) (*testEngine, string, *atomic.I
 		},
 	}
 	eng, syncRoot := newTestEngine(t, mock)
-	eng.hooks.reconciliationQuery = reconciliationQueryWithoutLocalUploadRule(t)
+	eng.hooks.decideOverride = decideWithoutLocalUploadRule
 
 	return eng, syncRoot, &uploads
 }

@@ -663,8 +663,8 @@ This work is intentionally staged.
 ## Comparison SQL Micro-Benchmarks
 
 `BenchmarkComparisonQueries` (`internal/sync/syncstore/sqlite_compare_bench_test.go`)
-times `QueryComparisonState` plus `QueryReconciliationState`, the two queries
-every plan runs, over synced trees of 10k and 100k items in folders of 100:
+timed `QueryComparisonState` plus `QueryReconciliationState`, the two queries
+every plan ran until 2026-11-20 (below), over synced trees of 10k and 100k items in folders of 100:
 a quiet tree, a OneDrive rename of a folder holding half the items (the
 `followed_ancestor_deletes` shape) and the same rename made locally (the
 `local_move_candidates` / `followed_local_ancestor_deletes` shape). Measured
@@ -686,6 +686,33 @@ is cast back to TEXT, prefix joins are `path > p || '/' AND path < p || '0'`
 ranges, and the followed-ancestor sets are materialized once instead of
 re-evaluated per path. A rename now costs about a quiet pass; the quiet pass
 itself (about 11 s per query at 100k items) is the next target.
+
+Since 2026-11-20 the benchmark times `QueryPlannerRows`, what a plan reads:
+one query over the comparison chain, then the Go decision table
+(`syncdomain.Decide`) on every row. Before, the two SQL `CASE` expressions
+decided and the chain ran twice, once per query. Same host, one iteration
+each, both measured in the same session (the host also ran another branch's
+tests):
+
+| Items | Quiet | Remote rename | Local rename |
+| --- | --- | --- | --- |
+| 10k, two queries | 3.1 s | 1.6 s | 2.0 s |
+| 10k, one query and Go | 0.43 s | 0.63 s | 0.74 s |
+| 100k, two queries | 16.6 s | 16.8 s | 16.6 s |
+| 100k, one query and Go | 4.7 s | 6.7 s | 7.6 s |
+
+The change was to be reverted if the 100k plan read took longer than the
+23 s it took when it was proposed. Earlier the same day the two-query
+figures on this host were 15.5 s, 18.6 s and 38.4 s, so single runs vary
+widely with the load.
+
+`BenchmarkBaselineLookups` (`internal/sync/syncstore/baseline_cache_bench_test.go`)
+times a drive-scale pass of baseline lookups: by path and by item ID for each
+of 100k entries, one full iteration and a case-variant lookup per folder.
+Since 2026-11-20 the baseline view returns entries by value instead of the
+cache's pointers; the pass went from 63-66 ms to 84-103 ms (three runs each),
+the price of copying a 208-byte entry per lookup, against a plan read of
+several seconds.
 
 ## Planner Micro-Benchmarks
 
