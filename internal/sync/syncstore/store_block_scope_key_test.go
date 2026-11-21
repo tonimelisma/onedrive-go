@@ -74,6 +74,7 @@ func TestRetryWorkSchema_BlockedRowsReferenceTheirScopeRow(t *testing.T) {
 
 	rows, err := store.db.QueryContext(ctx, `SELECT "table", "from", "to" FROM pragma_foreign_key_list('retry_work')`)
 	require.NoError(t, err)
+	defer func() { assert.NoError(t, rows.Close()) }()
 	var keys []string
 	for rows.Next() {
 		var parent, from, to string
@@ -81,7 +82,6 @@ func TestRetryWorkSchema_BlockedRowsReferenceTheirScopeRow(t *testing.T) {
 		keys = append(keys, from+" -> "+parent+"."+to)
 	}
 	require.NoError(t, rows.Err())
-	require.NoError(t, rows.Close())
 	assert.Equal(t, []string{"blocked_scope_key -> block_scopes.scope_key"}, keys)
 }
 

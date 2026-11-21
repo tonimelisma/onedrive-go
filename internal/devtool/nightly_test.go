@@ -20,17 +20,18 @@ import (
 )
 
 const (
-	nightlyTestRunID   = 4242
-	nightlyTestRunHead = "aaaaaaaaaaaaaaaa"
-	nightlyTestRunURL  = "https://example.invalid/run"
-	nightlyTestOwner   = "fix/this-increment"
-	nightlyTestGit     = "git"
-	nightlyTestOther   = "fix/other-agent"
-	nightlyTestE2EJob  = "e2e"
-	nightlyTestE2ELog  = "1"
-	nightlyTestTest    = "TestE2E_Edge_RapidFileChurn"
-	nightlyTestKey     = "e2e." + nightlyTestTest
-	nightlyTestStale   = "TestOldStyle"
+	nightlyTestRunID     = 4242
+	nightlyTestRunHead   = "aaaaaaaaaaaaaaaa"
+	nightlyTestRunURL    = "https://example.invalid/run"
+	nightlyTestOwner     = "fix/this-increment"
+	nightlyTestGit       = "git"
+	nightlyTestMergeBase = "merge-base"
+	nightlyTestOther     = "fix/other-agent"
+	nightlyTestE2EJob    = "e2e"
+	nightlyTestE2ELog    = "1"
+	nightlyTestTest      = "TestE2E_Edge_RapidFileChurn"
+	nightlyTestKey       = "e2e." + nightlyTestTest
+	nightlyTestStale     = "TestOldStyle"
 )
 
 // nightlyTestJobIDs are the job ids of a scheduled run in the fixtures: one
@@ -326,7 +327,7 @@ func (r *claimRemote) claim(key string) (nightlyClaim, bool) {
 }
 
 func (r *claimRemote) Run(_ context.Context, _ string, _ []string, _, _ io.Writer, name string, args ...string) error {
-	if name == nightlyTestGit && len(args) == 4 && args[0] == "merge-base" {
+	if name == nightlyTestGit && len(args) == 4 && args[0] == nightlyTestMergeBase {
 		if r.ancestors[args[2]+".."+args[3]] {
 			return nil
 		}

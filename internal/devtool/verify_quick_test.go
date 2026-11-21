@@ -227,7 +227,7 @@ func changedPackagesRunner(t *testing.T, repoRoot string, changed string) *fakeR
 
 	return &fakeRunner{outputFunc: func(_ string, _ []string, name string, args ...string) ([]byte, error) {
 		switch {
-		case name == "git" && args[0] == "merge-base":
+		case name == nightlyTestGit && args[0] == nightlyTestMergeBase:
 			return []byte("base\n"), nil
 		case name == "git" && args[0] == "diff":
 			return []byte(changed), nil

@@ -197,13 +197,6 @@ const testE2EPackage = "github.com/tonimelisma/onedrive-go/e2e"
 // fakePassingTestName is the test the fake runner reports as run and passed.
 const fakePassingTestName = "TestFakeRunnerPasses"
 
-// goCommandName is the go command, as a runner is asked to start it, and
-// goTestSubcommand its first argument for a test run.
-const (
-	goCommandName    = "go"
-	goTestSubcommand = "test"
-)
-
 // passingGoTestOutput is what go test prints for these arguments when one test
 // of its target runs and passes: -json events, -v lines, or the package result
 // line alone. Any other go command prints nothing, as a build or a vet that
