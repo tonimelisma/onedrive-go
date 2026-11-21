@@ -14,7 +14,8 @@ import (
 // runWatchUntilQuiescent drives the bootstrap watch loop until all work due
 // now has drained through the shared runtime. Future-held retry/scope work may
 // remain unresolved in the graph, so bootstrap quiescence is engine-owned
-// rather than defined by graph emptiness.
+// rather than defined by graph emptiness. It ends in Ready when bootstrap
+// settled and in Stopped when a stop overtook it.
 func (rt *watchRuntime) runWatchUntilQuiescent(
 	ctx context.Context,
 	p *watchPipeline,
@@ -23,10 +24,12 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 	ticker := rt.deps.clock.NewTicker(quiescenceLogInterval)
 	defer syncdomain.StopTicker(ticker)
 
-	rt.enterBootstrap()
+	if err := rt.transition(watchEventBootstrapPlanned); err != nil {
+		return err
+	}
 	rt.replaceOutbox(initialOutbox)
 
-	return rt.runWatchLoop(ctx, p, syncdomain.TickerChan(ticker))
+	return rt.runLoopSteps(ctx, p, syncdomain.TickerChan(ticker), true)
 }
 
 // runWatchLoop owns steady-state watch execution. The same goroutine handles
@@ -35,25 +38,26 @@ func (rt *watchRuntime) runWatchUntilQuiescent(
 func (rt *watchRuntime) runWatchLoop(
 	ctx context.Context,
 	p *watchPipeline,
-	bootstrapLogC ...<-chan time.Time,
 ) error {
-	// Bootstrap and steady state share this loop but end for different
-	// reasons. Bootstrap finishes when work due now has quiesced; steady
-	// state may only finish by draining. A steady-state loop that reports
-	// completion in any other phase has stopped watching while its caller
-	// still believes the mount is live, which is silent data staleness
-	// rather than a clean shutdown, so it is reported instead of returning
-	// the nil that hides it.
-	isBootstrapLoop := len(bootstrapLogC) > 0
-	if !isBootstrapLoop {
-		rt.replaceOutbox(nil)
-	}
+	rt.replaceOutbox(nil)
 
-	var logC <-chan time.Time
-	if isBootstrapLoop {
-		logC = bootstrapLogC[0]
-	}
+	return rt.runLoopSteps(ctx, p, nil, false)
+}
 
+// runLoopSteps runs steps until one reports done. Bootstrap and steady state
+// share the loop but end for different reasons: bootstrap may end in Ready
+// (settled) or Stopped (drained); steady state only in Stopped. bootstrap
+// says which of the two this loop is. A loop that
+// reports completion in any other phase has stopped watching while its caller
+// still believes the mount is live, which is silent data staleness rather
+// than a clean shutdown, so it is reported instead of returning the nil that
+// hides it.
+func (rt *watchRuntime) runLoopSteps(
+	ctx context.Context,
+	p *watchPipeline,
+	logC <-chan time.Time,
+	bootstrap bool,
+) error {
 	for {
 		done, err := rt.runWatchLoopStep(ctx, p, logC)
 		if err != nil {
@@ -64,7 +68,7 @@ func (rt *watchRuntime) runWatchLoop(
 			return err
 		}
 		if done {
-			if phase := rt.phase(); !isBootstrapLoop && phase != watchRuntimePhaseDraining {
+			if phase := rt.phase(); phase != watchPhaseStopped && (!bootstrap || phase != watchPhaseReady) {
 				// Deliberately reports the context as a bool rather than
 				// wrapping ctx.Err(): wrapping would make this error satisfy
 				// isWatchShutdownError, and RunWatch would translate the very
@@ -116,15 +120,22 @@ func (rt *watchRuntime) runWatchLoopStep(
 	rt.beginWatchDrainIfCanceled(ctx, p)
 
 	switch rt.phase() {
-	case watchRuntimePhaseDraining:
+	case watchPhaseDraining:
 		return rt.runDrainStep(ctx, p)
-	case watchRuntimePhaseBootstrap:
+	case watchPhaseStopped:
+		return true, nil
+	case watchPhaseBootstrap:
 		return rt.runBootstrapLoopStep(ctx, p, logC)
-	case watchRuntimePhaseRunning:
+	case watchPhaseRunning:
 		return rt.runRunningLoopStep(ctx, p)
-	default:
-		return false, fmt.Errorf("sync: unknown watch runtime phase %q", rt.phase())
+	case watchPhaseReady:
+		// A settled bootstrap whose caller kept stepping: the bootstrap loop
+		// is over, and steady state begins only once observers start.
+		return true, nil
+	case watchPhaseStarting, watchPhaseCount:
 	}
+
+	return false, fmt.Errorf("sync: no watch loop step in phase %q", rt.phase())
 }
 
 func (rt *watchRuntime) beginWatchDrainIfCanceled(ctx context.Context, p *watchPipeline) {
@@ -146,8 +157,7 @@ func (rt *watchRuntime) runBootstrapLoopStep(
 	logC <-chan time.Time,
 ) (bool, error) {
 	if rt.isBootstrapQuiescent() {
-		rt.enterRunning()
-		return true, nil
+		return true, rt.transition(watchEventBootstrapSettled)
 	}
 
 	return rt.runNonDrainingWatchStep(ctx, p, logC)
@@ -226,6 +236,8 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	}
 
 	dispatchCh, next := rt.dispatchChannelForOutbox()
+	phase := rt.phase()
+	observe := watchInputOn(phase, watchInputObservations)
 
 	select {
 	case dispatchCh <- rt.outboxEntry(next):
@@ -238,13 +250,13 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 		return rt.handleWatchReplanSignal(ctx, p, batch, ok)
 	case completion, ok := <-p.completions:
 		return rt.handleWatchCompletionSignal(ctx, p, &completion, ok)
-	case batch, ok := <-rt.resources.localBatches:
+	case batch, ok := <-recvIf(observe, rt.resources.localBatches):
 		return rt.handleWatchLocalObservationBatchSignal(ctx, &batch, ok)
-	case event, ok := <-rt.resources.protectedRootEvents:
+	case event, ok := <-recvIf(observe, rt.resources.protectedRootEvents):
 		return rt.handleWatchProtectedRootEventSignal(ctx, &event, ok)
-	case batch, ok := <-rt.resources.remoteBatches:
+	case batch, ok := <-recvIf(observe, rt.resources.remoteBatches):
 		return rt.handleWatchRemoteBatchSignal(ctx, &batch, ok)
-	case <-rt.resources.refreshCh:
+	case <-recvIf(watchInputOn(phase, watchInputRefreshTick), rt.resources.refreshCh):
 		rt.runFullRemoteRefreshAsync(ctx, p.bl)
 		return false, nil
 	case result, ok := <-rt.resources.refreshResults:
@@ -252,7 +264,7 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	case <-p.maintenanceC:
 		rt.handleMaintenanceTick(ctx)
 		return false, nil
-	case observerErr, ok := <-rt.resources.observerErrs:
+	case observerErr, ok := <-recvIf(watchInputOn(phase, watchInputObserverErrs), rt.resources.observerErrs):
 		return rt.handleWatchObserverErrorSignal(ctx, p, observerErr, ok)
 	case <-rt.trialTimerChan():
 		return false, rt.handleWatchHeldReleaseSignal(ctx, p, true)
@@ -261,7 +273,7 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	case <-rt.admitTimerChan():
 		// A parked outbox entry is due; the next step dispatches it.
 		return false, nil
-	case <-logC:
+	case <-recvIf(watchInputOn(phase, watchInputBootstrapLog), logC):
 		rt.logBootstrapWait(ctx)
 		return false, nil
 	case <-ctx.Done():
@@ -406,7 +418,7 @@ func (rt *watchRuntime) handleWatchHeldReleaseSignal(
 	p *watchPipeline,
 	trial bool,
 ) error {
-	if rt.phase() == watchRuntimePhaseBootstrap {
+	if rt.phase() == watchPhaseBootstrap {
 		return rt.releaseHeldFrontier(ctx, p, trial)
 	}
 

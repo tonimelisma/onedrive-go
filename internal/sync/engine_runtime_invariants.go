@@ -139,7 +139,7 @@ func (flow *engineFlow) assertWatchRuntimeInvariants() error {
 		}
 	}
 
-	if flow.inspect.phase() == watchRuntimePhaseDraining {
+	if flow.inspect.isDraining() {
 		if flow.inspect.hasRetryTimer() {
 			return fmt.Errorf("draining runtime still has retry timer armed")
 		}

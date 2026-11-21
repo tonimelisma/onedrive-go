@@ -12,7 +12,7 @@ import (
 )
 
 type watchLoopState struct {
-	phase                         watchRuntimePhase
+	phase                         watchPhase
 	outbox                        []*syncdomain.TrackedAction
 	pendingReplan                 syncobserve.DirtyBatch
 	hasPendingReplan              bool
@@ -155,19 +155,11 @@ type watchRuntime struct {
 	timers    watchTimerState
 }
 
-type watchRuntimePhase string
-
-const (
-	watchRuntimePhaseBootstrap watchRuntimePhase = "bootstrap"
-	watchRuntimePhaseRunning   watchRuntimePhase = "running"
-	watchRuntimePhaseDraining  watchRuntimePhase = "draining"
-)
-
 func newWatchRuntime(engine *Engine) *watchRuntime {
 	rt := &watchRuntime{
 		engineFlow: newEngineFlow(engine.flowInputs()),
 		loop: watchLoopState{
-			phase:             watchRuntimePhaseRunning,
+			phase:             watchPhaseStarting,
 			lastRemoteBlocked: make(map[syncdomain.ScopeKey]string),
 		},
 		timers: watchTimerState{
@@ -191,22 +183,20 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 	return rt
 }
 
-func (rt *watchRuntime) phase() watchRuntimePhase {
+func (rt *watchRuntime) phase() watchPhase {
 	return rt.loop.phase
 }
 
+// isDraining reports whether admission is sealed: the drain is running or
+// has ended.
 func (rt *watchRuntime) isDraining() bool {
-	return rt.phase() == watchRuntimePhaseDraining
+	phase := rt.phase()
+	return phase == watchPhaseDraining || phase == watchPhaseStopped
 }
 
-func (rt *watchRuntime) enterBootstrap() {
-	rt.loop.phase = watchRuntimePhaseBootstrap
-}
-
-func (rt *watchRuntime) enterRunning() {
-	rt.loop.phase = watchRuntimePhaseRunning
-}
-
+// beginObserverBackedRunning moves a settled bootstrap to running. During a
+// drain it refuses with errWatchObserversDuringDrain, which RunWatch reads as
+// the stop it asked for.
 func (rt *watchRuntime) beginObserverBackedRunning() error {
 	if rt.isDraining() {
 		return errWatchObserversDuringDrain
@@ -214,16 +204,18 @@ func (rt *watchRuntime) beginObserverBackedRunning() error {
 	if rt.resources.activeObservers != 0 {
 		return fmt.Errorf("sync: start watch observers while %d observers are already active", rt.resources.activeObservers)
 	}
-	rt.enterRunning()
-	return nil
+
+	return rt.transition(watchEventObserversStarted)
 }
 
+// enterDraining seals admission, reporting whether this call began the drain.
 func (rt *watchRuntime) enterDraining() bool {
-	if rt.loop.phase == watchRuntimePhaseDraining {
+	if rt.isDraining() {
 		return false
 	}
 
-	rt.loop.phase = watchRuntimePhaseDraining
+	// Every phase but the two draining ones moves to draining on this event.
+	_ = rt.transition(watchEventShutdownRequested)
 
 	return true
 }

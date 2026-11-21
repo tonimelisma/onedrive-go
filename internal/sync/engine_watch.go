@@ -99,6 +99,11 @@ func (e *Engine) runWatch(ctx context.Context, rt *watchRuntime, mode syncdomain
 
 		return fmt.Errorf("sync: initial sync: %w", err)
 	}
+	if rt.isDraining() {
+		// A stop overtook bootstrap: it drained, so the watch is over and
+		// no observer starts.
+		return nil
+	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
 	if err := rt.engine.protectedRoots.refresh(ctx); err != nil {
@@ -303,6 +308,10 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode syncdomain.SyncM
 	if err := rt.runWatchUntilQuiescent(ctx, pipe, initialOutbox); err != nil {
 		return fmt.Errorf("finishing transfers: %w", err)
 	}
+	if rt.isDraining() {
+		// Bootstrap ended by draining, not by settling: nothing to arm.
+		return nil
+	}
 
 	return rt.finishBootstrapAfterActions(ctx)
 }
@@ -312,6 +321,9 @@ func (rt *watchRuntime) finishBootstrapWithoutActions(
 	pendingRemoteObservation *syncobserve.RemoteObservationBatch,
 ) error {
 	if _, err := rt.commitPendingRemoteObservation(ctx, pendingRemoteObservation); err != nil {
+		return err
+	}
+	if err := rt.transition(watchEventBootstrapSettled); err != nil {
 		return err
 	}
 	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventBootstrapQuiesced})

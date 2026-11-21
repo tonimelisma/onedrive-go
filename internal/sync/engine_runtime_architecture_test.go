@@ -48,7 +48,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
-				rt.enterBootstrap()
+				setWatchPhase(rt, watchPhaseBootstrap)
 				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
@@ -239,7 +239,7 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
-				rt.enterBootstrap()
+				setWatchPhase(rt, watchPhaseBootstrap)
 				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",

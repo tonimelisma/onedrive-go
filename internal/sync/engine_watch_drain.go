@@ -24,7 +24,6 @@ func (rt *watchRuntime) beginWatchDrain(
 	}
 
 	rt.completeDrainOutbox()
-	rt.disableDrainInputs(p)
 	rt.refreshDrainCompletionSources()
 	rt.mustAssertInvariants(ctx, "begin watch drain")
 }
@@ -45,20 +44,14 @@ func (rt *watchRuntime) completeDrainOutbox() {
 	rt.replaceOutbox(nil)
 }
 
-func (rt *watchRuntime) disableDrainInputs(p *watchPipeline) {
-	p.replanReady = nil
-	rt.resources.localBatches = nil
-	rt.resources.remoteBatches = nil
-	p.maintenanceC = nil
-}
-
 func (rt *watchRuntime) refreshDrainCompletionSources() {
 	if rt.resources.activeObservers == 0 {
 		rt.resources.observerErrs = nil
 	}
 }
 
-// runDrainStep runs one step of the drain. When the drain is over, because
+// runDrainStep runs one step of the drain; a drain that is over moves the
+// phase to Stopped. When the drain is over, because
 // its sources ran dry or a step failed, the stop's bound ends: what the bound
 // cut short is said once, and its store failure is the watch's error unless a
 // step failed first (endStopDrain).
@@ -69,6 +62,14 @@ func (rt *watchRuntime) runDrainStep(
 	done, err := rt.takeDrainStep(ctx, p)
 	if !done && err == nil {
 		return false, nil
+	}
+
+	if done {
+		// Draining is the only phase the drain step runs in, and drained is
+		// the one event it leaves on.
+		if transitionErr := rt.transition(watchEventDrained); transitionErr != nil && err == nil {
+			err = transitionErr
+		}
 	}
 
 	drainErr := rt.endStopDrain()
