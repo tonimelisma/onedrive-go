@@ -1,25 +1,18 @@
 package syncdomain
 
-import (
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
-)
-
 // BaselineView is the read-only face of the baseline: the confirmed synced
 // state of every path. It is all that code outside the store holds. Lookups
 // return entries by value, so no holder can change what another one reads;
 // the store alone writes the baseline, in SQLite and in its cache together.
 //
-// Three indexes answer it: by path (primary), by item ID (move detection) and
-// by (directory, namespace key) for case collision detection.
+// Two indexes answer it: by path (primary) and by item ID (move detection).
+// Case collisions are judged against the names on disk, never the baseline
+// (syncobserve.DirNames).
 type BaselineView interface {
 	// GetByPath returns the entry at the given stored path.
 	GetByPath(path string) (BaselineEntry, bool)
 	// GetByID returns the entry of the given item ID.
 	GetByID(itemID string) (BaselineEntry, bool)
-	// GetCaseVariants returns every entry in dir whose name OneDrive treats
-	// as the same name as name (namekey: case, Unicode form, ignored emoji).
-	// The caller filters out the exact path (same spelling is no collision).
-	GetCaseVariants(dir, name string) []BaselineEntry
 	// Len returns the number of entries.
 	Len() int
 	// ForEachPath calls fn for every entry, in no particular order. fn must
@@ -34,25 +27,21 @@ type BaselineView interface {
 // literal entries. Safe for concurrent use without a lock, since nothing
 // writes it after NewBaselineSnapshot.
 type BaselineSnapshot struct {
-	byPath       map[string]*BaselineEntry
-	byID         map[string]*BaselineEntry
-	byDirNameKey map[DirNameKey][]*BaselineEntry
+	byPath map[string]*BaselineEntry
+	byID   map[string]*BaselineEntry
 }
 
 // NewBaselineSnapshot indexes copies of entries; a later change to an entry
 // the caller passed does not reach the snapshot.
 func NewBaselineSnapshot(entries []*BaselineEntry) *BaselineSnapshot {
 	snapshot := &BaselineSnapshot{
-		byPath:       make(map[string]*BaselineEntry, len(entries)),
-		byID:         make(map[string]*BaselineEntry, len(entries)),
-		byDirNameKey: make(map[DirNameKey][]*BaselineEntry, len(entries)),
+		byPath: make(map[string]*BaselineEntry, len(entries)),
+		byID:   make(map[string]*BaselineEntry, len(entries)),
 	}
 	for _, entry := range entries {
 		owned := *entry
 		snapshot.byPath[owned.Path] = &owned
 		snapshot.byID[owned.ItemID] = &owned
-		dnk := DirNameKeyFromPath(owned.Path)
-		snapshot.byDirNameKey[dnk] = append(snapshot.byDirNameKey[dnk], &owned)
 	}
 
 	return snapshot
@@ -76,11 +65,6 @@ func (b *BaselineSnapshot) GetByID(itemID string) (BaselineEntry, bool) {
 	}
 
 	return *entry, true
-}
-
-// GetCaseVariants implements BaselineView.
-func (b *BaselineSnapshot) GetCaseVariants(dir, name string) []BaselineEntry {
-	return CopyBaselineEntries(b.byDirNameKey[DirNameKey{Dir: dir, NameKey: namekey.Of(name)}])
 }
 
 // Len implements BaselineView.

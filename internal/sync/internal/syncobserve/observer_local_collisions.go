@@ -12,13 +12,13 @@
 // Related files:
 //   - observer_local_handlers.go: event handlers that call these methods
 //   - scanner.go:                 FullScan's DetectCaseCollisions (authoritative)
+//   - dir_names.go:               DirNames, the one collision rule both use
 
 package syncobserve
 
 import (
 	"os"
 	"path/filepath"
-	"slices"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
@@ -74,35 +74,26 @@ func (o *LocalObserver) onDiskSiblingName(tree *synctree.Root, dirPath, name str
 		cache = o.DirNameCache[dirPath]
 	}
 
-	match := ""
-	for _, existing := range cache[namekey.Of(name)] {
-		if existing == name {
-			return name
-		}
-		if namekey.Stored(existing) == name {
-			if match != "" {
-				return name
-			}
-			match = existing
-		}
-	}
-	if match == "" {
+	spellings := cache.spellings(name)
+	match := namekey.FindStored(spellings, name, func(spelling *string) string { return *spelling })
+	if !match.Found() {
 		return name
 	}
 
-	return match
+	return spellings[match.Index]
 }
 
-// HasCaseCollisionCached checks if name collides with an existing sibling
-// using a per-directory name cache (filesystem) and the baseline (synced
-// files). A cache miss lists the directory through the sync tree, so it sees
-// the filesystem every other sync-tree operation sees (D-094); without a tree
-// (a caller outside the engine) it lists the path directly. The dbDir
-// parameter is the db-relative directory path used for baseline cross-check.
-// Single-goroutine (watchLoop) access — no mutex needed.
-func (o *LocalObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, name, dbDir string) (string, bool) {
+// HasCaseCollisionCached checks whether name (its stored form) collides with
+// a sibling on disk, using the per-directory name cache. A cache miss lists
+// the directory through the sync tree, so it sees the filesystem every other
+// sync-tree operation sees (D-094); without a tree (a caller outside the
+// engine) it lists the path directly. The rule is the full scan's
+// (DetectCaseCollisions, DirNames.rivals): only on-disk rivals count, so a
+// synced name that is gone from disk (the old name of a case-only rename)
+// is not one. Single-goroutine (watchLoop) access — no mutex needed.
+func (o *LocalObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, name string) (string, bool) {
 	if o.DirNameCache == nil {
-		o.DirNameCache = make(map[string]map[namekey.Key][]string)
+		o.DirNameCache = make(map[string]DirNames)
 	}
 
 	cache, ok := o.DirNameCache[dirPath]
@@ -112,51 +103,16 @@ func (o *LocalObserver) HasCaseCollisionCached(tree *synctree.Root, dirPath, nam
 			return "", false
 		}
 
-		cache = make(map[namekey.Key][]string, len(entries))
-
-		for _, e := range entries {
-			key := namekey.Of(e.Name())
-			cache[key] = append(cache[key], e.Name())
-		}
-
+		cache = dirNamesOf(entries)
 		o.DirNameCache[dirPath] = cache
 	}
 
-	// Cached names are on-disk spellings, which may be NFD; name is NFC. A
-	// differently spelled sibling under the same namespace key is a
-	// collision, and so is a second on-disk spelling of name itself (an NFC
-	// and an NFD twin, one name on OneDrive).
-	sameSpellings := 0
-	for _, existing := range cache[namekey.Of(name)] {
-		if namekey.Stored(existing) != name {
-			return existing, true
-		}
-		sameSpellings++
-		if sameSpellings > 1 {
-			return existing, true
-		}
+	others, sameForm := cache.rivals(name)
+	if len(others) > 0 {
+		return others[0], true
 	}
-
-	// Cross-check baseline for files that exist remotely but not locally.
-	// A file synced to OneDrive but unchanged on disk produces no event
-	// and may not appear in the filesystem cache (e.g., remote-only items).
-	variants := o.baseline.GetCaseVariants(dbDir, name)
-	for i := range variants {
-		v := &variants[i]
-		baseName := filepath.Base(v.Path)
-		if baseName == name {
-			continue // same casing — not a collision
-		}
-
-		// Skip variants that were recently deleted locally. The baseline
-		// hasn't been updated yet (async worker), but the deletion event
-		// is already in the pipeline. Without this guard, case-only
-		// renames (File.txt → file.txt) would false-positive.
-		if _, recentlyDeleted := o.RecentLocalDeletes[v.Path]; recentlyDeleted {
-			continue
-		}
-
-		return baseName, true
+	if sameForm {
+		return name, true
 	}
 
 	return "", false
@@ -187,35 +143,14 @@ func (o *LocalObserver) updateDirNameCache(dirPath, name string) {
 		return // not cached yet — will be populated lazily on next check
 	}
 
-	key := namekey.Of(name)
-	if slices.ContainsFunc(cache[key], func(existing string) bool { return namekey.Stored(existing) == namekey.Stored(name) }) {
-		return // already present, possibly in its on-disk spelling
-	}
-
-	cache[key] = append(cache[key], name)
+	cache.addUnlessStored(name)
 }
 
 // removeDirNameCache removes a name from the cache for the given directory.
 // Called after processing a Delete event.
 func (o *LocalObserver) removeDirNameCache(dirPath, name string) {
-	cache, ok := o.DirNameCache[dirPath]
-	if !ok {
-		return
-	}
-
-	key := namekey.Of(name)
-	names := cache[key]
-
-	for i, n := range names {
-		if namekey.Stored(n) == namekey.Stored(name) {
-			cache[key] = append(names[:i], names[i+1:]...)
-
-			if len(cache[key]) == 0 {
-				delete(cache, key)
-			}
-
-			break
-		}
+	if cache, ok := o.DirNameCache[dirPath]; ok {
+		cache.remove(name)
 	}
 }
 
@@ -224,17 +159,10 @@ func (o *LocalObserver) removeDirNameCache(dirPath, name string) {
 // to avoid a redundant filesystem read in HasCaseCollisionCached.
 func (o *LocalObserver) populateDirNameCache(dirPath string, entries []os.DirEntry) {
 	if o.DirNameCache == nil {
-		o.DirNameCache = make(map[string]map[namekey.Key][]string)
+		o.DirNameCache = make(map[string]DirNames)
 	}
 
-	cache := make(map[namekey.Key][]string, len(entries))
-
-	for _, e := range entries {
-		key := namekey.Of(e.Name())
-		cache[key] = append(cache[key], e.Name())
-	}
-
-	o.DirNameCache[dirPath] = cache
+	o.DirNameCache[dirPath] = dirNamesOf(entries)
 }
 
 // AddCollisionPeer records a bidirectional collision relationship between

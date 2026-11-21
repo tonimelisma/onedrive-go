@@ -28,7 +28,6 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -100,14 +99,7 @@ type localWatchState struct {
 	// dirNameCache caches namespace key→original name mappings per directory
 	// for O(1) collision lookups. Built lazily on first check; invalidated
 	// by Create/Delete events. Single-goroutine access (watchLoop) — no mutex.
-	DirNameCache map[string]map[namekey.Key][]string // dirPath → name key → []originalNames
-
-	// recentLocalDeletes tracks dbRelPaths of files deleted locally in the
-	// current watch session. Used to suppress false-positive baseline
-	// collisions during case-only renames: the Delete event removes the
-	// old name but baseline isn't updated until the action executes (async).
-	// Cleared on safety scan. Single-goroutine access (watchLoop).
-	RecentLocalDeletes map[string]struct{}
+	DirNameCache map[string]DirNames // dirPath → its names on disk
 
 	// collisionPeers tracks N-way collision relationships detected in watch
 	// mode. When a collider is deleted, all surviving peers are re-emitted
@@ -160,8 +152,7 @@ func newLocalWatchState() localWatchState {
 	return localWatchState{
 		PendingTimers:        make(map[string]syncdomain.SyncTimer),
 		HashRequests:         make(chan HashRequest, HashRequestBufSize),
-		DirNameCache:         make(map[string]map[namekey.Key][]string),
-		RecentLocalDeletes:   make(map[string]struct{}),
+		DirNameCache:         make(map[string]DirNames),
 		CollisionPeers:       make(map[string]map[string]struct{}),
 		excludedSymlinkPaths: make(map[string]struct{}),
 		recoveryScanRequests: make(chan struct{}, 1),
@@ -488,6 +479,9 @@ type LocalObserver struct {
 	// paths that are unavailable rather than absent (scanner_unavailable.go).
 	// Set and cleared by FullScan; nil outside a scan.
 	scanAvailability *scanAvailability
+	// scanNames collects the on-disk names a full scan accepts, for its
+	// collision phase; nil outside a FullScan.
+	scanNames ScanNames
 	// watchIdentityLookup caches the identity index the watch handlers use
 	// to recognize a synced item renamed to a skipped name; rebuilt every
 	// watchIdentityIndexMaxAge. Touched only by the goroutine running Watch.

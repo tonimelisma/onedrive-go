@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
@@ -18,8 +17,7 @@ type watchObserverTestOptions struct {
 	Baseline              syncdomain.BaselineView
 	WriteCoalesceCooldown time.Duration
 	CollisionPeers        map[string]map[string]struct{}
-	DirNameCache          map[string]map[namekey.Key][]string
-	RecentLocalDeletes    map[string]struct{}
+	DirNameCache          map[string]DirNames
 	HashFunc              func(ctx context.Context, path string) (string, error)
 	AfterFunc             func(time.Duration, func()) syncdomain.SyncTimer
 	AfterSafetyScan       func()
@@ -59,9 +57,6 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 	}
 	if opts.DirNameCache != nil {
 		obs.DirNameCache = opts.DirNameCache
-	}
-	if opts.RecentLocalDeletes != nil {
-		obs.RecentLocalDeletes = opts.RecentLocalDeletes
 	}
 	if opts.HashFunc != nil {
 		obs.hooks.HashFile = opts.HashFunc

@@ -409,7 +409,7 @@ func stressSyncExecShutdownAndCancellationMembers() []string {
 // These tests are in internal/sync/syncstore.
 func stressSyncStoreShutdownAndCancellationMembers() []string {
 	return []string{
-		"TestBaselineCache_GetCaseVariantsCopyIsSafeAgainstConcurrentPut",
+		"TestBaselineCache_GetByPathCopyIsSafeAgainstConcurrentPut",
 		"TestBaseline_ConcurrentAccess",
 		"TestCheckCacheConsistency_IsSafeAgainstConcurrentMutation",
 		"TestCheckStoreIntegrity_CanceledCheckIsNotDamage",

@@ -72,7 +72,7 @@ func TestHasCaseCollisionCached_Detected(t *testing.T) {
 	// On case-insensitive FS (macOS), creating "File.txt" means "file.txt"
 	// refers to the same inode, so os.ReadDir returns "File.txt" and the
 	// exact-match check fails → no collision detected. Correct on both.
-	collidingName, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "file.txt", ".")
+	collidingName, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "file.txt")
 	if found {
 		assert.Equal(t, "File.txt", collidingName,
 			"should return the name of the existing colliding file")
@@ -90,7 +90,7 @@ func TestHasCaseCollisionCached_NoCollision(t *testing.T) {
 		baseline: syncfixture.EmptyBaseline(),
 	}
 
-	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "newfile.txt", ".")
+	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "newfile.txt")
 	assert.False(t, found, "unrelated files should not trigger collision")
 }
 
@@ -105,7 +105,7 @@ func TestHasCaseCollisionCached_ExactMatch_NotCollision(t *testing.T) {
 		baseline: syncfixture.EmptyBaseline(),
 	}
 
-	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "same.txt", ".")
+	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "same.txt")
 	assert.False(t, found, "exact name match should not be a collision")
 }
 
@@ -118,7 +118,7 @@ func TestHasCaseCollisionCached_UnreadableDir_FailOpen(t *testing.T) {
 	}
 
 	// Non-existent directory → ReadDir fails → returns false (fail-open).
-	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, "/nonexistent/path"), "/nonexistent/path", "anything.txt", ".")
+	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, "/nonexistent/path"), "/nonexistent/path", "anything.txt")
 	assert.False(t, found, "unreadable directory should fail open")
 }
 
@@ -132,7 +132,7 @@ func TestHasCaseCollisionCached_EmptyDir(t *testing.T) {
 		baseline: syncfixture.EmptyBaseline(),
 	}
 
-	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "anything.txt", ".")
+	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "anything.txt")
 	assert.False(t, found, "empty directory should have no collisions")
 }
 
@@ -140,22 +140,21 @@ func TestHasCaseCollisionCached_EmptyDir(t *testing.T) {
 // Baseline cross-check in hasCaseCollisionCached (R-2.12.2)
 // ---------------------------------------------------------------------------
 
-// Validates: R-2.12.2
-// Baseline entry with different casing triggers collision.
-func TestHasCaseCollisionCached_BaselineCollision(t *testing.T) {
+// Validates: R-2.12.1, R-2.12.2
+// A synced name that is gone from disk is the old name of a case-only rename
+// (or a delete), not a rival: the watch judges only names on disk, like the
+// full scan, so the new spelling is not held back.
+func TestHashAndEmit_BaselineVariantNotOnDiskIsNotACollision(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	syncfixture.WriteTestFile(t, dir, "report.txt", "renamed")
 
-	// Baseline has "File.txt" — no file on disk.
-	bl := syncfixture.BaselineWith(&syncdomain.BaselineEntry{Path: "File.txt"})
-	obs := &LocalObserver{
-		baseline: bl,
-	}
+	bl := syncfixture.BaselineWith(&syncdomain.BaselineEntry{Path: "Report.txt"})
+	obs := &LocalObserver{baseline: bl}
 
-	collidingName, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "file.txt", ".")
-	assert.True(t, found, "should detect baseline collision")
-	assert.Equal(t, "File.txt", collidingName)
+	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "report.txt")
+	assert.False(t, found, "a synced spelling that is no longer on disk is no collision")
 }
 
 // Validates: R-2.12.2
@@ -170,27 +169,8 @@ func TestHasCaseCollisionCached_BaselineExactMatch(t *testing.T) {
 		baseline: bl,
 	}
 
-	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "File.txt", ".")
+	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "File.txt")
 	assert.False(t, found, "same casing in baseline should not be a collision")
-}
-
-// Validates: R-2.12.2
-// Baseline collision is suppressed for recently deleted paths.
-func TestHasCaseCollisionCached_BaselineSkipsRecentDelete(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-
-	bl := syncfixture.BaselineWith(&syncdomain.BaselineEntry{Path: "File.txt"})
-	obs := &LocalObserver{
-		baseline: bl,
-		localWatchState: localWatchState{
-			RecentLocalDeletes: map[string]struct{}{"File.txt": {}},
-		},
-	}
-
-	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "file.txt", ".")
-	assert.False(t, found, "recently deleted baseline entry should not trigger collision")
 }
 
 // ---------------------------------------------------------------------------
@@ -537,7 +517,7 @@ func TestWatch_SafetyScan_ClearsPeers(t *testing.T) {
 	mockWatcher := newMockFsWatcher()
 	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
 		CollisionPeers: make(map[string]map[string]struct{}),
-		DirNameCache:   make(map[string]map[namekey.Key][]string),
+		DirNameCache:   make(map[string]DirNames),
 		TickCh:         safetyTickCh,
 		AfterSafetyScan: func() {
 			select {
@@ -583,7 +563,7 @@ func TestHasCaseCollisionCached_NFDOnDiskNameDoesNotCollideWithItself(t *testing
 
 	obs := &LocalObserver{baseline: syncfixture.EmptyBaseline()}
 
-	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "café.txt", ".")
+	_, found := obs.HasCaseCollisionCached(syncfixture.MustOpenSyncTree(t, dir), dir, "café.txt")
 	assert.False(t, found)
 }
 
@@ -599,11 +579,11 @@ func TestHasCaseCollisionCached_FullCaseFoldingAndEmojiCollide(t *testing.T) {
 	obs := &LocalObserver{baseline: syncfixture.EmptyBaseline()}
 	tree := syncfixture.MustOpenSyncTree(t, dir)
 
-	colliding, found := obs.HasCaseCollisionCached(tree, dir, "STRASSE.txt", ".")
+	colliding, found := obs.HasCaseCollisionCached(tree, dir, "STRASSE.txt")
 	assert.True(t, found)
 	assert.Equal(t, "straße.txt", colliding)
 
-	colliding, found = obs.HasCaseCollisionCached(tree, dir, "a.txt", ".")
+	colliding, found = obs.HasCaseCollisionCached(tree, dir, "a.txt")
 	assert.True(t, found)
 	assert.Equal(t, "a\U0001F600.txt", colliding)
 }

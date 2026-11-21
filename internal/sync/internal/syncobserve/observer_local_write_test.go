@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
@@ -430,7 +429,7 @@ func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
 			CollisionPeers: make(map[string]map[string]struct{}),
 			// A differently cased sibling in the name cache simulates a
 			// collision without requiring a case-sensitive FS.
-			DirNameCache: map[string]map[namekey.Key][]string{
+			DirNameCache: map[string]DirNames{
 				dir: {
 					"existing.txt": {"existing.txt", "Existing.txt"},
 				},

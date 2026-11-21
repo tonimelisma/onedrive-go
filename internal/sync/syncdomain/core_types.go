@@ -92,29 +92,12 @@ type BaselineEntry struct {
 	ETag             string
 }
 
-// DirNameKey groups baseline entries by (directory, OneDrive namespace key of
-// the name) for O(1) sibling lookups under OneDrive's name equivalence. Used
-// by DetectCaseCollisions to find collisions between new files and
-// already-synced baseline entries.
-type DirNameKey struct {
-	Dir     string
-	NameKey namekey.Key
-}
-
 // StoredPathOf turns a path relative to the sync tree, as spelled on disk
 // with the host's separator, into the form sync stores paths in:
 // slash-separated, in stored form (namekey.StoredPath, R-2.13.1). It is the
 // one place that conversion is written.
 func StoredPathOf(rel string) string {
 	return namekey.StoredPath(filepath.ToSlash(rel))
-}
-
-// DirNameKeyFromPath computes the namespace grouping key for a path.
-func DirNameKeyFromPath(path string) DirNameKey {
-	return DirNameKey{
-		Dir:     filepath.Dir(path),
-		NameKey: namekey.Of(filepath.Base(path)),
-	}
 }
 
 // RemoteState captures the current state of a path as observed from
