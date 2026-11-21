@@ -38,7 +38,7 @@ func newBootstrapWatchPipelineForTest(
 	bl, err := rt.runStartupStage(ctx)
 	require.NoError(t, err)
 
-	pool := syncexec.NewWorkerPool(eng.execCfg, rt.sched.dispatchCh, eng.baseline, eng.logger, 1024)
+	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{Config: eng.execCfg, Dispatch: rt.sched.dispatchCh, Store: eng.baseline, Logger: eng.logger, CompletionBuffer: 1024})
 	pool.Start(ctx, workers)
 	t.Cleanup(pool.Stop)
 
@@ -77,7 +77,7 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 	eng, syncRoot := newTestEngine(t, mock)
 	syncfixture.WriteLocalFile(t, syncRoot, "local.txt", "bootstrap upload")
 	recorder := attachDebugEventRecorder(eng)
-	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.hooks.observe.WatcherFactory = func() (syncobserve.FsWatcher, error) {
 		return syncfixture.NewEnospcWatcher(1 << 20), nil
 	}
 

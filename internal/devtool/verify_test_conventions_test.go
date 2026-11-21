@@ -127,6 +127,54 @@ func TestRunTestConventionsRefusesAProductionImportOfATestHelperPackage(t *testi
 	assert.NotContains(t, err.Error(), "syncfixture/store.go", "a test-helper package may import another")
 }
 
+// Validates: R-6.10.29
+//
+// A hooks value's zero value is production behavior, so production code may
+// pass one through, build an empty one and read its fields, but setting a
+// field is refused there; a test file may do all of it.
+func TestRunTestConventionsRefusesAProductionFileThatSetsAHook(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	require.NoError(t, writeFile(
+		filepath.Join(repoRoot, "internal", "sync", "engine.go"),
+		[]byte(`package sync
+
+import "example/syncexec"
+
+type engineHooks struct{ serialize bool; observe struct{ watcher bool } }
+
+type Engine struct{ hooks engineHooks }
+
+type engineInputs struct{ hooks engineHooks }
+
+func newEngine(in engineInputs) *Engine {
+	e := &Engine{hooks: in.hooks}
+	_ = syncexec.NewConfig(syncexec.Hooks{})
+	_ = syncexec.NewConfig(syncexec.Hooks{CrashAt: nil})
+	e.hooks.serialize = true
+	e.hooks.observe.watcher = true
+	_ = engineHooks{serialize: e.hooks.serialize}
+	return e
+}
+`),
+	))
+	require.NoError(t, writeFile(
+		filepath.Join(repoRoot, "internal", "sync", "engine_test.go"),
+		[]byte("package sync\n\nfunc serialized(e *Engine) { e.hooks.serialize = true; _ = engineHooks{serialize: true} }\n"),
+	))
+
+	err := runTestConventions(context.Background(), &fakeRunner{}, repoRoot, nil, &bytes.Buffer{}, &bytes.Buffer{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal/sync/engine.go:14: Hooks is a hooks type")
+	assert.Contains(t, err.Error(), "internal/sync/engine.go:15: hooks.serialize is a test seam")
+	assert.Contains(t, err.Error(), "internal/sync/engine.go:16: hooks.observe.watcher is a test seam")
+	assert.Contains(t, err.Error(), "internal/sync/engine.go:17: engineHooks is a hooks type")
+	assert.NotContains(t, err.Error(), "engine.go:12:", "passing a hooks value through is allowed")
+	assert.NotContains(t, err.Error(), "engine.go:13:", "an empty hooks value is production's")
+	assert.NotContains(t, err.Error(), "engine_test.go", "a test may set a hook")
+}
+
 // Validates: R-6.10.26
 //
 // The rule follows the constraint, not the word: a tag on either side of an

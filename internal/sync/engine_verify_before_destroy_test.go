@@ -73,10 +73,9 @@ func TestRunOnce_RemoteFolderDeleteWithIgnoredLocalFileConverges(t *testing.T) {
 	remote.addFolder("item-x", "root", "X")
 	remote.addFile(t, "item-a", "item-x", "a.txt", "a\n")
 
-	eng, syncRoot := newTestEngine(t, remote.client(t))
-	filter := syncdomain.ContentFilterConfig{IgnoreDotfiles: true}
-	eng.contentFilter = filter
-	eng.execCfg.SetContentFilter(filter)
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), remote.client(t), t.TempDir(), func(in *engineInputs) {
+		in.ContentFilter = syncdomain.ContentFilterConfig{IgnoreDotfiles: true}
+	})
 	runScenarioPass(t, eng)
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "X", ".env"), []byte("local only\n"), 0o600))
 
@@ -115,10 +114,9 @@ func TestRunOnce_FolderRecreatedWhereAKeptFolderWasIsCreatedOnline(t *testing.T)
 	remote.addFolder("item-x", "root", "X")
 	remote.addFile(t, "item-a", "item-x", "a.txt", "a\n")
 
-	eng, syncRoot := newTestEngine(t, remote.client(t))
-	filter := syncdomain.ContentFilterConfig{IgnoreDotfiles: true}
-	eng.contentFilter = filter
-	eng.execCfg.SetContentFilter(filter)
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), remote.client(t), t.TempDir(), func(in *engineInputs) {
+		in.ContentFilter = syncdomain.ContentFilterConfig{IgnoreDotfiles: true}
+	})
 	runScenarioPass(t, eng)
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "X", ".env"), []byte("local only\n"), 0o600))
 	remote.deleteRemotely("item-x")
@@ -177,7 +175,7 @@ func syncedFolderScenario(t *testing.T, client *syncfixture.EngineMockClient, re
 	remote.addFolder("item-x", "root", "X")
 	remote.addFile(t, "item-a", "item-x", "a.txt", "a\n")
 	eng, syncRoot := newTestEngine(t, client)
-	eng.serializeWorkers = true
+	eng.hooks.serializeWorkers = true
 	runScenarioPass(t, eng)
 	require.NoError(t, os.RemoveAll(filepath.Join(syncRoot, "X")))
 

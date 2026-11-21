@@ -546,7 +546,7 @@ func (e *Executor) validateExistingDownloadTarget(
 		if absErr != nil {
 			return normalizeSyncTreePathError(absErr)
 		}
-		currentHash, hashErr := e.hashFunc(ctx, absPath)
+		currentHash, hashErr := e.hashFile(ctx, absPath)
 		if hashErr != nil {
 			return fmt.Errorf("hashing download target %s: %w", action.Path, hashErr)
 		}
@@ -648,7 +648,7 @@ func (e *Executor) existingTargetVerifier(
 		if expected == "" {
 			return nil
 		}
-		currentHash, hashErr := e.hashReader(ctx, f)
+		currentHash, hashErr := e.hashOpenFile(ctx, f)
 		if hashErr != nil {
 			return fmt.Errorf("hashing %s %s: %w", noun, action.Path, hashErr)
 		}
@@ -895,7 +895,7 @@ func (e *Executor) localFileHoldsBaselineContent(
 	if err != nil {
 		return false
 	}
-	currentHash, err := e.hashFunc(ctx, absPath)
+	currentHash, err := e.hashFile(ctx, absPath)
 
 	return err == nil && currentHash == baseline.LocalHash
 }
@@ -942,7 +942,7 @@ func (e *Executor) validateLocalSourceAgainstBaseline(
 			if absErr != nil {
 				return normalizeSyncTreePathError(absErr)
 			}
-			currentHash, hashErr := e.hashFunc(ctx, absPath)
+			currentHash, hashErr := e.hashFile(ctx, absPath)
 			if hashErr != nil {
 				return fmt.Errorf("hashing %s source %s: %w", op, source, hashErr)
 			}

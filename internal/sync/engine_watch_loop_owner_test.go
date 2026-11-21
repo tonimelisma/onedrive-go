@@ -524,9 +524,8 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 			return &graph.Item{ID: itemID, Name: newName}, nil
 		},
 	}
-	eng, syncRoot := newTestEngine(t, mock)
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), withTestShortcutNamespace)
 	setupWatchEngine(t, eng)
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	renamedRoot := filepath.Join(syncRoot, "Shared", "Renamed")

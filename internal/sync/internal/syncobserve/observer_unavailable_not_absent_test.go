@@ -57,7 +57,7 @@ func TestFullScan_HashEIOProducesNoUploadAndNoDelete(t *testing.T) {
 	dir := t.TempDir()
 	syncfixture.WriteTestFile(t, dir, "a.txt", "content")
 	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hashFunc = func(context.Context, string) (string, error) {
+	obs.hooks.HashFile = func(context.Context, string) (string, error) {
 		return "", &fs.PathError{Op: "read", Path: "a.txt", Err: syscall.EIO}
 	}
 

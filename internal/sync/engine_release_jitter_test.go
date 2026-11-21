@@ -148,7 +148,7 @@ func TestWatchRuntime_ParkedBatchMembersWaitForTheirAdmitInstant(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
-	clock, ok := eng.clock.(*syncfixture.ManualClock)
+	clock, ok := eng.hooks.clock.(*syncfixture.ManualClock)
 	require.True(t, ok)
 	rt := testWatchRuntime(t, eng)
 	// No plan is installed, so the slow start (R-6.8.25) does not gate; the

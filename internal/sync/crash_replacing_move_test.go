@@ -54,7 +54,7 @@ func TestCrashRecovery_ReplacingMoveBetweenItsTwoStepsFinishesTheMove(t *testing
 		point:  syncdomain.CrashPointLocalMoveDestinationTrashed,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
-	h.eng.execCfg.SetCrashHookForTest(capture.hook)
+	h.eng.armExecCrash(capture.hook)
 	_, err = h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	recovered := capture.reopen(t)
@@ -66,7 +66,7 @@ func TestCrashRecovery_ReplacingMoveBetweenItsTwoStepsFinishesTheMove(t *testing
 	requireBaselineItemAt(t, crashed, "a.txt", aRow.ItemID, aRow.LocalHash)
 	requireBaselineItemAt(t, crashed, "b.txt", bRow.ItemID, bRow.LocalHash)
 
-	recovered.eng.oneShotPassLimit = 1
+	recovered.eng.hooks.oneShotPassLimit = 1
 	report := runScenarioPass(t, recovered.eng)
 
 	assert.Equal(t, 1, report.Moves, "the next plan finishes the move")

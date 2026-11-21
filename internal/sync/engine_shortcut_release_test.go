@@ -939,8 +939,7 @@ func crashDuringRelease(t *testing.T, point string, occurrence int, lostWAL bool
 		}
 		return nil
 	}
-	h.eng.execCfg.SetCrashHookForTest(hook)
-	h.eng.baseline.SetCrashHookForTest(hook)
+	h.eng.armCrash(hook)
 	runReleaseDrain(t, h.eng)
 	recovered := capture.reopen(t)
 

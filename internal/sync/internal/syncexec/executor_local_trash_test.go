@@ -53,7 +53,7 @@ func TestDeleteLocalFile_MovesTheFileToTheTrash(t *testing.T) {
 
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 	trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
-	cfg.SetTrash(trash)
+	cfg.trash = trash
 	syncfixture.WriteExecTestFile(t, syncRoot, "docs/a.txt", syncedContent)
 
 	outcome := NewExecution(cfg, syncfixture.EmptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
@@ -84,10 +84,10 @@ func TestDeleteLocalFile_FileReplacedMidHashSurvives(t *testing.T) {
 			var trash *localtrash.Trash
 			if withTrash {
 				trash = localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
-				cfg.SetTrash(trash)
+				cfg.trash = trash
 			}
 			target := syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", syncedContent)
-			cfg.hashReader = func(ctx context.Context, r io.Reader) (string, error) {
+			cfg.hooks.HashReader = func(ctx context.Context, r io.Reader) (string, error) {
 				hash, err := driveops.ComputeQuickXorHashFromReaderContext(ctx, r)
 				replacement := syncfixture.WriteExecTestFile(t, syncRoot, "a.txt.save", "new edit\n")
 				require.NoError(t, os.Rename(replacement, target))
@@ -140,8 +140,8 @@ func TestDeleteLocalFile_ATrashThatFailsIsAFailureNotAFileAlreadyGone(t *testing
 
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 	trashDir := filepath.Join(t.TempDir(), "trash")
-	cfg.SetTrash(localtrash.Open(trashDir, nil))
-	cfg.hashReader = hashRemovingTrash(t, trashDir)
+	cfg.trash = localtrash.Open(trashDir, nil)
+	cfg.hooks.HashReader = hashRemovingTrash(t, trashDir)
 	syncfixture.WriteExecTestFile(t, syncRoot, "docs/a.txt", syncedContent)
 
 	outcome := NewExecution(cfg, syncfixture.EmptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
@@ -164,8 +164,8 @@ func TestExecutor_LocalMove_ATrashThatFailsFailsTheReplacingMove(t *testing.T) {
 
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 	trashDir := filepath.Join(t.TempDir(), "trash")
-	cfg.SetTrash(localtrash.Open(trashDir, nil))
-	cfg.hashReader = hashRemovingTrash(t, trashDir)
+	cfg.trash = localtrash.Open(trashDir, nil)
+	cfg.hooks.HashReader = hashRemovingTrash(t, trashDir)
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 	syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", "moving\n")
 	syncfixture.WriteExecTestFile(t, syncRoot, "b.txt", "bravo\n")
@@ -206,7 +206,7 @@ func TestDeleteLocalFile_AReservationThatFailsIsAFailureNotAFileAlreadyGone(t *t
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
-	cfg.SetTrash(reservationLosingItsFolder(t))
+	cfg.trash = reservationLosingItsFolder(t)
 	syncfixture.WriteExecTestFile(t, syncRoot, "docs/a.txt", syncedContent)
 
 	outcome := NewExecution(cfg, syncfixture.EmptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "docs/a.txt"))
@@ -228,7 +228,7 @@ func TestExecutor_LocalMove_AReservationThatFailsFailsTheReplacingMove(t *testin
 	t.Parallel()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
-	cfg.SetTrash(reservationLosingItsFolder(t))
+	cfg.trash = reservationLosingItsFolder(t)
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 	syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", "moving\n")
 	syncfixture.WriteExecTestFile(t, syncRoot, "b.txt", "bravo\n")
@@ -285,7 +285,7 @@ func TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded(t *testin
 			}
 			cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, dl, &syncfixture.ExecutorMockUploader{})
 			if tt.withTrash {
-				cfg.SetTrash(localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil))
+				cfg.trash = localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
 			}
 			target := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", edited)
 			info, err := os.Stat(target)
@@ -338,11 +338,11 @@ func TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace(t *te
 
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 	trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
-	cfg.SetTrash(trash)
+	cfg.trash = trash
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 	syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", "alpha\n")
 	syncfixture.WriteExecTestFile(t, syncRoot, "b.txt", "bravo\n")
-	plannedHash, err := e.hashFunc(t.Context(), filepath.Join(syncRoot, "b.txt"))
+	plannedHash, err := e.hashFile(t.Context(), filepath.Join(syncRoot, "b.txt"))
 	require.NoError(t, err)
 	info, err := os.Stat(filepath.Join(syncRoot, "b.txt"))
 	require.NoError(t, err)

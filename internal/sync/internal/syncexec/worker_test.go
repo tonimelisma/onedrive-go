@@ -63,9 +63,10 @@ func newWorkerTestSetup(t *testing.T) (
 	}
 	ul := &syncfixture.WorkerMockUploader{}
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
-	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
-	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	cfg := mustNewExecutorConfig(t, &ExecutorInputs{
+		Items: items, Downloads: dl, Uploads: ul, SyncTree: syncTree, DriveID: driveID, Logger: logger,
+		Now: func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) },
+	})
 	return cfg, mgr, syncRoot
 }
 
@@ -182,7 +183,7 @@ func TestWorkerPool_ClosedDispatchChannelClosesCompletions(t *testing.T) {
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	dispatchCh := make(chan *syncdomain.TrackedAction)
-	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dispatchCh, Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 1})
 
 	pool.Start(t.Context(), 1)
 	close(dispatchCh)
@@ -197,7 +198,7 @@ func TestWorkerPool_ContextCancellationClosesCompletions(t *testing.T) {
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	dispatchCh := make(chan *syncdomain.TrackedAction)
 	ctx, cancel := context.WithCancel(t.Context())
-	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dispatchCh, Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 1})
 
 	pool.Start(ctx, 1)
 	cancel()
@@ -211,7 +212,7 @@ func TestWorkerPool_StopIsIdempotentAfterCompletionsClose(t *testing.T) {
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	dispatchCh := make(chan *syncdomain.TrackedAction)
-	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dispatchCh, Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 1})
 
 	pool.Start(t.Context(), 1)
 	close(dispatchCh)
@@ -232,7 +233,7 @@ func TestWorkerPool_SendResultDropsWhenContextCancellationWins(t *testing.T) {
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	dispatchCh := make(chan *syncdomain.TrackedAction)
-	pool := NewWorkerPool(cfg, dispatchCh, mgr, synctest.TestLogger(t), 1)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dispatchCh, Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 1})
 
 	// Saturate the completions buffer so sendResult cannot complete before shutdown.
 	pool.completions <- syncdomain.ActionCompletion{Path: "buffered.txt", ActionID: 1}
@@ -286,7 +287,7 @@ func TestWorkerPool_FolderCreate(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -342,7 +343,7 @@ func TestWorkerPool_DependencyChain(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -382,7 +383,7 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 
 	started := make(chan struct{})
-	cfg.SetDownloads(&syncfixture.WorkerMockDownloader{
+	cfg.downloads = &syncfixture.WorkerMockDownloader{
 		DownloadFn: func(ctx context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			select {
 			case <-started:
@@ -392,10 +393,10 @@ func TestWorkerPool_StopCancelsWork(t *testing.T) {
 			<-ctx.Done()
 			return 0, ctx.Err()
 		},
-	})
-	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+	}
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, synctest.TestLogger(t))
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 	pool.Start(ctx, 4)
 
 	select {
@@ -440,7 +441,7 @@ func TestWorkerPool_ResultChannel(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 42, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	// Verify result for the action.
@@ -465,12 +466,12 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	ctx := t.Context()
 
 	// Configure a download mock that always fails.
-	cfg.SetDownloads(&syncfixture.WorkerMockDownloader{
+	cfg.downloads = &syncfixture.WorkerMockDownloader{
 		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			return 0, fmt.Errorf("simulated download failure")
 		},
-	})
-	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+	}
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, synctest.TestLogger(t))
 
 	actions := []syncdomain.Action{
 		{
@@ -492,7 +493,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -528,14 +529,14 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	var capturedParentID string
 
 	// Override uploader to capture the parentID used.
-	cfg.SetUploads(&syncfixture.WorkerMockUploader{
+	cfg.uploads = &syncfixture.WorkerMockUploader{
 		UploadFn: func(_ context.Context, _ driveid.ID, parentID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			capturedParentID = parentID
 
 			return &graph.Item{ID: "uploaded-into-folder", ETag: "e1"}, nil
 		},
-	})
-	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+	}
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, synctest.TestLogger(t))
 
 	// Action 0: create folder "Uploads".
 	// Action 1: upload file "Uploads/doc.txt" into that folder.
@@ -570,7 +571,7 @@ func TestWorkerPool_FolderCreateThenUpload_ParentResolvedFromBaseline(t *testing
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, []int64{0})
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	succeeded, failed := countResults(results)
@@ -596,12 +597,12 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	ctx := t.Context()
 
 	// Configure a download mock that panics.
-	cfg.SetDownloads(&syncfixture.WorkerMockDownloader{
+	cfg.downloads = &syncfixture.WorkerMockDownloader{
 		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			panic("intentional panic for testing")
 		},
-	})
-	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+	}
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, synctest.TestLogger(t))
 
 	actions := []syncdomain.Action{
 		{
@@ -622,7 +623,7 @@ func TestWorkerPool_PanicRecovery(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 	results := runPoolWithDrain(t, ctx, pool, dgh)
 
 	// If we got here, the panic was recovered — the process didn't crash.
@@ -666,7 +667,7 @@ func TestWorker_NeverCallsComplete(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 	pool.Start(ctx, 4)
 
 	// Read one completion from the channel — worker must send a completion.
@@ -729,7 +730,7 @@ func TestActionCompletion_PopulatesFromAction(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 77, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 	pool.Start(ctx, 4)
 
 	var result syncdomain.ActionCompletion
@@ -759,7 +760,7 @@ func TestActionCompletion_HTTPStatusAndRetryAfter(t *testing.T) {
 	ctx := t.Context()
 
 	// Configure a download mock that returns a 429 with Retry-After.
-	cfg.SetDownloads(&syncfixture.WorkerMockDownloader{
+	cfg.downloads = &syncfixture.WorkerMockDownloader{
 		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 			return 0, &graph.GraphError{
 				StatusCode: 429,
@@ -767,8 +768,8 @@ func TestActionCompletion_HTTPStatusAndRetryAfter(t *testing.T) {
 				RetryAfter: 30 * time.Second,
 			}
 		},
-	})
-	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+	}
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, synctest.TestLogger(t))
 
 	actions := []syncdomain.Action{
 		{
@@ -789,7 +790,7 @@ func TestActionCompletion_HTTPStatusAndRetryAfter(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 	pool.Start(ctx, 4)
 
 	var result syncdomain.ActionCompletion
@@ -849,7 +850,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "ok.txt"), []byte("delete me"), 0o600))
 
 	// 2 actions: one succeeds, one fails.
-	cfg.SetDownloads(&syncfixture.WorkerMockDownloader{
+	cfg.downloads = &syncfixture.WorkerMockDownloader{
 		DownloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
 			if itemID == "fail-id" {
 				return 0, fmt.Errorf("simulated failure")
@@ -857,8 +858,8 @@ func TestEngineOwnsCounters(t *testing.T) {
 			n, err := w.Write([]byte("ok"))
 			return int64(n), err
 		},
-	})
-	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t)))
+	}
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, synctest.TestLogger(t))
 
 	actions := []syncdomain.Action{
 		{
@@ -887,7 +888,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 	dgh.Add(&actions[0], 0, nil)
 	dgh.Add(&actions[1], 1, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 
 	// Simulate engine-owned counters.
 	var succeeded, failed atomic.Int32
@@ -946,16 +947,16 @@ func TestWorkerPool_CommitsCompletedOutcomeAfterPoolCancellation(t *testing.T) {
 	poolCtx, cancelPool := context.WithCancel(t.Context())
 	defer cancelPool()
 
-	cfg.SetItemsForTest(&syncfixture.WorkerMockItemClient{
+	cfg.items = &syncfixture.WorkerMockItemClient{
 		CreateFolderFn: func(_ context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
 			// The transfer succeeds, then shutdown arrives before the worker
 			// commits the outcome.
 			cancelPool()
 			return &graph.Item{ID: "created-" + name, Name: name, ParentID: "root-id"}, nil
 		},
-	})
+	}
 
-	pool := NewWorkerPool(cfg, nil, mgr, synctest.TestLogger(t), 1)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 1})
 	pool.ExecuteActionForTest(poolCtx, &syncdomain.TrackedAction{
 		ID: 1,
 		Action: syncdomain.Action{
@@ -986,7 +987,7 @@ func TestWorkerPool_AStoppedPoolDeliversEveryCompletionItHasRoomFor(t *testing.T
 
 	const finished = 32
 	cfg, mgr, _ := newWorkerTestSetup(t)
-	pool := NewWorkerPool(cfg, nil, mgr, synctest.TestLogger(t), finished)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: finished})
 	stopped, stop := context.WithCancel(t.Context())
 	stop()
 
@@ -1010,7 +1011,7 @@ func TestWorkerPool_ACompletionDroppedAfterTheStopIsLogged(t *testing.T) {
 
 	cfg, mgr, _ := newWorkerTestSetup(t)
 	logger, logs := syncfixture.NewCapturedLogger()
-	pool := NewWorkerPool(cfg, nil, mgr, logger, 1)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Store: mgr, Logger: logger, CompletionBuffer: 1})
 	stopped, stop := context.WithCancel(t.Context())
 	stop()
 
@@ -1038,13 +1039,13 @@ func TestWorkerPool_StopReturnsWhileWorkerHashesBeforeUpload(t *testing.T) {
 
 	hashing := make(chan struct{})
 	var hashingOnce sync.Once
-	cfg.SetTransferMgr(driveops.NewTransferManager(cfg.Downloads(), cfg.Uploads(), nil, synctest.TestLogger(t),
+	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, synctest.TestLogger(t),
 		driveops.WithContentHasher(func(ctx context.Context, _ string) (string, error) {
 			hashingOnce.Do(func() { close(hashing) })
 			<-ctx.Done()
 			return "", ctx.Err()
 		}),
-	))
+	)
 
 	absPath := filepath.Join(syncRoot, "slow.bin")
 	require.NoError(t, os.WriteFile(absPath, []byte("upload content"), 0o600))
@@ -1058,7 +1059,7 @@ func TestWorkerPool_StopReturnsWhileWorkerHashesBeforeUpload(t *testing.T) {
 	dgh := newTestDepGraphHelper(t)
 	dgh.Add(&actions[0], 0, nil)
 
-	pool := NewWorkerPool(cfg, dgh.Dispatch(), mgr, synctest.TestLogger(t), 10)
+	pool := NewWorkerPool(WorkerPoolInputs{Config: cfg, Dispatch: dgh.Dispatch(), Store: mgr, Logger: synctest.TestLogger(t), CompletionBuffer: 10})
 	pool.Start(t.Context(), 1)
 
 	select {

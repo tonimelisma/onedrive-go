@@ -132,7 +132,7 @@ func TestExecutor_RenameLocal_SpellingRenameThatLeavesItsTemporaryNameIsDone(t *
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 	capture, logger := synctest.NewLogCapture()
-	e.SetLoggerForTest(logger)
+	e.logger = logger
 	temporary := syncdomain.SpellingRenameArtifactPrefix + "docs.txt"
 	e.syncTree = e.syncTree.WithoutNoReplaceFlagAndUnremovableName(temporary)
 	syncfixture.WriteExecTestFile(t, syncRoot, "Docs.txt", "content")

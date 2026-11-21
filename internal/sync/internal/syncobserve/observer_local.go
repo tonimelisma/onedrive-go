@@ -28,7 +28,6 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
@@ -500,7 +499,8 @@ type LocalObserver struct {
 	watchIdentityLookup  *scanAvailability
 	watchIdentityBuiltAt time.Time
 	protectedRootEvents  syncshortcut.ProtectedRootEventSink
-	watcherFactory       func() (FsWatcher, error)
+	// hooks are the observer's test seams; the zero value is production.
+	hooks Hooks
 
 	// debugEvents is the engine's debug event sink, set by the watch runtime
 	// before Watch; nil reports nothing.
@@ -542,21 +542,12 @@ type LocalObserver struct {
 
 	safetyScanInterval time.Duration // 0 → default (5 minutes); configurable (B-099)
 
-	// hashFunc computes the QuickXorHash of a file. It takes the observer's
-	// run context because the watch event loop hashes synchronously: a
-	// shutdown must not wait out a whole-file read (R-6.3.6). Injectable for
-	// testing (e.g., to simulate panics in the hash phase).
-	hashFunc func(ctx context.Context, path string) (string, error)
-
 	// clock is the observer's time capability: safety-scan ticks, retry
 	// sleeps, and write-coalesce timers all read the same clock, so a test
 	// cannot advance one without the others.
-	clock           syncdomain.SyncClock
-	afterSafetyScan func() // test hook: called after safety-scan state reset completes
-	beforeWatchLoop func() // test hook: called once setup is done, before events are read
+	clock syncdomain.SyncClock
 
-	writeCoalesceCooldown time.Duration // 0 → defaultWriteCoalesceCooldown; injectable for tests
-	startupSafetyScan     bool          // engine watch mode closes the bootstrap-to-fsnotify startup gap
+	startupSafetyScan bool // engine watch mode closes the bootstrap-to-fsnotify startup gap
 
 	// localBatchCh forwards engine-applied local observation batches. The
 	// observer never writes SQLite directly; the watch runtime owns durable
@@ -578,18 +569,10 @@ func NewLocalObserver(baseline *syncdomain.Baseline, logger *slog.Logger, checkW
 		baseline:         baseline,
 		logger:           logger,
 		checkWorkers:     checkWorkers,
-		hashFunc:         driveops.ComputeQuickXorHashContext,
 		clock:            syncdomain.RealClock{},
 		localWatchState:  newLocalWatchState(),
 		descriptorBudget: watchDescriptorBudget(),
 		filesystemKind:   localFilesystemKind,
-		watcherFactory: func() (FsWatcher, error) {
-			w, err := fsnotify.NewWatcher()
-			if err != nil {
-				return nil, fmt.Errorf("create fsnotify watcher: %w", err)
-			}
-			return &fsnotifyWrapper{w: w}, nil
-		},
 	}
 }
 
@@ -711,11 +694,11 @@ func (o *LocalObserver) SetSafetyScan(interval time.Duration, atStartup bool) {
 	o.startupSafetyScan = atStartup
 }
 
-// SetWatcherFactory overrides the default fsnotify watcher factory. Used by
-// tests to inject a mock factory that simulates inotify watch limit exhaustion
-// (ENOSPC) or other platform-specific failure modes.
-func (o *LocalObserver) SetWatcherFactory(fn func() (FsWatcher, error)) {
-	o.watcherFactory = fn
+// SetHooks installs the observer's test seams. The engine passes its own
+// through unchanged; production's are the zero value. Must be called before
+// the observer scans or watches.
+func (o *LocalObserver) SetHooks(hooks Hooks) {
+	o.hooks = hooks
 }
 
 // TrySend hands what a watch handler observed for one path to the runtime as
@@ -928,7 +911,7 @@ func (o *LocalObserver) Watch(ctx context.Context, tree *synctree.Root) error {
 	o.watchedDirs = watchRegistry{}
 	o.watchUnavailable = nil
 
-	watcher, err := o.watcherFactory()
+	watcher, err := o.newWatcher()
 	if err != nil {
 		if cause, ok := classifyWatcherCreateError(err); ok {
 			return &localWatchUnavailableError{cause: cause, err: fmt.Errorf("create filesystem watcher: %w", err)}
@@ -967,8 +950,8 @@ func (o *LocalObserver) Watch(ctx context.Context, tree *synctree.Root) error {
 			return o.watchUnavailable
 		}
 	}
-	if o.beforeWatchLoop != nil {
-		o.beforeWatchLoop()
+	if o.hooks.BeforeWatchLoop != nil {
+		o.hooks.BeforeWatchLoop()
 	}
 
 	return o.watchLoop(ctx, watcher, tree)

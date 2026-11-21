@@ -275,7 +275,7 @@ func (e *Executor) verifyLocalDeleteContent(ctx context.Context, action *syncdom
 		)
 	}
 
-	currentHash, err := e.hashReader(ctx, f)
+	currentHash, err := e.hashOpenFile(ctx, f)
 	if err != nil {
 		return fmt.Errorf("hashing %s before delete: %w", action.Path, err)
 	}

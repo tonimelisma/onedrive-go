@@ -106,6 +106,7 @@ func stressSyncRunWatchMembers() []string {
 		"TestRunWatch_FallbackSleepHonorsCancellation",
 		"TestRunWatch_FinishesTheRemoteEditBehindARekey",
 		"TestRunWatch_FinishesWorkTheBootstrapMovesLeaveForTheNextPass",
+		"TestRunWatch_HousekeepingRunsBeforeTheFirstRefreshTimerIsArmed",
 		"TestRunWatch_LocalObserverPanicFailsMountInsteadOfCrashing",
 		"TestRunWatch_MountRootKeepsPollingOnly",
 		"TestRunWatch_ObserverThatIgnoresItsContextIsNamedAfterTheBound",

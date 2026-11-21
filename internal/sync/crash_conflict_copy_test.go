@@ -75,7 +75,7 @@ func conflictCopyUploadCutAfterCreate(t *testing.T, lostWAL bool) (string, strin
 	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-c", "root", conflictCrashPath, "c\n")
 	h := newSyncHarness(t, remote)
-	h.eng.serializeWorkers = true
+	h.eng.hooks.serializeWorkers = true
 	runScenarioPass(t, h.eng)
 	// The synced state reaches the main database file; the round's commits,
 	// the create's intent among them, stay in the WAL, which the lost-WAL
@@ -89,8 +89,7 @@ func conflictCopyUploadCutAfterCreate(t *testing.T, lostWAL bool) (string, strin
 		point: syncdomain.CrashPointUploadCreatedUnrecorded, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
-	h.eng.execCfg.SetCrashHookForTest(capture.hook)
-	h.eng.baseline.SetCrashHookForTest(capture.hook)
+	h.eng.armCrash(capture.hook)
 	h.beginRound(t)
 	syncHarnessUntilQuiet(t, h)
 	require.True(t, capture.captured, "the conflict copy's upload reached %s", capture.point)

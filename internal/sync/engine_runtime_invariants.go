@@ -12,7 +12,7 @@ import (
 // invariantChecksEnabled gates expensive invariant assertions used by tests
 // and debug sessions. Production keeps this disabled by default.
 func (flow *engineFlow) invariantChecksEnabled() bool {
-	return flow.engine.assertInvariants
+	return flow.hooks.assertInvariants
 }
 
 func (flow *engineFlow) mustAssertInvariants(ctx context.Context, stage string) {

@@ -54,53 +54,44 @@ type WorkerPool struct {
 	// test's dispatch order is also the execution order (D-090).
 	serialize bool
 
-	// outcomeCommitTimeout bounds the detached commit of a completed action's
-	// outcome: OutcomeCommitTimeout, which tests shorten.
-	outcomeCommitTimeout time.Duration
-
 	cancel    context.CancelCauseFunc
 	wg        stdsync.WaitGroup
 	closeOnce stdsync.Once
 }
 
-// NewWorkerPool creates a pool without starting any workers. planSize
-// determines the result channel buffer (use the number of actions in the
-// plan for one-shot mode, or a generous buffer for watch mode).
-//
-// dispatchCh provides actions ready for execution. Workers exit only when the
-// owning context is canceled or the dispatch channel is closed.
-func NewWorkerPool(
-	cfg *ExecutorConfig,
-	dispatchCh <-chan *syncdomain.TrackedAction,
-	baseline ExecutorStore,
-	logger *slog.Logger,
-	planSize int,
-) *WorkerPool {
-	if planSize < 1 {
-		planSize = 1
-	}
-
-	return &WorkerPool{
-		cfg:           cfg,
-		dispatchCh:    dispatchCh,
-		baseline:      baseline,
-		logger:        logger,
-		perfCollector: nil,
-		// Buffer sizing contract: one-shot mode uses planSize (equal to
-		// the number of actions, so workers never block). Watch mode passes
-		// watchCompletionBuf, which the watch loop reads as completions
-		// arrive, so blocking is unlikely under normal load.
-		completions:          make(chan syncdomain.ActionCompletion, planSize),
-		outcomeCommitTimeout: syncdomain.OutcomeCommitTimeout,
-	}
+// WorkerPoolInputs is everything NewWorkerPool builds a pool from.
+type WorkerPoolInputs struct {
+	// Config is the executor configuration every worker's executor shares.
+	Config *ExecutorConfig
+	// Dispatch provides actions ready for execution. Workers exit only when
+	// the owning context is canceled or the channel is closed.
+	Dispatch <-chan *syncdomain.TrackedAction
+	Store    ExecutorStore
+	Logger   *slog.Logger
+	// CompletionBuffer sizes the completions channel: the number of actions
+	// in the plan for one-shot mode, so workers never block, or a generous
+	// buffer for watch mode, whose loop reads completions as they arrive.
+	// Below one is one.
+	CompletionBuffer int
+	// Perf is the collector the workers report to; nil reports nowhere.
+	Perf *perf.Collector
+	// Serialize runs exactly one worker, below the minWorkers floor, so a
+	// test's dispatch order is also the execution order (D-090). The engine
+	// passes its test seam through; production's is false.
+	Serialize bool
 }
 
-// SetRuntimeOptions sets the perf collector the workers report to and
-// whether the pool runs a single worker (see serialize). Must be called
-// before Start.
-func (wp *WorkerPool) SetRuntimeOptions(collector *perf.Collector, serialize bool) {
-	wp.perfCollector = collector
-	wp.serialize = serialize
+// NewWorkerPool creates a pool without starting any workers.
+func NewWorkerPool(in WorkerPoolInputs) *WorkerPool {
+	return &WorkerPool{
+		cfg:           in.Config,
+		dispatchCh:    in.Dispatch,
+		baseline:      in.Store,
+		logger:        in.Logger,
+		perfCollector: in.Perf,
+		serialize:     in.Serialize,
+		completions:   make(chan syncdomain.ActionCompletion, max(in.CompletionBuffer, 1)),
+	}
 }
 
 // Start spawns a flat pool of goroutines, all reading from the single dispatch
@@ -243,9 +234,9 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *syncdomain.TrackedA
 }
 
 // commitOutcome persists a completed action's baseline mutation detached
-// from the caller's cancellation, bounded by the pool's outcomeCommitTimeout.
+// from the caller's cancellation, bounded by the pool's outcomeCommitBound.
 func (wp *WorkerPool) commitOutcome(ctx context.Context, mutation *syncdomain.BaselineMutation) error {
-	return RunDetachedStoreAccess(ctx, wp.outcomeCommitTimeout, func(commitCtx context.Context) error {
+	return RunDetachedStoreAccess(ctx, wp.outcomeCommitBound(), func(commitCtx context.Context) error {
 		return wp.baseline.CommitMutation(commitCtx, mutation)
 	})
 }

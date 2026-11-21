@@ -156,7 +156,7 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	watcher := syncfixture.NewEnospcWatcher(1)
 
 	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.watcherFactory = func() (FsWatcher, error) { return watcher, nil }
+	obs.hooks.WatcherFactory = func() (FsWatcher, error) { return watcher, nil }
 
 	tree := syncfixture.MustOpenSyncTree(t, root)
 

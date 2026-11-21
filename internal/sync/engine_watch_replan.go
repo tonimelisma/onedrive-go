@@ -33,7 +33,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 		slog.Bool("dirty_signal", true),
 		slog.Bool("full_refresh", batch.FullRefresh),
 	)
-	rt.engine.collector().RecordWatchBatch(1)
+	rt.deps.perf.RecordWatchBatch(1)
 
 	replanStart := rt.deps.now()
 	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventSteadyStateReplanStarted, "", 0, time.Time{})
@@ -47,7 +47,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	}
 	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventLocalTruthRefreshFinished, "", len(localResult.Rows), observeStart)
 	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventSteadyStateObservationCompleted})
-	rt.engine.collector().RecordObserve(len(localResult.Rows), rt.deps.since(observeStart))
+	rt.deps.perf.RecordObserve(len(localResult.Rows), rt.deps.since(observeStart))
 
 	planStart := rt.deps.now()
 	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventPlanningStarted, "", 0, replanStart)

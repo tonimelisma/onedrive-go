@@ -217,7 +217,7 @@ func TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth(t *testing.T) {
 	t.Parallel()
 
 	h := syncedNFDFileHarness(t)
-	h.eng.clock = &modelClock{}
+	h.eng.hooks.clock = &modelClock{}
 	syncfixture.WriteLocalFile(t, h.syncRoot, filepath.Join("corpus", syncfixture.NfdCafe+" nfd.txt"), "edited here\n")
 	h.remote.putFileAt(t, "corpus/"+syncfixture.NfcCafe+" nfd.txt", "edited online\n")
 	h.beginRound(t)

@@ -13,15 +13,34 @@ import (
 // observers reach in a store they built. A ...ForTest function is used only by
 // tests and the sync test-helper packages (devtool's test-conventions check).
 
+// Hooks are the store's test seams, passed in when the store is opened. The
+// zero value is production behavior, and production code passes a Hooks
+// value through without setting a field (R-6.10.29).
+type Hooks struct {
+	// CrashAt is called at each crash point before a commit
+	// (crash_points.go): an error rolls the transaction back as a crash
+	// would.
+	CrashAt func(point string) error
+	// Driver names the database/sql driver the store opens its database
+	// through; empty is the SQLite driver. Tests name a fault-injecting
+	// wrapper of it.
+	Driver string
+}
+
+// driverName is the database/sql driver the store opens its database
+// through.
+func (h Hooks) driverName() string {
+	if h.Driver == "" {
+		return SqliteDriverName
+	}
+
+	return h.Driver
+}
+
 // RawDBForTest is the store's database, for tests that read or seed tables
 // directly.
 func (s *SyncStore) RawDBForTest() *sql.DB {
 	return s.rawDB()
-}
-
-// SetCrashHookForTest installs the hook the store's crash points call.
-func (s *SyncStore) SetCrashHookForTest(hook func(point string) error) {
-	s.crashAt = hook
 }
 
 // NowForTest is the store's clock reading.
@@ -58,12 +77,12 @@ func OpenSyncStoreForTest(ctx context.Context, dbPath string, logger *slog.Logge
 	return openSyncStore(ctx, dbPath, logger, ensureSchema)
 }
 
-// OpenSyncStoreWithDriverForTest opens the store at dbPath through the named
-// database/sql driver (openSyncStoreWithDriver).
-func OpenSyncStoreWithDriverForTest(
-	ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool, driverName string,
+// OpenSyncStoreWithHooksForTest opens the store at dbPath with hooks
+// (openSyncStoreWithHooks).
+func OpenSyncStoreWithHooksForTest(
+	ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool, hooks Hooks,
 ) (*SyncStore, error) {
-	return openSyncStoreWithDriver(ctx, dbPath, logger, ensureSchema, driverName)
+	return openSyncStoreWithHooks(ctx, dbPath, logger, ensureSchema, hooks)
 }
 
 // UpsertBaselineRowTxForTest writes one baseline row in tx.

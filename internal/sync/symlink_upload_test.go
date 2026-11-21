@@ -52,8 +52,8 @@ func newFollowSymlinksTestEngine(t *testing.T, mock *syncfixture.EngineMockClien
 		ContentFilter:      syncdomain.ContentFilterConfig{FollowSymlinks: true},
 	})
 	require.NoError(t, err)
-	eng.assertInvariants = true
-	testEng := &testEngine{Engine: eng, flow: newEngineFlow(eng)}
+	eng.hooks.assertInvariants = true
+	testEng := &testEngine{Engine: eng, flow: newEngineFlow(eng.flowInputs())}
 	seedTestEngineAccount(t, dataDir, accountCID)
 	t.Cleanup(func() {
 		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)))

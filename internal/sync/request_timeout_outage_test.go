@@ -282,7 +282,7 @@ func stalledOutageEngine(t *testing.T, folders int, logger *slog.Logger) (*testE
 		return stalled.CreateFolder(ctx, driveID, parentID, name)
 	}
 	eng, syncRoot := newTestEngineWithLogger(t, client, logger)
-	eng.oneShotPassLimit = 1
+	eng.hooks.oneShotPassLimit = 1
 	for i := range folders {
 		require.NoError(t, os.Mkdir(filepath.Join(syncRoot, fmt.Sprintf("folder-%d", i)), 0o750))
 	}
@@ -480,21 +480,23 @@ const workerTestCommitBound = 20 * time.Millisecond
 func wedgedCommitCompletion(t *testing.T) syncdomain.ActionCompletion {
 	t.Helper()
 
-	cfg, store, _ := newWorkerTestSetup(t)
 	var wedge atomic.Pointer[sql.Conn]
-	cfg.SetItemsForTest(&syncfixture.WorkerMockItemClient{
-		CreateFolderFn: func(ctx context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
-			conn, err := store.RawDBForTest().Conn(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("take the store's connection: %w", err)
-			}
-			wedge.Store(conn)
+	var store *syncstore.SyncStore
+	cfg, store, _ := newWorkerTestSetupWith(t, func(in *syncexec.ExecutorInputs) {
+		in.Hooks.OutcomeCommitTimeout = workerTestCommitBound
+		in.Items = &syncfixture.WorkerMockItemClient{
+			CreateFolderFn: func(ctx context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
+				conn, err := store.RawDBForTest().Conn(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("take the store's connection: %w", err)
+				}
+				wedge.Store(conn)
 
-			return &graph.Item{ID: "created-" + name, Name: name, ParentID: "root-id"}, nil
-		},
+				return &graph.Item{ID: "created-" + name, Name: name, ParentID: "root-id"}, nil
+			},
+		}
 	})
-	pool := syncexec.NewWorkerPool(cfg, nil, store, synctest.TestLogger(t), 1)
-	pool.SetOutcomeCommitTimeoutForTest(workerTestCommitBound)
+	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{Config: cfg, Store: store, Logger: synctest.TestLogger(t), CompletionBuffer: 1})
 
 	pool.ExecuteActionForTest(t.Context(), &syncdomain.TrackedAction{ID: 1, Action: syncdomain.Action{
 		Type:       syncdomain.ActionFolderCreate,
@@ -610,9 +612,10 @@ func TestUploadNewFile_ARecordThatOutlastsItsBoundIsAStoreFailure(t *testing.T) 
 
 		return created, nil
 	}}
-	e, store, syncRoot := newPendingCreateTestExecutor(t, ul, synctest.TestLogger(t))
-	e.SetPendingCreates(unansweringRecordStore{PendingCreateStore: store, bound: workerTestCommitBound})
-	e.SetStoreAccessTimeoutForTest(workerTestCommitBound)
+	e, _, syncRoot := newPendingCreateTestExecutorWith(t, ul, synctest.TestLogger(t), func(in *syncexec.ExecutorInputs) {
+		in.Hooks.StoreAccessTimeout = workerTestCommitBound
+		in.PendingCreates = unansweringRecordStore{PendingCreateStore: in.PendingCreates, bound: workerTestCommitBound}
+	})
 	local := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 
 	_, uploadErr := e.UploadNewFileForTest(t.Context(), &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "doc.txt"},

@@ -2,8 +2,8 @@ package syncdomain
 
 // Crash points (D-091) name the commit boundaries where a process killed at
 // that instant leaves its effects half recorded: the mutation done on one
-// side, the state database not yet told. A test hook (ExecutorConfig.crashAt,
-// SyncStore.crashAt) is called at each one; production leaves both nil, and
+// side, the state database not yet told. A test hook (the CrashAt of
+// syncexec.Hooks and of syncstore.Hooks) is called at each one; production leaves both nil, and
 // each type's reachCrashPoint is then a no-op. Recovery from every point must
 // converge with nothing lost when a fresh engine reopens the same database and
 // tree.

@@ -130,7 +130,7 @@ func (rt *watchRuntime) dropGoneCreateIntentsAfterPoll(ctx context.Context, poll
 		return
 	}
 
-	kept, err := rt.deps.store.DropGoneCreateIntentsAt(ctx, paths, rt.engine.localScanCoverage())
+	kept, err := rt.deps.store.DropGoneCreateIntentsAt(ctx, paths, rt.localScanCoverage())
 	if err != nil {
 		level := slog.LevelDebug
 		if !attempts.dropFailing && ctx.Err() == nil {

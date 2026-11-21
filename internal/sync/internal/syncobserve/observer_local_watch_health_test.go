@@ -107,12 +107,12 @@ func TestWatch_NewDirectoryEMFILEStopsWatchingForFallback(t *testing.T) {
 		return filepath.Base(name) == "newdir"
 	})
 	obs := newWatchTestObserver(t, &watcher.MockFsWatcher, watchObserverTestOptions{})
-	obs.watcherFactory = func() (FsWatcher, error) { return watcher, nil }
+	obs.hooks.WatcherFactory = func() (FsWatcher, error) { return watcher, nil }
 	// newdir must appear only after setup has walked the tree; created
 	// earlier, setup itself meets the limit, closes the watcher, and the
 	// Create below would be sent on a closed channel.
 	watching := make(chan struct{})
-	obs.beforeWatchLoop = func() { close(watching) }
+	obs.hooks.BeforeWatchLoop = func() { close(watching) }
 
 	tree := syncfixture.MustOpenSyncTree(t, dir)
 	_, done := syncfixture.RunInBackground(t, t.Context(), func(ctx context.Context) error {
@@ -259,7 +259,7 @@ func TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree(t *testing.T)
 
 	var hashCalls atomic.Int64
 	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hashFunc = func(context.Context, string) (string, error) {
+	obs.hooks.HashFile = func(context.Context, string) (string, error) {
 		hashCalls.Add(1)
 		return "h", nil
 	}
@@ -481,7 +481,7 @@ func TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan(t *testi
 			return noopSyncTimer{}
 		},
 	})
-	obs.watcherFactory = func() (FsWatcher, error) { return watcher, nil }
+	obs.hooks.WatcherFactory = func() (FsWatcher, error) { return watcher, nil }
 	batches := make(chan LocalObservation, 8)
 	obs.SetLocalObservationBatchChannel(batches)
 

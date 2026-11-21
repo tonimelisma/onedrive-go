@@ -204,7 +204,7 @@ func requireRunOwnership(t *testing.T, eng *testEngine) *runOwnership {
 	t.Helper()
 
 	ownership := &runOwnership{byOwner: map[string]int{}}
-	eng.ownerCheckFactory = func() func() {
+	eng.hooks.ownerCheckFactory = func() func() {
 		owner := currentGoroutineID(t)
 		return func() {
 			onOwner := currentGoroutineID(t) == owner

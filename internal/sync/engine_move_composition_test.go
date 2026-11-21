@@ -502,7 +502,7 @@ func TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass(t *testing.T) {
 
 	// The move pass alone: a follow-up pass would refresh the baseline from
 	// the disk and hide what the move published.
-	eng.oneShotPassLimit = 1
+	eng.hooks.oneShotPassLimit = 1
 	report := runScenarioPass(t, eng)
 	assert.Equal(t, 1, report.Moves)
 	assert.Zero(t, report.BaselineUpdates, "no competing publication for the destination")

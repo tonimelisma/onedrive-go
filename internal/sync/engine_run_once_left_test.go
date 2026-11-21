@@ -169,7 +169,7 @@ func TestRunOnce_ALastStoreReadThatFailsReturnsTheReportAndTheError(t *testing.T
 
 	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	eng, syncRoot := newTestEngine(t, remote.client(t))
-	eng.oneShotPassLimit = 1
+	eng.hooks.oneShotPassLimit = 1
 	syncfixture.WriteLocalFile(t, syncRoot, "a.txt", "content")
 	db := syncstoretest.RequireStoreTestRawDB(t, eng.baseline)
 	var damageErr error
@@ -237,7 +237,7 @@ func TestRunOnce_FollowUpWorkTheRunEndsOnIsLeftForTheNextSync(t *testing.T) {
 			t.Parallel()
 
 			eng, syncRoot := newRemoteSwapTestEngine(t)
-			eng.oneShotPassLimit = tc.limit
+			eng.hooks.oneShotPassLimit = tc.limit
 			report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 			require.NoError(t, err)
 			require.Zero(t, report.Failed, "errors: %v", report.Errors)

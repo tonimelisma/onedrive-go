@@ -122,7 +122,7 @@ func TestRunOnce_AFatalFailureEndsTheTransferItInterruptsAsAShutdown(t *testing.
 	eng, syncRoot := newTestEngineWithLogger(t, mock, logger)
 	// The download is in flight while the upload fails only on two workers,
 	// whatever dispatch order the test runs under.
-	eng.serializeWorkers = false
+	eng.hooks.serializeWorkers = false
 	var activities []Activity
 	eng.SetActivityHook(func(a Activity) { activities = append(activities, a) })
 	syncfixture.WriteLocalFile(t, syncRoot, "local.txt", "local content\n")
