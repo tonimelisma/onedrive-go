@@ -147,7 +147,7 @@ func openSyncStoreWithHooks(
 	// DSN parameters ensure pragmas apply to every connection from the pool.
 	db, err := sql.Open(hooks.driverName(), SqliteFileURI(dbPath, url.Values{SqlitePragmaParam: {
 		"journal_mode(WAL)",
-		"synchronous(FULL)",
+		hooks.synchronousPragma(),
 		"foreign_keys(ON)",
 		fmt.Sprintf("busy_timeout(%d)", storeBusyTimeout.Milliseconds()),
 		fmt.Sprintf("journal_size_limit(%d)", storeJournalSizeLimitBytes),

@@ -41,6 +41,12 @@ var (
 	errTestStoreTemplate  error
 )
 
+// TestStoreHooks are the hooks of a test's store: it skips the waits for
+// the disk, which a store thrown away with its temp directory does not need.
+func TestStoreHooks() syncstore.Hooks {
+	return syncstore.Hooks{SkipFsync: true}
+}
+
 func NewTestStore(tb testing.TB) *syncstore.SyncStore {
 	tb.Helper()
 
@@ -48,7 +54,7 @@ func NewTestStore(tb testing.TB) *syncstore.SyncStore {
 	ctx := synctest.TestContext(tb)
 	require.NoError(tb, os.WriteFile(dbPath, LoadTestStoreTemplate(tb), 0o600), "WriteFile(%q)", dbPath)
 
-	mgr, err := syncstore.OpenSyncStoreForTest(ctx, dbPath, synctest.TestLogger(tb), false)
+	mgr, err := syncstore.OpenSyncStoreWithHooksForTest(ctx, dbPath, synctest.TestLogger(tb), false, TestStoreHooks())
 	require.NoError(tb, err, "NewSyncStore(%q)", dbPath)
 
 	tb.Cleanup(func() {
@@ -67,7 +73,7 @@ func NewTestManager(t *testing.T) *syncstore.SyncStore {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	require.NoError(t, os.WriteFile(dbPath, LoadTestStoreTemplate(t), 0o600), "WriteFile(%q)", dbPath)
 
-	mgr, err := syncstore.OpenSyncStoreForTest(ctx, dbPath, synctest.TestLogger(t), false)
+	mgr, err := syncstore.OpenSyncStoreWithHooksForTest(ctx, dbPath, synctest.TestLogger(t), false, TestStoreHooks())
 	require.NoError(t, err, "NewSyncStore(%q)", dbPath)
 
 	t.Cleanup(func() {

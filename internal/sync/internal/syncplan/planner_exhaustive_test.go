@@ -1344,7 +1344,7 @@ func exQuietStore(t *testing.T) *syncstore.SyncStore {
 
 	dbPath := filepath.Join(t.TempDir(), "exhaustive.db")
 	require.NoError(t, os.WriteFile(dbPath, syncstoretest.LoadTestStoreTemplate(t), 0o600))
-	store, err := syncstore.OpenSyncStoreWithHooksForTest(t.Context(), dbPath, slog.New(slog.DiscardHandler), false, syncstore.Hooks{Driver: exDriverName})
+	store, err := syncstore.OpenSyncStoreWithHooksForTest(t.Context(), dbPath, slog.New(slog.DiscardHandler), false, syncstore.Hooks{Driver: exDriverName, SkipFsync: true})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, store.Close(context.Background()))

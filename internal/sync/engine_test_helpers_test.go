@@ -517,6 +517,9 @@ func newTestEngineInputs(t *testing.T, mock *syncfixture.EngineMockClient, tmpDi
 		PermChecker:        mock,
 		Logger:             logger,
 	}
+	// A test's store skips the waits for the disk unless the test proves
+	// durability on the production setting (keepRealFsync).
+	inputs.hooks.store.SkipFsync = !usesRealFsync(t)
 	return inputs
 }
 

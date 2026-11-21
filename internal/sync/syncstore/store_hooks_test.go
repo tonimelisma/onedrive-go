@@ -29,4 +29,41 @@ func TestHooks_ZeroValueIsProduction(t *testing.T) {
 	for _, point := range syncfixture.AllCrashPoints() {
 		require.NoError(t, store.reachCrashPoint(point), "crash point %s does nothing", point)
 	}
+	assert.Equal(t, sqliteSynchronousFull, storeSynchronous(t, store), "the store commits with synchronous=FULL")
+
+	plain, err := NewSyncStore(synctest.TestContext(t), filepath.Join(t.TempDir(), "plain.db"), synctest.TestLogger(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, plain.Close(context.WithoutCancel(t.Context()))) })
+	assert.Equal(t, sqliteSynchronousFull, storeSynchronous(t, plain), "a store opened without hooks commits with synchronous=FULL")
+}
+
+// SkipFsync, the tests' setting, is the only way to a store that does not
+// wait for the disk.
+//
+// Validates: R-6.10.29
+func TestHooks_SkipFsyncTurnsSynchronousOff(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store, err := OpenEngineSyncStore(synctest.TestContext(t), dbPath, synctest.TestLogger(t), Hooks{SkipFsync: true})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, store.Close(context.WithoutCancel(t.Context()))) })
+
+	assert.Equal(t, sqliteSynchronousOff, storeSynchronous(t, store))
+}
+
+// SQLite's PRAGMA synchronous values.
+const (
+	sqliteSynchronousOff  = 0
+	sqliteSynchronousFull = 2
+)
+
+// storeSynchronous is the synchronous setting of store's connection.
+func storeSynchronous(t *testing.T, store *SyncStore) int {
+	t.Helper()
+
+	var synchronous int
+	require.NoError(t, store.db.QueryRowContext(t.Context(), "PRAGMA synchronous").Scan(&synchronous))
+
+	return synchronous
 }

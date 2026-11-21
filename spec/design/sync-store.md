@@ -127,7 +127,7 @@ and every other significant type in the tree already matched its own name
 
 | Behavior | Evidence |
 | --- | --- |
-| The store's test seams are one `Hooks` value (`store_test_seams.go`), passed to `OpenEngineSyncStore`; its zero value opens through the SQLite driver and makes every crash point a no-op (R-6.10.29). | `TestHooks_ZeroValueIsProduction` |
+| The store's test seams are one `Hooks` value (`store_test_seams.go`), passed to `OpenEngineSyncStore`; its zero value opens through the SQLite driver with `synchronous(FULL)` and makes every crash point a no-op, and only `SkipFsync`, which tests set, turns synchronous off (R-6.10.29). | `TestHooks_ZeroValueIsProduction`, `TestHooks_SkipFsyncTurnsSynchronousOff` |
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 | A store write that fails part-way (a statement inside the transaction, or the commit itself) leaves the database and the in-memory baseline cache agreeing, with the failed outcome in neither, and the same write succeeds once the fault is gone; a failed read is returned, never answered as an empty result. Proven through `openSyncStoreWithDriver`, the seam the tests use to open the store through a fault-injecting wrapper of the SQLite driver that fails the next statement matching a SQL fragment or the next commit. | `TestFault_CommitMutationFailureLeavesCacheAndDatabaseAgreeing`, `TestFault_RefreshLocalBaselineCommitFailureLeavesTheOldRow`, `TestFault_ReadFailureIsReturnedNotEmpty` |
 | Baseline, local observation truth, remote mirror truth, observation cursor/confidence, observation issues, retry work, and block scopes survive close/reopen as one restart authority. | `TestSyncStore_ReopenPreservesDurableRecoveryTruth` |
@@ -1068,8 +1068,17 @@ fragment. Interpolated unescaped, a data folder named `data?v=1#part` opened
 a database file `data` beside the folder, and the pragma after the `?` was
 lost. The URI carries the pragmas every pooled connection applies: WAL,
 `synchronous(FULL)`, foreign keys, a busy timeout of `storeBusyTimeout`
-(5 s) and a journal size limit of `storeJournalSizeLimitBytes` (64 MiB). The
-inspector's read-only URI (`mode=ro`, `query_only`, `inspectorBusyTimeout`,
+(5 s) and a journal size limit of `storeJournalSizeLimitBytes` (64 MiB).
+A test's store, opened through the test helpers (`syncstoretest.TestStoreHooks`,
+the engine tests' `newTestEngineInputs`, the planner's exhaustive check),
+sets `Hooks.SkipFsync` and opens with `synchronous(OFF)`: it is thrown away
+with its temp directory and no test cuts the power, and the waits for the
+disk were most of what a test's commit cost. A store opened with zero hooks,
+which is every production store, keeps `synchronous(FULL)`
+(`TestHooks_ZeroValueIsProduction`, `TestEngineHooks_ZeroValueIsProduction`),
+and the delete-boundary crash test runs on it
+(`TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry`,
+`TestTestEngines_SkipFsyncUnlessTheTestKeepsIt`). The inspector's read-only URI (`mode=ro`, `query_only`, `inspectorBusyTimeout`,
 1 s) is built the same way
 (`TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters`,
 `TestSQLiteFileURI_EscapesTheDatabasePath`). Tests in other packages open a
