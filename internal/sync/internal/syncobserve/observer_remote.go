@@ -229,7 +229,7 @@ func (o *RemoteObserver) fullDelta(
 	}
 	inflight := make(map[string]inflightParent)
 	token := savedToken
-	lastProgressLog := time.Now()
+	lastProgressLog := o.clock.Now()
 	if o.Converter != nil {
 		o.Converter.resetIncompleteObservation()
 		o.Converter.ShortcutTopology = &topology
@@ -259,13 +259,13 @@ func (o *RemoteObserver) fullDelta(
 		// Periodic progress logging for long-running enumerations (100K+ item
 		// drives can take minutes). Time-based (30s) rather than page-based to
 		// produce evenly-spaced logs regardless of page size or API latency.
-		if !done && time.Since(lastProgressLog) >= 30*time.Second {
+		if !done && o.clock.Now().Sub(lastProgressLog) >= 30*time.Second {
 			o.logger.Info("remote observer delta enumeration in progress",
 				slog.Int("pages_fetched", page+1),
 				slog.Int("items_so_far", len(window)),
 			)
 
-			lastProgressLog = time.Now()
+			lastProgressLog = o.clock.Now()
 		}
 
 		if done {

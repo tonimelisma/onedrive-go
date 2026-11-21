@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 type txRollbacker interface {
@@ -45,7 +46,7 @@ func BeginPerfTx(ctx context.Context, db *sql.DB) (*perfTx, error) {
 	return &perfTx{
 		Tx:        tx,
 		collector: perf.FromContext(ctx),
-		startedAt: time.Now(),
+		startedAt: syncdomain.WallNow(),
 	}, nil
 }
 
@@ -116,5 +117,5 @@ func (tx *perfTx) record() {
 		return
 	}
 
-	tx.collector.RecordDBTransaction(time.Since(tx.startedAt))
+	tx.collector.RecordDBTransaction(syncdomain.WallSince(tx.startedAt))
 }

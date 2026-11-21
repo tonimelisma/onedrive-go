@@ -278,7 +278,7 @@ func TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
 		return getItem(ctx, driveID, itemID)
 	}
 	h := newSyncHarnessWithClient(t, remote, client)
-	clock := &modelClock{}
+	clock := newModelClock(1)
 	h.eng.hooks.clock = clock
 	runScenarioPass(t, h.eng)
 
@@ -326,7 +326,7 @@ func TestFullRefresh_PermanentlyUndecidedOrphanBacksOff(t *testing.T) {
 		return getItem(ctx, driveID, itemID)
 	}
 	h := newSyncHarnessWithClient(t, remote, client)
-	clock := &modelClock{}
+	clock := newModelClock(1)
 	h.eng.hooks.clock = clock
 	runScenarioPass(t, h.eng)
 

@@ -250,7 +250,7 @@ func (wp *WorkerPool) commitOutcome(ctx context.Context, mutation *syncdomain.Ba
 // innermost error of the last error a chain joins, so a user reads that the
 // sync database did not answer, not the deadline the store gave up at.
 func RunDetachedStoreAccess(ctx context.Context, bound time.Duration, access func(context.Context) error) error {
-	accessCtx, cancel := DetachedStoreContext(ctx, time.Now().Add(bound))
+	accessCtx, cancel := DetachedStoreContext(ctx, syncdomain.WallNow().Add(bound))
 	defer cancel()
 
 	return StoreAccessError(accessCtx, access(accessCtx))

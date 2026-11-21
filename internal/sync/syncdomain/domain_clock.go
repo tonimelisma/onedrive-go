@@ -51,6 +51,16 @@ func (c RealClock) Panics() *TimerPanics {
 
 func (RealClock) Now() time.Time { return time.Now() }
 
+// WallNow is the wall clock, for what must run on real time whatever clock
+// the engine was given: a context deadline (the runtime enforces it on wall
+// time, so one computed from a test's clock would expire at once or never)
+// and a measured duration. Every other reading of time goes through the
+// engine's SyncClock.
+func WallNow() time.Time { return time.Now() }
+
+// WallSince is the wall-clock time elapsed since start (WallNow).
+func WallSince(start time.Time) time.Duration { return time.Since(start) }
+
 // AfterFunc runs fn on a goroutine of its own once delay has passed, inside
 // the clock's boundary (RecoverTimerPanic).
 func (c RealClock) AfterFunc(delay time.Duration, fn func()) SyncTimer {
