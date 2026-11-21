@@ -486,6 +486,7 @@ func observeEngineClock(eng *Engine) *syncfixture.ObservingClock {
 // production zero value.
 func newTestEngineInputs(t *testing.T, mock *syncfixture.EngineMockClient, tmpDir string) *engineInputs {
 	t.Helper()
+	syncfixture.SkipUnsampledInShort(t)
 
 	dataDir := filepath.Join(tmpDir, "data")
 	dbPath := filepath.Join(tmpDir, "test.db")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"math"
@@ -982,6 +983,34 @@ func SkipInShort(tb testing.TB) {
 	if testing.Short() {
 		tb.Skip("exhaustive: runs in the full verify profiles and nightly CI")
 	}
+}
+
+// ShortSampleBuckets is how many top-level tests of the sync engine share
+// one place in the short tier: under -short a test that builds an engine runs
+// only when its top-level name falls in the sampled bucket
+// (SkipUnsampledInShort), and the full tiers run every one.
+const ShortSampleBuckets = 8
+
+// SkipUnsampledInShort skips, under -short, a test outside the short tier's
+// fixed sample: one top-level test in ShortSampleBuckets, chosen by a hash
+// of its top-level name, so a table test runs all its cases or none and the
+// sample stays the same from run to run. The engine tests' harness calls it
+// as it builds an engine. The per-PR tier is the short one (`verify quick`,
+// `verify platform` and the pre-PR gate); the full profiles, the race
+// profile and nightly CI run every test.
+func SkipUnsampledInShort(tb testing.TB) {
+	tb.Helper()
+
+	if !testing.Short() {
+		return
+	}
+	name, _, _ := strings.Cut(tb.Name(), "/")
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(name))
+	if hash.Sum32()%ShortSampleBuckets == 0 {
+		return
+	}
+	tb.Skip("exhaustive: runs in the full verify profiles and nightly CI; the short tier runs a fixed sample of the engine tests")
 }
 
 // FullTier reports whether this test binary is the full unit tier's: one
