@@ -39,8 +39,8 @@ func TestRetryWorkPruneDistinguishesOldPathSemanticWork(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("dest.txt", "src-a.txt", syncdomain.ActionRemoteMove, 1, 0)))
-	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("dest.txt", "src-b.txt", syncdomain.ActionRemoteMove, 1, 0)))
+	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("dest.txt", "src-a.txt", syncdomain.ActionRemoteMove, 1, 1)))
+	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("dest.txt", "src-b.txt", syncdomain.ActionRemoteMove, 1, 1)))
 
 	require.NoError(t, store.PruneRetryWorkToCurrentActions(ctx, []syncdomain.RetryWorkKey{
 		{Path: "dest.txt", OldPath: "src-b.txt", ActionType: syncdomain.ActionRemoteMove},
@@ -63,6 +63,7 @@ func TestRetryWorkReadyAndTrialCandidateQueries(t *testing.T) {
 
 	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("retry-now.txt", "", syncdomain.ActionDownload, 1, now.UnixNano())))
 	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("retry-later.txt", "", syncdomain.ActionUpload, 1, now.Add(time.Hour).UnixNano())))
+	seedBlockScopeForTest(t, store, syncdomain.SKService())
 	require.NoError(t, store.UpsertRetryWork(ctx, testBlockedRetryWorkRow("blocked.txt", "", syncdomain.ActionRemoteDelete, syncdomain.SKService(), 2)))
 
 	blocked, err := store.ListBlockedRetryWork(ctx)
@@ -93,6 +94,7 @@ func TestReadDriveStatusSnapshot_RetryingIgnoresBlockedAndLowAttemptRows(t *test
 
 	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("retrying-a.txt", "", syncdomain.ActionUpload, 3, 10)))
 	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("retrying-b.txt", "", syncdomain.ActionDownload, 4, 20)))
+	seedBlockScopeForTest(t, store, syncdomain.SKService())
 	require.NoError(t, store.UpsertRetryWork(ctx, testBlockedRetryWorkRow("blocked.txt", "", syncdomain.ActionRemoteDelete, syncdomain.SKService(), 7)))
 	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("fresh.txt", "", syncdomain.ActionUpload, 2, 30)))
 
@@ -110,7 +112,8 @@ func TestRetryWorkScopeReadyAndDeleteHelpers(t *testing.T) {
 	ctx := t.Context()
 	now := time.Unix(75, 0).UnixNano()
 
-	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("delete-me.txt", "", syncdomain.ActionUpload, 1, 0)))
+	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("delete-me.txt", "", syncdomain.ActionUpload, 1, 1)))
+	seedBlockScopeForTest(t, store, syncdomain.SKService())
 	require.NoError(t, store.UpsertRetryWork(ctx, testBlockedRetryWorkRow("blocked-a.txt", "", syncdomain.ActionRemoteDelete, syncdomain.SKService(), 2)))
 	require.NoError(t, store.UpsertRetryWork(ctx, testBlockedRetryWorkRow("blocked-b.txt", "", syncdomain.ActionRemoteDelete, syncdomain.SKService(), 3)))
 
@@ -204,7 +207,7 @@ func TestRecordRetryWorkFailure_RejectsInvalidInput(t *testing.T) {
 	assert.Contains(t, err.Error(), "requires delay function")
 
 	err = func() error {
-		_, recordErr := store.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("blocked-without-scope.txt", "", syncdomain.ActionUpload), syncdomain.ScopeKey{})
+		_, recordErr := store.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("blocked-without-scope.txt", "", syncdomain.ActionUpload), syncdomain.ScopeKey{}, nil)
 		return recordErr
 	}()
 	require.Error(t, err)
@@ -223,7 +226,8 @@ func TestRecordRetryWorkFailure_PopulatesRetryAndBlockedRows(t *testing.T) {
 	_, err := store.RecordRetryWorkFailure(ctx, syncfixture.TestRetryWorkFailure("retry.txt", "", syncdomain.ActionUpload), func(int) time.Duration { return time.Minute })
 	require.NoError(t, err)
 
-	_, err = store.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("blocked.txt", "", syncdomain.ActionRemoteDelete), syncdomain.SKService())
+	seedBlockScopeForTest(t, store, syncdomain.SKService())
+	_, err = store.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("blocked.txt", "", syncdomain.ActionRemoteDelete), syncdomain.SKService(), nil)
 	require.NoError(t, err)
 
 	rows, err := store.ListRetryWork(ctx)
@@ -267,7 +271,8 @@ func TestClearBlockedRetryWork_RemovesOnlyMatchingScopedWork(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("blocked.txt", "", syncdomain.ActionUpload), syncdomain.SKService())
+	seedBlockScopeForTest(t, store, syncdomain.SKService())
+	_, err := store.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("blocked.txt", "", syncdomain.ActionUpload), syncdomain.SKService(), nil)
 	require.NoError(t, err)
 
 	other := syncfixture.TestRetryWorkRow("blocked.txt", "old.txt", syncdomain.ActionRemoteMove)
@@ -388,10 +393,10 @@ func TestScanRetryWorkRow_ConditionTypeMustBeEmptyOrAMember(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	actionable := syncfixture.TestDelayedRetryWorkRow("refused.txt", "", syncdomain.ActionUpload, 1, 0)
+	actionable := syncfixture.TestDelayedRetryWorkRow("refused.txt", "", syncdomain.ActionUpload, 1, 1)
 	actionable.ConditionType = syncdomain.IssuePathTooLong
 	require.NoError(t, store.UpsertRetryWork(ctx, actionable))
-	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("transient.txt", "", syncdomain.ActionDownload, 1, 0)))
+	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("transient.txt", "", syncdomain.ActionDownload, 1, 1)))
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
@@ -419,7 +424,7 @@ func TestUpsertRetryWork_RefusesAConditionTypeNoMemberHas(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	row := syncfixture.TestDelayedRetryWorkRow("refused.txt", "", syncdomain.ActionUpload, 1, 0)
+	row := syncfixture.TestDelayedRetryWorkRow("refused.txt", "", syncdomain.ActionUpload, 1, 1)
 	row.ConditionType = syncdomain.IssueType("path_too_long_v2")
 	require.ErrorContains(t, store.UpsertRetryWork(ctx, row), `unknown condition type "path_too_long_v2"`)
 

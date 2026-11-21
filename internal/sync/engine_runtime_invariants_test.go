@@ -43,64 +43,10 @@ func TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockS
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}))
-	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("Shared/Docs/file.txt", "", syncdomain.ActionUpload), scopeKey)
+	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("Shared/Docs/file.txt", "", syncdomain.ActionUpload), scopeKey, nil)
 	require.NoError(t, err)
 
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
-}
-
-// Validates: R-2.10.33
-func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutPath(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	flow := testEngineFlow(t, eng)
-
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
-		ActionType:   syncdomain.ActionUpload,
-		AttemptCount: 1,
-		NextRetryAt:  eng.nowFunc().Add(time.Minute).UnixNano(),
-	}))
-
-	err := flow.assertPersistedInvariants(t.Context())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "retry_work row missing path")
-}
-
-// Validates: R-2.10.33
-func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutTiming(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	flow := testEngineFlow(t, eng)
-
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
-		Path:         "delayed.txt",
-		ActionType:   syncdomain.ActionUpload,
-		AttemptCount: 1,
-	}))
-
-	err := flow.assertPersistedInvariants(t.Context())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing retry timing")
-}
-
-// Validates: R-2.10.33
-func TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutAttempts(t *testing.T) {
-	t.Parallel()
-
-	eng := newSingleOwnerEngine(t)
-	flow := testEngineFlow(t, eng)
-
-	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
-		Path:        "delayed.txt",
-		ActionType:  syncdomain.ActionUpload,
-		NextRetryAt: eng.nowFunc().Add(time.Minute).UnixNano(),
-	}))
-
-	err := flow.assertPersistedInvariants(t.Context())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid attempt count")
 }
 
 // A delayed row's retry time at either end of the stored range is timing;

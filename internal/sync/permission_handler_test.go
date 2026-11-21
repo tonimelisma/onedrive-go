@@ -253,7 +253,7 @@ func TestScopeKeyForPermissionEvidence_EveryMemberIsDecided(t *testing.T) {
 			// evidence; every other member is not a permission condition.
 			Verdict: syncdomain.ScopeKey{},
 			Members: []syncdomain.IssueType{
-				syncdomain.IssueInvalidFilename, syncdomain.IssuePathTooLong, syncdomain.IssueFileTooLarge, syncdomain.IssueHashPanic,
+				syncdomain.IssueInvalidFilename, syncdomain.IssuePathTooLong, syncdomain.IssueFileTooLarge, syncdomain.IssueHashError,
 				syncdomain.IssueUnauthorized, syncdomain.IssueRemoteReadDenied, syncdomain.IssueRemoteRootNotFound, syncdomain.IssueQuotaExceeded, syncdomain.IssueRateLimited,
 				syncdomain.IssueCaseCollision, syncdomain.IssueRemoteNameTwin, syncdomain.IssueDiskFull, syncdomain.IssueServiceOutage,
 				syncdomain.IssueFileTooLargeForSpace, syncdomain.IssueLocalNameTooLong, syncdomain.IssueDeletesHeld, syncdomain.IssueLocalUnsyncableReplacement,

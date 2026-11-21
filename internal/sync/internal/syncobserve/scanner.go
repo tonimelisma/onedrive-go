@@ -290,7 +290,7 @@ func (o *LocalObserver) hashPhase(
 						slog.String("path", job.dbRelPath))
 					skip(syncdomain.SkippedItem{
 						Path:   job.dbRelPath,
-						Reason: syncdomain.IssueHashPanic,
+						Reason: syncdomain.IssueHashError,
 						Detail: panicErr.Error(),
 					})
 				}
@@ -322,7 +322,7 @@ func (o *LocalObserver) hashPhase(
 					// unavailable truth.
 					skip(syncdomain.SkippedItem{
 						Path:   job.dbRelPath,
-						Reason: syncdomain.IssueHashPanic,
+						Reason: syncdomain.IssueHashError,
 						Detail: fmt.Sprintf("could not read the file to check its content (%v)", err),
 					})
 				}

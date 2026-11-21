@@ -40,9 +40,10 @@ func validateBlockScope(block *syncdomain.BlockScope) error {
 	return nil
 }
 
-// UpsertBlockScope persists a block scope to the block_scopes table.
-// INSERT OR REPLACE — the scope_key is the primary key, so this handles
-// both insert and update. All fields are serialized: ScopeKey.String() for
+// UpsertBlockScope persists a block scope to the block_scopes table: an
+// upsert on the scope_key primary key that updates the row in place, never
+// INSERT OR REPLACE, whose delete of the old row the blocked retry_work rows
+// referencing it would refuse. All fields are serialized: ScopeKey.String() for
 // the key, StoredTimeNano for the trial time (a server's Retry-After can put
 // it past 2262), nanoseconds for Duration.
 func (s *SyncStore) UpsertBlockScope(ctx context.Context, block *syncdomain.BlockScope) error {
@@ -55,9 +56,13 @@ func upsertBlockScopeWithRunner(ctx context.Context, runner SqlTxRunner, block *
 	}
 
 	_, err := runner.ExecContext(ctx,
-		`INSERT OR REPLACE INTO block_scopes
+		`INSERT INTO block_scopes
 			(scope_key, trial_interval, next_trial_at, slow_start_threshold)
-		VALUES (?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(scope_key) DO UPDATE SET
+			trial_interval = excluded.trial_interval,
+			next_trial_at = excluded.next_trial_at,
+			slow_start_threshold = excluded.slow_start_threshold`,
 		block.Key.String(),
 		int64(block.TrialInterval),
 		syncdomain.StoredTimeNano(block.NextTrialAt),
@@ -71,7 +76,9 @@ func upsertBlockScopeWithRunner(ctx context.Context, runner SqlTxRunner, block *
 }
 
 // DeleteBlockScope removes a block scope from the block_scopes table.
-// No-op if the row doesn't exist (DELETE WHERE is a natural no-op).
+// No-op if the row doesn't exist (DELETE WHERE is a natural no-op). The
+// database refuses it while a blocked retry_work row still references the
+// scope.
 func (s *SyncStore) DeleteBlockScope(ctx context.Context, key syncdomain.ScopeKey) error {
 	return deleteBlockScopeWithRunner(ctx, s.db, key)
 }

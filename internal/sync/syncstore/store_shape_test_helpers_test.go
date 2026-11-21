@@ -1,9 +1,24 @@
 package syncstore
 
 import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
+
+// seedBlockScopeForTest writes key's block_scopes row, which work blocked
+// under key references (the database refuses the blocked row without it).
+func seedBlockScopeForTest(t *testing.T, store *SyncStore, key syncdomain.ScopeKey) {
+	t.Helper()
+
+	require.NoError(t, store.UpsertBlockScope(t.Context(),
+		syncfixture.TestBlockScope(key, time.Minute, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))))
+}
 
 func testBlockedRetryWorkRow(
 	path string,

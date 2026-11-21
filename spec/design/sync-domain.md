@@ -110,11 +110,11 @@ known to clear by itself. Each key's console label is a switch over every key
 too (`conditionLabelText`, sync-engine.md). Their tests read the keys from
 `condition_keys.go` (`stringConstantsOfType`).
 
-`hash_panic` is narrower than its use: the scanner records it for a panic in
-a hash worker and for a file it could not read to hash, and users see it as
-the condition `hash_error` (`ConditionHashError`). The stored value keeps its
-name, because a rename changes what `observation_issues` holds and so needs a
-store generation of its own; the comment at the constant says so. The stores
+`hash_error` is what the scanner records for a panic in a hash worker and for
+a file it could not read to hash, and users see it as the condition of the
+same name (`ConditionHashError`). Before store generation 29 the stored value
+had a name that covered only the panic; the rename changed what
+`observation_issues` holds, which is why it waited for a generation. The stores
 convert to and from the stored string at their own boundary and refuse a
 value that is not a member (sync-store.md); elsewhere a value becomes a plain
 string only as a log attribute or in CLI output.

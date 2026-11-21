@@ -322,7 +322,6 @@ func TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks(t *testing.T) {
 	eng.transferWorkers = 2
 	recorder := attachDebugEventRecorder(eng)
 	rt := testWatchRuntime(t, eng)
-	ctx := t.Context()
 	key := syncdomain.SKThrottleDrive(eng.driveID)
 	otherDrive := driveid.New("0000000000000002")
 
@@ -335,12 +334,10 @@ func TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks(t *testing.T) {
 	}
 	rt.replaceOutbox([]*syncdomain.TrackedAction{first, other, second})
 
-	// The failure that activates the scope is persisted blocked first.
-	_, err := eng.baseline.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("failed.txt", "", syncdomain.ActionUpload), key)
-	require.NoError(t, err)
-	require.NoError(t, rt.applyBlockScope(ctx, syncdomain.ScopeUpdateResult{
+	// The failure that activates the scope is persisted blocked with it.
+	activateScopeForTest(t, rt.engineFlow, syncfixture.TestRetryWorkKey("failed.txt", "", syncdomain.ActionUpload), syncdomain.ScopeUpdateResult{
 		Block: true, ScopeKey: key, ConditionType: syncdomain.IssueRateLimited, RetryAfter: 10 * time.Second,
-	}))
+	})
 
 	require.Equal(t, []*syncdomain.TrackedAction{other}, rt.currentOutbox(), "only work the scope does not block stays admitted")
 	for _, ta := range []*syncdomain.TrackedAction{first, second} {
@@ -450,15 +447,15 @@ func TestEngineFlow_LaterShorterRetryAfterNeverPullsTheTrialEarlier(t *testing.T
 	eng, rt, _, clock := rampTestEngine(t, 4)
 	ctx := t.Context()
 	key := syncdomain.SKThrottleDrive(eng.driveID)
-	holdBlockedUploadsForTest(t, eng, rt, key, 1, 3)
 	now := clock.Now()
 
-	require.NoError(t, rt.applyBlockScope(ctx, syncdomain.ScopeUpdateResult{
+	activateScopeForTest(t, rt.engineFlow, syncfixture.TestRetryWorkKey("first-429.txt", "", syncdomain.ActionUpload), syncdomain.ScopeUpdateResult{
 		Block: true, ScopeKey: key, ConditionType: syncdomain.IssueRateLimited, RetryAfter: 40 * time.Second,
-	}))
-	require.NoError(t, rt.applyBlockScope(ctx, syncdomain.ScopeUpdateResult{
+	})
+	holdBlockedUploadsForTest(t, eng, rt, key, 1, 3)
+	activateScopeForTest(t, rt.engineFlow, syncfixture.TestRetryWorkKey("second-429.txt", "", syncdomain.ActionUpload), syncdomain.ScopeUpdateResult{
 		Block: true, ScopeKey: key, ConditionType: syncdomain.IssueRateLimited, RetryAfter: 10 * time.Second,
-	}))
+	})
 	scope, active := rt.scopes.lookupActiveScope(key)
 	require.True(t, active)
 	assert.Equal(t, now.Add(40*time.Second), scope.NextTrialAt, "a re-activation keeps the later deadline")

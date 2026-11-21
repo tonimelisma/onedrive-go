@@ -147,7 +147,7 @@ and every other significant type in the tree already matched its own name
 | Shortcut alias mutation is a parent-engine-internal operation by binding item ID and updates parent shortcut-root state. | `TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState`, `TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain` |
 | An issue type or condition type that no `IssueType` member names is refused at the store boundary on read and on write (R-2.5.6); every member has a stated verdict on local and remote truth and on the remote subtree, and a value outside the enum leaves both sides of its path unavailable; a remote twin's subtree is unavailable on OneDrive's side by its type alone. | `TestSyncStore_ListObservationIssues_RefusesUnknownStoredIssueType`, `TestSyncStore_ReconcileObservationFindings_RefusesToWriteAnUnknownIssueType`, `TestScanRetryWorkRow_ConditionTypeMustBeEmptyOrAMember`, `TestUpsertRetryWork_RefusesAConditionTypeNoMemberHas`, `TestObservationIssueBlocksTruth_VerdictForEveryIssueType`, `TestObservationIssueBlocksLocalTruth_ValueOutsideTheEnumIsUnavailable`, `TestObservationIssueBlocksRemoteTruth_ValueOutsideTheEnumIsUnavailable`, `TestTruthAvailabilityIndex_OnlyASubtreeBoundingTypeBlocksDescendants` |
 | An observation findings batch replaces the stored issues of exactly the types it manages, and a batch that reports an issue of a type it does not manage is refused before anything is written, naming the type and the path: such a row would outlive every later batch that stops reporting it, as an interrupted removal's report outlived the file (R-2.10.10, R-6.4.9). | `TestBuildObservationReconcilePlan_RefusesAnIssueOfATypeTheBatchDoesNotManage`, `TestSyncStore_ReconcileObservationFindings_RefusesAnIssueOfATypeTheBatchDoesNotManage`, `TestSyncStore_ReconcileObservationFindings_OnlyClearsManagedFamilies`, `TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover` |
-| Debug invariant checks reject malformed retry/block durable state before runtime handoff. | `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutPath`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutTiming`, `TestEngineFlow_AssertPersistedInvariants_RejectsRetryWorkWithoutAttempts`, `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkWithTiming`, `TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockScope` |
+| The schema refuses malformed retry/block durable state (an empty path, no attempt, retry timing on a blocked row or none on a ready one, a blocked row without its scope row, a scope row deleted under its blocked work); the debug invariant checks reject what it cannot, a scope row with no blocked work. | `TestRetryWorkSchema_ChecksRefuseTheStatesTheEngineUsedToAssert`, `TestRetryWorkSchema_BlockedRowsReferenceTheirScopeRow`, `TestRecordBlockedRetryWork_RefusesABlockedRowWithoutItsScope`, `TestBlockScopeRows_CannotGoWhileBlockedWorkReferencesThem`, `TestEngineFlow_AssertPersistedInvariants_RejectsOrphanBlockScope`, `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkWithTiming`, `TestEngineFlow_AssertPersistedInvariants_AllowsBlockedRetryWorkBackedBlockScope` |
 | Stored times compared by order saturate at the ends of the int64 range, so a trial a saturated `Retry-After` puts past 2262 is not due after a restart; readers take only zero as "no time". | `TestStoredTimeNano_SaturatesAtBothEndsOfTheRange`, `TestUpsertBlockScope_SaturatedTrialSurvivesAReload`, `TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange`, `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkAtBothEndsOfTheStoredRange` |
 | The store and the inspector open the file they name when its folder's name holds `?` or `#`, with every pragma applied. | `TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters`, `TestSQLiteFileURI_EscapesTheDatabasePath` |
 | Remote modification times saturate through the same encoder at every writer and come back through one decoder, so an item dated 2300 or 1601 is downloaded with the last or first storable time and the next pass plans nothing; a time re-dated to the epoch on either side converges. | `TestStoredTimeNano_RemoteModificationTimeWritersAgree`, `TestRunOnce_ARemoteFileDated2300DownloadsWithTheLastStorableTime`, `TestRunOnce_ARemoteFileDated1601DownloadsWithTheFirstStorableTime`, `TestRunOnce_AFileRedatedToTheEpochConverges`, `TestStoredTimes_EveryDecodeIsDeclared` |
@@ -156,18 +156,34 @@ and every other significant type in the tree already matched its own name
 
 ### Retry and block state invariants
 
-`retry_work` rows are exact retry obligations. Every row must carry a non-empty
-path, a valid `ActionType`, and a positive attempt count. Delayed retry rows
-must have `next_retry_at`; blocked rows must not have retry timing and must
-reference an existing `block_scopes` row. Every persisted block scope must in
-turn have at least one blocked retry row. These invariants are asserted by the
-engine debug invariant pass so malformed durable state is caught at the store
-ownership boundary instead of becoming silent runtime debt.
+`retry_work` rows are exact retry obligations. Since generation 29 the schema
+refuses the malformed ones (`schema.go`): a row carries a non-empty path and
+a positive attempt count; a delayed row has `next_retry_at` and a blocked row
+has none; a blocked row has a scope; and a row blocked under a scope kept in
+`block_scopes` (`ScopeKey.PersistsInBlockScopes`) names it in
+`blocked_scope_key`, a foreign key to `block_scopes(scope_key)` that is set
+on exactly those rows and equals their `scope_key`. A row blocked under a read
+boundary leaves the key NULL: observation owns that boundary, and it has no
+`block_scopes` row to reference. The key has no cascade, so a scope row
+cannot be deleted while blocked work references it: `DiscardScope` deletes
+the blocked rows first, a release clears the key of each row it makes ready,
+and `UpsertBlockScope` updates a scope row in place rather than replacing it.
+What the database cannot hold, a valid `ActionType` and every persisted block
+scope having at least one blocked row, the engine debug invariant pass
+asserts (`TestRetryWorkSchema_BlockedRowsReferenceTheirScopeRow`,
+`TestRetryWorkSchema_ChecksRefuseTheStatesTheEngineUsedToAssert`,
+`TestBlockScopeRows_CannotGoWhileBlockedWorkReferencesThem`).
 
 A blocked row exists only under an active scope: a failure whose scope
 detection has not crossed its window is written as a delayed row with the
-scope as evidence, and `ReleaseOrphanBlockedRetryWork` makes any blocked row
-whose scope has no `block_scopes` row due again at startup. The status
+scope as evidence. The failure that activates a scope is recorded blocked
+under it in the transaction that writes the scope row
+(`RecordBlockedRetryWork` with the activation), so neither is ever stored
+without the other
+(`TestRecordBlockedRetryWork_AFailedBlockedRowLeavesNoScopeRow`). At startup
+`ReleaseOrphanBlockedRetryWork` makes the blocked rows that reference no
+scope row, those under read boundaries, due again
+(`TestRecordBlockedRetryWork_UnderAReadBoundaryCarriesNoKey`). The status
 snapshot read in the same pass carries `NeverSynced`, a store with no delta
 cursor and an empty baseline, which status shows as not synced yet
 (`TestReadDriveStatusSnapshot_AFreshStoreIsNeverSynced`,

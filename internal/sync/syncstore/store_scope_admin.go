@@ -80,6 +80,8 @@ func (s *SyncStore) DiscardScope(ctx context.Context, scopeKey syncdomain.ScopeK
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback discard-scope tx for %s", wire))
 	}()
 
+	// The blocked rows go first: they reference the scope row, and the
+	// database refuses to delete a scope row they still reference.
 	deleted, err = deleteBlockedRetryWorkByScopeTx(ctx, tx, wire)
 	if err != nil {
 		return nil, err

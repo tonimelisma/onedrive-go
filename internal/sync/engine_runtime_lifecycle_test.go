@@ -53,7 +53,7 @@ func TestBlockScopeActivationLine_EveryMemberIsDecided(t *testing.T) {
 		syncfixture.IssueTypeVerdictGroup[scopeLine]{
 			Verdict: scopeLine{generic: true},
 			Members: []syncdomain.IssueType{
-				syncdomain.IssueInvalidFilename, syncdomain.IssuePathTooLong, syncdomain.IssueFileTooLarge, syncdomain.IssueHashPanic,
+				syncdomain.IssueInvalidFilename, syncdomain.IssuePathTooLong, syncdomain.IssueFileTooLarge, syncdomain.IssueHashError,
 				syncdomain.IssueUnauthorized, syncdomain.IssueRemoteWriteDenied, syncdomain.IssueRemoteReadDenied, syncdomain.IssueRemoteRootNotFound, syncdomain.IssueLocalReadDenied,
 				syncdomain.IssueLocalWriteDenied, syncdomain.IssueCaseCollision, syncdomain.IssueRemoteNameTwin, syncdomain.IssueFileTooLargeForSpace,
 				syncdomain.IssueLocalNameTooLong, syncdomain.IssueDeletesHeld, syncdomain.IssueLocalUnsyncableReplacement, syncdomain.IssueLocalMountBoundary,
@@ -106,6 +106,7 @@ func TestEngineFlow_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *testi
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
+	seedBlockScopeRowForTest(t, eng, scopeKey)
 	require.NoError(t, flow.recordBlockedRetryWork(t.Context(), &root.Action, scopeKey))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -180,6 +181,7 @@ func TestEngineFlow_PersistBlockedRetryWork_CanonicalizesRowsAcrossRuntimePaths(
 func persistBlockedRetryViaAdmission(scopeKey syncdomain.ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
 	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
 		t.Helper()
+		seedBlockScopeRowForTest(t, eng, scopeKey)
 		action := &syncdomain.Action{
 			Type:    syncdomain.ActionUpload,
 			Path:    "Shared/Docs/file.txt",
@@ -193,6 +195,7 @@ func persistBlockedRetryViaAdmission(scopeKey syncdomain.ScopeKey) func(*testing
 func persistBlockedRetryViaHeldScope(scopeKey syncdomain.ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
 	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
 		t.Helper()
+		seedBlockScopeRowForTest(t, eng, scopeKey)
 		current := rt.sched.graph.Add(&syncdomain.Action{
 			Type:    syncdomain.ActionUpload,
 			Path:    "Shared/Docs/file.txt",
@@ -212,6 +215,7 @@ func persistBlockedRetryViaHeldScope(scopeKey syncdomain.ScopeKey) func(*testing
 func persistBlockedRetryViaTrialRehome(scopeKey syncdomain.ScopeKey) func(*testing.T, *testEngine, *engineFlow, *watchRuntime) {
 	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
 		t.Helper()
+		seedBlockScopeRowForTest(t, eng, scopeKey)
 		require.NoError(t, flow.rehomeBlockedRetryWork(t.Context(), &syncdomain.ActionCompletion{
 			Path:       "Shared/Docs/file.txt",
 			OldPath:    "Shared/Docs/old.txt",
@@ -275,6 +279,7 @@ func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissi
 
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
 	syncstoretest.SeedObservationIssueForTest(t, eng.baseline, "keep.txt", syncdomain.IssueInvalidFilename, syncdomain.ScopeKey{})
+	seedBlockScopeRowForTest(t, eng, scopeKey)
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 		Path:         "accessible/file.txt",
 		ActionType:   syncdomain.ActionDownload,
@@ -390,8 +395,9 @@ func TestEngineFlow_ClearBlockedRetryWorkForScope_RemovesScopedRetryWork(t *test
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 	scopeKey := syncdomain.SKService()
+	seedBlockScopeRowForTest(t, eng, scopeKey)
 
-	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("blocked.txt", "", syncdomain.ActionUpload), scopeKey)
+	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("blocked.txt", "", syncdomain.ActionUpload), scopeKey, nil)
 	require.NoError(t, err)
 
 	require.NoError(t, flow.clearBlockedRetryWorkForScope(t.Context(), syncdomain.RetryWorkKey{
@@ -453,10 +459,10 @@ func TestEngineFlow_AdmitReady_RehomedWorkDoesNotStrandItsOldScope(t *testing.T)
 	setTestBlockScope(t, eng, &syncdomain.BlockScope{Key: syncdomain.SKService()})
 	setTestBlockScope(t, eng, &syncdomain.BlockScope{Key: testThrottleScope()})
 	movedKey := syncfixture.TestRetryWorkKey("moved.txt", "", syncdomain.ActionDownload)
-	moved, err := eng.baseline.RecordBlockedRetryWork(t.Context(), movedKey, syncdomain.SKService())
+	moved, err := eng.baseline.RecordBlockedRetryWork(t.Context(), movedKey, syncdomain.SKService(), nil)
 	require.NoError(t, err)
 	flow.retryWork.rows[movedKey] = *moved
-	_, err = eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("other.txt", "", syncdomain.ActionDownload), testThrottleScope())
+	_, err = eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("other.txt", "", syncdomain.ActionDownload), testThrottleScope(), nil)
 	require.NoError(t, err)
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
 
@@ -491,8 +497,9 @@ func TestEngineFlow_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenScopeNoL
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
 	scopeKey := syncdomain.SKQuotaOwn()
+	seedBlockScopeRowForTest(t, eng, scopeKey)
 
-	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("trial.txt", "", syncdomain.ActionDownload), scopeKey)
+	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("trial.txt", "", syncdomain.ActionDownload), scopeKey, nil)
 	require.NoError(t, err)
 
 	ready := rt.sched.graph.Add(&syncdomain.Action{
@@ -521,8 +528,9 @@ func TestEngineFlow_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWithout
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
 	scopeKey := syncdomain.SKQuotaOwn()
+	seedBlockScopeRowForTest(t, eng, scopeKey)
 
-	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("trial.txt", "", syncdomain.ActionUpload), scopeKey)
+	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("trial.txt", "", syncdomain.ActionUpload), scopeKey, nil)
 	require.NoError(t, err)
 
 	ready := rt.sched.graph.Add(&syncdomain.Action{
@@ -656,7 +664,8 @@ func TestEngineFlow_ScopeHasBlockedRetryWork_AnswersForOneScope(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 	ctx := t.Context()
-	_, err := eng.baseline.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("held.txt", "", syncdomain.ActionUpload), syncdomain.SKService())
+	seedBlockScopeRowForTest(t, eng, syncdomain.SKService())
+	_, err := eng.baseline.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("held.txt", "", syncdomain.ActionUpload), syncdomain.SKService(), nil)
 	require.NoError(t, err)
 	_, err = eng.baseline.RecordRetryWorkFailure(ctx,
 		&syncdomain.RetryWorkFailure{Work: syncfixture.TestRetryWorkKey("timed.txt", "", syncdomain.ActionUpload), ScopeKey: syncdomain.SKQuotaOwn()},

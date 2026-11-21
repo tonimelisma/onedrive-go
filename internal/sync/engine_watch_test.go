@@ -538,7 +538,7 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 		TrialInterval: 5 * time.Second,
 		NextTrialAt:   eng.nowFunc().Add(5 * time.Second),
 	})
-	_, err := eng.baseline.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("held.txt", "", syncdomain.ActionUpload), syncdomain.SKService())
+	_, err := eng.baseline.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("held.txt", "", syncdomain.ActionUpload), syncdomain.SKService(), nil)
 	require.NoError(t, err)
 
 	_, err = eng.baseline.RecordRetryWorkFailure(ctx, syncfixture.TestRetryWorkFailure("retry.txt", "", syncdomain.ActionDownload), func(_ int) time.Duration {

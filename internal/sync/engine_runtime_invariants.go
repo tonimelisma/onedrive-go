@@ -190,6 +190,13 @@ func (flow *engineFlow) assertObserverExitPhase(
 	return fmt.Errorf("draining runtime must not treat observer exit as fatal outside shutdown")
 }
 
+// assertPersistedInvariants checks what the database does not hold itself.
+// The schema refuses an empty path, an attempt count below one, retry timing
+// on a blocked row or none on a ready one, a blocked row without a scope,
+// a blocked row under a block_scopes scope whose row is missing, and a
+// duplicate or empty scope key (schema.go, generation 29); what is left is a
+// known action type, the retry cache agreeing with the store, and every
+// scope row having blocked work to trial.
 func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	blocks, err := flow.deps.store.ListBlockScopes(ctx)
 	if err != nil {
@@ -205,66 +212,16 @@ func (flow *engineFlow) assertPersistedInvariants(ctx context.Context) error {
 	}
 	links := summarizePersistedScopeLinks(retryWork)
 
-	seenBlocks := make(map[syncdomain.ScopeKey]struct{}, len(blocks))
 	for i := range blocks {
-		if blocks[i] == nil {
-			return fmt.Errorf("nil persisted block scope")
-		}
-		if blocks[i].Key.IsZero() {
-			return fmt.Errorf("persisted block scope missing key")
-		}
-		if _, ok := seenBlocks[blocks[i].Key]; ok {
-			return fmt.Errorf("duplicate persisted block scope %s", blocks[i].Key.String())
-		}
-		seenBlocks[blocks[i].Key] = struct{}{}
 		if !links.hasRelatedRows(blocks[i].Key) {
 			return fmt.Errorf("persisted block scope %s has no related blocked retry_work rows", blocks[i].Key.String())
 		}
 	}
 
 	for i := range retryWork {
-		if err := assertPersistedRetryWorkInvariant(&retryWork[i], seenBlocks); err != nil {
-			return err
+		if _, valueErr := retryWork[i].ActionType.Value(); valueErr != nil {
+			return fmt.Errorf("retry_work %s has invalid action type: %w", retryWork[i].Path, valueErr)
 		}
-	}
-
-	return nil
-}
-
-func assertPersistedRetryWorkInvariant(row *syncdomain.RetryWorkRow, seenBlocks map[syncdomain.ScopeKey]struct{}) error {
-	if row.Path == "" {
-		return fmt.Errorf("retry_work row missing path for action %s", row.ActionType.String())
-	}
-	if _, valueErr := row.ActionType.Value(); valueErr != nil {
-		return fmt.Errorf("retry_work %s has invalid action type: %w", row.Path, valueErr)
-	}
-	if row.AttemptCount <= 0 {
-		return fmt.Errorf("retry_work %s has invalid attempt count %d", row.Path, row.AttemptCount)
-	}
-	if !row.Blocked {
-		return assertDelayedRetryWorkInvariant(row)
-	}
-
-	return assertBlockedRetryWorkInvariant(row, seenBlocks)
-}
-
-func assertDelayedRetryWorkInvariant(row *syncdomain.RetryWorkRow) error {
-	if !syncdomain.StoredTimeIsSet(row.NextRetryAt) {
-		return fmt.Errorf("retry_work %s is missing retry timing", row.Path)
-	}
-
-	return nil
-}
-
-func assertBlockedRetryWorkInvariant(row *syncdomain.RetryWorkRow, seenBlocks map[syncdomain.ScopeKey]struct{}) error {
-	if row.ScopeKey.IsZero() {
-		return fmt.Errorf("blocked retry_work %s is missing scope key", row.Path)
-	}
-	if _, ok := seenBlocks[row.ScopeKey]; !ok {
-		return fmt.Errorf("blocked retry_work %s references missing block scope %s", row.Path, row.ScopeKey.String())
-	}
-	if syncdomain.StoredTimeIsSet(row.NextRetryAt) {
-		return fmt.Errorf("blocked retry_work %s must not have retry timing", row.Path)
 	}
 
 	return nil

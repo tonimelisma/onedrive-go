@@ -1216,12 +1216,12 @@ func TestQuerySyncState_CountsAuthAndRemoteBlockedScopesAsConditions(t *testing.
 	_, err = store.RecordBlockedRetryWork(ctx, syncdomain.RetryWorkKey{
 		Path:       "/blocked/a.txt",
 		ActionType: syncdomain.ActionUpload,
-	}, scopeKey)
+	}, scopeKey, nil)
 	require.NoError(t, err)
 	_, err = store.RecordBlockedRetryWork(ctx, syncdomain.RetryWorkKey{
 		Path:       "/blocked/b.txt",
 		ActionType: syncdomain.ActionUpload,
-	}, scopeKey)
+	}, scopeKey, nil)
 	require.NoError(t, err)
 	seedObservationIssueForStatusTest(t, store, &syncdomain.ObservationIssue{
 		Path:      "/actionable.txt",
@@ -1312,12 +1312,12 @@ func TestQuerySyncState_PreservesConditionScopeContext(t *testing.T) {
 	_, err = store.RecordBlockedRetryWork(ctx, syncdomain.RetryWorkKey{
 		Path:       "/blocked/a.txt",
 		ActionType: syncdomain.ActionUpload,
-	}, scopeKey)
+	}, scopeKey, nil)
 	require.NoError(t, err)
 	_, err = store.RecordBlockedRetryWork(ctx, syncdomain.RetryWorkKey{
 		Path:       "/blocked/b.txt",
 		ActionType: syncdomain.ActionUpload,
-	}, scopeKey)
+	}, scopeKey, nil)
 	require.NoError(t, err)
 
 	info := queryLiveSyncState(t.Context(), dbPath, logger)

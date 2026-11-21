@@ -298,7 +298,7 @@ func seedDurableRecoveryTruth(
 	_, err := mgr.RecordBlockedRetryWork(ctx, syncdomain.RetryWorkKey{
 		Path:       "Shared/Docs/blocked.txt",
 		ActionType: syncdomain.ActionUpload,
-	}, scopeKey)
+	}, scopeKey, nil)
 	require.NoError(t, err)
 }
 

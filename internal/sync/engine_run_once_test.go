@@ -360,11 +360,13 @@ func TestReconcileRuntimeState_PrunesRetryAndScopeState(t *testing.T) {
 		Path:         "keep.txt",
 		ActionType:   syncdomain.ActionUpload,
 		AttemptCount: 1,
+		NextRetryAt:  time.Unix(100, 0).UnixNano(),
 	}))
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &syncdomain.RetryWorkRow{
 		Path:         "drop.txt",
 		ActionType:   syncdomain.ActionDownload,
 		AttemptCount: 1,
+		NextRetryAt:  time.Unix(100, 0).UnixNano(),
 	}))
 	require.NoError(t, eng.baseline.UpsertBlockScope(ctx, &syncdomain.BlockScope{
 		Key:           syncdomain.SKService(),

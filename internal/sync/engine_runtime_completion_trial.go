@@ -76,7 +76,8 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 // applyTrialRetryFallback persists a failed trial as retry work. When the
 // failure names a block scope of its own (a scope-blocking answer, or one that
 // scope detection turns into a block), the work is persisted blocked under
-// that scope and the trial's scope transitions to it in one step, which
+// that scope, in the transaction that writes the scope's row, and the
+// trial's scope transitions to it in one step, which
 // discards the trial's scope if the trial was its only blocked work: checked
 // between the two, either order left a block scope without blocked work
 // (found by the chaos Graph layer, D-092). Otherwise the trial's scope is
@@ -106,14 +107,21 @@ func (flow *engineFlow) applyTrialRetryFallback(
 		target = detected
 	}
 
-	persisted, err := flow.persistAndHoldFailure(ctx, current, persistAs, r)
+	var activation *blockActivation
+	if target.Block {
+		prepared, err := flow.prepareBlockActivation(target)
+		if err != nil {
+			return err
+		}
+		activation = prepared
+	}
+
+	persisted, err := flow.persistAndHoldFailure(ctx, current, persistAs, r, activation)
 	if err != nil {
 		return err
 	}
-	if target.Block {
-		if err := flow.transitionTrialScopeToPersistedBlock(
-			ctx, trialScopeKey, target.ScopeKey, target.ConditionType, target.RetryAfter,
-		); err != nil {
+	if activation != nil {
+		if err := flow.transitionTrialScopeToPersistedBlock(ctx, trialScopeKey, activation); err != nil {
 			return err
 		}
 	} else if err := flow.rearmOrDiscardScope(ctx, trialScopeKey); err != nil {
@@ -145,14 +153,18 @@ func (flow *engineFlow) applyTrialReclassification(
 	}
 
 	if decision.Class == errclass.ClassScopeBlockingTransient && decision.ScopeKey == syncdomain.SKDiskLocal() {
-		if err := flow.rehomeBlockedRetryWork(ctx, r, decision.ScopeKey); err != nil {
-			return false, err
-		}
-		return true, flow.applyBlockScope(ctx, syncdomain.ScopeUpdateResult{
+		activation, err := flow.prepareBlockActivation(syncdomain.ScopeUpdateResult{
 			Block:         true,
 			ScopeKey:      decision.ScopeKey,
 			ConditionType: decision.ScopeKey.ConditionType(),
 		})
+		if err != nil {
+			return false, err
+		}
+		if _, err := flow.recordActivatingBlockedRetryWork(ctx, syncdomain.RetryWorkKeyForCompletion(r), activation); err != nil {
+			return false, err
+		}
+		return true, flow.applyBlockActivation(ctx, activation)
 	}
 
 	return false, nil
