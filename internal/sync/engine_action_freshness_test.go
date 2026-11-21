@@ -20,6 +20,7 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 
 	eng := newSingleOwnerEngine(t)
 	eng.perfCollector = perf.NewCollector(nil)
+	refreshTestFlowInputs(eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 	flow := testEngineFlow(t, eng)

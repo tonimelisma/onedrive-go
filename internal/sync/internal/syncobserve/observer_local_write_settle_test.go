@@ -30,7 +30,7 @@ func newSettleTestObserver(t *testing.T, baseline *syncdomain.Baseline, clock *s
 	obs.clock = clock
 	// Each read returns a new hash: every write in these tests changes the
 	// content.
-	obs.hashFunc = func(context.Context, string) (string, error) {
+	obs.hooks.HashFile = func(context.Context, string) (string, error) {
 		return fmt.Sprintf("hash-from-read-%d", hashCalls.Add(1)), nil
 	}
 
@@ -310,7 +310,7 @@ func TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash(t *test
 	obs.clock = clock
 	// The file grows during every read, as a log being appended to does.
 	grow := 0
-	obs.hashFunc = func(_ context.Context, path string) (string, error) {
+	obs.hooks.HashFile = func(_ context.Context, path string) (string, error) {
 		grow++
 		require.NoError(t, os.WriteFile(path, []byte(strings.Repeat("x", grow+1)), 0o600))
 		return "partial", nil

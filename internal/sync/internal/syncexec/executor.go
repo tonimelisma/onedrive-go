@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -26,7 +25,7 @@ import (
 const GraphRootID = "root"
 
 // ExecutorConfig holds the configuration every per-action executor shares.
-// The engine sets it up while it is built and no run changes it, except
+// NewExecutorConfig builds it whole and no run changes it, except
 // parentChecks, which guards itself and is reset for each plan.
 type ExecutorConfig struct {
 	items            syncdomain.ItemClient
@@ -49,18 +48,11 @@ type ExecutorConfig struct {
 	// driveops.WithDiskCheck when constructing the TransferManager.
 	transferMgr *driveops.TransferManager
 
-	// crashAt, when set, is called at each crash point (crash_points.go):
-	// an error stops the operation there as a crash would (D-091).
-	// Test-only; nil in production.
-	crashAt func(point string) error
+	// hooks are the executor's and its worker pools' test seams; the zero
+	// value is production.
+	hooks Hooks
 
-	// Injectable for testing.
-	nowFunc  func() time.Time
-	hashFunc func(ctx context.Context, filePath string) (string, error)
-	// hashReader hashes an open descriptor; destructive actions verify the
-	// exact inode they then remove or replace through it (D-010). It stops
-	// when the action's context ends.
-	hashReader      func(ctx context.Context, r io.Reader) (string, error)
+	nowFunc         func() time.Time
 	pathConvergence driveops.PathConvergence
 
 	// trash keeps what local deletes remove and what downloads replace
@@ -71,24 +63,9 @@ type ExecutorConfig struct {
 	// content is sent (R-5.6.15). Nil in executor-only tests.
 	pendingCreates PendingCreateStore
 
-	// storeAccessTimeout bounds every store access the executor runs detached
-	// from its action's context. Zero means OutcomeCommitTimeout; tests
-	// shorten it.
-	storeAccessTimeout time.Duration
-
 	// parentChecks remembers the remote parents already read live for the
 	// plan being executed, so sibling creates do not read them again.
 	parentChecks *remoteParentChecks
-}
-
-// SetTrash wires the drive's local trash.
-func (cfg *ExecutorConfig) SetTrash(trash *localtrash.Trash) {
-	cfg.trash = trash
-}
-
-// SetPendingCreates wires the store that records pending creates.
-func (cfg *ExecutorConfig) SetPendingCreates(store PendingCreateStore) {
-	cfg.pendingCreates = store
 }
 
 // executor executes individual actions against the Graph API and local
@@ -100,62 +77,93 @@ type Executor struct {
 	baseline *syncdomain.Baseline
 }
 
-// NewExecutorConfig creates the executor configuration bound to a
-// specific drive and sync root. Use NewExecution to create per-call executors.
-func NewExecutorConfig(
-	items syncdomain.ItemClient, downloads driveops.Downloader, uploads driveops.Uploader,
-	syncTree *synctree.Root, driveID driveid.ID, logger *slog.Logger, pathConvergence driveops.PathConvergence,
-) *ExecutorConfig {
-	cfg := &ExecutorConfig{
-		items:           items,
-		downloads:       downloads,
-		uploads:         uploads,
-		syncTree:        syncTree,
-		driveID:         driveID,
-		logger:          logger,
-		nowFunc:         time.Now,
-		hashFunc:        driveops.ComputeQuickXorHashContext,
-		hashReader:      driveops.ComputeQuickXorHashFromReaderContext,
-		pathConvergence: pathConvergence,
-		parentChecks:    newRemoteParentChecks(),
+// ExecutorInputs is everything NewExecutorConfig builds an executor
+// configuration from. Items, Downloads, Uploads, Transfers, SyncTree,
+// DriveID, Logger and Now are required; the rest may be zero.
+type ExecutorInputs struct {
+	Items     syncdomain.ItemClient
+	Downloads driveops.Downloader
+	Uploads   driveops.Uploader
+	// Transfers handles unified download/upload with resume and disk space
+	// pre-checks (R-6.2.6).
+	Transfers *driveops.TransferManager
+	SyncTree  *synctree.Root
+	DriveID   driveid.ID
+	// RemoteRootItemID is the mounted remote root of a mount-root engine;
+	// empty is the drive root.
+	RemoteRootItemID string
+	Logger           *slog.Logger
+	// ContentFilter tells a folder delete which leftover children sync
+	// deliberately does not own (D-012).
+	ContentFilter syncdomain.ContentFilterConfig
+	// SyncRootIdentity is the sync folder identity remote deletes re-check
+	// before acting on local absence (D-011). It is shared, not copied, so a
+	// binding made after startup is seen here too.
+	SyncRootIdentity *syncdomain.SyncRootIdentity
+	PathConvergence  driveops.PathConvergence
+	// Trash keeps what local deletes remove and what downloads replace
+	// (P-4); nil makes removal permanent.
+	Trash *localtrash.Trash
+	// PendingCreates records new files whose empty item exists before their
+	// content is sent (R-5.6.15).
+	PendingCreates PendingCreateStore
+	// Now is the executor's clock, the engine's run clock in production.
+	Now   func() time.Time
+	Hooks Hooks
+}
+
+// NewExecutorConfig builds the executor configuration bound to one drive and
+// sync root, refusing inputs that lack a required field. Use NewExecution to
+// create per-call executors.
+func NewExecutorConfig(in *ExecutorInputs) (*ExecutorConfig, error) {
+	if missing := in.missingRequiredField(); missing != "" {
+		return nil, fmt.Errorf("syncexec: building executor config: %s is required", missing)
 	}
 
-	return cfg
+	return &ExecutorConfig{
+		items:            in.Items,
+		downloads:        in.Downloads,
+		uploads:          in.Uploads,
+		transferMgr:      in.Transfers,
+		syncTree:         in.SyncTree,
+		driveID:          in.DriveID,
+		remoteRootItemID: in.RemoteRootItemID,
+		logger:           in.Logger,
+		ignoreJunkFiles:  in.ContentFilter.IgnoreJunkFiles,
+		contentFilter:    syncdomain.NewContentFilter(syncdomain.CloneContentFilterConfig(in.ContentFilter)),
+		syncRootIdentity: in.SyncRootIdentity,
+		pathConvergence:  in.PathConvergence,
+		trash:            in.Trash,
+		pendingCreates:   in.PendingCreates,
+		nowFunc:          in.Now,
+		hooks:            in.Hooks,
+		parentChecks:     newRemoteParentChecks(),
+	}, nil
 }
 
-// SetTransferMgr sets the transfer manager for unified download/upload with
-// resume and disk space pre-checks. Must be called before any Executor is
-// created from this config.
-func (cfg *ExecutorConfig) SetTransferMgr(mgr *driveops.TransferManager) {
-	cfg.transferMgr = mgr
-}
+// missingRequiredField names the first required input that is zero, or is
+// empty when none is.
+func (in *ExecutorInputs) missingRequiredField() string {
+	required := []struct {
+		name    string
+		missing bool
+	}{
+		{name: "Items", missing: in.Items == nil},
+		{name: "Downloads", missing: in.Downloads == nil},
+		{name: "Uploads", missing: in.Uploads == nil},
+		{name: "Transfers", missing: in.Transfers == nil},
+		{name: "SyncTree", missing: in.SyncTree == nil},
+		{name: "DriveID", missing: in.DriveID.IsZero()},
+		{name: "Logger", missing: in.Logger == nil},
+		{name: "Now", missing: in.Now == nil},
+	}
+	for _, field := range required {
+		if field.missing {
+			return field.name
+		}
+	}
 
-// SetRemoteRootItemID sets the mounted remote root item for mount-root engines.
-// Empty keeps the normal owner-drive root semantics.
-func (cfg *ExecutorConfig) SetRemoteRootItemID(itemID string) {
-	cfg.remoteRootItemID = itemID
-}
-
-// SetContentFilter installs executor-relevant cleanup policy from the
-// sync-owned content filter. The executor does not decide visibility; it only
-// needs to know whether ignored junk may be removed when blocking a folder
-// delete.
-func (cfg *ExecutorConfig) SetContentFilter(filter syncdomain.ContentFilterConfig) {
-	cfg.ignoreJunkFiles = filter.IgnoreJunkFiles
-	cfg.contentFilter = syncdomain.NewContentFilter(syncdomain.CloneContentFilterConfig(filter))
-}
-
-// SetSyncRootIdentity installs the engine's sync folder identity, which
-// remote deletes re-validate before acting on local absence. It is shared,
-// not copied, so a binding made after startup is seen here too.
-func (cfg *ExecutorConfig) SetSyncRootIdentity(identity *syncdomain.SyncRootIdentity) {
-	cfg.syncRootIdentity = identity
-}
-
-// Items returns the item client for direct API access (e.g., for trial
-// observation in the engine's reobserve path).
-func (cfg *ExecutorConfig) Items() syncdomain.ItemClient {
-	return cfg.items
+	return ""
 }
 
 // SyncTree is the sync root the executor acts in.
@@ -243,36 +251,6 @@ func (e *Executor) waitRemoteParentVisible(ctx context.Context, action *syncdoma
 	e.parentChecks.markPathVisible(remotePath)
 
 	return nil
-}
-
-// SetNowFunc overrides the time source. Used in tests to produce deterministic
-// timestamps without mocking the real clock.
-func (cfg *ExecutorConfig) SetNowFunc(fn func() time.Time) {
-	cfg.nowFunc = fn
-}
-
-// Downloads returns the configured downloader. Used by tests that need to
-// replace the downloader mid-test and rebuild the TransferManager.
-func (cfg *ExecutorConfig) Downloads() driveops.Downloader {
-	return cfg.downloads
-}
-
-// SetDownloads replaces the downloader. Used in tests to inject a mock that
-// simulates download failures after the initial ExecutorConfig is constructed.
-func (cfg *ExecutorConfig) SetDownloads(dl driveops.Downloader) {
-	cfg.downloads = dl
-}
-
-// Uploads returns the configured uploader. Used by tests that need to
-// replace the uploader mid-test and rebuild the TransferManager.
-func (cfg *ExecutorConfig) Uploads() driveops.Uploader {
-	return cfg.uploads
-}
-
-// SetUploads replaces the uploader. Used in tests to inject a mock that
-// simulates upload failures after the initial ExecutorConfig is constructed.
-func (cfg *ExecutorConfig) SetUploads(ul driveops.Uploader) {
-	cfg.uploads = ul
 }
 
 // NewExecution creates an ephemeral Executor for a single action execution.
@@ -1138,9 +1116,9 @@ func fillRemoteOutcomeFromBaseline(o *syncdomain.ActionOutcome, baseline *syncdo
 
 // reachCrashPoint calls the crash hook at point (crash_points.go).
 func (cfg *ExecutorConfig) reachCrashPoint(point string) error {
-	if cfg == nil || cfg.crashAt == nil {
+	if cfg == nil || cfg.hooks.CrashAt == nil {
 		return nil
 	}
 
-	return cfg.crashAt(point)
+	return cfg.hooks.CrashAt(point)
 }

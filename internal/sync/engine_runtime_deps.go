@@ -4,34 +4,32 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // runtimeDeps are the capabilities every per-run flow needs regardless of what
-// it is deciding: somewhere to log, the durable store, the clock, and the debug
-// event stream.
-//
-// They were reached through a back-pointer to the whole Engine. That pointer
-// carried 320 references, and four targets accounted for 191 of them -- logger,
-// baseline, emitDebugEvent, and the clock. Those four are not collaborators the
-// flow coordinates with; they are ambient capabilities that happened to be in
-// scope. Passing them in narrows what a flow can reach for, and leaves the
-// remaining engine references as what they actually are: the specific
-// configuration and collaborators a particular decision consults.
+// it is deciding: somewhere to log, the durable store, the clock, the debug
+// event stream and the perf collector. They are ambient capabilities, not
+// collaborators the flow coordinates with, so a flow is handed them
+// (flowInputs) rather than reaching for them through the engine.
 type runtimeDeps struct {
 	logger *slog.Logger
 	store  *syncstore.SyncStore
 	clock  syncdomain.SyncClock
 	events func(syncdomain.EngineDebugEvent)
+	// perf is the engine's perf collector; nil records nothing.
+	perf *perf.Collector
 }
 
 func newRuntimeDeps(engine *Engine) runtimeDeps {
 	return runtimeDeps{
 		logger: engine.logger,
 		store:  engine.baseline,
-		clock:  engine.clock,
+		clock:  engine.runClock(),
 		events: engine.emitDebugEvent,
+		perf:   engine.collector(),
 	}
 }
 

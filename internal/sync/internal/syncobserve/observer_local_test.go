@@ -115,9 +115,9 @@ func startLocalWatch(t *testing.T, obs *LocalObserver, dir string) (context.Canc
 	t.Helper()
 
 	ready := make(chan struct{})
-	obs.SetWatcherFactory(func() (FsWatcher, error) {
+	obs.hooks.WatcherFactory = func() (FsWatcher, error) {
 		return newReadySignalWatcher(ready)
-	})
+	}
 
 	tree := syncfixture.MustOpenSyncTree(t, dir)
 	cancel, done := syncfixture.RunInBackground(t, t.Context(), func(ctx context.Context) error {
@@ -375,7 +375,7 @@ func TestFullScan_SubsecondMtimeDifferenceForcesRehash(t *testing.T) {
 
 	var hashCalls atomic.Int32
 	obs := NewLocalObserver(syncfixture.BaselineWith(entry), synctest.TestLogger(t), 0)
-	obs.hashFunc = func(ctx context.Context, path string) (string, error) {
+	obs.hooks.HashFile = func(ctx context.Context, path string) (string, error) {
 		hashCalls.Add(1)
 		return driveops.ComputeQuickXorHashContext(ctx, path)
 	}
@@ -474,7 +474,7 @@ func TestFullScan_UnchangedFileWithMatchingIdentityAndCtimeSkipsHash(t *testing.
 	// ctime cannot be set into the past, so the scan clock moves past the
 	// racily-clean window instead.
 	obs.clock = syncfixture.NewManualClock(time.Now().Add(2 * time.Second))
-	obs.hashFunc = func(context.Context, string) (string, error) {
+	obs.hooks.HashFile = func(context.Context, string) (string, error) {
 		return "", errors.New("hash function must not run for an untouched file")
 	}
 
@@ -1903,7 +1903,7 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 
 			obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 1)
 			// Inject a hash function that panics for the target path.
-			obs.hashFunc = func(_ context.Context, path string) (string, error) {
+			obs.hooks.HashFile = func(_ context.Context, path string) (string, error) {
 				if filepath.Base(path) == tt.panicPath {
 					panic("simulated hash panic for " + tt.panicPath)
 				}
@@ -1948,7 +1948,7 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	syncfixture.WriteTestFile(t, dir, badFileName, "bad content")
 
 	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hashFunc = func(_ context.Context, path string) (string, error) {
+	obs.hooks.HashFile = func(_ context.Context, path string) (string, error) {
 		if filepath.Base(path) == badFileName {
 			panic("corrupted file")
 		}

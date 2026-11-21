@@ -46,7 +46,7 @@ func newConflictCopyExecutor(t *testing.T) (*Executor, string) {
 	t.Helper()
 
 	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
-	cfg.SetNowFunc(conflictCopyClock)
+	cfg.nowFunc = conflictCopyClock
 
 	return NewExecution(cfg, syncfixture.EmptyBaseline()), syncRoot
 }
@@ -249,7 +249,7 @@ func TestExecutor_ConflictCopy_OriginalNameThatCannotBeRemovedIsASavedCopy(t *te
 
 	e, syncRoot := newConflictCopyExecutor(t)
 	capture, logger := synctest.NewLogCapture()
-	e.SetLoggerForTest(logger)
+	e.logger = logger
 	e.syncTree = e.syncTree.WithoutNoReplaceFlagAndUnremovableName("a.txt")
 	syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", "local edit")
 

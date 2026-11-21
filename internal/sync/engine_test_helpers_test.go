@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func newSingleOwnerEngine(t *testing.T) *testEngine {
 
 	mock := &syncfixture.EngineMockClient{}
 	eng, _ := newTestEngine(t, mock)
-	eng.clock = syncfixture.NewManualClock(time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC))
+	eng.hooks.clock = syncfixture.NewManualClock(time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC))
 	setupWatchEngine(t, eng)
 
 	return eng
@@ -78,6 +79,49 @@ type testEngine struct {
 	*Engine
 	runtime *watchRuntime
 	flow    *engineFlow
+	// crash receives the engine's executor and store crash points; nil on
+	// an engine the test harness did not build.
+	crash *crashSwitch
+}
+
+// crashSwitch is a test engine's crash hooks, fixed when the engine is built:
+// it forwards the executor's and the store's crash points to the hook the
+// test armed last, so a test arms a crash after the engine has synced.
+type crashSwitch struct {
+	exec  atomic.Pointer[func(point string) error]
+	store atomic.Pointer[func(point string) error]
+}
+
+func (c *crashSwitch) execAt(point string) error {
+	return reachArmedCrash(c.exec.Load(), point)
+}
+
+func (c *crashSwitch) storeAt(point string) error {
+	return reachArmedCrash(c.store.Load(), point)
+}
+
+func reachArmedCrash(hook *func(point string) error, point string) error {
+	if hook == nil {
+		return nil
+	}
+
+	return (*hook)(point)
+}
+
+// armCrash makes hook the crash hook of both the executor and the store.
+func (te *testEngine) armCrash(hook func(point string) error) {
+	te.armExecCrash(hook)
+	te.armStoreCrash(hook)
+}
+
+// armExecCrash makes hook the executor's crash hook.
+func (te *testEngine) armExecCrash(hook func(point string) error) {
+	te.crash.exec.Store(&hook)
+}
+
+// armStoreCrash makes hook the store's crash hook.
+func (te *testEngine) armStoreCrash(hook func(point string) error) {
+	te.crash.store.Store(&hook)
 }
 
 type enginePathConvergenceStub struct{}
@@ -95,7 +139,7 @@ func (s *enginePathConvergenceStub) PermanentDeleteResolvedPath(_ context.Contex
 }
 
 func newFlowBackedTestEngine(engine *Engine) *testEngine {
-	flow := newEngineFlow(engine)
+	flow := newEngineFlow(engine.flowInputs())
 
 	return &testEngine{
 		Engine: engine,
@@ -136,7 +180,7 @@ func newTestEngineOnFS(
 	t.Helper()
 
 	return newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), func(inputs *engineInputs) {
-		inputs.interposeSyncTree = interpose
+		inputs.hooks.interposeSyncTree = interpose
 	})
 }
 
@@ -147,55 +191,30 @@ func newTestEngineInDirWith(
 ) (*testEngine, string) {
 	t.Helper()
 
-	dataDir := filepath.Join(tmpDir, "data")
-	dbPath := filepath.Join(tmpDir, "test.db")
-	syncRoot := filepath.Join(tmpDir, "sync")
-
-	require.NoError(t, os.MkdirAll(syncRoot, 0o750), "creating sync root")
-	require.NoError(t, os.MkdirAll(dataDir, 0o750), "creating test data dir")
-
-	logger := syncfixture.TestLogger(t)
-	driveID := driveid.New(syncfixture.EngineTestDriveID)
-	accountEmail := engineTestEmail
-	accountCID := testEngineAccountCanonicalID()
-
-	inputs := &engineInputs{
-		DBPath:             dbPath,
-		SyncRoot:           syncRoot,
-		DataDir:            dataDir,
-		DriveID:            driveID,
-		AccountEmail:       accountEmail,
-		AccountCanonicalID: accountCID,
-		Fetcher:            mock,
-		SocketIOFetcher:    mock,
-		Items:              mock,
-		Downloads:          mock,
-		Uploads:            mock,
-		PathConvergence:    &enginePathConvergenceStub{},
-		FolderDelta:        mock,
-		RecursiveLister:    mock,
-		PermChecker:        mock,
-		Logger:             logger,
-	}
+	inputs := newTestEngineInputs(t, mock, tmpDir)
+	crash := &crashSwitch{}
+	inputs.hooks.exec.CrashAt = crash.execAt
+	inputs.hooks.store.CrashAt = crash.storeAt
 	if configure != nil {
 		configure(inputs)
 	}
 	eng, err := newEngine(ctx, inputs)
 	require.NoError(t, err, "NewEngine")
-	eng.assertInvariants = true
+	eng.hooks.assertInvariants = true
 	applyRegisteredDispatchOrder(t, eng)
-	flow := newEngineFlow(eng)
+	flow := newEngineFlow(eng.flowInputs())
 	testEng := &testEngine{
 		Engine: eng,
 		flow:   flow,
+		crash:  crash,
 	}
-	seedTestEngineAccount(t, dataDir, inputs.AccountCanonicalID)
+	seedTestEngineAccount(t, inputs.DataDir, inputs.AccountCanonicalID)
 
 	t.Cleanup(func() {
 		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")
 	})
 
-	return testEng, syncRoot
+	return testEng, inputs.SyncRoot
 }
 
 // testEngineAccountCanonicalID is the personal account a test engine syncs
@@ -237,51 +256,9 @@ func newTestEngineWithLogger(t *testing.T, mock *syncfixture.EngineMockClient, l
 func newTestEngineWithLoggerContext(t *testing.T, ctx context.Context, mock *syncfixture.EngineMockClient, logger *slog.Logger) (*testEngine, string) {
 	t.Helper()
 
-	tmpDir := t.TempDir()
-	dataDir := filepath.Join(tmpDir, "data")
-	dbPath := filepath.Join(tmpDir, "test.db")
-	syncRoot := filepath.Join(tmpDir, "sync")
-
-	require.NoError(t, os.MkdirAll(syncRoot, 0o750), "creating sync root")
-	require.NoError(t, os.MkdirAll(dataDir, 0o750), "creating test data dir")
-
-	driveID := driveid.New(syncfixture.EngineTestDriveID)
-	accountEmail := "sync-user@example.com"
-	accountCID := testEngineAccountCanonicalID()
-
-	eng, err := newEngine(ctx, &engineInputs{
-		DBPath:             dbPath,
-		SyncRoot:           syncRoot,
-		DataDir:            dataDir,
-		DriveID:            driveID,
-		AccountEmail:       accountEmail,
-		AccountCanonicalID: accountCID,
-		Fetcher:            mock,
-		SocketIOFetcher:    mock,
-		Items:              mock,
-		Downloads:          mock,
-		Uploads:            mock,
-		PathConvergence:    &enginePathConvergenceStub{},
-		FolderDelta:        mock,
-		RecursiveLister:    mock,
-		PermChecker:        mock,
-		Logger:             logger,
+	return newTestEngineInDirWith(t, ctx, mock, t.TempDir(), func(inputs *engineInputs) {
+		inputs.Logger = logger
 	})
-	require.NoError(t, err, "NewEngine")
-	eng.assertInvariants = true
-	applyRegisteredDispatchOrder(t, eng)
-	flow := newEngineFlow(eng)
-	testEng := &testEngine{
-		Engine: eng,
-		flow:   flow,
-	}
-	seedTestEngineAccount(t, dataDir, accountCID)
-
-	t.Cleanup(func() {
-		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")
-	})
-
-	return testEng, syncRoot
 }
 
 func newDownloadDeltaMock(driveID driveid.ID, item *graph.Item, token string, content []byte) *syncfixture.EngineMockClient {
@@ -401,7 +378,7 @@ func attachDebugEventRecorderWithHook(
 // test that swaps the clock after building the runtime has to say so rather
 // than relying on the runtime re-reading the engine.
 func installManualClock(eng *Engine, clock *syncfixture.ManualClock) {
-	eng.clock = clock
+	eng.hooks.clock = clock
 }
 
 // errManualClockSkipsScopeWait is what the manual-clock harness answers a
@@ -416,8 +393,8 @@ func installManualClockForTestEngine(eng *testEngine, clock *syncfixture.ManualC
 	// A one-shot scope wait is wall-clock time; on a manual clock it would
 	// pass without making the trial due. A test that wants the wait sets a
 	// waitFn of its own that advances its clock.
-	if eng.waitFn == nil {
-		eng.waitFn = func(context.Context, time.Duration) error {
+	if eng.hooks.wait == nil {
+		eng.hooks.wait = func(context.Context, time.Duration) error {
 			return errManualClockSkipsScopeWait
 		}
 	}
@@ -494,12 +471,71 @@ func seedBaseline(t *testing.T, mgr *syncstore.SyncStore, ctx context.Context, o
 // observeEngineClock wraps the engine's current clock so callers can attach
 // hooks, returning the wrapper for further configuration.
 func observeEngineClock(eng *Engine) *syncfixture.ObservingClock {
-	if existing, ok := eng.clock.(*syncfixture.ObservingClock); ok {
+	if existing, ok := eng.runClock().(*syncfixture.ObservingClock); ok {
 		return existing
 	}
 
-	wrapped := &syncfixture.ObservingClock{SyncClock: eng.clock}
-	eng.clock = wrapped
+	wrapped := &syncfixture.ObservingClock{SyncClock: eng.runClock()}
+	eng.hooks.clock = wrapped
 
 	return wrapped
+}
+
+// newTestEngineInputs is the engine inputs of a test engine on tmpDir's data,
+// test.db and sync, creating whichever are missing, with every hook at its
+// production zero value.
+func newTestEngineInputs(t *testing.T, mock *syncfixture.EngineMockClient, tmpDir string) *engineInputs {
+	t.Helper()
+
+	dataDir := filepath.Join(tmpDir, "data")
+	dbPath := filepath.Join(tmpDir, "test.db")
+	syncRoot := filepath.Join(tmpDir, "sync")
+
+	require.NoError(t, os.MkdirAll(syncRoot, 0o750), "creating sync root")
+	require.NoError(t, os.MkdirAll(dataDir, 0o750), "creating test data dir")
+
+	logger := syncfixture.TestLogger(t)
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	accountEmail := engineTestEmail
+	accountCID := testEngineAccountCanonicalID()
+
+	inputs := &engineInputs{
+		DBPath:             dbPath,
+		SyncRoot:           syncRoot,
+		DataDir:            dataDir,
+		DriveID:            driveID,
+		AccountEmail:       accountEmail,
+		AccountCanonicalID: accountCID,
+		Fetcher:            mock,
+		SocketIOFetcher:    mock,
+		Items:              mock,
+		Downloads:          mock,
+		Uploads:            mock,
+		PathConvergence:    &enginePathConvergenceStub{},
+		FolderDelta:        mock,
+		RecursiveLister:    mock,
+		PermChecker:        mock,
+		Logger:             logger,
+	}
+	return inputs
+}
+
+// refreshTestFlowInputs gives the test engine's flow and watch runtime the
+// engine's configuration, capabilities and hooks as they are now, for a test
+// that changed them on the engine after the flow was built: a run takes its
+// copy when it starts, so a live flow would not see the change.
+func refreshTestFlowInputs(eng *testEngine) {
+	in := eng.flowInputs()
+	if rt, ok := lookupTestWatchRuntime(eng); ok {
+		rt.cfg, rt.deps, rt.hooks = in.cfg, in.deps, in.hooks
+	}
+	if flow, ok := lookupTestEngineFlow(eng); ok {
+		flow.cfg, flow.deps, flow.hooks = in.cfg, in.deps, in.hooks
+	}
+}
+
+// withTestShortcutNamespace gives a test engine the test shortcut namespace,
+// so it protects the shortcut child roots its store holds.
+func withTestShortcutNamespace(inputs *engineInputs) {
+	inputs.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 }

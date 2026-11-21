@@ -37,7 +37,7 @@ func TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan(t *testing.T) {
 
 	// inotify_init1 fails with EMFILE when max_user_instances is used up.
 	// Before the fix this ended local observation for the whole session.
-	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.hooks.observe.WatcherFactory = func() (syncobserve.FsWatcher, error) {
 		return nil, syscall.EMFILE
 	}
 
@@ -77,7 +77,7 @@ func TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval(t *testing.T) {
 	t.Parallel()
 
 	eng, recorder, clock := newFallbackTestEngine(t)
-	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) { return syncfixture.NewEnospcWatcher(1), nil }
+	eng.hooks.observe.WatcherFactory = func() (syncobserve.FsWatcher, error) { return syncfixture.NewEnospcWatcher(1), nil }
 	tickerCreated := installTickerCreatedSignal(eng, syncobserve.LocalWatchHealthySafetyScanInterval)
 
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
@@ -107,7 +107,7 @@ func TestRunWatch_WatchFallbackRetriesTheWatcher(t *testing.T) {
 	eng, recorder, clock := newFallbackTestEngine(t)
 	recovered := newSignalingWatcher()
 	var factoryCalls atomic.Int64
-	eng.localWatcherFactory = func() (syncobserve.FsWatcher, error) {
+	eng.hooks.observe.WatcherFactory = func() (syncobserve.FsWatcher, error) {
 		if factoryCalls.Add(1) == 1 {
 			return syncfixture.NewEnospcWatcher(1), nil
 		}

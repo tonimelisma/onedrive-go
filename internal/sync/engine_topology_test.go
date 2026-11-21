@@ -23,6 +23,8 @@ func TestApplyShortcutObservationBatch_ForwardsEmptyCompleteBatch(t *testing.T) 
 
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
+	refreshTestFlowInputs(eng)
 	var got []syncshortcut.ShortcutChildWorkSnapshot
 	eng.shortcutChildWorkSink = func(_ context.Context, publication syncshortcut.ShortcutChildWorkSnapshot) error {
 		got = append(got, publication)
@@ -47,6 +49,8 @@ func TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler(t *testi
 
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
+	refreshTestFlowInputs(eng)
 	eng.shortcutChildWorkSink = func(ctx context.Context, publication syncshortcut.ShortcutChildWorkSnapshot) error {
 		roots, err := eng.baseline.ListShortcutRoots(ctx)
 		require.NoError(t, err)
@@ -106,6 +110,8 @@ func TestRunOncePublishesEmptyCompleteChildChildWorkSnapshotBeforeCommittingCurs
 	}
 	eng, _ := newTestEngine(t, mock)
 	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
+	refreshTestFlowInputs(eng)
 	var got []syncshortcut.ShortcutChildWorkSnapshot
 	eng.shortcutChildWorkSink = func(_ context.Context, publication syncshortcut.ShortcutChildWorkSnapshot) error {
 		got = append(got, publication)
@@ -135,6 +141,8 @@ func TestRunOnceChildChildWorkSnapshotPublishFailureDoesNotCommitCursor(t *testi
 	}
 	eng, _ := newTestEngine(t, mock)
 	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
+	refreshTestFlowInputs(eng)
 	applyErr := errors.New("persist topology")
 	eng.shortcutChildWorkSink = func(_ context.Context, _ syncshortcut.ShortcutChildWorkSnapshot) error {
 		return applyErr

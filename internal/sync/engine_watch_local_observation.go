@@ -42,7 +42,7 @@ func (rt *watchRuntime) applyLocalObservationBatch(
 		if err := rt.deps.store.MarkLocalTruthSuspect(ctx, reason); err != nil {
 			return false, err
 		}
-		rt.engine.collector().RecordLocalObservationSuspect(reason)
+		rt.deps.perf.RecordLocalObservationSuspect(reason)
 		return true, nil
 	case syncobserve.LocalSnapshot:
 		return rt.applyLocalSnapshot(ctx, batch)
@@ -77,7 +77,7 @@ func (rt *watchRuntime) applyLocalSnapshot(ctx context.Context, batch *syncobser
 	if err != nil {
 		return false, err
 	}
-	rt.engine.collector().RecordLocalObservationFullSnapshotReplacement()
+	rt.deps.perf.RecordLocalObservationFullSnapshotReplacement()
 	if rt.resources.localObs != nil {
 		rt.resources.localObs.SetMountBoundaryFlags(result.MountBoundaries)
 	}
@@ -102,7 +102,7 @@ func (rt *watchRuntime) applyLocalPatch(ctx context.Context, batch *syncobserve.
 	); err != nil {
 		return false, err
 	}
-	rt.engine.collector().RecordLocalObservationScopedCommit(
+	rt.deps.perf.RecordLocalObservationScopedCommit(
 		len(batch.Rows),
 		len(batch.DeletedPaths),
 		len(batch.DeletedPrefixes),

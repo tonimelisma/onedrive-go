@@ -143,8 +143,7 @@ func TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain(t *testing.T) {
 func TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot(t *testing.T) {
 	t.Parallel()
 
-	eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
 	// The child's final drain released the tree, so the root is empty.
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
@@ -185,8 +184,7 @@ func TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot(t *testing.
 func TestEngine_AcknowledgeChildFinalDrainSendsANonEmptyRootBackToTheFinalDrain(t *testing.T) {
 	t.Parallel()
 
-	eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(filepath.Join(aliasRoot, "sub"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(aliasRoot, "sub", "arrived-late.txt"), []byte("mine"), 0o600))
@@ -236,6 +234,7 @@ func TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemote
 	}
 	eng, syncRoot := newTestEngine(t, mock)
 	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
@@ -267,8 +266,7 @@ func TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemote
 func TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemoved(t *testing.T) {
 	t.Parallel()
 
-	eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(filepath.Dir(aliasRoot), 0o700))
 	require.NoError(t, os.WriteFile(aliasRoot, []byte("blocking file"), 0o600))
@@ -316,6 +314,7 @@ func TestEngine_ReconcileMissingLocalAliasDeleteReleasesParentShortcutRoot(t *te
 	}
 	eng, syncRoot := newTestEngine(t, mock)
 	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
@@ -362,6 +361,7 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 	}
 	eng, syncRoot := newTestEngine(t, mock)
 	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
@@ -409,6 +409,7 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 	}
 	eng, syncRoot := newTestEngine(t, mock)
 	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	renamedRoot := filepath.Join(syncRoot, "Shared", "Renamed")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
@@ -460,6 +461,7 @@ func TestEngine_ReconcileMissingAliasDetectsLiveRenameWithoutStaleLocalState(t *
 	}
 	eng, syncRoot := newTestEngine(t, mock)
 	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	renamedRoot := filepath.Join(syncRoot, "Shared", "Renamed")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
@@ -510,6 +512,7 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 	}
 	eng, syncRoot := newTestEngine(t, mock)
 	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	renamedRoot := filepath.Join(syncRoot, "Shared", "Renamed")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
@@ -535,7 +538,7 @@ func TestEngine_EmptyIncrementalTopologyStillReconcilesLocalShortcutAliasRename(
 		published = publication
 		return nil
 	}
-	flow := newEngineFlow(eng.Engine)
+	flow := newEngineFlow(eng.flowInputs())
 
 	err = flow.applyShortcutObservationBatch(t.Context(), &syncobserve.RemoteObservationBatch{
 		ShortcutTopology: syncshortcut.ShortcutTopologyBatch{
@@ -675,6 +678,7 @@ func TestEngine_ShortcutRootFoldersFollowTheUmask(t *testing.T) {
 	t.Run("a shortcut folder and its parent", func(t *testing.T) {
 		eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
 		eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+		eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
 		require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{
 			shortcutRoot("Shared/Docs", []string{"Shared/Docs"}, nil),
 		}))
@@ -689,6 +693,7 @@ func TestEngine_ShortcutRootFoldersFollowTheUmask(t *testing.T) {
 	t.Run("the parent a moved shortcut folder needs", func(t *testing.T) {
 		eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
 		eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+		eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
 		require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "Shared", "Old"), 0o700))
 		identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Old"))
 		require.NoError(t, err)
@@ -709,8 +714,7 @@ func TestEngine_ShortcutRootFoldersFollowTheUmask(t *testing.T) {
 func TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending(t *testing.T) {
 	t.Parallel()
 
-	eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
@@ -744,8 +748,7 @@ func TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending(t *t
 func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedWithoutError(t *testing.T) {
 	t.Parallel()
 
-	eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
 	var logBuf bytes.Buffer
 	eng.logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
@@ -783,8 +786,7 @@ func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedWithoutErro
 func TestEngine_ReconcileShortcutRootLocalStateRepeatedCleanupBlockedIsQuiet(t *testing.T) {
 	t.Parallel()
 
-	eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
 	var logBuf bytes.Buffer
 	eng.logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
@@ -823,8 +825,7 @@ func TestEngine_ReconcileShortcutRootLocalStateRepeatedCleanupBlockedIsQuiet(t *
 func TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterReleasePending(t *testing.T) {
 	t.Parallel()
 
-	eng, syncRoot := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
 	require.NoError(t, os.MkdirAll(aliasRoot, 0o700))
 	require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{

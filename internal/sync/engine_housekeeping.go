@@ -6,24 +6,56 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// postSyncHousekeeping runs non-critical cleanup after a sync pass: leftover
-// download files, expired upload session files and expired trash entries. It
-// runs synchronously on the run's goroutine, so a one-shot sync that runs it
-// has cleaned up before RunOnce returns.
+// housekeeper runs the engine's non-critical cleanup: leftover download
+// files, expired upload session files and expired trash entries, after each
+// sync pass, and the watch's hourly trash purge. It owns when the trash was
+// last purged and the failure streak of each step. Only the goroutine
+// running the engine's RunOnce or RunWatch calls it, so its state is plain
+// fields.
+type housekeeper struct {
+	syncTree      *synctree.Root
+	sessionStore  *driveops.SessionStore
+	trash         *localtrash.Trash // nil purges nothing
+	contentFilter syncdomain.ContentFilterConfig
+	roots         *protectedRootSet
+	logger        *slog.Logger
+	now           func() time.Time
+
+	// trashPurgedAt is when the trash was last purged; the watch's
+	// maintenance purges at most once per trashPurgeInterval. It holds no
+	// monotonic reading, so the interval is measured in wall time.
+	trashPurgedAt time.Time
+
+	// These keep each step's failure to one Warn per failure streak
+	// (R-6.6.30): a protected-root refresh, a leftover download file
+	// cleanup, an expired upload session cleanup and a trash purge that
+	// keeps failing. Each clears when its step succeeds again, so the next
+	// streak is reported once more.
+	rootRefreshFailing    ownedStreak
+	partialCleanupFailing ownedStreak
+	sessionCleanupFailing ownedStreak
+	trashPurgeFailing     ownedStreak
+}
+
+// afterSync runs the cleanup after a sync pass. It runs synchronously on the
+// run's goroutine, so a one-shot sync that runs it has cleaned up before
+// RunOnce returns.
 //
 // The transfer-artifact cleanup walks everything but the protected roots, and
 // removes every owned partial it finds with no age check. It therefore runs
 // only when the protected-root list was refreshed for this pass: a stale list
 // could let the parent delete a child mount's in-flight partials.
-func (flow *engineFlow) postSyncHousekeeping(ctx context.Context) {
-	if flow.engine.refreshProtectedRootsForHousekeeping(ctx) {
-		flow.engine.cleanTransferArtifacts()
+func (h *housekeeper) afterSync(ctx context.Context) {
+	if h.refreshRoots(ctx) {
+		h.cleanTransferArtifacts()
 	}
-	flow.engine.purgeExpiredTrash(true)
+	h.purgeExpiredTrash(true)
 }
 
 // streakReport names one repeated step's failure streak and the three lines
@@ -60,10 +92,10 @@ func (f *ownedStreak) Swap(failing bool) bool {
 // otherwise warn each time: the first failure warns, repeats are Debug, and
 // the first success after a streak says so at Info and ends it, so the next
 // streak warns once more. attrs go on every line.
-func (e *Engine) reportStreakOutcome(report streakReport, err error, attrs ...any) {
+func reportStreakOutcome(logger *slog.Logger, report streakReport, err error, attrs ...any) {
 	if err == nil {
 		if report.failing.Swap(false) {
-			e.logger.Info(report.recovered, attrs...)
+			logger.Info(report.recovered, attrs...)
 		}
 
 		return
@@ -73,10 +105,10 @@ func (e *Engine) reportStreakOutcome(report streakReport, err error, attrs ...an
 	failed = append(failed, attrs...)
 	failed = append(failed, slog.Any("error", err))
 	if report.failing.Swap(true) {
-		e.logger.Debug(report.repeat, failed...)
+		logger.Debug(report.repeat, failed...)
 		return
 	}
-	e.logger.Warn(report.warn, failed...)
+	logger.Warn(report.warn, failed...)
 }
 
 // protectedRootRefreshRecoveredMessage is the line that ends a failure streak
@@ -84,7 +116,7 @@ func (e *Engine) reportStreakOutcome(report streakReport, err error, attrs ...an
 // cleanup reads the list.
 const protectedRootRefreshRecoveredMessage = "shared-folder list refreshed again; transfer cleanup resumes"
 
-// refreshProtectedRootsForHousekeeping refreshes the protected-root list and
+// refreshRoots refreshes the protected-root list and
 // reports whether housekeeping may walk the tree. A failure is one Warn per
 // streak (R-6.6.30), Debug on repeats, and the streak ends when a refresh
 // succeeds; the cleanup it guards is skipped for the pass, not run stale.
@@ -93,15 +125,15 @@ const protectedRootRefreshRecoveredMessage = "shared-folder list refreshed again
 // watch bootstrap whose actions were canceled still reaches housekeeping, and
 // a clean stop warns about nothing (R-6.6.21). It skips the cleanup at Debug
 // and leaves the streak as it was, so a real failure later still warns once.
-func (e *Engine) refreshProtectedRootsForHousekeeping(ctx context.Context) bool {
-	err := e.refreshProtectedRootsFromStore(ctx)
+func (h *housekeeper) refreshRoots(ctx context.Context) bool {
+	err := h.roots.refresh(ctx)
 	if err != nil && ctx.Err() != nil {
-		e.logger.Debug("skipping transfer cleanup: shutting down", slog.Any("error", err))
+		h.logger.Debug("skipping transfer cleanup: shutting down", slog.Any("error", err))
 		return false
 	}
 
-	e.reportStreakOutcome(streakReport{
-		failing:   &e.protectedRootRefreshFailing,
+	reportStreakOutcome(h.logger, streakReport{
+		failing:   &h.rootRefreshFailing,
 		warn:      "Could not refresh the shared-folder list; skipping transfer-leftover cleanup until it can be read",
 		repeat:    "refresh protected roots before housekeeping failed again; skipping transfer cleanup",
 		recovered: protectedRootRefreshRecoveredMessage,
@@ -115,36 +147,36 @@ func (e *Engine) refreshProtectedRootsForHousekeeping(ctx context.Context) bool 
 // a pass. Each of the two reports everything it could not remove in one line,
 // once per streak (R-6.6.30): what cannot be removed now is still there the
 // next time. What it did remove is said whenever there was something. It
-// reads the protected roots through their lock: a parent's final-drain
+// reads the protected roots through their set's lock: a parent's final-drain
 // acknowledgement can rederive them from the orchestrator's goroutine while
 // this runs.
-func (e *Engine) cleanTransferArtifacts() {
-	result := driveops.CleanTransferArtifacts(e.syncTree, e.sessionStore, e.logger,
+func (h *housekeeper) cleanTransferArtifacts() {
+	result := driveops.CleanTransferArtifacts(h.syncTree, h.sessionStore, h.logger,
 		driveops.TransferArtifactCleanupOptions{
-			SkipDirs:            transferArtifactCleanupSkipDirs(e.contentFilter, e.currentProtectedRoots()),
-			IncludedDirs:        e.contentFilter.IncludedDirs,
-			IncludeJunkPartials: e.contentFilter.IgnoreJunkFiles,
+			SkipDirs:            transferArtifactCleanupSkipDirs(h.contentFilter, h.roots.current()),
+			IncludedDirs:        h.contentFilter.IncludedDirs,
+			IncludeJunkPartials: h.contentFilter.IgnoreJunkFiles,
 		},
 	)
 
-	e.reportStreakOutcome(streakReport{
-		failing:   &e.partialCleanupFailing,
+	reportStreakOutcome(h.logger, streakReport{
+		failing:   &h.partialCleanupFailing,
 		warn:      "Could not remove every leftover download file; the rest stay until this is fixed",
 		repeat:    "could not remove every leftover download file (still failing)",
 		recovered: "leftover download files can be removed again",
 	}, result.PartialsErr)
 	if result.PartialsRemoved > 0 {
-		e.logger.Info("cleaned stale partial files", slog.Int("count", result.PartialsRemoved))
+		h.logger.Info("cleaned stale partial files", slog.Int("count", result.PartialsRemoved))
 	}
 
-	e.reportStreakOutcome(streakReport{
-		failing:   &e.sessionCleanupFailing,
+	reportStreakOutcome(h.logger, streakReport{
+		failing:   &h.sessionCleanupFailing,
 		warn:      "Could not remove every expired upload session file; the rest stay until this is fixed",
 		repeat:    "could not remove every expired upload session file (still failing)",
 		recovered: "expired upload session files can be removed again",
 	}, result.SessionsErr)
 	if result.SessionsRemoved > 0 {
-		e.logger.Info("cleaned stale upload sessions", slog.Int("count", result.SessionsRemoved))
+		h.logger.Info("cleaned stale upload sessions", slog.Int("count", result.SessionsRemoved))
 	}
 }
 
@@ -157,26 +189,26 @@ const trashPurgeInterval = time.Hour
 // that keeps failing is reported once per streak at Warn, naming the trash
 // directory, because the trash then grows without bound and nothing else
 // says so; repeats are Debug and recovery ends the streak (R-6.6.30).
-func (e *Engine) purgeExpiredTrash(force bool) {
-	if e == nil || e.trash == nil {
+func (h *housekeeper) purgeExpiredTrash(force bool) {
+	if h.trash == nil {
 		return
 	}
-	now := e.nowFunc()
-	if last := e.trashPurgedAt; !force && last != 0 && now.Sub(time.Unix(0, last)) < trashPurgeInterval {
+	now := h.now()
+	if !force && !h.trashPurgedAt.IsZero() && now.Sub(h.trashPurgedAt) < trashPurgeInterval {
 		return
 	}
-	e.trashPurgedAt = now.UnixNano()
+	h.trashPurgedAt = now.Round(0)
 
-	removed, err := e.trash.Purge()
-	e.reportStreakOutcome(streakReport{
-		failing:   &e.trashPurgeFailing,
+	removed, err := h.trash.Purge()
+	reportStreakOutcome(h.logger, streakReport{
+		failing:   &h.trashPurgeFailing,
 		warn:      "Could not remove expired files from the sync trash; it will keep growing until this is fixed",
 		repeat:    "could not purge expired trash entries (still failing)",
 		recovered: "expired files can be removed from the sync trash again",
-	}, err, slog.String("trash", e.trash.Dir()))
+	}, err, slog.String("trash", h.trash.Dir()))
 	if removed > 0 {
-		e.logger.Info("removed expired files from the sync trash",
-			slog.Int("removed", removed), slog.String("trash", e.trash.Dir()))
+		h.logger.Info("removed expired files from the sync trash",
+			slog.Int("removed", removed), slog.String("trash", h.trash.Dir()))
 	}
 }
 

@@ -130,7 +130,7 @@ func TestEngineStartup_LockedCatalogWarnsAndStarts(t *testing.T) {
 	})
 	account := testEngineAccountCanonicalID()
 	require.NoError(t, config.MarkAccountAuthRequired(eng.dataDir, account, authstate.ReasonSyncAuthRejected))
-	eng.clearAccountAuthRequirement = func(string, driveid.CanonicalID) error {
+	eng.hooks.clearAccountAuthRequirement = func(string, driveid.CanonicalID) error {
 		return fmt.Errorf("updating catalog: %w", config.ErrConfigLocked)
 	}
 
@@ -141,7 +141,7 @@ func TestEngineStartup_LockedCatalogWarnsAndStarts(t *testing.T) {
 	assert.Contains(t, logs.String(), "Could not clear the stored sign-in requirement; the next start clears it")
 	assert.Contains(t, logs.String(), account.String(), "the Warn names the account")
 
-	eng.clearAccountAuthRequirement = nil
+	eng.hooks.clearAccountAuthRequirement = nil
 	_, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, signInRequirementOf(t, eng, account), "the next start clears it")

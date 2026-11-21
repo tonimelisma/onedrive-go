@@ -29,7 +29,7 @@ func newFaultStore(t *testing.T) (*SyncStore, *syncfixture.SqlFault) {
 
 	registerFaultDriver(t)
 	dbPath := filepath.Join(t.TempDir(), "fault.db")
-	store, err := OpenSyncStoreWithDriverForTest(synctest.TestContext(t), dbPath, synctest.TestLogger(t), true, syncfixture.FaultDriverName)
+	store, err := OpenSyncStoreWithHooksForTest(synctest.TestContext(t), dbPath, synctest.TestLogger(t), true, Hooks{Driver: syncfixture.FaultDriverName})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close(context.Background())) })
 

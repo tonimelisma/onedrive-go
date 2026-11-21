@@ -18,7 +18,7 @@ func newTestEngineOnFaultStore(
 	syncstoretest.RegisterFaultDriver(t)
 	tmpDir := t.TempDir()
 	eng, _ := newTestEngineInDirWith(t, t.Context(), mock, tmpDir, func(inputs *engineInputs) {
-		inputs.storeDriver = syncfixture.FaultDriverName
+		inputs.hooks.store.Driver = syncfixture.FaultDriverName
 		if configure != nil {
 			configure(inputs)
 		}

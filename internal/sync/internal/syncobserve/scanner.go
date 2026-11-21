@@ -246,7 +246,7 @@ func (o *LocalObserver) hashPhase(
 		slog.Int("workers", workers),
 	)
 
-	hashFn := o.hashFunc
+	hashFn := o.hooks.HashFile
 	if hashFn == nil {
 		hashFn = driveops.ComputeQuickXorHashContext
 	}

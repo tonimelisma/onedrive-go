@@ -114,7 +114,7 @@ func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 	mountCfg := testEngineMountConfig(syncDir)
 	mountCfg.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 
-	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
+	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger, syncstore.Hooks{})
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
 		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
@@ -136,11 +136,11 @@ func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	require.Len(t, eng.currentProtectedRoots(), 2)
-	assert.Equal(t, "Shared/Docs", eng.currentProtectedRoots()[0].Path)
-	assert.Equal(t, "binding-1", eng.currentProtectedRoots()[0].BindingID)
-	assert.True(t, eng.currentProtectedRoots()[0].HasIdentity)
-	assert.Equal(t, "Shared/Old Docs", eng.currentProtectedRoots()[1].Path)
+	require.Len(t, eng.protectedRoots.current(), 2)
+	assert.Equal(t, "Shared/Docs", eng.protectedRoots.current()[0].Path)
+	assert.Equal(t, "binding-1", eng.protectedRoots.current()[0].BindingID)
+	assert.True(t, eng.protectedRoots.current()[0].HasIdentity)
+	assert.Equal(t, "Shared/Old Docs", eng.protectedRoots.current()[1].Path)
 }
 
 // Validates: R-2.4.8
@@ -154,7 +154,7 @@ func TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot(t *testing.T) {
 	mountCfg := testEngineMountConfig(syncDir)
 	mountCfg.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 
-	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
+	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger, syncstore.Hooks{})
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
 		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
@@ -174,7 +174,7 @@ func TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot(t *testing.T) {
 		assert.NoError(t, eng.Close(t.Context()))
 	})
 
-	assert.Empty(t, eng.currentProtectedRoots())
+	assert.Empty(t, eng.protectedRoots.current())
 }
 
 func TestNewMountEngine_PropagatesRootedMountConfig(t *testing.T) {
@@ -354,7 +354,7 @@ func TestRefreshProtectedRootsFromStore_ConcurrentReadersAreRaceFree(t *testing.
 	mountCfg := testEngineMountConfig(syncDir)
 	mountCfg.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 
-	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger)
+	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger, syncstore.Hooks{})
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
 		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
@@ -385,14 +385,14 @@ func TestRefreshProtectedRootsFromStore_ConcurrentReadersAreRaceFree(t *testing.
 		defer wg.Done()
 		<-start
 		for range rounds {
-			refreshErrs <- eng.refreshProtectedRootsFromStore(t.Context())
+			refreshErrs <- eng.protectedRoots.refresh(t.Context())
 		}
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
 		for range rounds {
-			roots := eng.currentProtectedRoots()
+			roots := eng.protectedRoots.current()
 			if len(roots) != 1 || roots[0].Path != "Shared/Docs" {
 				refreshErrs <- fmt.Errorf("reader saw protected roots %+v", roots)
 			}

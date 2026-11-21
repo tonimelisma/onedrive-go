@@ -62,7 +62,7 @@ func writeAgedFile(t *testing.T, path, content string) {
 func scanWithCache(t *testing.T, syncRoot string, cache syncdomain.LocalHashCache, reads *atomic.Int32) ScanResult {
 	t.Helper()
 	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hashFunc = countingHasher(reads)
+	obs.hooks.HashFile = countingHasher(reads)
 	obs.SetLocalHashCache(cache)
 	// ctime cannot be aged, so the racily-clean guard on it is satisfied
 	// by a scan clock a few seconds ahead of the writes.
@@ -141,7 +141,7 @@ func TestFullScan_RecordedHashIsNotTrustedInsideTheRacilyCleanWindow(t *testing.
 
 	var reads atomic.Int32
 	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hashFunc = countingHasher(&reads)
+	obs.hooks.HashFile = countingHasher(&reads)
 	obs.SetLocalHashCache(cache)
 	_, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -150,7 +150,7 @@ func TestFullScan_RecordedHashIsNotTrustedInsideTheRacilyCleanWindow(t *testing.
 
 	reads.Store(0)
 	obs = NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hashFunc = countingHasher(&reads)
+	obs.hooks.HashFile = countingHasher(&reads)
 	obs.SetLocalHashCache(cache)
 	_, err = obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)

@@ -277,7 +277,7 @@ func crashRecoveryScenario(t *testing.T) (*moveScenarioRemote, *syncHarness) {
 	remote.addFile(t, "item-r", "item-docs", "r.txt", crashReplacingContent)
 	remote.addFile(t, "item-s", "item-docs", path.Base(crashReplacedPath), crashReplacedContent)
 	h := newSyncHarness(t, remote)
-	h.eng.serializeWorkers = true
+	h.eng.hooks.serializeWorkers = true
 	runScenarioPass(t, h.eng)
 	// The synced state reaches the main database file; the round's commits
 	// stay in the WAL, which the lost-WAL variant then loses.
@@ -327,8 +327,7 @@ func crashAndRecover(t *testing.T, point string, lostWAL bool) (*crashCapture, *
 		point: point, lostWAL: lostWAL,
 		srcDir: filepath.Dir(h.syncRoot), dstDir: t.TempDir(), remote: remote,
 	}
-	h.eng.execCfg.SetCrashHookForTest(capture.hook)
-	h.eng.baseline.SetCrashHookForTest(capture.hook)
+	h.eng.armCrash(capture.hook)
 	h.beginRound(t)
 	_, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)

@@ -49,7 +49,6 @@ func TestStoredTimes_EveryDecodeIsDeclared(t *testing.T) {
 		"internal/sync/engine_watch_maintenance.go":              {decodesOrderedTime: 3},
 		"internal/sync/syncdomain/domain_pending_create.go":      {decodesOrderedTime: 1},
 		"internal/sync/internal/syncobserve/local_hash_reuse.go": {inMemoryValue: 1},
-		"internal/sync/engine_housekeeping.go":                   {inMemoryValue: 1},
 	}
 
 	found := countProductCalls(t, isTimeUnixFromNanoseconds, "internal/sync", "internal/driveops")
@@ -71,7 +70,6 @@ func TestStoredTimes_EveryPlainUnixNanoIsDeclared(t *testing.T) {
 		"internal/sync/internal/syncobserve/local_hash_reuse.go":        {encodesLocalTimeForEquality: 1},
 		"internal/sync/internal/syncobserve/scanner_hash_cache.go":      {encodesLocalTimeForEquality: 1},
 		"internal/sync/engine_shortcut_release.go":                      {encodesLocalTimeForEquality: 1},
-		"internal/sync/engine_housekeeping.go":                          {inMemoryValue: 1},
 	}
 
 	found := countProductCalls(t, isPlainUnixNano, "internal/sync")

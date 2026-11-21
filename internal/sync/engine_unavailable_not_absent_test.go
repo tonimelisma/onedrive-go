@@ -106,9 +106,9 @@ func TestRunOnce_SyncedItemsMadeUnrepresentableAreNotDeletedOnline(t *testing.T)
 			t.Parallel()
 
 			remote := seedUnavailableRemote(t)
-			eng, syncRoot := newTestEngine(t, remote.client(t))
-			eng.contentFilter = tc.filter
-			eng.execCfg.SetContentFilter(tc.filter)
+			eng, syncRoot := newTestEngineInDirWith(t, t.Context(), remote.client(t), t.TempDir(), func(in *engineInputs) {
+				in.ContentFilter = tc.filter
+			})
 			runScenarioPass(t, eng)
 
 			tc.mutate(t, syncRoot)

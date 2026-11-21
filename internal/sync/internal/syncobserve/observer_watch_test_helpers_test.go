@@ -47,12 +47,12 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 	clock.tickCh = make(chan time.Time)
 	obs.clock = clock
 
-	obs.watcherFactory = func() (FsWatcher, error) {
+	obs.hooks.WatcherFactory = func() (FsWatcher, error) {
 		return watcher, nil
 	}
 
 	if opts.WriteCoalesceCooldown != 0 {
-		obs.writeCoalesceCooldown = opts.WriteCoalesceCooldown
+		obs.hooks.WriteCoalesceCooldown = opts.WriteCoalesceCooldown
 	}
 	if opts.CollisionPeers != nil {
 		obs.CollisionPeers = opts.CollisionPeers
@@ -64,13 +64,13 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 		obs.RecentLocalDeletes = opts.RecentLocalDeletes
 	}
 	if opts.HashFunc != nil {
-		obs.hashFunc = opts.HashFunc
+		obs.hooks.HashFile = opts.HashFunc
 	}
 	if opts.AfterFunc != nil {
 		clock.afterFunc = opts.AfterFunc
 	}
 	if opts.AfterSafetyScan != nil {
-		obs.afterSafetyScan = opts.AfterSafetyScan
+		obs.hooks.AfterSafetyScan = opts.AfterSafetyScan
 	}
 	if opts.TickCh != nil {
 		clock.tickCh = opts.TickCh
@@ -326,7 +326,7 @@ func startMockWatchInLoop(
 	t.Helper()
 
 	looping := make(chan struct{})
-	obs.beforeWatchLoop = func() { close(looping) }
+	obs.hooks.BeforeWatchLoop = func() { close(looping) }
 	cancel, done := startMockWatch(t, obs, watcher, dir)
 	syncfixture.ReceiveWithin(t, looping, "the watch to finish its setup")
 

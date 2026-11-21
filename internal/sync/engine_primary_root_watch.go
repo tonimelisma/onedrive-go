@@ -17,7 +17,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	errs chan<- error,
 	pollInterval time.Duration,
 ) {
-	if rt.engine.hasRemoteMountRoot() {
+	if rt.hasRemoteMountRoot() {
 		rt.warnMountRootWebsocketFallback()
 		rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
 			defer rt.deps.emit(syncdomain.EngineDebugEvent{
@@ -34,7 +34,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	remoteObs := rt.engine.buildRemoteObserver(bl, rt.deps.logger)
 	remoteObs.SetItemClient(rt.engine.itemsClient)
 	remoteObs.SetRemotePathLookup(rt.engine.remotePathLookup(ctx))
-	remoteObs.SetShortcutTopology(rt.engine.shortcutNamespaceID, rt.engine.currentProtectedRoots())
+	remoteObs.SetShortcutTopology(rt.cfg.shortcutNamespaceID, rt.engine.protectedRoots.current())
 	remoteObs.SetDeltaExpiredRecovery(func(ctx context.Context, kind syncdomain.ResyncKind) (syncobserve.RemoteObservationBatch, error) {
 		batch, err := rt.executeDriveRootFullObservation(ctx, bl, kind)
 		if err != nil {
@@ -90,7 +90,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 }
 
 func (rt *watchRuntime) warnMountRootWebsocketFallback() {
-	if !rt.engine.enableWebsocket {
+	if !rt.cfg.enableWebsocket {
 		return
 	}
 
@@ -101,7 +101,7 @@ func (rt *watchRuntime) warnMountRootWebsocketFallback() {
 	// Debug: a by-design limitation with nothing for the user to do; it
 	// fired at every watch start for every shared folder.
 	rt.deps.logger.Debug("websocket watch is not supported for mount-root engines; falling back to polling",
-		slog.String("drive_id", rt.engine.driveID.String()),
-		slog.String("remote_root_item_id", rt.engine.remoteRootItemID),
+		slog.String("drive_id", rt.cfg.driveID.String()),
+		slog.String("remote_root_item_id", rt.cfg.remoteRootItemID),
 	)
 }

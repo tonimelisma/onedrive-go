@@ -279,7 +279,7 @@ func TestFullRefresh_UndecidedOrphanPullsTheNextRescanForward(t *testing.T) {
 	}
 	h := newSyncHarnessWithClient(t, remote, client)
 	clock := &modelClock{}
-	h.eng.clock = clock
+	h.eng.hooks.clock = clock
 	runScenarioPass(t, h.eng)
 
 	h.beginRound(t)
@@ -327,7 +327,7 @@ func TestFullRefresh_PermanentlyUndecidedOrphanBacksOff(t *testing.T) {
 	}
 	h := newSyncHarnessWithClient(t, remote, client)
 	clock := &modelClock{}
-	h.eng.clock = clock
+	h.eng.hooks.clock = clock
 	runScenarioPass(t, h.eng)
 
 	remote.deleteAt(t, "a.txt")

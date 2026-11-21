@@ -539,7 +539,7 @@ func syncedPathGone(tree *synctree.Root, dbRelPath string) bool {
 // with empty hashes on failure because Create events and directory scans
 // have no guaranteed follow-up event (B-203).
 func (o *LocalObserver) stableHashOrEmpty(ctx context.Context, fsPath, dbRelPath string) string {
-	hash, err := computeStableHashWith(ctx, fsPath, o.hashFunc)
+	hash, err := computeStableHashWith(ctx, fsPath, o.hooks.HashFile)
 	if err != nil {
 		if errors.Is(err, syncdomain.ErrFileChangedDuringHash) {
 			o.logger.Debug("file metadata still settling, emitting with empty hash",
@@ -805,11 +805,11 @@ func (o *LocalObserver) scheduleWriteHash(fsPath, dbRelPath string) {
 }
 
 func (o *LocalObserver) writeCooldown() time.Duration {
-	if o.writeCoalesceCooldown == 0 {
+	if o.hooks.WriteCoalesceCooldown == 0 {
 		return defaultWriteCoalesceCooldown
 	}
 
-	return o.writeCoalesceCooldown
+	return o.hooks.WriteCoalesceCooldown
 }
 
 // scheduleDeferredHash arms a timer that hands a hash request to the watch
@@ -1006,7 +1006,7 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		return
 	}
 
-	hash, err := computeStableHashWith(ctx, req.FsPath, o.hashFunc)
+	hash, err := computeStableHashWith(ctx, req.FsPath, o.hooks.HashFile)
 	if err != nil {
 		if o.retryDeferredHashOnChange(req, err) {
 			return
@@ -1392,8 +1392,8 @@ func (o *LocalObserver) runSafetyScan(ctx context.Context, tree *synctree.Root) 
 	o.CollisionPeers = make(map[string]map[string]struct{})
 	o.RecentLocalDeletes = make(map[string]struct{})
 	o.pruneWriteChurn(o.clock.Now())
-	if o.afterSafetyScan != nil {
-		o.afterSafetyScan()
+	if o.hooks.AfterSafetyScan != nil {
+		o.hooks.AfterSafetyScan()
 	}
 
 	// Log timing and resource counts for operational visibility (B-101).

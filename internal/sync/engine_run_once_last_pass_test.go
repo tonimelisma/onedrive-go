@@ -106,7 +106,7 @@ func throttledUploadTestEngine(
 	eng.transferWorkers = 2
 	clock := syncfixture.NewManualClock(time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
-	eng.waitFn = func(_ context.Context, d time.Duration) error {
+	eng.hooks.wait = func(_ context.Context, d time.Duration) error {
 		clock.Advance(d)
 		return nil
 	}
@@ -374,7 +374,7 @@ func TestRunOnce_AConflictCopyAtThePassBoundIsLeftWork(t *testing.T) {
 	runScenarioPass(t, eng)
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "doc.txt"), []byte("edited here\n"), 0o600))
 	remote.putFileAt(t, "doc.txt", "edited online\n")
-	eng.oneShotPassLimit = 1
+	eng.hooks.oneShotPassLimit = 1
 
 	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)

@@ -79,7 +79,7 @@ func (flow *engineFlow) executePrimaryRootObservation(
 	bl *syncdomain.Baseline,
 	fullReconcile bool,
 ) (syncobserve.RemoteObservationBatch, error) {
-	if flow.engine.hasRemoteMountRoot() {
+	if flow.hasRemoteMountRoot() {
 		return flow.executeMountRootObservation(ctx, bl, fullReconcile)
 	}
 
@@ -98,7 +98,7 @@ func (flow *engineFlow) rootReadFailureBatch(
 		nil,
 		"",
 		false,
-		rootReadFailureObservationFindingsBatch(flow.engine.driveID, issueType),
+		rootReadFailureObservationFindingsBatch(flow.cfg.driveID, issueType),
 	)
 }
 
@@ -116,7 +116,7 @@ func (flow *engineFlow) executeDriveRootObservation(
 		// Info: self-healing. Recovery is a full refresh with orphan
 		// detection, not a bare re-enumeration: a delete that happened while
 		// the token aged out is in no delta window (R-2.15.3).
-		flow.engine.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
+		flow.deps.logger.Info("OneDrive change history expired; rescanning the whole drive (this may take a while)")
 		return flow.executeDriveRootFullObservation(ctx, bl, syncdomain.ResyncKindOf(err))
 	}
 	if issueType, ok := rootReadFailureIssueType(err); ok {

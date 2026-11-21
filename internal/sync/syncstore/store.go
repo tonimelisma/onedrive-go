@@ -74,11 +74,11 @@ type SyncStore struct {
 	baseline   *syncdomain.Baseline
 	baselineMu stdsync.Mutex // guards baseline cache (Load is called from multiple workers)
 	logger     *slog.Logger
-	nowFunc    func() time.Time // injectable for deterministic tests
-	// crashAt, when set, is called at each crash point before a commit
-	// (crash_points.go): an error rolls the transaction back as a crash
-	// would. Test-only; nil in production.
-	crashAt func(point string) error
+	// nowFunc is the store's clock, the engine's run clock once the engine
+	// owns the store (SetNowFunc).
+	nowFunc func() time.Time
+	// hooks are the store's test seams; the zero value is production.
+	hooks Hooks
 
 	// contentDriveMu guards cachedContentDriveID only.
 	contentDriveMu       stdsync.RWMutex
@@ -97,7 +97,7 @@ func NewSyncStore(ctx context.Context, dbPath string, logger *slog.Logger) (*Syn
 
 // SqliteDriverName is the database/sql driver the store opens its database
 // with. Tests open through a fault-injecting wrapper of the same driver
-// (openSyncStoreWithDriver) to reach the store's failure branches.
+// (Hooks.Driver) to reach the store's failure branches.
 const SqliteDriverName = "sqlite"
 
 const (
@@ -131,11 +131,11 @@ func SqliteFileURI(path string, query url.Values) string {
 }
 
 func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool) (*SyncStore, error) {
-	return openSyncStoreWithDriver(ctx, dbPath, logger, ensureSchema, SqliteDriverName)
+	return openSyncStoreWithHooks(ctx, dbPath, logger, ensureSchema, Hooks{})
 }
 
-func openSyncStoreWithDriver(
-	ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool, driverName string,
+func openSyncStoreWithHooks(
+	ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool, hooks Hooks,
 ) (*SyncStore, error) {
 	root, _, err := fsroot.OpenPath(dbPath)
 	if err != nil {
@@ -146,7 +146,7 @@ func openSyncStoreWithDriver(
 	}
 
 	// DSN parameters ensure pragmas apply to every connection from the pool.
-	db, err := sql.Open(driverName, SqliteFileURI(dbPath, url.Values{SqlitePragmaParam: {
+	db, err := sql.Open(hooks.driverName(), SqliteFileURI(dbPath, url.Values{SqlitePragmaParam: {
 		"journal_mode(WAL)",
 		"synchronous(FULL)",
 		"foreign_keys(ON)",
@@ -177,6 +177,7 @@ func openSyncStoreWithDriver(
 		db:      db,
 		logger:  logger,
 		nowFunc: time.Now,
+		hooks:   hooks,
 	}
 
 	return store, nil
@@ -288,9 +289,9 @@ func nullKnownInt64(n int64, known bool) sql.NullInt64 {
 
 // reachCrashPoint calls the crash hook at point (crash_points.go).
 func (s *SyncStore) reachCrashPoint(point string) error {
-	if s == nil || s.crashAt == nil {
+	if s == nil || s.hooks.CrashAt == nil {
 		return nil
 	}
 
-	return s.crashAt(point)
+	return s.hooks.CrashAt(point)
 }

@@ -40,7 +40,7 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 	dg := syncexec.NewDepGraph(syncfixture.TestLogger(t))
 	dispatchCh := make(chan *syncdomain.TrackedAction, 4)
 	mgr := syncstoretest.NewTestManager(t)
-	pool := syncexec.NewWorkerPool(cfg, dispatchCh, mgr, syncfixture.TestLogger(t), 10)
+	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{Config: cfg, Dispatch: dispatchCh, Store: mgr, Logger: syncfixture.TestLogger(t), CompletionBuffer: 10})
 
 	ctx, cancel := context.WithCancel(t.Context())
 

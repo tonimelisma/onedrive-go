@@ -109,11 +109,11 @@ func engineLockDataDir(cfg *engineInputs) string {
 // it. The refusal lets both locks go.
 func acquireEngineLocks(cfg *engineInputs) (engineLocks, error) {
 	dataDir := engineLockDataDir(cfg)
-	root, err := acquireSyncRootLock(dataDir, cfg.SyncRoot, cfg.Logger, cfg.lockFlock)
+	root, err := acquireSyncRootLock(dataDir, cfg.SyncRoot, cfg.Logger, cfg.hooks.lockFlock)
 	if err != nil {
 		return engineLocks{}, err
 	}
-	store, err := acquireSyncStoreLock(dataDir, cfg.DBPath, cfg.Logger, cfg.lockFlock)
+	store, err := acquireSyncStoreLock(dataDir, cfg.DBPath, cfg.Logger, cfg.hooks.lockFlock)
 	if err != nil {
 		return engineLocks{}, errors.Join(err, root.release())
 	}

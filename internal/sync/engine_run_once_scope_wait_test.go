@@ -35,7 +35,7 @@ func TestRunOnce_WaitsOutAShortPauseBeforeTheNextPass(t *testing.T) {
 	eng.transferWorkers = 4
 	installManualClockForTestEngine(eng, clock)
 	var waits []time.Duration
-	eng.waitFn = func(_ context.Context, d time.Duration) error {
+	eng.hooks.wait = func(_ context.Context, d time.Duration) error {
 		waits = append(waits, d)
 		clock.Advance(d)
 
@@ -73,7 +73,7 @@ func TestRunOnce_LeavesWorkBehindAPauseLongerThanTenMinutes(t *testing.T) {
 	eng.transferWorkers = 4
 	installManualClockForTestEngine(eng, clock)
 	waited := 0
-	eng.waitFn = func(_ context.Context, d time.Duration) error {
+	eng.hooks.wait = func(_ context.Context, d time.Duration) error {
 		waited++
 		clock.Advance(d)
 

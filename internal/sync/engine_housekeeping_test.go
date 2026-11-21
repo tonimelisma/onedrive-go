@@ -28,6 +28,28 @@ func testOwnedPartialName(base string) string {
 	return ".onedrive-go." + base + ".partial"
 }
 
+// newTestHousekeeper is a housekeeper of syncRoot under filter, logging to
+// logger, whose protected roots are those of the shortcut roots store holds
+// (none when store is nil), on the wall clock.
+func newTestHousekeeper(
+	t *testing.T, syncRoot string, filter syncdomain.ContentFilterConfig, store *syncstore.SyncStore, logger *slog.Logger,
+) *housekeeper {
+	t.Helper()
+
+	namespaceID := ""
+	if store != nil {
+		namespaceID = syncfixture.ShortcutNamespaceTestID
+	}
+
+	return &housekeeper{
+		syncTree:      syncfixture.MustOpenSyncTree(t, syncRoot),
+		contentFilter: filter,
+		roots:         newProtectedRootSet(store, namespaceID),
+		logger:        logger,
+		now:           time.Now,
+	}
+}
+
 // Validates: R-2.4.10
 func TestPostSyncHousekeeping_SkipsConfiguredChildRoots(t *testing.T) {
 	t.Parallel()
@@ -38,15 +60,8 @@ func TestPostSyncHousekeeping_SkipsConfiguredChildRoots(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, testOwnedPartialName("root.txt")), []byte("root"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(childRoot, testOwnedPartialName("child.txt")), []byte("child"), 0o600))
 
-	flow := &engineFlow{
-		engine: &Engine{
-			syncTree:      syncfixture.MustOpenSyncTree(t, syncRoot),
-			logger:        syncfixture.TestLogger(t),
-			contentFilter: syncdomain.ContentFilterConfig{IgnoredDirs: []string{"Shortcuts/Docs"}},
-		},
-	}
-	flow.deps = newRuntimeDeps(flow.engine)
-	flow.postSyncHousekeeping(t.Context())
+	newTestHousekeeper(t, syncRoot, syncdomain.ContentFilterConfig{IgnoredDirs: []string{"Shortcuts/Docs"}}, nil,
+		syncfixture.TestLogger(t)).afterSync(t.Context())
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, testOwnedPartialName("root.txt")))
 	assert.FileExists(t, filepath.Join(childRoot, testOwnedPartialName("child.txt")))
@@ -62,19 +77,19 @@ func TestPostSyncHousekeeping_SkipsProtectedShortcutRoots(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, testOwnedPartialName("root.txt")), []byte("root"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(childRoot, testOwnedPartialName("shortcut-sentinel.txt")), []byte("child"), 0o600))
 
-	flow := &engineFlow{
-		engine: &Engine{
-			syncTree:      syncfixture.MustOpenSyncTree(t, syncRoot),
-			logger:        syncfixture.TestLogger(t),
-			contentFilter: syncdomain.ContentFilterConfig{},
-			protectedRoots: []syncshortcut.ProtectedRoot{{
-				Path:      "Shared Project",
-				BindingID: "shortcut-binding",
-			}},
-		},
-	}
-	flow.deps = newRuntimeDeps(flow.engine)
-	flow.postSyncHousekeeping(t.Context())
+	store := syncstoretest.NewTestStore(t)
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
+		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
+		BindingItemID:     "shortcut-binding",
+		RelativeLocalPath: "Shared Project",
+		LocalAlias:        "Shared Project",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-1",
+		RemoteIsFolder:    true,
+		State:             syncshortcut.ShortcutRootStateActive,
+		ProtectedPaths:    []string{"Shared Project"},
+	}}))
+	newTestHousekeeper(t, syncRoot, syncdomain.ContentFilterConfig{}, store, syncfixture.TestLogger(t)).afterSync(t.Context())
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, testOwnedPartialName("root.txt")))
 	assert.FileExists(t, filepath.Join(childRoot, testOwnedPartialName("shortcut-sentinel.txt")))
@@ -104,8 +119,10 @@ func TestPostSyncHousekeeping_ReadsProtectedRootsUnderTheLock(t *testing.T) {
 		message: protectedRootRefreshRecoveredMessage,
 		signal:  refreshed,
 	})
-	eng, syncRoot := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(in *engineInputs) {
+		in.Logger = logger
+		in.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+	})
 	ack := eng.ShortcutChildAckHandle()
 
 	const rounds = 10
@@ -132,11 +149,11 @@ func TestPostSyncHousekeeping_ReadsProtectedRootsUnderTheLock(t *testing.T) {
 
 	for range rounds {
 		seedRemovedSharedFolders(t, eng.Engine, syncRoot)
-		eng.protectedRootRefreshFailing = true
-		eng.flow.postSyncHousekeeping(t.Context())
+		eng.upkeep.rootRefreshFailing = true
+		eng.upkeep.afterSync(t.Context())
 		require.NoError(t, syncfixture.ReceiveWithin[error](t, acked,
 			"the final-drain acknowledgement, which starts when housekeeping logs its refresh recovery line"))
-		assert.Empty(t, eng.currentProtectedRoots(),
+		assert.Empty(t, eng.protectedRoots.current(),
 			"the acknowledgement rewrote the list housekeeping had just refreshed")
 	}
 }
@@ -213,15 +230,8 @@ func TestPostSyncHousekeeping_RespectsIncludedDirs(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(excludedRoot, "user.partial"), []byte("excluded"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "root.partial"), []byte("root"), 0o600))
 
-	flow := &engineFlow{
-		engine: &Engine{
-			syncTree:      syncfixture.MustOpenSyncTree(t, syncRoot),
-			logger:        syncfixture.TestLogger(t),
-			contentFilter: syncdomain.ContentFilterConfig{IncludedDirs: []string{"Projects"}},
-		},
-	}
-	flow.deps = newRuntimeDeps(flow.engine)
-	flow.postSyncHousekeeping(t.Context())
+	newTestHousekeeper(t, syncRoot, syncdomain.ContentFilterConfig{IncludedDirs: []string{"Projects"}}, nil,
+		syncfixture.TestLogger(t)).afterSync(t.Context())
 
 	assert.NoFileExists(t, filepath.Join(includedRoot, testOwnedPartialName("owned.txt")))
 	assert.FileExists(t, filepath.Join(excludedRoot, "user.partial"))
@@ -345,41 +355,30 @@ func TestPostSyncHousekeeping_SkipsTransferCleanupWhenProtectedRootsCannotBeRead
 
 	logBuf, logger := syncfixture.NewDebugLogBuffer()
 	broken := closedTestStore(t)
-	flow := &engineFlow{
-		engine: &Engine{
-			syncTree:            syncfixture.MustOpenSyncTree(t, syncRoot),
-			logger:              logger,
-			baseline:            broken,
-			shortcutNamespaceID: syncfixture.ShortcutNamespaceTestID,
-			contentFilter:       syncdomain.ContentFilterConfig{},
-		},
-	}
-	flow.deps = newRuntimeDeps(flow.engine)
+	h := newTestHousekeeper(t, syncRoot, syncdomain.ContentFilterConfig{}, broken, logger)
 
 	const warnLine = "Could not refresh the shared-folder list; skipping"
 
-	flow.postSyncHousekeeping(t.Context())
+	h.afterSync(t.Context())
 	assert.FileExists(t, rootPartial, "no cleanup walk with a protected-root list that could not be refreshed")
 	assert.FileExists(t, childPartial)
 	assert.Equal(t, 1, countLogLines(logBuf.String(), warnLine))
 	assert.Contains(t, logBuf.String(), "level=WARN")
 
-	flow.postSyncHousekeeping(t.Context())
+	h.afterSync(t.Context())
 	assert.FileExists(t, rootPartial)
 	assert.Equal(t, 1, countLogLines(logBuf.String(), warnLine), "a repeat in the same streak is Debug")
 	assert.Equal(t, 1, countLogLines(logBuf.String(), "failed again"))
 
 	// Recovery: the store reads again, cleanup resumes and the streak ends.
-	flow.engine.baseline = syncstoretest.NewTestStore(t)
-	flow.deps = newRuntimeDeps(flow.engine)
-	flow.postSyncHousekeeping(t.Context())
+	h.roots.store = syncstoretest.NewTestStore(t)
+	h.afterSync(t.Context())
 	assert.NoFileExists(t, rootPartial, "cleanup runs once the protected roots are current")
 	assert.Contains(t, logBuf.String(), "transfer cleanup resumes")
 
 	// A new streak is reported once more.
-	flow.engine.baseline = broken
-	flow.deps = newRuntimeDeps(flow.engine)
-	flow.postSyncHousekeeping(t.Context())
+	h.roots.store = broken
+	h.afterSync(t.Context())
 	assert.Equal(t, 2, countLogLines(logBuf.String(), warnLine))
 }
 
@@ -399,24 +398,15 @@ func TestPostSyncHousekeeping_CanceledContextIsQuiet(t *testing.T) {
 	require.NoError(t, os.WriteFile(rootPartial, []byte("root"), 0o600))
 
 	logBuf, logger := syncfixture.NewDebugLogBuffer()
-	flow := &engineFlow{
-		engine: &Engine{
-			syncTree:            syncfixture.MustOpenSyncTree(t, syncRoot),
-			logger:              logger,
-			baseline:            syncstoretest.NewTestStore(t),
-			shortcutNamespaceID: syncfixture.ShortcutNamespaceTestID,
-			contentFilter:       syncdomain.ContentFilterConfig{},
-		},
-	}
-	flow.deps = newRuntimeDeps(flow.engine)
+	h := newTestHousekeeper(t, syncRoot, syncdomain.ContentFilterConfig{}, syncstoretest.NewTestStore(t), logger)
 
 	shuttingDown, cancel := context.WithCancel(t.Context())
 	cancel()
-	flow.postSyncHousekeeping(shuttingDown)
+	h.afterSync(shuttingDown)
 	assert.NotContains(t, logBuf.String(), "level=WARN", "a clean shutdown warns about nothing")
 	assert.FileExists(t, rootPartial, "no cleanup walk with a protected-root list that was not read")
 
-	flow.postSyncHousekeeping(t.Context())
+	h.afterSync(t.Context())
 	assert.NoFileExists(t, rootPartial, "the next pass cleans up")
 	assert.NotContains(t, logBuf.String(), "transfer cleanup resumes", "a shutdown is no failure streak to recover from")
 }
@@ -441,26 +431,21 @@ func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *
 		recovered string
 		// arrange returns an engine and a function that leaves one leftover
 		// for its cleanup and returns the folder holding it.
-		arrange func(t *testing.T, logger *slog.Logger) (*Engine, func() string)
+		arrange func(t *testing.T, logger *slog.Logger) (*housekeeper, func() string)
 	}{
 		{
 			name:      "leftover download file",
 			warn:      "Could not remove every leftover download file",
 			repeat:    "could not remove every leftover download file (still failing)",
 			recovered: "leftover download files can be removed again",
-			arrange: func(t *testing.T, logger *slog.Logger) (*Engine, func() string) {
+			arrange: func(t *testing.T, logger *slog.Logger) (*housekeeper, func() string) {
 				t.Helper()
 
 				syncRoot := t.TempDir()
 				locked := filepath.Join(syncRoot, "locked")
 				require.NoError(t, os.Mkdir(locked, 0o700))
-				eng := &Engine{
-					syncTree:      syncfixture.MustOpenSyncTree(t, syncRoot),
-					logger:        logger,
-					contentFilter: syncdomain.ContentFilterConfig{},
-				}
 
-				return eng, func() string {
+				return newTestHousekeeper(t, syncRoot, syncdomain.ContentFilterConfig{}, nil, logger), func() string {
 					partial := filepath.Join(locked, testOwnedPartialName("stuck.txt"))
 					require.NoError(t, os.WriteFile(partial, []byte("x"), 0o600))
 
@@ -473,18 +458,14 @@ func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *
 			warn:      "Could not remove every expired upload session file",
 			repeat:    "could not remove every expired upload session file (still failing)",
 			recovered: "expired upload session files can be removed again",
-			arrange: func(t *testing.T, logger *slog.Logger) (*Engine, func() string) {
+			arrange: func(t *testing.T, logger *slog.Logger) (*housekeeper, func() string) {
 				t.Helper()
 
 				dataDir := t.TempDir()
-				eng := &Engine{
-					syncTree:      syncfixture.MustOpenSyncTree(t, t.TempDir()),
-					sessionStore:  driveops.NewSessionStore(dataDir, logger),
-					logger:        logger,
-					contentFilter: syncdomain.ContentFilterConfig{},
-				}
+				h := newTestHousekeeper(t, t.TempDir(), syncdomain.ContentFilterConfig{}, nil, logger)
+				h.sessionStore = driveops.NewSessionStore(dataDir, logger)
 
-				return eng, func() string { return saveStaleEngineSession(t, dataDir) }
+				return h, func() string { return saveStaleEngineSession(t, dataDir) }
 			},
 		},
 	}
@@ -494,9 +475,7 @@ func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *
 			t.Parallel()
 
 			logs, logger := syncfixture.NewDebugLogBuffer()
-			eng, leaveLeftover := tc.arrange(t, logger)
-			flow := &engineFlow{engine: eng}
-			flow.deps = newRuntimeDeps(eng)
+			h, leaveLeftover := tc.arrange(t, logger)
 
 			dir := leaveLeftover()
 			leftovers := func() int {
@@ -507,8 +486,8 @@ func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *
 			}
 			makeReadOnlyForTest(t, dir)
 
-			flow.postSyncHousekeeping(t.Context())
-			flow.postSyncHousekeeping(t.Context())
+			h.afterSync(t.Context())
+			h.afterSync(t.Context())
 			require.Equal(t, 1, countLogLines(logs.String(), tc.warn), "one Warn per streak: %s", logs.String())
 			assert.Contains(t, logLineWith(logs.String(), tc.warn), "level=WARN")
 			assert.Contains(t, logLineWith(logs.String(), tc.warn), "permission denied")
@@ -519,8 +498,8 @@ func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *
 			// Recovery: the folder is writable again, the leftover goes and
 			// the streak ends. A clean pass after that says nothing more.
 			syncfixture.SetTestDirPermissions(t, dir, 0o700)
-			flow.postSyncHousekeeping(t.Context())
-			flow.postSyncHousekeeping(t.Context())
+			h.afterSync(t.Context())
+			h.afterSync(t.Context())
 			assert.Zero(t, leftovers())
 			require.Equal(t, 1, countLogLines(logs.String(), tc.recovered), logs.String())
 			assert.Contains(t, logLineWith(logs.String(), tc.recovered), "level=INFO")
@@ -529,7 +508,7 @@ func TestPostSyncHousekeeping_WarnsOncePerStreakWhenLeftoversCannotBeRemoved(t *
 			// A new streak is reported once more.
 			leaveLeftover()
 			syncfixture.SetTestDirPermissions(t, dir, 0o500)
-			flow.postSyncHousekeeping(t.Context())
+			h.afterSync(t.Context())
 			assert.Equal(t, 2, countLogLines(logs.String(), tc.warn), "a new streak is reported once more")
 		})
 	}
@@ -556,27 +535,27 @@ func TestPurgeExpiredTrash_WarnsOncePerFailureStreak(t *testing.T) {
 	breakTrash()
 
 	logBuf, logger := syncfixture.NewDebugLogBuffer()
-	eng := &Engine{
+	h := &housekeeper{
 		trash:  localtrash.Open(trashPath, nil),
 		logger: logger,
-		clock:  syncfixture.NewManualClock(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)),
+		now:    syncfixture.NewManualClock(time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)).Now,
 	}
 
 	const warnLine = "Could not remove expired files from the sync trash"
 
-	eng.purgeExpiredTrash(true)
-	eng.purgeExpiredTrash(true)
+	h.purgeExpiredTrash(true)
+	h.purgeExpiredTrash(true)
 	assert.Equal(t, 1, countLogLines(logBuf.String(), warnLine), "one Warn per streak")
 	assert.Contains(t, logBuf.String(), "level=WARN")
 	assert.Contains(t, logBuf.String(), trashPath, "the Warn names the trash directory")
 	assert.Equal(t, 1, countLogLines(logBuf.String(), "still failing"))
 
 	repairTrash()
-	eng.purgeExpiredTrash(true)
+	h.purgeExpiredTrash(true)
 	assert.Contains(t, logBuf.String(), "expired files can be removed from the sync trash again")
 	assert.Equal(t, 1, countLogLines(logBuf.String(), warnLine))
 
 	breakTrash()
-	eng.purgeExpiredTrash(true)
+	h.purgeExpiredTrash(true)
 	assert.Equal(t, 2, countLogLines(logBuf.String(), warnLine), "a new streak is reported once more")
 }

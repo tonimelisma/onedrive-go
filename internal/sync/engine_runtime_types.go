@@ -4,16 +4,26 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // engineFlow holds mutable per-run execution state shared by one-shot and
-// watch coordinators. The Engine itself remains a dependency container whose
-// fields are fixed after construction, apart from the few it guards itself
-// (protectedRoots under protectedRootsMu, the atomic counters); run-scoped
-// state lives here instead.
+// watch coordinators. It reads the engine's configuration, hooks and ambient
+// capabilities from the copies flowInputs took when the run started; the
+// engine pointer remains for its collaborators and the state it owns
+// (the protected-root set, the housekeeper).
 type engineFlow struct {
+	// engine is the collaborators and engine-owned state this flow still
+	// reaches; its configuration and hooks it reads from cfg and hooks.
 	engine *Engine
+
+	// cfg is the engine's configuration, copied when the run starts.
+	cfg runConfig
+
+	// hooks are the engine's test seams as they were when the run started.
+	hooks engineHooks
 
 	// deps are the capabilities this run needs regardless of what it decides.
 	// See runtimeDeps for why they are passed rather than reached for.
@@ -66,17 +76,75 @@ type engineFlow struct {
 	canceledAt atomic.Pointer[time.Time]
 }
 
-func newEngineFlow(engine *Engine) *engineFlow {
+// runConfig is the engine configuration a run reads: plain values fixed when
+// the engine was built, copied once when the run starts.
+type runConfig struct {
+	driveID          driveid.ID
+	remoteRootItemID string
+	dataDir          string
+	syncRoot         string
+	syncTree         *synctree.Root
+	transferWorkers  int
+	// poolSize is how many workers the run's pools run (workerPoolSize).
+	poolSize            int
+	checkWorkers        int
+	contentFilter       syncdomain.ContentFilterConfig
+	localRules          syncdomain.LocalObservationRules
+	shortcutNamespaceID string
+	enableWebsocket     bool
+	// accountCanonicalID names the account whose sign-in a rejected token
+	// marks as needing attention.
+	accountCanonicalID driveid.CanonicalID
+}
+
+// flowInputs is everything newEngineFlow builds a run's flow from.
+type flowInputs struct {
+	engine *Engine
+	cfg    runConfig
+	deps   runtimeDeps
+	hooks  engineHooks
+	runID  string
+}
+
+// flowInputs is the one place a run reads the engine's configuration, hooks
+// and capabilities. Each call takes the next run ID.
+func (e *Engine) flowInputs() *flowInputs {
+	return &flowInputs{
+		engine: e,
+		cfg: runConfig{
+			driveID:             e.driveID,
+			remoteRootItemID:    e.remoteRootItemID,
+			dataDir:             e.dataDir,
+			syncRoot:            e.syncRoot,
+			syncTree:            e.syncTree,
+			transferWorkers:     e.transferWorkers,
+			poolSize:            e.workerPoolSize(),
+			checkWorkers:        e.checkWorkers,
+			contentFilter:       e.contentFilter,
+			localRules:          e.localRules,
+			shortcutNamespaceID: e.shortcutNamespaceID,
+			enableWebsocket:     e.enableWebsocket,
+			accountCanonicalID:  e.accountCanonicalID,
+		},
+		deps:  newRuntimeDeps(e),
+		hooks: e.hooks,
+		runID: e.nextRuntimeRunID(),
+	}
+}
+
+func newEngineFlow(in *flowInputs) *engineFlow {
 	flow := &engineFlow{
-		engine:    engine,
-		deps:      newRuntimeDeps(engine),
+		engine:    in.engine,
+		cfg:       in.cfg,
+		hooks:     in.hooks,
+		deps:      in.deps,
 		signals:   noRuntimeSignals{},
 		inspect:   noWatchInspector{},
 		admitted:  noAdmittedWork{},
-		runID:     engine.nextRuntimeRunID(),
+		runID:     in.runID,
 		sched:     newActionScheduler(),
 		retries:   newRetryLedger(),
-		scopes:    scopeLedger{ownerCheck: engine.runOwnerCheck},
+		scopes:    scopeLedger{ownerCheck: in.engine.runOwnerCheck},
 		retryWork: retryWork{rows: make(map[syncdomain.RetryWorkKey]syncdomain.RetryWorkRow)},
 
 		supersedeStreaks: make(map[string]int),
@@ -96,7 +164,7 @@ type oneShotRunner struct {
 
 func newOneShotRunner(engine *Engine) *oneShotRunner {
 	runner := &oneShotRunner{
-		engineFlow: newEngineFlow(engine),
+		engineFlow: newEngineFlow(engine.flowInputs()),
 	}
 	runner.admitted = runner
 

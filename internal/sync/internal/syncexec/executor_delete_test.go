@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -101,10 +100,11 @@ func newDeleteTestExecutor(t *testing.T) (*Executor, string) {
 	dl := &syncfixture.ExecutorMockDownloader{}
 	ul := &syncfixture.ExecutorMockUploader{}
 
-	cfg := NewExecutorConfig(items, dl, ul, syncTree, driveID, logger, nil)
-	cfg.SetTransferMgr(driveops.NewTransferManager(dl, ul, nil, logger))
-	cfg.SetContentFilter(syncdomain.ContentFilterConfig{IgnoreJunkFiles: true})
-	cfg.SetNowFunc(func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) })
+	cfg := mustNewExecutorConfig(t, &ExecutorInputs{
+		Items: items, Downloads: dl, Uploads: ul, SyncTree: syncTree, DriveID: driveID, Logger: logger,
+		ContentFilter: syncdomain.ContentFilterConfig{IgnoreJunkFiles: true},
+		Now:           func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) },
+	})
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 
 	return e, syncRoot
@@ -119,16 +119,14 @@ func TestDeleteLocalFolder_JunkFileWhenIgnoreJunkDisabled_Fails(t *testing.T) {
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 
-	cfg := NewExecutorConfig(
-		&syncfixture.ExecutorMockItemClient{},
-		&syncfixture.ExecutorMockDownloader{},
-		&syncfixture.ExecutorMockUploader{},
-		syncTree,
-		driveID,
-		logger,
-		nil,
-	)
-	cfg.SetTransferMgr(driveops.NewTransferManager(&syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{}, nil, logger))
+	cfg := mustNewExecutorConfig(t, &ExecutorInputs{
+		Items:     &syncfixture.ExecutorMockItemClient{},
+		Downloads: &syncfixture.ExecutorMockDownloader{},
+		Uploads:   &syncfixture.ExecutorMockUploader{},
+		SyncTree:  syncTree,
+		DriveID:   driveID,
+		Logger:    logger,
+	})
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 
 	dir := filepath.Join(syncRoot, "folder")
@@ -191,8 +189,10 @@ func TestExecuteRemoteDelete_DoesNotUsePathConvergenceDelete(t *testing.T) {
 	}
 	pathConvergence := &executorPathConvergenceStub{}
 
-	cfg := NewExecutorConfig(items, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{}, syncTree, driveID, logger, pathConvergence)
-	cfg.SetTransferMgr(driveops.NewTransferManager(&syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{}, nil, logger))
+	cfg := mustNewExecutorConfig(t, &ExecutorInputs{
+		Items: items, Downloads: &syncfixture.ExecutorMockDownloader{}, Uploads: &syncfixture.ExecutorMockUploader{},
+		SyncTree: syncTree, DriveID: driveID, Logger: logger, PathConvergence: pathConvergence,
+	})
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
 
 	action := &syncdomain.Action{
