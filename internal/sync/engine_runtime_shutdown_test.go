@@ -400,7 +400,7 @@ func TestEngineFlow_AStoppingRunAsksOneDriveNothing(t *testing.T) {
 		HTTPStatus: http.StatusForbidden, ErrMsg: "folder is read-only",
 	}
 
-	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &syncdomain.Baseline{}))
+	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, syncdomain.NewBaselineSnapshot(nil)))
 	require.NoError(t, flow.endStopDrain())
 
 	assert.Zero(t, probes, "a stop asks OneDrive nothing")
@@ -442,7 +442,7 @@ func TestEngineFlow_AStoppingRunAsksOneDriveNothingForATrial(t *testing.T) {
 		IsTrial: true, TrialScopeKey: scopeKey,
 	}
 
-	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &syncdomain.Baseline{}))
+	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, syncdomain.NewBaselineSnapshot(nil)))
 	require.NoError(t, flow.endStopDrain())
 
 	assert.Zero(t, probes, "a stop asks OneDrive nothing for a trial")
@@ -488,7 +488,7 @@ func TestEngineFlow_AStoppingRunProbesNoLocalFolder(t *testing.T) {
 		Err: os.ErrPermission, ErrMsg: "permission denied", FailureCapability: syncdomain.PermissionCapabilityLocalWrite,
 	}
 
-	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &syncdomain.Baseline{}))
+	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, syncdomain.NewBaselineSnapshot(nil)))
 	require.NoError(t, flow.endStopDrain())
 
 	rows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -524,7 +524,7 @@ func TestEngineFlow_AStoppingRunProbesNoLocalFolderForATrial(t *testing.T) {
 		IsTrial: true, TrialScopeKey: scopeKey,
 	}
 
-	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, &syncdomain.Baseline{}))
+	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, syncdomain.NewBaselineSnapshot(nil)))
 	require.NoError(t, flow.endStopDrain())
 
 	rows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -565,7 +565,7 @@ func TestEngineFlow_AStoppingRunReleasesNoHeldWork(t *testing.T) {
 	require.NotNil(t, held)
 	flow.holdAction(held, heldReasonRetry, syncdomain.ScopeKey{}, flow.deps.now().Add(-time.Minute))
 
-	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &completions[0], &syncdomain.Baseline{}))
+	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &completions[0], syncdomain.NewBaselineSnapshot(nil)))
 	require.NoError(t, flow.endStopDrain())
 
 	assert.Contains(t, flow.retries.heldByKey, syncdomain.RetryWorkKeyForAction(&held.Action), "the due action stays held")

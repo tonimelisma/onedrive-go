@@ -301,6 +301,32 @@ func newTestWatchState(t *testing.T, eng *testEngine) {
 	_ = setupWatchEngine(t, eng)
 }
 
+// seedBlockScopeRowForTest writes only key's block_scopes row, which work
+// recorded blocked under key references (the database refuses the blocked
+// row without it); the run's scope ledger is left alone.
+func seedBlockScopeRowForTest(t *testing.T, eng *testEngine, key syncdomain.ScopeKey) {
+	t.Helper()
+
+	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &syncdomain.BlockScope{
+		Key:           key,
+		TrialInterval: time.Minute,
+		NextTrialAt:   eng.nowFunc().Add(time.Minute),
+	}))
+}
+
+// activateScopeForTest does what a failure that activates sr's scope does:
+// it records work blocked under the scope together with the scope row, in one
+// transaction, and then activates the scope.
+func activateScopeForTest(t *testing.T, flow *engineFlow, work syncdomain.RetryWorkKey, sr syncdomain.ScopeUpdateResult) {
+	t.Helper()
+
+	activation, err := flow.prepareBlockActivation(sr)
+	require.NoError(t, err)
+	_, err = flow.recordActivatingBlockedRetryWork(t.Context(), work, activation)
+	require.NoError(t, err)
+	require.NoError(t, flow.applyBlockActivation(t.Context(), activation))
+}
+
 func setTestBlockScope(t *testing.T, eng *testEngine, block *syncdomain.BlockScope) {
 	t.Helper()
 
@@ -407,7 +433,7 @@ func installManualClockForTestEngine(eng *testEngine, clock *syncfixture.ManualC
 	}
 }
 
-func runFullRemoteRefreshAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl *syncdomain.Baseline) {
+func runFullRemoteRefreshAsyncForTest(t *testing.T, eng *testEngine, ctx context.Context, bl syncdomain.BaselineView) {
 	t.Helper()
 	testWatchRuntime(t, eng).runFullRemoteRefreshAsync(ctx, bl)
 }
@@ -486,6 +512,7 @@ func observeEngineClock(eng *Engine) *syncfixture.ObservingClock {
 // production zero value.
 func newTestEngineInputs(t *testing.T, mock *syncfixture.EngineMockClient, tmpDir string) *engineInputs {
 	t.Helper()
+	syncfixture.SkipUnsampledInShort(t)
 
 	dataDir := filepath.Join(tmpDir, "data")
 	dbPath := filepath.Join(tmpDir, "test.db")
@@ -517,6 +544,9 @@ func newTestEngineInputs(t *testing.T, mock *syncfixture.EngineMockClient, tmpDi
 		PermChecker:        mock,
 		Logger:             logger,
 	}
+	// A test's store skips the waits for the disk unless the test proves
+	// durability on the production setting (keepRealFsync).
+	inputs.hooks.store.SkipFsync = !usesRealFsync(t)
 	return inputs
 }
 

@@ -106,16 +106,18 @@ func (s *SyncStore) CommitLocalSnapshot(
 	if err != nil {
 		return result, err
 	}
+	var patch baselineCachePatch
+	if backfilled > 0 {
+		patch, err = s.reloadPatchTx(ctx, tx)
+		if err != nil {
+			return result, fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
+		}
+	}
 
 	if err = tx.Commit(); err != nil {
 		return result, fmt.Errorf("sync: committing local_state transaction: %w", err)
 	}
-
-	if backfilled > 0 {
-		if err = s.reloadBaselineCache(ctx); err != nil {
-			return result, fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
-		}
-	}
+	s.applyBaselineCachePatch(patch)
 
 	return result, nil
 }

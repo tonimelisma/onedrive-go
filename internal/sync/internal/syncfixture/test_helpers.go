@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"math"
@@ -873,20 +874,19 @@ const TestDriveID = synctest.TestDriveID
 // it waits for the signal that the input was handled, then checks.
 const EventWait = time.Minute
 
-// EmptyBaseline returns a Baseline with initialized but empty maps.
-func EmptyBaseline() *syncdomain.Baseline {
-	return syncdomain.NewBaselineForTest(nil)
+// EmptyBaseline returns a baseline with no entries.
+func EmptyBaseline() *syncdomain.BaselineSnapshot {
+	return syncdomain.NewBaselineSnapshot(nil)
 }
 
-// BaselineWith creates a Baseline pre-populated with the given entries.
-func BaselineWith(entries ...*syncdomain.BaselineEntry) *syncdomain.Baseline {
-	return syncdomain.NewBaselineForTest(entries)
+// BaselineWith returns a baseline holding the given entries.
+func BaselineWith(entries ...*syncdomain.BaselineEntry) *syncdomain.BaselineSnapshot {
+	return syncdomain.NewBaselineSnapshot(entries)
 }
 
-// NewBaselineForTest seeds a baseline using the store-owned test helper so
-// sync tests stay aligned with the current baseline owner.
-func NewBaselineForTest(entries []*syncdomain.BaselineEntry) *syncdomain.Baseline {
-	return syncdomain.NewBaselineForTest(entries)
+// NewBaselineForTest returns a baseline holding the given entries.
+func NewBaselineForTest(entries []*syncdomain.BaselineEntry) *syncdomain.BaselineSnapshot {
+	return syncdomain.NewBaselineSnapshot(entries)
 }
 
 // TestLogger returns a *slog.Logger wired to t.Log for clean test output.
@@ -983,6 +983,46 @@ func SkipInShort(tb testing.TB) {
 	if testing.Short() {
 		tb.Skip("exhaustive: runs in the full verify profiles and nightly CI")
 	}
+}
+
+// ShortSampleBuckets is how many top-level tests of the sync engine share
+// one place in the short tier: under -short a test that builds an engine runs
+// only when its top-level name falls in the sampled bucket
+// (SkipUnsampledInShort), and the full tiers run every one.
+const ShortSampleBuckets = 8
+
+// SkipUnsampledInShort skips, under -short, a test outside the short tier's
+// fixed sample: one top-level test in ShortSampleBuckets, chosen by a hash
+// of its top-level name, so a table test runs all its cases or none and the
+// sample stays the same from run to run. The engine tests' harness calls it
+// as it builds an engine. The per-PR tier is the short one (`verify quick`,
+// `verify platform` and the pre-PR gate); the full profiles, the race
+// profile and nightly CI run every test.
+func SkipUnsampledInShort(tb testing.TB) {
+	tb.Helper()
+
+	if !testing.Short() {
+		return
+	}
+	name, _, _ := strings.Cut(tb.Name(), "/")
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(name))
+	if hash.Sum32()%ShortSampleBuckets == 0 {
+		return
+	}
+	tb.Skip("exhaustive: runs in the full verify profiles and nightly CI; the short tier runs a fixed sample of the engine tests")
+}
+
+// FullTier reports whether this test binary is the full unit tier's: one
+// built with coverage, which only the full verify profiles ask for
+// (`verify default` and `verify public`, which nightly CI runs; their
+// `go test -race -coverpkg=./... -coverprofile`, devtool's runUnitTests). An
+// exhaustive test whose full breadth costs more than a per-PR run can carry
+// runs all of it there and a fixed sample of it in every other non-short run:
+// the race profile on every push to main, the stress lane and a plain
+// `go test`. `go test -cover` runs the whole of it by hand.
+func FullTier() bool {
+	return testing.CoverMode() != ""
 }
 
 // SeedVars names the environment variables of one seeded model family: one

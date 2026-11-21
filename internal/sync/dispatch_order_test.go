@@ -395,12 +395,24 @@ func runOnceScenarios() []func(*testing.T) {
 	}
 }
 
+// reverseDispatchSampleStride is the share of the scenarios a run outside
+// the full tier re-runs reversed (syncfixture.FullTier): every one is a
+// second run of a scenario the suite already ran.
+const reverseDispatchSampleStride = 8
+
 // Validates: R-2.17.1, R-6.8.9
 func TestReverseDispatch_RunOnceScenariosPass(t *testing.T) {
 	syncfixture.SkipInShort(t)
 	t.Parallel()
 
-	for _, scenario := range runOnceScenarios() {
+	stride := 1
+	if !syncfixture.FullTier() {
+		stride = reverseDispatchSampleStride
+	}
+	for i, scenario := range runOnceScenarios() {
+		if i%stride != 0 {
+			continue
+		}
 		name := testFuncName(scenario)
 		t.Run(name, func(t *testing.T) {
 			runUnderDispatchOrder(t, "reverse", scenario)

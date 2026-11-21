@@ -63,7 +63,7 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 		},
 	}, "", driveID))
 
-	bl, err := store.Load(ctx)
+	bl, err := store.BaselineSnapshotForTest(ctx)
 	require.NoError(t, err)
 
 	comparisons, err := store.QueryComparisonState(ctx)
@@ -386,7 +386,7 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 		ETag:     "etag-remote",
 	}}, "", driveID))
 
-	bl, err := store.Load(ctx)
+	bl, err := store.BaselineSnapshotForTest(ctx)
 	require.NoError(t, err)
 
 	comparisons, err := store.QueryComparisonState(ctx)
@@ -727,7 +727,7 @@ func TestPlannerPlanCurrentState_UsesRemoteRowDriveOwnershipForDownloadActions(t
 			Mtime:    123,
 		}},
 		nil,
-		syncdomain.NewBaselineForTest(nil),
+		syncdomain.NewBaselineSnapshot(nil),
 	)
 
 	require.Len(t, plan.Actions, 1)
@@ -767,7 +767,7 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteWinnerDownloadWithoutConf
 		ETag:     "etag-remote",
 	}}, "", driveID))
 
-	bl, err := store.Load(ctx)
+	bl, err := store.BaselineSnapshotForTest(ctx)
 	require.NoError(t, err)
 
 	comparisons, err := store.QueryComparisonState(ctx)
@@ -815,7 +815,7 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 	t.Helper()
 
 	ctx := t.Context()
-	bl, err := store.Load(ctx)
+	bl, err := store.BaselineSnapshotForTest(ctx)
 	require.NoError(t, err)
 
 	tx, err := syncstore.BeginPerfTx(ctx, store.RawDBForTest())
@@ -859,6 +859,9 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 	require.NoError(t, err)
 	observationIssues, err := syncstore.QueryObservationIssueRowsWithRunner(ctx, tx)
 	require.NoError(t, err)
+	for i := range comparisons {
+		require.NoError(t, comparisons[i].DecisionState().Valid(), "the decision state of %q", comparisons[i].Path)
+	}
 
 	planner := NewPlanner(logger)
 	plan, err := planner.PlanCurrentState(
@@ -883,7 +886,7 @@ func planCurrentStateForInputs(
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
 	observationIssues []syncdomain.ObservationIssueRow,
-	baseline *syncdomain.Baseline,
+	baseline *syncdomain.BaselineSnapshot,
 ) *syncdomain.ActionPlan {
 	t.Helper()
 
@@ -1094,7 +1097,7 @@ func planForUnavailableLocalMoveSource(t *testing.T) *syncdomain.ActionPlan {
 			Path:      "docs/source.txt",
 			IssueType: syncdomain.IssueLocalReadDenied,
 		}},
-		syncdomain.NewBaselineForTest([]*syncdomain.BaselineEntry{{
+		syncdomain.NewBaselineSnapshot([]*syncdomain.BaselineEntry{{
 			Path:     "docs/source.txt",
 			DriveID:  driveid.New(syncfixture.EngineTestDriveID),
 			ItemID:   "baseline-source",
@@ -1138,7 +1141,7 @@ func planForUnavailableRemoteMoveDestination(t *testing.T) *syncdomain.ActionPla
 			IssueType: syncdomain.IssueRemoteReadDenied,
 			ScopeKey:  syncdomain.SKPermRemoteRead("Shared"),
 		}},
-		syncdomain.NewBaselineForTest([]*syncdomain.BaselineEntry{{
+		syncdomain.NewBaselineSnapshot([]*syncdomain.BaselineEntry{{
 			Path:     "Shared/dest.txt",
 			DriveID:  driveid.New(syncfixture.EngineTestDriveID),
 			ItemID:   "baseline-dest",

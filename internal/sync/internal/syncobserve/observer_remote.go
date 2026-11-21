@@ -127,7 +127,7 @@ type observerStats struct {
 // baseline must be a loaded Baseline (from SyncStore.Load); it is
 // read-only during observation. The caller must pass a normalized driveid.ID.
 func NewRemoteObserver(
-	fetcher syncdomain.DeltaFetcher, baseline *syncdomain.Baseline, driveID driveid.ID, logger *slog.Logger,
+	fetcher syncdomain.DeltaFetcher, baseline syncdomain.BaselineView, driveID driveid.ID, logger *slog.Logger,
 ) *RemoteObserver {
 	obs := &RemoteObserver{
 		fetcher: fetcher,

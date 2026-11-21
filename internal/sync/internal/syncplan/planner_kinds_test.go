@@ -38,7 +38,7 @@ func TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable(t *tes
 				{Path: "docs/a.txt", IssueType: syncdomain.IssueLocalReadDenied},
 				{Path: "docs/b.txt", IssueType: syncdomain.IssueLocalReadDenied},
 			},
-			syncdomain.NewBaselineForTest(nil),
+			syncdomain.NewBaselineSnapshot(nil),
 			PlannerMountContext{},
 			syncdomain.SyncBidirectional,
 		)
@@ -73,7 +73,7 @@ func TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan(t *testing.T) {
 		[]syncdomain.LocalStateRow{{Path: "docs/a.txt", ItemType: syncdomain.ItemTypeFile, Hash: "local-a"}},
 		nil,
 		nil,
-		syncdomain.NewBaselineForTest(nil),
+		syncdomain.NewBaselineSnapshot(nil),
 		PlannerMountContext{},
 		syncdomain.SyncBidirectional,
 	)
@@ -100,7 +100,7 @@ func TestPlanCurrentState_FolderTransferFailsThePlan(t *testing.T) {
 		[]syncdomain.LocalStateRow{{Path: "local-dir", ItemType: syncdomain.ItemTypeFolder}},
 		nil,
 		nil,
-		syncdomain.NewBaselineForTest(nil),
+		syncdomain.NewBaselineSnapshot(nil),
 		PlannerMountContext{},
 		syncdomain.SyncBidirectional,
 	)

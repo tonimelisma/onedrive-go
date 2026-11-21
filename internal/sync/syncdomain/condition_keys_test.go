@@ -137,7 +137,7 @@ func TestConditionKeyForIssueType_EveryMemberIsDecided(t *testing.T) {
 		IssueInvalidFilename:            ConditionInvalidFilename,
 		IssuePathTooLong:                ConditionPathTooLong,
 		IssueFileTooLarge:               ConditionFileTooLarge,
-		IssueHashPanic:                  ConditionHashError,
+		IssueHashError:                  ConditionHashError,
 		IssueUnauthorized:               ConditionAuthenticationRequired,
 		IssueRemoteWriteDenied:          ConditionRemoteWriteDenied,
 		IssueRemoteReadDenied:           ConditionRemoteReadDenied,

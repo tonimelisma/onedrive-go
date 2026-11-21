@@ -441,9 +441,7 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 	require.Len(t, activeScopes, 1)
 	assert.Equal(t, syncdomain.SKService(), activeScopes[0].Key)
 
-	bl, err := eng.baseline.Load(ctx)
-	require.NoError(t, err)
-	runtime, err := rt.runSteadyStateCurrentPlan(ctx, bl, syncdomain.SyncBidirectional)
+	runtime, err := rt.runSteadyStateCurrentPlan(ctx, syncdomain.SyncBidirectional)
 	require.NoError(t, err)
 	assert.Empty(t, runtime.Plan.Actions, "read-denied observation findings should suppress planning without reloading active scopes")
 }
@@ -475,9 +473,11 @@ func TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForwa
 			now := eng.nowFunc()
 			require.NoError(t, eng.baseline.MarkFullRemoteRefresh(ctx, eng.driveID, now, syncdomain.RemoteObservationModeDelta))
 
-			bl := syncdomain.NewBaselineForTest(nil)
+			bl := syncdomain.NewBaselineSnapshot(nil)
 			if tc.inBase {
-				bl.Put(&syncdomain.BaselineEntry{Path: "bin", DriveID: eng.driveID, ItemID: "item-bin", ParentID: "root", ItemType: syncdomain.ItemTypeFolder})
+				bl = syncdomain.NewBaselineSnapshot([]*syncdomain.BaselineEntry{
+					{Path: "bin", DriveID: eng.driveID, ItemID: "item-bin", ParentID: "root", ItemType: syncdomain.ItemTypeFolder},
+				})
 			}
 			batch := buildPrimaryWatchBatch(eng.Engine, bl, []syncdomain.RemoteItem{{ObservedItem: syncdomain.ObservedItem{
 				Path:      "bin",

@@ -43,7 +43,7 @@ type inflightParent struct {
 // accumulates inflight across delta pages; mount-root callers populate it once per
 // batch. Same methods, different lifetime.
 type itemConverter struct {
-	Baseline              *syncdomain.Baseline
+	Baseline              syncdomain.BaselineView
 	DriveID               driveid.ID
 	Logger                *slog.Logger
 	Stats                 *observerCounters     // nil-safe: primary observer provides this
@@ -124,7 +124,7 @@ const maxAncestorFetchesPerWindow = 200
 // shared content syncs through explicit standalone mounts or managed child
 // mounts.
 func NewPrimaryConverter(
-	baseline *syncdomain.Baseline,
+	baseline syncdomain.BaselineView,
 	driveID driveid.ID,
 	logger *slog.Logger,
 	stats *observerCounters,
@@ -463,7 +463,7 @@ func (c *itemConverter) registerInflight(item *graph.Item, inflight map[string]i
 	itemDriveID := c.resolveItemDriveID(item)
 	var existing *syncdomain.BaselineEntry
 	if baselineEntry, found := c.Baseline.GetByID(item.ID); found {
-		existing = baselineEntry
+		existing = &baselineEntry
 	}
 
 	name := effectiveItemName(item, existing)
@@ -514,7 +514,7 @@ func (c *itemConverter) ClassifyItem(item *graph.Item, inflight map[string]infli
 
 	var existing *syncdomain.BaselineEntry
 	if baselineEntry, found := c.Baseline.GetByID(item.ID); found {
-		existing = baselineEntry
+		existing = &baselineEntry
 	}
 
 	// Non-deleted items need a materializable leaf name. Deleted items may

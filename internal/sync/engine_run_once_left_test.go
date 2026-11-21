@@ -206,7 +206,7 @@ func TestExecutePreparedPlan_AMismatchedPlanFailsEveryActionLoudly(t *testing.T)
 		Report: report,
 	}
 
-	require.NoError(t, newOneShotRunner(eng.Engine).executePreparedPlan(t.Context(), runtime, &syncdomain.Baseline{}))
+	require.NoError(t, newOneShotRunner(eng.Engine).executePreparedPlan(t.Context(), runtime, syncdomain.NewBaselineSnapshot(nil)))
 	assert.Equal(t, len(runtime.Plan.Actions), report.Failed)
 	assert.Equal(t, LeftWork{Failed: len(runtime.Plan.Actions)}, report.LeftWork(),
 		"every action of the plan is left as failed, none kept for retry")

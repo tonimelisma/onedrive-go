@@ -107,9 +107,11 @@ func TestRunOnce_ThreeQuotaRefusalsActivateTheScopeAndBlockTheRows(t *testing.T)
 
 // Validates: R-2.10.33
 //
-// A store an earlier build left with a blocked row and no scope for it (the
-// case above, before the fix) gets the work back at startup: the row is made
-// due and the pass does it.
+// A blocked row with no scope row to reference gets the work back at
+// startup: the row is made due and the pass does it. Since store generation
+// 29 the database refuses such a row under a scope kept in block_scopes (an
+// earlier build left them for the case above, before the fix), so the rows
+// left are those blocked under a read boundary, which observation owns.
 func TestRunOnce_ABlockedRowWhoseScopeIsGoneIsReleasedAtStartup(t *testing.T) {
 	t.Parallel()
 
@@ -117,7 +119,10 @@ func TestRunOnce_ABlockedRowWhoseScopeIsGoneIsReleasedAtStartup(t *testing.T) {
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	syncfixture.WriteLocalFile(t, syncRoot, "stuck.txt", "content")
 	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(),
-		syncdomain.RetryWorkKey{Path: "stuck.txt", ActionType: syncdomain.ActionUpload}, syncdomain.SKQuotaOwn())
+		syncdomain.RetryWorkKey{Path: "stuck.txt", ActionType: syncdomain.ActionUpload}, syncdomain.SKQuotaOwn(), nil)
+	require.Error(t, err, "the database refuses a blocked row whose scope row is missing")
+	_, err = eng.baseline.RecordBlockedRetryWork(t.Context(),
+		syncdomain.RetryWorkKey{Path: "stuck.txt", ActionType: syncdomain.ActionUpload}, syncdomain.SKPermLocalRead("gone"), nil)
 	require.NoError(t, err)
 
 	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})

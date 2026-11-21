@@ -69,7 +69,16 @@ const (
 	// condition only the user can clear keeps the condition with the row, so
 	// status lists it under that condition instead of as anonymous retrying
 	// work (R-2.10.71).
-	currentSyncStoreGeneration = 28
+	//
+	// Generation 29 makes the database refuse retry and block state the
+	// engine used to assert in a debug pass: retry_work.blocked_scope_key
+	// references the block_scopes row a blocked row waits under (read
+	// boundaries, which have no such row, leave it NULL), and CHECKs hold a
+	// non-empty path, a positive attempt count, and retry timing exactly on
+	// the rows that are not blocked. The stored issue type of a file that could
+	// not be read or hashed is renamed hash_error, the name of its condition;
+	// the old name named only a panic in a hash worker.
+	currentSyncStoreGeneration = 29
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -195,18 +204,23 @@ CREATE TABLE IF NOT EXISTS local_state (
 );
 
 CREATE TABLE IF NOT EXISTS retry_work (
-    path            TEXT    NOT NULL,
-    old_path        TEXT    NOT NULL DEFAULT '',
-    action_type     TEXT    NOT NULL,
-    scope_key       TEXT    NOT NULL DEFAULT '',
-    blocked         INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0, 1)),
-    attempt_count   INTEGER NOT NULL DEFAULT 0,
-    next_retry_at   INTEGER NOT NULL DEFAULT 0,
-    condition_type  TEXT    NOT NULL DEFAULT '',
-    PRIMARY KEY (path, old_path, action_type)
+    path              TEXT    NOT NULL CHECK(path <> ''),
+    old_path          TEXT    NOT NULL DEFAULT '',
+    action_type       TEXT    NOT NULL,
+    scope_key         TEXT    NOT NULL DEFAULT '',
+    blocked           INTEGER NOT NULL DEFAULT 0 CHECK(blocked IN (0, 1)),
+    attempt_count     INTEGER NOT NULL CHECK(attempt_count > 0),
+    next_retry_at     INTEGER NOT NULL DEFAULT 0,
+    condition_type    TEXT    NOT NULL DEFAULT '',
+    blocked_scope_key TEXT    REFERENCES block_scopes(scope_key),
+    PRIMARY KEY (path, old_path, action_type),
+    CHECK(blocked = 0 OR scope_key <> ''),
+    CHECK((blocked = 1) = (next_retry_at = 0)),
+    CHECK(blocked_scope_key IS NULL OR (blocked = 1 AND blocked_scope_key = scope_key))
 );
 
 CREATE INDEX IF NOT EXISTS idx_retry_work_scope_key ON retry_work(scope_key);
+CREATE INDEX IF NOT EXISTS idx_retry_work_blocked_scope_key ON retry_work(blocked_scope_key);
 CREATE INDEX IF NOT EXISTS idx_retry_work_blocked ON retry_work(blocked);
 CREATE INDEX IF NOT EXISTS idx_retry_work_retrying ON retry_work(attempt_count)
     WHERE blocked = 0 AND attempt_count >= 3;
@@ -223,7 +237,7 @@ CREATE INDEX IF NOT EXISTS idx_observation_issues_scope_key
     ON observation_issues(scope_key);
 
 CREATE TABLE IF NOT EXISTS block_scopes (
-    scope_key            TEXT PRIMARY KEY,
+    scope_key            TEXT NOT NULL PRIMARY KEY CHECK(scope_key <> ''),
     trial_interval       INTEGER NOT NULL,
     next_trial_at        INTEGER NOT NULL,
     slow_start_threshold INTEGER NOT NULL DEFAULT 0
@@ -305,6 +319,7 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"retry_work": {
 			"path", "old_path", "action_type", "scope_key", "blocked", "attempt_count", "next_retry_at", "condition_type",
+			"blocked_scope_key",
 		},
 		"observation_issues": {
 			"path", "issue_type", "scope_key",

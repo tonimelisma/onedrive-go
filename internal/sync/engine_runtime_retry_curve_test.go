@@ -58,7 +58,7 @@ func TestRetryDelayForCondition_EveryMemberIsDecided(t *testing.T) {
 			// durable curve, or never becomes retry work.
 			Verdict: false,
 			Members: []syncdomain.IssueType{
-				syncdomain.IssueInvalidFilename, syncdomain.IssuePathTooLong, syncdomain.IssueFileTooLarge, syncdomain.IssueHashPanic,
+				syncdomain.IssueInvalidFilename, syncdomain.IssuePathTooLong, syncdomain.IssueFileTooLarge, syncdomain.IssueHashError,
 				syncdomain.IssueUnauthorized, syncdomain.IssueRemoteWriteDenied, syncdomain.IssueRemoteReadDenied, syncdomain.IssueRemoteRootNotFound, syncdomain.IssueQuotaExceeded,
 				syncdomain.IssueRateLimited, syncdomain.IssueLocalReadDenied, syncdomain.IssueLocalWriteDenied, syncdomain.IssueRemoteNameTwin,
 				syncdomain.IssueDiskFull, syncdomain.IssueServiceOutage, syncdomain.IssueFileTooLargeForSpace, syncdomain.IssueLocalNameTooLong,

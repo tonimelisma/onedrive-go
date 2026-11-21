@@ -56,8 +56,9 @@ func TestSyncStore_ClearBlockedRetryWork(t *testing.T) {
 
 	store := newTestStore(t)
 	scopeKey := syncdomain.SKPermRemoteWrite("Shared/Docs")
+	seedBlockScopeForTest(t, store, scopeKey)
 
-	_, err := store.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("blocked.txt", "", syncdomain.ActionUpload), scopeKey)
+	_, err := store.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("blocked.txt", "", syncdomain.ActionUpload), scopeKey, nil)
 	require.NoError(t, err)
 
 	cleared, err := store.ClearBlockedRetryWork(t.Context(), syncdomain.RetryWorkKey{
@@ -99,7 +100,7 @@ func TestReadDriveStatusSnapshot(t *testing.T) {
 		IssueType: syncdomain.IssueInvalidFilename,
 	})
 	require.NoError(t, store.UpsertBlockScope(t.Context(), syncfixture.TestBlockScope(scopeKey, time.Second, time.Unix(2, 0))))
-	_, err := store.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("Shared/Docs/a.txt", "", syncdomain.ActionUpload), scopeKey)
+	_, err := store.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("Shared/Docs/a.txt", "", syncdomain.ActionUpload), scopeKey, nil)
 	require.NoError(t, err)
 
 	dbPath := syncStorePathForStoreScopeTest(t, store)
@@ -269,7 +270,7 @@ func TestSyncStore_ReleaseScopeWork_RemovesTheScopeWithItsLastBlockedRows(t *tes
 		syncfixture.TestRetryWorkKey("Shared/Docs/c.txt", "", syncdomain.ActionUpload),
 	}
 	for _, key := range work {
-		_, err := store.RecordBlockedRetryWork(ctx, key, scopeKey)
+		_, err := store.RecordBlockedRetryWork(ctx, key, scopeKey, nil)
 		require.NoError(t, err)
 	}
 
@@ -383,7 +384,7 @@ func TestSyncStore_DiscardScope_DeletesBlockedRetryWorkAndPreservesObservationIs
 	)))
 	seedObservationIssueForTest(t, store, "Shared/Docs/bad.txt", syncdomain.IssueRemoteWriteDenied, scopeKey)
 	seedObservationIssueForTest(t, store, "keep.txt", syncdomain.IssueInvalidFilename, syncdomain.ScopeKey{})
-	_, err := store.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("Shared/Docs/file.txt", "", syncdomain.ActionUpload), scopeKey)
+	_, err := store.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("Shared/Docs/file.txt", "", syncdomain.ActionUpload), scopeKey, nil)
 	require.NoError(t, err)
 	evidence, err := store.RecordRetryWorkFailure(ctx, &syncdomain.RetryWorkFailure{
 		Work:     syncfixture.TestRetryWorkKey("Shared/Docs/evidence.txt", "", syncdomain.ActionUpload),
@@ -440,7 +441,7 @@ func TestSyncStore_DiscardScope_IgnoresRowsOfOtherScopes(t *testing.T) {
 	ctx := t.Context()
 	scopeKey := syncdomain.SKService()
 	require.NoError(t, store.UpsertBlockScope(ctx, syncfixture.TestBlockScope(scopeKey, time.Minute, time.Unix(160, 0))))
-	_, err := store.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("mine.txt", "", syncdomain.ActionUpload), scopeKey)
+	_, err := store.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("mine.txt", "", syncdomain.ActionUpload), scopeKey, nil)
 	require.NoError(t, err)
 	_, err = store.db.ExecContext(ctx, `INSERT INTO retry_work
 		(path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at)

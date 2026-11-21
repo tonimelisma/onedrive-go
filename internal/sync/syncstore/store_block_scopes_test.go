@@ -153,7 +153,7 @@ func TestSyncStore_ListBlockScopes_SkipsZeroScopeKeys(t *testing.T) {
 		int64(time.Second),
 		now.Add(time.Second).UnixNano(),
 	)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "CHECK constraint failed", "since generation 29 the database refuses an empty scope key")
 
 	require.NoError(t, store.UpsertBlockScope(ctx, syncfixture.TestBlockScope(syncdomain.SKService(), 5*time.Second, now.Add(5*time.Second))))
 

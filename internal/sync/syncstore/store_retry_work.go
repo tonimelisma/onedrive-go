@@ -12,14 +12,15 @@ import (
 
 const (
 	sqlUpsertRetryWork = `INSERT INTO retry_work
-		(path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, condition_type)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		(path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, condition_type, blocked_scope_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path, old_path, action_type) DO UPDATE SET
 			scope_key = excluded.scope_key,
 			blocked = excluded.blocked,
 			attempt_count = excluded.attempt_count,
 			next_retry_at = excluded.next_retry_at,
-			condition_type = excluded.condition_type`
+			condition_type = excluded.condition_type,
+			blocked_scope_key = excluded.blocked_scope_key`
 	sqlDeleteRetryWorkByPathType = `DELETE FROM retry_work WHERE path = ? AND old_path = ? AND action_type = ?`
 	sqlSelectRetryWorkCols       = `path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at, condition_type`
 	sqlListRetryWork             = `SELECT ` + sqlSelectRetryWorkCols + `
@@ -69,12 +70,26 @@ func upsertRetryWorkTx(ctx context.Context, runner SqlTxRunner, row *syncdomain.
 		row.AttemptCount,
 		row.NextRetryAt,
 		string(row.ConditionType),
+		blockedScopeKeyColumn(row),
 	)
 	if err != nil {
 		return fmt.Errorf("sync: upserting retry_work for %s: %w", row.Path, err)
 	}
 
 	return nil
+}
+
+// blockedScopeKeyColumn is the value of retry_work.blocked_scope_key for row:
+// its scope when it is blocked under a scope kept in block_scopes, which the
+// key then references, and NULL otherwise. A row blocked under a read
+// boundary has no block_scopes row to reference (observation owns that
+// boundary), so it stays blocked with no key.
+func blockedScopeKeyColumn(row *syncdomain.RetryWorkRow) sql.NullString {
+	if !row.Blocked || !row.ScopeKey.PersistsInBlockScopes() {
+		return sql.NullString{}
+	}
+
+	return sql.NullString{String: row.ScopeKey.String(), Valid: true}
 }
 
 func deleteRetryWorkByWorkTx(ctx context.Context, runner SqlTxRunner, work syncdomain.RetryWorkKey) error {
@@ -135,7 +150,7 @@ func markRetryWorkReadyTx(
 	for i := range work {
 		result, err := runner.ExecContext(ctx,
 			`UPDATE retry_work
-			SET blocked = 0, next_retry_at = ?
+			SET blocked = 0, next_retry_at = ?, blocked_scope_key = NULL
 			WHERE path = ? AND old_path = ? AND action_type = ? AND scope_key = ? AND blocked = 1`,
 			nowNano, work[i].Path, work[i].OldPath, work[i].ActionType.String(), scopeKey,
 		)
@@ -161,16 +176,18 @@ func markRetryWorkReadyTx(
 	return released, nil
 }
 
-// ReleaseOrphanBlockedRetryWork makes every blocked row whose scope has no
+// ReleaseOrphanBlockedRetryWork makes every blocked row that references no
 // block_scopes row ready at now, and returns how many it released. Such a
-// row has nothing that will trial or release it (R-2.10.33); the startup
-// normalization calls this after it has discarded empty scopes.
+// row has nothing that will trial or release it (R-2.10.33). A row blocked
+// under a scope kept in block_scopes references its scope row through
+// blocked_scope_key, which the database holds to an existing row, so only
+// the rows blocked under a read boundary are left for this to release; the
+// startup normalization calls it after it has discarded empty scopes.
 func (s *SyncStore) ReleaseOrphanBlockedRetryWork(ctx context.Context, now time.Time) (int, error) {
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE retry_work
 		SET blocked = 0, next_retry_at = ?
-		WHERE blocked = 1
-		  AND scope_key NOT IN (SELECT scope_key FROM block_scopes)`,
+		WHERE blocked = 1 AND blocked_scope_key IS NULL`,
 		syncdomain.StoredTimeNano(now),
 	)
 	if err != nil {
@@ -253,10 +270,18 @@ func (s *SyncStore) RecordRetryWorkFailure(
 	return row, nil
 }
 
+// RecordBlockedRetryWork records work blocked under scopeKey, one more
+// attempt than its row had. When activates is not nil it is the block scope
+// row the failure activates (or re-activates), written in the same
+// transaction before the blocked row that references it, so neither is ever
+// stored without the other. When it is nil, a scope kept in block_scopes must
+// already have its row: the database refuses a blocked row that references
+// a missing one.
 func (s *SyncStore) RecordBlockedRetryWork(
 	ctx context.Context,
 	work syncdomain.RetryWorkKey,
 	scopeKey syncdomain.ScopeKey,
+	activates *syncdomain.BlockScope,
 ) (row *syncdomain.RetryWorkRow, err error) {
 	if work.Path == "" {
 		return nil, fmt.Errorf("sync: record blocked retry_work: missing path")
@@ -267,6 +292,10 @@ func (s *SyncStore) RecordBlockedRetryWork(
 	if scopeKey.IsZero() {
 		return nil, fmt.Errorf("sync: record blocked retry_work for %s: missing scope key", work.Path)
 	}
+	if activates != nil && activates.Key != scopeKey {
+		return nil, fmt.Errorf("sync: record blocked retry_work for %s under %s: activates scope %s",
+			work.Path, scopeKey.String(), activates.Key.String())
+	}
 
 	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
@@ -275,6 +304,12 @@ func (s *SyncStore) RecordBlockedRetryWork(
 	defer func() {
 		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback blocked retry_work transaction for %s", work.Path))
 	}()
+
+	if activates != nil {
+		if scopeErr := upsertBlockScopeWithRunner(ctx, tx, activates); scopeErr != nil {
+			return nil, scopeErr
+		}
+	}
 
 	existing, found, err := loadRetryWorkByWorkTx(ctx, tx, work)
 	if err != nil {

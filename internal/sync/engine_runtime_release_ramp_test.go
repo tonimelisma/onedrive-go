@@ -162,7 +162,7 @@ func TestEngineFlow_TrialSuccess_ReleasesOneBatchAndKeepsTheScopeOnProbation(t *
 	trial.IsTrial, trial.TrialScopeKey = true, key
 	rt.sched.markRunning(trial)
 
-	batch, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(trial), &syncdomain.Baseline{})
+	batch, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(trial), syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
 	require.Len(t, batch, 4, "two workers ramp from the minimum batch of four")
 	for i, ta := range batch {
@@ -181,7 +181,7 @@ func TestEngineFlow_TrialSuccess_ReleasesOneBatchAndKeepsTheScopeOnProbation(t *
 	// The batch's first three successes only count it down: releasing on
 	// every success would cascade the whole backlog off a few successes.
 	for _, member := range batch[:3] {
-		ready, memberErr := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(member), &syncdomain.Baseline{})
+		ready, memberErr := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(member), syncdomain.NewBaselineSnapshot(nil))
 		require.NoError(t, memberErr)
 		assert.Empty(t, ready, "%s finishing does not release the next batch yet", member.Action.Path)
 	}
@@ -191,7 +191,7 @@ func TestEngineFlow_TrialSuccess_ReleasesOneBatchAndKeepsTheScopeOnProbation(t *
 
 	// The batch's last success doubles the allowance; eight covers the six
 	// left, and the last blocked row released removes the scope.
-	rest, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(batch[3]), &syncdomain.Baseline{})
+	rest, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(batch[3]), syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
 	require.Len(t, rest, 6)
 	assert.False(t, rt.scopes.hasActiveScope(key), "the last blocked row released removes the scope")
@@ -200,7 +200,7 @@ func TestEngineFlow_TrialSuccess_ReleasesOneBatchAndKeepsTheScopeOnProbation(t *
 	assert.Equal(t, 1, strings.Count(logs.String(), "Resumed syncing"))
 
 	// A member that finishes after the scope is gone is an ordinary success.
-	late, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(rest[0]), &syncdomain.Baseline{})
+	late, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(rest[0]), syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
 	assert.Empty(t, late)
 	assert.Equal(t, 1, strings.Count(logs.String(), "Resumed syncing"))
@@ -226,7 +226,7 @@ func TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndRe
 	require.NotNil(t, trial)
 	trial.IsTrial, trial.TrialScopeKey = true, key
 	rt.sched.markRunning(trial)
-	batch, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(trial), &syncdomain.Baseline{})
+	batch, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(trial), syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
 	require.Len(t, batch, 4)
 	generation := batch[0].TrialScopeGeneration
@@ -242,7 +242,7 @@ func TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndRe
 	throttled.RetryAfter = 30 * time.Second
 	throttled.Err = graph.ErrThrottled
 	throttled.ErrMsg = "rate limited"
-	ready, err := rt.applyRuntimeCompletionStage(ctx, throttled, &syncdomain.Baseline{})
+	ready, err := rt.applyRuntimeCompletionStage(ctx, throttled, syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
 	assert.Empty(t, ready)
 
@@ -280,7 +280,7 @@ func requireStaleSuccessReleasesNothing(t *testing.T, eng *testEngine, rt *watch
 	require.NotNil(t, stale)
 	stale.IsTrial, stale.TrialScopeKey, stale.TrialScopeGeneration = true, key, generation
 	rt.sched.markRunning(stale)
-	ready, err := rt.applyRuntimeCompletionStage(t.Context(), trialSuccessForTest(stale), &syncdomain.Baseline{})
+	ready, err := rt.applyRuntimeCompletionStage(t.Context(), trialSuccessForTest(stale), syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
 	assert.Empty(t, ready)
 	scope, _ := rt.scopes.lookupActiveScope(key)
@@ -303,7 +303,7 @@ func requireNextTrialRampsFromTheFirstBatch(
 	require.Len(t, trials, 1)
 	assert.Equal(t, generation, trials[0].TrialScopeGeneration)
 	rt.sched.markRunning(trials[0])
-	batch, err := rt.applyRuntimeCompletionStage(t.Context(), trialSuccessForTest(trials[0]), &syncdomain.Baseline{})
+	batch, err := rt.applyRuntimeCompletionStage(t.Context(), trialSuccessForTest(trials[0]), syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
 	assert.Len(t, batch, nextReleaseAllowance(eng.transferWorkers, 0, 0))
 	scope, _ = rt.scopes.lookupActiveScope(key)
@@ -322,7 +322,6 @@ func TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks(t *testing.T) {
 	eng.transferWorkers = 2
 	recorder := attachDebugEventRecorder(eng)
 	rt := testWatchRuntime(t, eng)
-	ctx := t.Context()
 	key := syncdomain.SKThrottleDrive(eng.driveID)
 	otherDrive := driveid.New("0000000000000002")
 
@@ -335,12 +334,10 @@ func TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks(t *testing.T) {
 	}
 	rt.replaceOutbox([]*syncdomain.TrackedAction{first, other, second})
 
-	// The failure that activates the scope is persisted blocked first.
-	_, err := eng.baseline.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey("failed.txt", "", syncdomain.ActionUpload), key)
-	require.NoError(t, err)
-	require.NoError(t, rt.applyBlockScope(ctx, syncdomain.ScopeUpdateResult{
+	// The failure that activates the scope is persisted blocked with it.
+	activateScopeForTest(t, rt.engineFlow, syncfixture.TestRetryWorkKey("failed.txt", "", syncdomain.ActionUpload), syncdomain.ScopeUpdateResult{
 		Block: true, ScopeKey: key, ConditionType: syncdomain.IssueRateLimited, RetryAfter: 10 * time.Second,
-	}))
+	})
 
 	require.Equal(t, []*syncdomain.TrackedAction{other}, rt.currentOutbox(), "only work the scope does not block stays admitted")
 	for _, ta := range []*syncdomain.TrackedAction{first, second} {
@@ -450,15 +447,15 @@ func TestEngineFlow_LaterShorterRetryAfterNeverPullsTheTrialEarlier(t *testing.T
 	eng, rt, _, clock := rampTestEngine(t, 4)
 	ctx := t.Context()
 	key := syncdomain.SKThrottleDrive(eng.driveID)
-	holdBlockedUploadsForTest(t, eng, rt, key, 1, 3)
 	now := clock.Now()
 
-	require.NoError(t, rt.applyBlockScope(ctx, syncdomain.ScopeUpdateResult{
+	activateScopeForTest(t, rt.engineFlow, syncfixture.TestRetryWorkKey("first-429.txt", "", syncdomain.ActionUpload), syncdomain.ScopeUpdateResult{
 		Block: true, ScopeKey: key, ConditionType: syncdomain.IssueRateLimited, RetryAfter: 40 * time.Second,
-	}))
-	require.NoError(t, rt.applyBlockScope(ctx, syncdomain.ScopeUpdateResult{
+	})
+	holdBlockedUploadsForTest(t, eng, rt, key, 1, 3)
+	activateScopeForTest(t, rt.engineFlow, syncfixture.TestRetryWorkKey("second-429.txt", "", syncdomain.ActionUpload), syncdomain.ScopeUpdateResult{
 		Block: true, ScopeKey: key, ConditionType: syncdomain.IssueRateLimited, RetryAfter: 10 * time.Second,
-	}))
+	})
 	scope, active := rt.scopes.lookupActiveScope(key)
 	require.True(t, active)
 	assert.Equal(t, now.Add(40*time.Second), scope.NextTrialAt, "a re-activation keeps the later deadline")

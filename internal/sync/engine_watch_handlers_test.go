@@ -257,7 +257,7 @@ func TestRunPublicationDrainStage_PersistsRetryWorkOnPublicationCommitFailure(t 
 	}, 1, nil)
 	require.NotNil(t, publication)
 
-	outbox, err := rt.runPublicationDrainStage(ctx, &syncdomain.Baseline{}, []*syncdomain.TrackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, syncdomain.NewBaselineSnapshot(nil), []*syncdomain.TrackedAction{publication})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
 
@@ -340,7 +340,7 @@ func TestRunPublicationDrainStage_TerminatesWhenPublicationRetryPersistenceFails
 
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	outbox, err := rt.runPublicationDrainStage(ctx, &syncdomain.Baseline{}, []*syncdomain.TrackedAction{publication})
+	outbox, err := rt.runPublicationDrainStage(ctx, syncdomain.NewBaselineSnapshot(nil), []*syncdomain.TrackedAction{publication})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "record retry_work")
 	assert.Empty(t, outbox)
@@ -402,7 +402,7 @@ func TestWatchRuntime_HandleWatchHeldRelease_CompletesReleasedConcreteActionsOnR
 
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	err := rt.handleWatchHeldRelease(ctx, &watchPipeline{bl: &syncdomain.Baseline{}}, false)
+	err := rt.handleWatchHeldRelease(ctx, &watchPipeline{bl: syncdomain.NewBaselineSnapshot(nil)}, false)
 	require.ErrorContains(t, err, "reading observation state for action freshness")
 	assert.Empty(t, rt.currentOutbox(), "released frontier should be shutdown-completed when reduction fails")
 	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "only the publication action should remain unresolved on fail-closed termination")

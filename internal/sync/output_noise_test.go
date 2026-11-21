@@ -303,33 +303,25 @@ func TestEngineFlow_BlockScope_ReportedOnceWhenItStarts(t *testing.T) {
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
 
-	// A persisted block scope must own blocked retry work (invariant).
-	seedBlockedWork := func(key syncdomain.ScopeKey) {
-		require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
-			Path:         "blocked-" + key.String() + ".txt",
-			ActionType:   syncdomain.ActionUpload,
-			ScopeKey:     key,
-			Blocked:      true,
-			AttemptCount: 1,
-		}))
+	// Each failure is recorded blocked under the scope it (re)activates.
+	blockedWork := func(key syncdomain.ScopeKey) syncdomain.RetryWorkKey {
+		return syncfixture.TestRetryWorkKey("blocked-"+key.String()+".txt", "", syncdomain.ActionUpload)
 	}
 
 	throttle := syncdomain.SKThrottleDrive(eng.driveID)
-	seedBlockedWork(throttle)
 	for range 4 {
-		require.NoError(t, flow.applyBlockScope(t.Context(), syncdomain.ScopeUpdateResult{
+		activateScopeForTest(t, flow, blockedWork(throttle), syncdomain.ScopeUpdateResult{
 			Block: true, ScopeKey: throttle, ConditionType: syncdomain.IssueRateLimited,
-		}))
+		})
 	}
 	output := logs.String()
 	assert.Zero(t, syncfixture.CountLevel(output, "WARN"), "rate limiting is handled automatically")
 	assert.Equal(t, 1, strings.Count(output, "OneDrive is limiting requests"))
 
-	seedBlockedWork(syncdomain.SKQuotaOwn())
 	for range 3 {
-		require.NoError(t, flow.applyBlockScope(t.Context(), syncdomain.ScopeUpdateResult{
+		activateScopeForTest(t, flow, blockedWork(syncdomain.SKQuotaOwn()), syncdomain.ScopeUpdateResult{
 			Block: true, ScopeKey: syncdomain.SKQuotaOwn(), ConditionType: syncdomain.IssueQuotaExceeded,
-		}))
+		})
 	}
 	output = logs.String()
 	assert.Equal(t, 1, syncfixture.CountLevel(output, "WARN"), "a full drive is warned once, in plain words")

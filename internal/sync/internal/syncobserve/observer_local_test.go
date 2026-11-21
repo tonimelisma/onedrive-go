@@ -1858,7 +1858,7 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 
 	// Inject a hash function that panics for a specific path. Other files
 	// should still be hashed successfully, and the panicking file should
-	// become a SkippedItem with IssueHashPanic.
+	// become a SkippedItem with IssueHashError.
 
 	tests := []struct {
 		name       string
@@ -1927,7 +1927,7 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 				}
 			}
 			require.NotNil(t, found, "panicking file should be in Skipped")
-			assert.Equal(t, syncdomain.IssueHashPanic, found.Reason)
+			assert.Equal(t, syncdomain.IssueHashError, found.Reason)
 			assert.Contains(t, found.Detail, "internal error while hashing "+tt.panicPath+": simulated hash panic")
 		})
 	}
@@ -1977,7 +1977,7 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 		}
 	}
 	require.NotNil(t, badSkip, "panicking file should be in Skipped")
-	assert.Equal(t, syncdomain.IssueHashPanic, badSkip.Reason)
+	assert.Equal(t, syncdomain.IssueHashError, badSkip.Reason)
 	assert.Contains(t, badSkip.Detail, "corrupted file")
 }
 

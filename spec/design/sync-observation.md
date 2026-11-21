@@ -759,10 +759,9 @@ subtree:
 - an entry the walk listed but could not stat (any error but ENOENT) and a
   file whose content could not be hashed: a read boundary or a hash error
   (D-005), never an empty hash that reads as a change. The hash error is
-  stored as `hash_panic`, a name narrower than its use: it covers a panic in
-  a hash worker and any read error but "not found" and "permission denied"
-  (which is `local_read_denied`); `status` shows it as the `hash_error`
-  condition, and its truth verdict is unavailable local truth
+  stored as `hash_error`: it covers a panic in a hash worker and any read
+  error but "not found" and "permission denied" (which is
+  `local_read_denied`); `status` shows it as the `hash_error` condition, and its truth verdict is unavailable local truth
   (`truthVerdictForIssueType`, sync-store.md);
 - a folder whose device differs from its parent's, both read in the same scan,
   is a mount point; unless `cross_filesystems = true` it is not descended and
@@ -804,7 +803,7 @@ subtree:
 
 Every issue type a local scan reports is a managed type of the local findings
 batch: `invalid_filename`, `path_too_long`, `file_too_large`,
-`case_collision`, `local_read_denied`, `hash_panic`,
+`case_collision`, `local_read_denied`, `hash_error`,
 `local_unsyncable_replacement`, `local_mount_boundary`, `local_mount_missing`
 and `local_interrupted_removal`. Every full scan re-reports a finding whose cause
 is still there, so the scan that no longer reports one has proven it gone and

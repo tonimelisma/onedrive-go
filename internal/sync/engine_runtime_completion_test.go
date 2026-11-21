@@ -397,7 +397,7 @@ func TestEngineFlow_ProcessNormalDecision_StaleCompletionIsNeverProbedForPermiss
 			decision := classifyResult(&r)
 			require.Equal(t, resultSuperseded, decision.Class)
 
-			ready, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, &r, &syncdomain.Baseline{})
+			ready, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, &r, syncdomain.NewBaselineSnapshot(nil))
 
 			require.NoError(t, err)
 			assert.Empty(t, ready)
@@ -534,7 +534,7 @@ func TestEngineFlow_ProcessNormalDecision_RemoteBoundaryPermissionDoesNotArmRetr
 		Class:         errclass.ClassActionable,
 		ConditionKey:  syncdomain.ConditionRemoteWriteDenied,
 		ConditionType: syncdomain.IssueRemoteWriteDenied,
-	}, nil, r, &syncdomain.Baseline{})
+	}, nil, r, syncdomain.NewBaselineSnapshot(nil))
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
@@ -581,7 +581,7 @@ func TestEngineFlow_ProcessNormalDecision_KnownRemoteBoundaryNoOpDoesNotPersistO
 		Class:         errclass.ClassActionable,
 		ConditionKey:  syncdomain.ConditionRemoteWriteDenied,
 		ConditionType: syncdomain.IssueRemoteWriteDenied,
-	}, nil, r, &syncdomain.Baseline{})
+	}, nil, r, syncdomain.NewBaselineSnapshot(nil))
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
@@ -1036,7 +1036,7 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 		Success:       true,
 		IsTrial:       true,
 		TrialScopeKey: scopeKey,
-	}, &syncdomain.Baseline{})
+	}, syncdomain.NewBaselineSnapshot(nil))
 
 	require.NoError(t, err)
 	require.Len(t, ready, 1)
@@ -1138,7 +1138,7 @@ func TestEngineFlow_ProcessActionCompletion_BoundaryReadFailureFailsTheCompletio
 		ActionType: syncdomain.ActionUpload,
 		HTTPStatus: http.StatusForbidden,
 		ErrMsg:     "folder is read-only",
-	}, &syncdomain.Baseline{})
+	}, syncdomain.NewBaselineSnapshot(nil))
 
 	require.ErrorContains(t, err, "list remote block scopes")
 	assert.NotContains(t, err.Error(), "record retry_work", "the failure is the boundary read, not a later write")
@@ -1173,7 +1173,7 @@ func TestEngineFlow_ProcessTrialDecision_BoundaryReadFailureFailsTheCompletion(t
 		ErrMsg:        "folder is read-only",
 		IsTrial:       true,
 		TrialScopeKey: scopeKey,
-	}, &syncdomain.Baseline{})
+	}, syncdomain.NewBaselineSnapshot(nil))
 
 	require.ErrorContains(t, err, "list remote block scopes")
 	assert.NotContains(t, err.Error(), "record retry_work", "the failure is the boundary read, not a later write")
@@ -1210,7 +1210,7 @@ func TestEngineFlow_Quota403OnSharedMountIsQuotaNotPermission(t *testing.T) {
 			},
 		}
 		decision := classifyResult(r)
-		_, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, r, &syncdomain.Baseline{})
+		_, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, r, syncdomain.NewBaselineSnapshot(nil))
 		require.NoError(t, err)
 	}
 

@@ -73,8 +73,12 @@ func seedScratchPlanningSource(t *testing.T, store *SyncStore, driveID driveid.I
 	require.NoError(t, store.MarkFullRemoteRefresh(ctx, driveID, refreshAt, syncdomain.RemoteObservationModeDelta))
 }
 
-func scratchPlanningBaseline(driveID driveid.ID) *syncdomain.Baseline {
-	return syncfixture.NewBaselineForTest([]*syncdomain.BaselineEntry{
+// seedScratchPlanningBaseline writes the baseline rows the scratch store must
+// copy, straight into the database.
+func seedScratchPlanningBaseline(t *testing.T, store *SyncStore, driveID driveid.ID) {
+	t.Helper()
+
+	for _, entry := range []*syncdomain.BaselineEntry{
 		{
 			Path:            "baseline.txt",
 			DriveID:         driveID,
@@ -98,7 +102,9 @@ func scratchPlanningBaseline(driveID driveid.ID) *syncdomain.Baseline {
 			ParentID: "root",
 			ItemType: syncdomain.ItemTypeFolder,
 		},
-	})
+	} {
+		require.NoError(t, upsertBaselineRowTx(t.Context(), store.RawDBForTest(), entry))
+	}
 }
 
 // Validates: R-2.1.5
@@ -110,8 +116,9 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 	driveID := driveid.New(syncfixture.TestDriveID)
 
 	seedScratchPlanningSource(t, store, driveID)
+	seedScratchPlanningBaseline(t, store, driveID)
 
-	scratch, cleanup, err := store.CreateScratchPlanningStore(ctx, scratchPlanningBaseline(driveID))
+	scratch, cleanup, err := store.CreateScratchPlanningStore(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, scratch)
 	require.NotNil(t, cleanup)
@@ -153,51 +160,37 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
-// Validates: R-2.1.5
-func TestCreateScratchPlanningStore_RequiresBaseline(t *testing.T) {
+// Validates: R-2.1.5, R-6.5.2
+//
+// A dry run plans from what is committed: the scratch store copies the
+// baseline table, not the cache, so a cache that lags or leads the
+// database cannot reach the plan.
+func TestCreateScratchPlanningStore_CopiesTheDatabaseNotAStaleCache(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
+	ctx := t.Context()
+	driveID := driveid.New(syncfixture.TestDriveID)
+	seedScratchPlanningSource(t, store, driveID)
+	_, err := store.Load(ctx)
+	require.NoError(t, err)
 
-	scratch, cleanup, err := store.CreateScratchPlanningStore(t.Context(), nil)
-	require.Error(t, err)
-	assert.Nil(t, scratch)
-	assert.Nil(t, cleanup)
-	assert.Contains(t, err.Error(), "scratch planning store requires baseline")
-}
+	// One row reaches the database behind the cache, one the cache alone.
+	require.NoError(t, upsertBaselineRowTx(ctx, store.RawDBForTest(), &syncdomain.BaselineEntry{
+		Path: "committed.txt", DriveID: driveID, ItemID: "item-committed", ParentID: "root", ItemType: syncdomain.ItemTypeFile,
+	}))
+	store.cachedBaseline().put(&syncdomain.BaselineEntry{
+		Path: "cache-only.txt", DriveID: driveID, ItemID: "item-cache-only", ParentID: "root", ItemType: syncdomain.ItemTypeFile,
+	})
 
-// Validates: R-2.1.5
-func TestCloneBaselineEntries_ReturnsIndependentCopy(t *testing.T) {
-	t.Parallel()
+	scratch, cleanup, err := store.CreateScratchPlanningStore(ctx)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cleanup(ctx)) }()
 
-	assert.Nil(t, cloneBaselineEntries(nil))
-
-	original := syncfixture.NewBaselineForTest([]*syncdomain.BaselineEntry{{
-		Path:            "copied.txt",
-		ItemID:          "item-1",
-		ParentID:        "root",
-		ItemType:        syncdomain.ItemTypeFile,
-		LocalHash:       "local-hash",
-		RemoteHash:      "remote-hash",
-		LocalSize:       10,
-		LocalSizeKnown:  true,
-		RemoteSize:      12,
-		RemoteSizeKnown: true,
-		LocalMtime:      100,
-		RemoteMtime:     200,
-		ETag:            "etag-1",
-	}})
-
-	cloned := cloneBaselineEntries(original)
-	require.Len(t, cloned, 1)
-
-	cloned[0].Path = "changed.txt"
-	cloned[0].ItemID = "changed-item"
-	cloned[0].LocalHash = "changed-hash"
-
-	entry, ok := original.GetByPath("copied.txt")
-	require.True(t, ok)
-	assert.Equal(t, "item-1", entry.ItemID)
-	assert.Equal(t, "local-hash", entry.LocalHash)
-	assert.Equal(t, "copied.txt", entry.Path)
+	planned, err := scratch.Load(ctx)
+	require.NoError(t, err)
+	_, ok := planned.GetByPath("committed.txt")
+	assert.True(t, ok, "the committed row is planned from")
+	_, ok = planned.GetByPath("cache-only.txt")
+	assert.False(t, ok, "a row only the cache holds is not")
 }

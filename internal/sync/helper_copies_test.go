@@ -177,9 +177,6 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 	t.Helper()
 
 	ctx := t.Context()
-	bl, err := store.Load(ctx)
-	require.NoError(t, err)
-
 	tx, err := syncstore.BeginPerfTx(ctx, store.RawDBForTest())
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
@@ -220,6 +217,11 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 	)
 	require.NoError(t, err)
 	observationIssues, err := syncstore.QueryObservationIssueRowsWithRunner(ctx, tx)
+	require.NoError(t, err)
+	for i := range comparisons {
+		require.NoError(t, comparisons[i].DecisionState().Valid(), "the decision state of %q", comparisons[i].Path)
+	}
+	bl, err := syncstore.LoadBaselineWithRunner(ctx, tx, contentDriveID)
 	require.NoError(t, err)
 
 	planner := syncplan.NewPlanner(logger)

@@ -29,8 +29,9 @@ import (
 //     checks below also see the observation that follows the last
 //     mutation: local_state is observed truth, refreshed by a scan);
 //   - DB integrity: PRAGMA integrity_check and foreign_key_check pass, no
-//     row survives at a :park: path, and every baseline row agrees with
-//     remote_state (same item at the same path) and with local_state;
+//     row survives at a :park: path, every baseline row agrees with
+//     remote_state (same item at the same path) and with local_state, and
+//     the store's baseline cache equals the baseline table, field for field;
 //   - nothing left waiting: retry_work, held_deletes and pending_creates are
 //     empty;
 //   - no stray artifacts: no partial download or other .onedrive-go. file in
@@ -153,6 +154,7 @@ func assertStoreIntegrity(t *testing.T, eng *testEngine) bool {
 	ok := assert.Equal(t, "ok", integrity, "invariant: PRAGMA integrity_check")
 
 	ok = assertForeignKeysClean(t, db) && ok
+	ok = assert.NoError(t, eng.baseline.CheckCacheConsistency(ctx), "invariant: the baseline cache equals the database") && ok
 
 	for _, query := range []struct{ what, sql string }{
 		{"rows parked at :park: paths", `SELECT

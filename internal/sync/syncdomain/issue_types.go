@@ -33,15 +33,14 @@ const (
 	IssuePathTooLong     IssueType = "path_too_long"
 	IssueFileTooLarge    IssueType = "file_too_large"
 
-	// Scanner-detectable (hash phase). The name is narrower than its use: the
-	// scanner records it for a panic in a hash worker and for any error but
-	// "not found" and "permission denied" while reading a file to hash it
-	// (scanner.go), so it means "the content could not be read or checked".
-	// Users see it as the condition ConditionHashError ("hash_error",
-	// ConditionKeyForIssueType). The stored value is kept: renaming it
-	// changes what observation_issues holds, which needs a store generation
-	// of its own.
-	IssueHashPanic IssueType = "hash_panic"
+	// Scanner-detectable (hash phase): the scanner records it for a panic in
+	// a hash worker and for any error but "not found" and "permission denied"
+	// while reading a file to hash it (scanner.go), so it means "the content
+	// could not be read or checked". Users see it as the condition
+	// ConditionHashError, of the same name (ConditionKeyForIssueType). Store
+	// generation 29 gave the stored value this name; before, it named only
+	// the panic.
+	IssueHashError IssueType = "hash_error"
 
 	// Runtime (execution-time).
 	IssueUnauthorized      IssueType = "unauthorized"
@@ -130,7 +129,7 @@ func (t IssueType) IsMember() bool {
 	case IssueInvalidFilename,
 		IssuePathTooLong,
 		IssueFileTooLarge,
-		IssueHashPanic,
+		IssueHashError,
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
 		IssueRemoteReadDenied,
@@ -198,7 +197,7 @@ func IssueTypeLeavesFileUnsynced(issueType IssueType) bool {
 	case IssueInvalidFilename,
 		IssuePathTooLong,
 		IssueFileTooLarge,
-		IssueHashPanic,
+		IssueHashError,
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
 		IssueRemoteReadDenied,
@@ -249,7 +248,7 @@ func IssueTypeIsRootReadFailure(issueType IssueType) bool {
 	case IssueInvalidFilename,
 		IssuePathTooLong,
 		IssueFileTooLarge,
-		IssueHashPanic,
+		IssueHashError,
 		IssueUnauthorized,
 		IssueRemoteWriteDenied,
 		IssueQuotaExceeded,

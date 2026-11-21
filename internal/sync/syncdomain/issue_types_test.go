@@ -49,7 +49,7 @@ func TestIssueTypes_EveryTypeIsClassifiedForOneShotExit(t *testing.T) {
 			// The scan found a path sync cannot represent, read or reach.
 			verdict: true,
 			members: []IssueType{
-				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueHashPanic, IssueCaseCollision,
+				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueHashError, IssueCaseCollision,
 				IssueLocalReadDenied, IssueLocalUnsyncableReplacement, IssueLocalMountBoundary, IssueLocalMountMissing,
 				IssueRemoteNameTwin, IssueRemoteReadDenied, IssueRemoteRootNotFound,
 			},
@@ -98,7 +98,7 @@ func TestIssueTypeIsRootReadFailure_EveryMemberIsDecided(t *testing.T) {
 			// What a scan finds, or a refusal of one path's work.
 			verdict: false,
 			members: []IssueType{
-				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueHashPanic, IssueCaseCollision,
+				IssueInvalidFilename, IssuePathTooLong, IssueFileTooLarge, IssueHashError, IssueCaseCollision,
 				IssueLocalReadDenied, IssueLocalUnsyncableReplacement, IssueLocalMountBoundary, IssueLocalMountMissing,
 				IssueRemoteNameTwin, IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded, IssueRateLimited,
 				IssueLocalWriteDenied, IssueDiskFull, IssueServiceOutage, IssueFileTooLargeForSpace,
@@ -129,7 +129,7 @@ func TestIssueTypeIsRootReadFailure_EveryMemberIsDecided(t *testing.T) {
 func TestParseIssueType_RefusesAValueNoMemberHas(t *testing.T) {
 	t.Parallel()
 
-	for _, stored := range []string{"", "invalid_name", "Invalid_Filename", "hash_error"} {
+	for _, stored := range []string{"", "invalid_name", "Invalid_Filename", "hash_failed"} {
 		parsed, err := ParseIssueType(stored)
 		require.ErrorContains(t, err, "unknown issue type "+strconv.Quote(stored))
 		assert.Empty(t, parsed)

@@ -132,7 +132,7 @@ func TestReleaseDueHeldTrialsNow_DoesNotConsultDurableBlockedRetryRowsWithoutHel
 		NextTrialAt:   eng.nowFunc().Add(-time.Second),
 		TrialInterval: 10 * time.Second,
 	})
-	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("blocked.txt", "", syncdomain.ActionUpload), scopeKey)
+	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("blocked.txt", "", syncdomain.ActionUpload), scopeKey, nil)
 	require.NoError(t, err)
 
 	outbox, err := rt.releaseDueHeldTrialsNow(t.Context(), nil)

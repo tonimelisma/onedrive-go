@@ -879,7 +879,7 @@ func dispatchTestAction(t *testing.T, rt *watchRuntime, id int64, action *syncdo
 
 // failTestCreate completes the dispatched create as one whose answer was
 // lost, a second after clock's now, and returns when it ended.
-func failTestCreate(t *testing.T, rt *watchRuntime, bl *syncdomain.Baseline, clock *syncfixture.ManualClock, create *syncdomain.TrackedAction) time.Time {
+func failTestCreate(t *testing.T, rt *watchRuntime, bl syncdomain.BaselineView, clock *syncfixture.ManualClock, create *syncdomain.TrackedAction) time.Time {
 	t.Helper()
 
 	clock.Advance(time.Second)
@@ -898,7 +898,7 @@ type pollWatchTest struct {
 	remote *moveScenarioRemote
 	eng    *testEngine
 	rt     *watchRuntime
-	bl     *syncdomain.Baseline
+	bl     syncdomain.BaselineView
 	clock  *syncfixture.ManualClock
 }
 
@@ -1124,7 +1124,7 @@ func TestWatch_MountRootPollDropsTheFreshIntentOfAGoneFile(t *testing.T) {
 type mountRootWatchTest struct {
 	eng   *testEngine
 	rt    *watchRuntime
-	bl    *syncdomain.Baseline
+	bl    syncdomain.BaselineView
 	clock *syncfixture.ManualClock
 }
 

@@ -268,17 +268,17 @@ func TestPhase0_RunWatch_DueTrialDrainsDuringBootstrapBeforeObserversStart(t *te
 	eng, syncRoot := newTestEngine(t, mock)
 	syncfixture.WriteLocalFile(t, syncRoot, "trial-held.txt", "trial upload")
 	now := eng.nowFunc()
+	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &syncdomain.BlockScope{
+		Key:           scopeKey,
+		TrialInterval: 10 * time.Second,
+		NextTrialAt:   now.Add(-time.Second),
+	}))
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &syncdomain.RetryWorkRow{
 		Path:         "trial-held.txt",
 		ActionType:   syncdomain.ActionUpload,
 		ScopeKey:     scopeKey,
 		Blocked:      true,
 		AttemptCount: 1,
-	}))
-	require.NoError(t, eng.baseline.UpsertBlockScope(t.Context(), &syncdomain.BlockScope{
-		Key:           scopeKey,
-		TrialInterval: 10 * time.Second,
-		NextTrialAt:   now.Add(-time.Second),
 	}))
 
 	recorder := attachDebugEventRecorder(eng)
@@ -533,7 +533,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		TrialInterval: 10 * time.Millisecond,
 		NextTrialAt:   eng.nowFunc().Add(10 * time.Millisecond),
 	})
-	_, err := eng.baseline.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey(blockedPath, "", syncdomain.ActionDownload), testThrottleScope())
+	_, err := eng.baseline.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey(blockedPath, "", syncdomain.ActionDownload), testThrottleScope(), nil)
 	require.NoError(t, err)
 	blocked := rt.sched.graph.Add(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,

@@ -41,7 +41,7 @@ func (flow *engineFlow) maybeHandlePermissionFailure(
 	decision *syncdomain.ResultDecision,
 	current *syncdomain.TrackedAction,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (bool, error) {
 	switch {
 	case decision.Class == errclass.ClassSuperseded, isStoppingRun(ctx):
@@ -60,7 +60,7 @@ func (flow *engineFlow) handleRemote403PermissionFailure(
 	decision *syncdomain.ResultDecision,
 	current *syncdomain.TrackedAction,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (bool, error) {
 	if bl == nil || flow.engine.permHandler.permChecker == nil {
 		return false, nil
@@ -126,17 +126,8 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 		}
 	case permissionEvidenceBoundaryDenied:
 		scopeKey := scopeKeyForPermissionEvidence(evidence)
-		if err := flow.recordPermissionBlockedRetry(ctx, work, scopeKey); err != nil {
-			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
-		}
-		if scopeKey.PersistsInBlockScopes() {
-			if err := flow.applyBlockScope(ctx, syncdomain.ScopeUpdateResult{
-				Block:         true,
-				ScopeKey:      scopeKey,
-				ConditionType: scopeKey.ConditionType(),
-			}); err != nil {
-				return err
-			}
+		if err := flow.recordPermissionBoundaryDenied(ctx, work, scopeKey); err != nil {
+			return err
 		}
 		if remote {
 			flow.logRemotePermissionBoundary(scopeKey, evidence)
@@ -163,7 +154,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 func (flow *engineFlow) applyTrialPermissionReclassification(
 	ctx context.Context,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (bool, error) {
 	if isStoppingRun(ctx) {
 		return false, nil
@@ -196,7 +187,7 @@ func (flow *engineFlow) applyTrialPermissionReclassification(
 func (flow *engineFlow) permissionEvidenceForCompletion(
 	ctx context.Context,
 	r *syncdomain.ActionCompletion,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) (permissionEvidence, bool, error) {
 	switch {
 	case shouldHandleRemote403Permission(r):
@@ -229,7 +220,7 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 		if scopeKey.IsZero() {
 			scopeKey = trialScopeKey
 		}
-		if err := flow.recordPermissionBlockedRetry(ctx, work, scopeKey); err != nil {
+		if err := flow.recordPermissionBlockedRetry(ctx, work, scopeKey, nil); err != nil {
 			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
 	case permissionEvidenceFileDenied:
@@ -238,17 +229,8 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 		}
 	case permissionEvidenceBoundaryDenied:
 		scopeKey := scopeKeyForPermissionEvidence(evidence)
-		if err := flow.recordPermissionBlockedRetry(ctx, work, scopeKey); err != nil {
-			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
-		}
-		if scopeKey.PersistsInBlockScopes() {
-			if err := flow.applyBlockScope(ctx, syncdomain.ScopeUpdateResult{
-				Block:         true,
-				ScopeKey:      scopeKey,
-				ConditionType: scopeKey.ConditionType(),
-			}); err != nil {
-				return err
-			}
+		if err := flow.recordPermissionBoundaryDenied(ctx, work, scopeKey); err != nil {
+			return err
 		}
 	default:
 		panic(fmt.Sprintf("unknown permission evidence kind %d", evidence.Kind))
@@ -281,7 +263,7 @@ func scopeKeyForPermissionEvidence(evidence permissionEvidence) syncdomain.Scope
 		syncdomain.IssueInvalidFilename,
 		syncdomain.IssuePathTooLong,
 		syncdomain.IssueFileTooLarge,
-		syncdomain.IssueHashPanic,
+		syncdomain.IssueHashError,
 		syncdomain.IssueUnauthorized,
 		syncdomain.IssueQuotaExceeded,
 		syncdomain.IssueRateLimited,
@@ -384,12 +366,45 @@ func (flow *engineFlow) recordPermissionRetryWork(
 	return nil
 }
 
-func (flow *engineFlow) recordPermissionBlockedRetry(
+// recordPermissionBoundaryDenied records work blocked under the boundary a
+// permission probe found. A write boundary is kept in block_scopes: its scope
+// row is written with the blocked row, in one transaction, and the scope is
+// then activated. A read boundary is observation's (it has no block_scopes
+// row), so the work is only recorded blocked under it.
+func (flow *engineFlow) recordPermissionBoundaryDenied(
 	ctx context.Context,
 	work syncdomain.RetryWorkKey,
 	scopeKey syncdomain.ScopeKey,
 ) error {
-	if _, err := flow.retryWork.recordBlocked(ctx, flow.deps.store, work, scopeKey); err != nil {
+	var activation *blockActivation
+	if scopeKey.PersistsInBlockScopes() {
+		prepared, err := flow.prepareBlockActivation(syncdomain.ScopeUpdateResult{
+			Block:         true,
+			ScopeKey:      scopeKey,
+			ConditionType: scopeKey.ConditionType(),
+		})
+		if err != nil {
+			return err
+		}
+		activation = prepared
+	}
+	if err := flow.recordPermissionBlockedRetry(ctx, work, scopeKey, activation); err != nil {
+		return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
+	}
+	if activation == nil {
+		return nil
+	}
+
+	return flow.applyBlockActivation(ctx, activation)
+}
+
+func (flow *engineFlow) recordPermissionBlockedRetry(
+	ctx context.Context,
+	work syncdomain.RetryWorkKey,
+	scopeKey syncdomain.ScopeKey,
+	activation *blockActivation,
+) error {
+	if _, err := flow.retryWork.recordBlocked(ctx, flow.deps.store, work, scopeKey, activation.storeRow()); err != nil {
 		return err
 	}
 	fields := append(flow.summaryLogFields(

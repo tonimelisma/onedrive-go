@@ -123,7 +123,7 @@ func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
 // orphan detection. Non-blocking — the watch loop continues processing events
 // while refresh work runs. The goroutine sends one loop-owned remote batch back
 // to the watch loop; the loop owns durable apply and dirty marking.
-func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl *syncdomain.Baseline) {
+func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl syncdomain.BaselineView) {
 	if rt.resources.refreshActive {
 		rt.deps.logger.Info("full remote refresh skipped — previous still running")
 		return
@@ -163,7 +163,7 @@ func (rt *watchRuntime) recoverFullRemoteRefreshPanic(ctx context.Context) {
 
 func (rt *watchRuntime) performFullRemoteRefresh(
 	ctx context.Context,
-	bl *syncdomain.Baseline,
+	bl syncdomain.BaselineView,
 ) syncobserve.RemoteObservationBatch {
 	result := syncobserve.RemoteObservationBatch{
 		Source: syncobserve.RemoteObservationBatchFullRefresh,

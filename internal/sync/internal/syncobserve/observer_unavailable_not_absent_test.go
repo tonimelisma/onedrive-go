@@ -71,7 +71,7 @@ func TestFullScan_HashEIOProducesNoUploadAndNoDelete(t *testing.T) {
 		}
 	}
 	require.NotNil(t, issue, "a read failure must be recorded, making the path unavailable truth")
-	assert.Equal(t, syncdomain.IssueHashPanic, issue.Reason)
+	assert.Equal(t, syncdomain.IssueHashError, issue.Reason)
 	assert.True(t, syncdomain.ObservationIssueBlocksLocalTruth(issue.Reason))
 }
 
