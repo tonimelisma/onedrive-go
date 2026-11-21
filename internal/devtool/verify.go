@@ -228,9 +228,12 @@ type fullE2EBucketSpec struct {
 }
 
 type verifyPlan struct {
-	runPublicChecks   bool
-	runQuickChecks    bool
-	runLint           bool
+	runPublicChecks bool
+	runQuickChecks  bool
+	runLint         bool
+	// lintChangedOnly lints only the packages changed against origin/main and
+	// their direct importers (runChangedLint): the pr profile's local gate.
+	lintChangedOnly   bool
 	runPlatformChecks bool
 	runE2E            bool
 	runE2EFull        bool
@@ -388,8 +391,9 @@ func resolveVerifyPlan(profile VerifyProfile) (verifyPlan, error) {
 		}, nil
 	case VerifyPR:
 		return verifyPlan{
-			runLint:        true,
-			runQuickChecks: true,
+			runLint:         true,
+			lintChangedOnly: true,
+			runQuickChecks:  true,
 		}, nil
 	case VerifyQuick:
 		return verifyPlan{
@@ -1029,6 +1033,15 @@ const (
 func lintSteps() []verifyStep {
 	return []verifyStep{
 		{name: lintStepName, run: runLint},
+		{name: workflowLintStepName, run: runWorkflowLint},
+	}
+}
+
+// changedLintSteps are lintSteps with golangci-lint over the changed packages
+// only (runChangedLint), the pr profile's.
+func changedLintSteps() []verifyStep {
+	return []verifyStep{
+		{name: lintStepName, run: runChangedLint},
 		{name: workflowLintStepName, run: runWorkflowLint},
 	}
 }

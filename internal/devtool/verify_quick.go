@@ -89,7 +89,9 @@ func resolveVerifyShard(plan verifyPlan, spec string) (verifyShard, error) {
 //     breakage, and the repository rules are platform-independent.
 //   - pr: lint, then quick. It is what CI's required check runs on Linux, in
 //     one local command, and what the DoD pre-pr stage runs by default: a host
-//     too small for the race tier can still finish it.
+//     too small for the race tier can still finish it. Its golangci-lint
+//     covers only the packages changed against origin/main and their direct
+//     importers (runChangedLint); CI's lint job lints every package.
 //
 // The race detector runs in the race profile, the sync tree alone, which CI
 // runs on every push to main, and in default and public beside the coverage
@@ -107,7 +109,10 @@ func runPRLaneVerification(
 	shortUnitTimeout time.Duration,
 ) error {
 	var steps []verifyStep
-	if plan.runLint {
+	switch {
+	case plan.runLint && plan.lintChangedOnly:
+		steps = append(steps, changedLintSteps()...)
+	case plan.runLint:
 		steps = append(steps, lintSteps()...)
 	}
 	switch {
