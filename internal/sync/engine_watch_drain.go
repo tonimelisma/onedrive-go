@@ -173,4 +173,3 @@ func (rt *watchRuntime) handleDrainingObserverError(
 
 	return rt.drainLoopDone(p), nil
 }
-

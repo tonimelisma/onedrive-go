@@ -4,7 +4,6 @@ package synctree
 
 import (
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,7 +27,7 @@ func writeMemoryFile(t *testing.T, root *Root, rel, content string) {
 	require.NoError(t, root.MkdirAll(filepath.Dir(rel)))
 	file, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	require.NoError(t, err)
-	_, err = io.WriteString(file, content)
+	_, err = file.WriteString(content)
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 }
@@ -54,7 +53,7 @@ func TestMemoryVolume_NFDNamedFileIsMissingUnderItsStoredSpelling(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, int64(len("corpus file")), info.Size())
 	_, statErr := os.Lstat(root.Path())
-	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the in-memory root must not exist on disk")
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "the in-memory root must not exist on disk")
 }
 
 // The same file on a volume that folds normalization, as APFS does: the

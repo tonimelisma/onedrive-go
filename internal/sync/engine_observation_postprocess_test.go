@@ -67,12 +67,13 @@ func TestHandleRemoteObservationBatch_EmptyCompleteTopologyApplyFailureDoesNotCo
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	setupWatchEngine(t, eng)
-	rt := testWatchRuntime(t, eng)
+	// The watch runtime takes the sink when it is built.
 	applyErr := errors.New("persist topology")
 	eng.shortcutChildWorkSink = func(_ context.Context, _ syncshortcut.ShortcutChildWorkSnapshot) error {
 		return applyErr
 	}
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
 
 	batch := buildPrimaryWatchBatch(eng.logger, nil, nil, "cursor-empty-complete")
 	batch.CursorToken = "cursor-empty-complete"

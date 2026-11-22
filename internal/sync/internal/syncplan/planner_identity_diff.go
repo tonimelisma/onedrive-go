@@ -115,19 +115,26 @@ const (
 		"is unavailable, the identity planner does not read the issues"
 	reasonConflictCopy = "below a conflict copy: the current planner trims the work the copy's " +
 		"rename invalidates, the identity planner leaves it to its own nodes"
+	reasonSharedLocalIdentity = "an identity at two paths of one tree: the identity planner keys a " +
+		"node by it and pairs at most one of them, where the current planner pairs by path and moves"
+	reasonBookkeeping = "baseline bookkeeping only: the current planner records new metadata over " +
+		"unchanged content, which the identity planner does not model"
 )
 
 // ExplainPlanDifferences sets each difference's reason, from the shape of
 // the inputs both plans came from: a path at or below an item that moved on
 // either side (its baseline path and where each side holds it), at or below
 // an entry whose type differs from its baseline row's, at or below a path
-// with an observation issue, or below a conflict copy either plan makes. It returns the differences no reason covers.
+// with an observation issue, below a conflict copy either plan makes, at an
+// identity two rows of one tree share, or a difference of baseline updates
+// alone. It returns the differences no reason covers.
 func ExplainPlanDifferences(in *IdentityInputs, current, shadow *syncdomain.ActionPlan, diffs []PlanDifference) []PlanDifference {
 	if in == nil || in.Baseline == nil {
 		return diffs
 	}
 	moved, replaced := identityDifferenceRoots(in)
 	copies := append(conflictCopyPaths(current), conflictCopyPaths(shadow)...)
+	shared := sharedIdentityPaths(in)
 	issues := make([]string, 0, len(in.ObservationIssues))
 	for i := range in.ObservationIssues {
 		issues = append(issues, in.ObservationIssues[i].Path)
@@ -145,6 +152,10 @@ func ExplainPlanDifferences(in *IdentityInputs, current, shadow *syncdomain.Acti
 			d.Reason = reasonUnavailableTruth
 		case belowAny(d.Path, copies):
 			d.Reason = reasonConflictCopy
+		case touchesAny(d, shared):
+			d.Reason = reasonSharedLocalIdentity
+		case onlyBaselineUpdates(d):
+			d.Reason = reasonBookkeeping
 		default:
 			unexplained = append(unexplained, *d)
 		}
@@ -192,6 +203,63 @@ func identityDifferenceRoots(in *IdentityInputs) (moved, replaced []string) {
 	}
 
 	return moved, replaced
+}
+
+// sharedIdentityPaths returns the paths of rows whose identity another row
+// of the same tree has too: two local rows of one local identity (a hard
+// link, or one entry seen at two paths), or two baseline rows of one local
+// identity or one item ID. The join keys a node by that identity, so it can
+// pair only one of them.
+func sharedIdentityPaths(in *IdentityInputs) []string {
+	localByKey := make(map[localIdentityKey][]string)
+	for i := range in.Local {
+		if in.Local[i].LocalHasIdentity {
+			key := localIdentityKey{in.Local[i].LocalDevice, in.Local[i].LocalInode}
+			localByKey[key] = append(localByKey[key], in.Local[i].Path)
+		}
+	}
+	baseByKey := make(map[localIdentityKey][]string)
+	baseByItemID := make(map[string][]string)
+	in.Baseline.ForEachPath(func(p string, entry syncdomain.BaselineEntry) {
+		if entry.LocalHasIdentity {
+			key := localIdentityKey{entry.LocalDevice, entry.LocalInode}
+			baseByKey[key] = append(baseByKey[key], p)
+		}
+		if entry.ItemID != "" {
+			baseByItemID[entry.ItemID] = append(baseByItemID[entry.ItemID], p)
+		}
+	})
+	var shared []string
+	for _, groups := range []map[localIdentityKey][]string{localByKey, baseByKey} {
+		for _, paths := range groups {
+			if len(paths) > 1 {
+				shared = append(shared, paths...)
+			}
+		}
+	}
+	for _, paths := range baseByItemID {
+		if len(paths) > 1 {
+			shared = append(shared, paths...)
+		}
+	}
+	sort.Strings(shared)
+
+	return shared
+}
+
+// onlyBaselineUpdates reports whether every action either plan holds at the
+// difference's path is a baseline update.
+func onlyBaselineUpdates(d *PlanDifference) bool {
+	prefix := syncdomain.ActionBaselineUpdate.String() + " "
+	for _, lines := range [][]string{d.Current, d.Shadow} {
+		for _, line := range lines {
+			if !strings.HasPrefix(line, prefix) {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func conflictCopyPaths(plan *syncdomain.ActionPlan) []string {

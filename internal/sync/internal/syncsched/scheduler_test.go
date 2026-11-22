@@ -94,23 +94,39 @@ func TestScheduler_Admit(t *testing.T) {
 		clearKey syncdomain.ScopeKey
 	}{
 		{name: "nothing holds it", kind: AdmitNow},
-		{name: "a blocked row holds it under its scope", row: &syncdomain.RetryWorkRow{Blocked: true, ScopeKey: quota},
-			kind: HoldForScope, scope: quota},
-		{name: "a trial of the row's scope passes it", trial: quota,
-			row: &syncdomain.RetryWorkRow{Blocked: true, ScopeKey: quota}, kind: AdmitNow},
-		{name: "a future retry time holds it", row: &syncdomain.RetryWorkRow{NextRetryAt: syncdomain.StoredTimeNano(now.Add(time.Minute))},
-			kind: HoldForRetry, retryAt: now.Add(time.Minute)},
-		{name: "a past retry time does not", row: &syncdomain.RetryWorkRow{NextRetryAt: syncdomain.StoredTimeNano(now.Add(-time.Minute))},
-			kind: AdmitNow},
-		{name: "an active scope that blocks it holds it", active: []syncdomain.ActiveScope{{Key: service}},
-			kind: HoldForScope, scope: service},
-		{name: "a trial of that scope passes it", trial: service, active: []syncdomain.ActiveScope{{Key: service}},
-			kind: AdmitNow},
-		{name: "a trial of a scope that no longer blocks it clears its row", trial: syncdomain.SKPermRemoteWrite("elsewhere"),
-			row: &syncdomain.RetryWorkRow{Blocked: true, ScopeKey: syncdomain.SKPermRemoteWrite("elsewhere")},
-			kind: AdmitNow, clearKey: syncdomain.SKPermRemoteWrite("elsewhere")},
-		{name: "a retry time before 1970 is still a time", row: &syncdomain.RetryWorkRow{NextRetryAt: syncdomain.StoredTimeNano(moon)},
-			kind: AdmitNow},
+		{
+			name: "a blocked row holds it under its scope", row: &syncdomain.RetryWorkRow{Blocked: true, ScopeKey: quota},
+			kind: HoldForScope, scope: quota,
+		},
+		{
+			name: "a trial of the row's scope passes it", trial: quota,
+			row: &syncdomain.RetryWorkRow{Blocked: true, ScopeKey: quota}, kind: AdmitNow,
+		},
+		{
+			name: "a future retry time holds it", row: &syncdomain.RetryWorkRow{NextRetryAt: syncdomain.StoredTimeNano(now.Add(time.Minute))},
+			kind: HoldForRetry, retryAt: now.Add(time.Minute),
+		},
+		{
+			name: "a past retry time does not", row: &syncdomain.RetryWorkRow{NextRetryAt: syncdomain.StoredTimeNano(now.Add(-time.Minute))},
+			kind: AdmitNow,
+		},
+		{
+			name: "an active scope that blocks it holds it", active: []syncdomain.ActiveScope{{Key: service}},
+			kind: HoldForScope, scope: service,
+		},
+		{
+			name: "a trial of that scope passes it", trial: service, active: []syncdomain.ActiveScope{{Key: service}},
+			kind: AdmitNow,
+		},
+		{
+			name: "a trial of a scope that no longer blocks it clears its row", trial: syncdomain.SKPermRemoteWrite("elsewhere"),
+			row:  &syncdomain.RetryWorkRow{Blocked: true, ScopeKey: syncdomain.SKPermRemoteWrite("elsewhere")},
+			kind: AdmitNow, clearKey: syncdomain.SKPermRemoteWrite("elsewhere"),
+		},
+		{
+			name: "a retry time before 1970 is still a time", row: &syncdomain.RetryWorkRow{NextRetryAt: syncdomain.StoredTimeNano(moon)},
+			kind: AdmitNow,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,7 +199,9 @@ func TestScheduler_HeldWorkReleasesInOrder(t *testing.T) {
 	s.Hold(first, HeldScope, syncdomain.SKService(), time.Time{})
 	s.Hold(second, HeldScope, syncdomain.SKService(), time.Time{})
 
-	key := func(ta *syncdomain.TrackedAction) syncdomain.RetryWorkKey { return syncdomain.RetryWorkKeyForAction(&ta.Action) }
+	key := func(ta *syncdomain.TrackedAction) syncdomain.RetryWorkKey {
+		return syncdomain.RetryWorkKeyForAction(&ta.Action)
+	}
 	assert.True(t, s.HasDueHeldWork(now))
 	assert.Equal(t, []syncdomain.RetryWorkKey{key(early), key(late), key(same)}, s.DueRetries(now))
 	assert.Equal(t, []syncdomain.RetryWorkKey{key(first)}, s.DueTrials(now))

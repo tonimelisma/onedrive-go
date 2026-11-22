@@ -1,9 +1,9 @@
 package sync
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -29,10 +29,13 @@ import (
 // Every run goes through the chaos Graph layer under one seeded fault plan
 // (watchFaultPlan): some batches begin in a storm that lasts a few poll
 // intervals, and the watch must converge once it passes. Waits the engine
-// arms between modelWatchCompressFrom and modelWatchCompressUpTo (retry
-// backoff, observer backoff) end in modelWatchCompressedWait of real time on
-// the model's clock, the clock moving to their due instant, so a batch's
-// failures are retried as a long watch would retry them.
+// arms on the model's clock between modelWatchCompressFrom and
+// modelWatchCompressUpTo (the executor's retry backoff) end in
+// modelWatchCompressedWait of real time, the clock moving to their due
+// instant, so a batch's failures are retried as a long watch would retry
+// them. The observers run on the wall clock: their delta retries and poll
+// interval take real time, so a storm can end before a watch's bootstrap
+// does (batchStorm).
 //
 // A watch is not replayed exactly: its interleavings follow real time. A
 // failing seed still logs its replay line, and rerunning it reruns the same
@@ -178,20 +181,68 @@ func (r *modelRun) watchBatch(label string, storm time.Duration) []syncfixture.M
 	defer r.eng.SetDebugEventHook(nil)
 
 	r.clock.compressed.Store(true)
-	stormEnds := time.Now().Add(storm)
-	cancel, done := runWatchInBackground(r.t, r.eng, syncdomain.SyncBidirectional,
-		WatchOptions{PollInterval: modelWatchPollInterval, Debounce: modelWatchDebounce})
-	syncfixture.ReceiveWithin(r.t, localStarted, label+": the watch's local observer to start")
+	weather := &batchStorm{chaos: r.chaos, on: r.chaos != nil && storm > 0, ends: time.Now().Add(storm)}
+	cancel, done := r.startWatch(label, weather, localStarted)
 
 	r.awaitDispatch()
 	edits = append(edits, r.inFlightEdits(label)...)
-	edits = append(edits, r.awaitWatchConverged(label, stormEnds)...)
+	edits = append(edits, r.awaitWatchConverged(label, weather, done)...)
 
 	// The watch's own bounds run on real time while it stops.
 	r.clock.compressed.Store(false)
 	syncfixture.StopWatch(r.t, cancel, done)
 
 	return append(edits, r.takeConcurrentEdits()...)
+}
+
+// batchStorm is one batch's storm: on from the batch's start until ends,
+// when the first check that finds it due ends it (passing) and every call
+// after is calm. It is read and ended on the test goroutine alone.
+type batchStorm struct {
+	chaos *chaosGraph
+	on    bool
+	ends  time.Time
+}
+
+// passing reports whether the storm is still on, ending it first when it is
+// due. The check is the one place a storm ends: a storm whose time ran out
+// before anyone looked (a bootstrap that waited out its delta retries on the
+// wall clock outlasts any storm of the plan) still ends.
+func (s *batchStorm) passing() bool {
+	if s.on && !time.Now().Before(s.ends) {
+		s.chaos.startStep(false)
+		s.on = false
+	}
+
+	return s.on
+}
+
+// startWatch starts the batch's watch and waits for its local observer. A
+// watch whose bootstrap the storm broke returns its error, and the control
+// plane restarts a runner that exits with an error (sync-control-plane.md);
+// the model restarts it the same way, at once, ending the storm first when
+// it is due. A watch that returns before its observer starts in a calm batch,
+// or returns nil, fails the batch, so the restarts end once the storm does.
+func (r *modelRun) startWatch(
+	label string, weather *batchStorm, localStarted <-chan struct{},
+) (context.CancelFunc, <-chan error) {
+	for {
+		inStorm := weather.on
+		cancel, done := runWatchInBackground(r.t, r.eng, syncdomain.SyncBidirectional,
+			WatchOptions{PollInterval: modelWatchPollInterval, Debounce: modelWatchDebounce})
+		select {
+		case <-localStarted:
+			return cancel, done
+		case err := <-done:
+			cancel()
+			require.Error(r.t, err, "%s: the watch returned before its local observer started; %s", label, r.failureContext())
+			require.True(r.t, inStorm, "%s: a calm watch returned before its local observer started: %v; %s", label, err, r.failureContext())
+			r.logf("%s: the storm ended the watch's bootstrap (%v); restarting it", label, err)
+			weather.passing()
+		case <-time.After(syncfixture.EventWait):
+			require.FailNow(r.t, "timed out waiting for "+label+": the watch's local observer to start")
+		}
+	}
 }
 
 // awaitDispatch waits for the watch's next dispatch, or modelWatchInFlightWait
@@ -215,7 +266,7 @@ func (r *modelRun) inFlightEdits(label string) []syncfixture.ModelEdit {
 	content := r.nextContent(syncfixture.ModelLocalSide)
 	r.newFiles++
 	name := modelWatchNewFilePrefix + strconv.Itoa(r.newFiles) + ".txt"
-	file, err := os.OpenFile(filepath.Join(r.syncRoot, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := os.OpenFile(filepath.Join(r.syncRoot, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // test writes into its own temp tree
 	require.NoError(r.t, err, "%s: creating %s while the watch runs", label, name)
 	_, writeErr := file.WriteString(content)
 	require.NoError(r.t, errors.Join(writeErr, file.Close()))
@@ -255,15 +306,15 @@ func (r *moveScenarioRemote) overwriteIfFile(t *testing.T, remotePath, content s
 // awaitWatchConverged waits until the watch alone has converged: both trees
 // equal, and unchanged, over modelWatchStableTicks checks after the storm has
 // ended. A user renames what collides once the watch has been stuck for
-// modelWatchCollisionTicks checks; those renames are returned.
-func (r *modelRun) awaitWatchConverged(label string, stormEnds time.Time) []syncfixture.ModelEdit {
+// modelWatchCollisionTicks checks; those renames are returned. A watch that
+// returns while it is awaited fails the batch with its error.
+func (r *modelRun) awaitWatchConverged(label string, weather *batchStorm, done <-chan error) []syncfixture.ModelEdit {
 	deadline := time.NewTimer(modelWatchConvergeWithin)
 	defer deadline.Stop()
 	tick := time.NewTicker(modelWatchSettle)
 	defer tick.Stop()
 
 	var userEdits []syncfixture.ModelEdit
-	storming := r.chaos != nil && time.Now().Before(stormEnds)
 	stable, stuck := 0, 0
 	last := ""
 	for {
@@ -272,14 +323,13 @@ func (r *modelRun) awaitWatchConverged(label string, stormEnds time.Time) []sync
 			require.Failf(r.t, modelNotConvergedMessage, "%s: the watch did not converge within %s; %s\nstate:%s",
 				label, modelWatchConvergeWithin, r.failureContext(), syncStateDump(r.t, r.eng))
 			return userEdits
+		case err := <-done:
+			require.FailNow(r.t, "the watch returned while it was converging", "%s: %v; %s", label, err, r.failureContext())
+			return userEdits
 		case <-tick.C:
 		}
-		if storming {
-			if time.Now().Before(stormEnds) {
-				continue
-			}
-			r.chaos.startStep(false)
-			storming = false
+		if weather.passing() {
+			continue
 		}
 
 		local, ok := r.liveLocalTree()
@@ -307,30 +357,7 @@ func (r *modelRun) awaitWatchConverged(label string, stormEnds time.Time) []sync
 // folder: an entry that goes away while it is read makes the reading not
 // ok, for the next check to retry.
 func (r *modelRun) liveLocalTree() (map[string]string, bool) {
-	out := map[string]string{}
-	err := filepath.WalkDir(r.syncRoot, func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, relErr := filepath.Rel(r.syncRoot, p)
-		if relErr != nil {
-			return fmt.Errorf("relative path of %s: %w", p, relErr)
-		}
-		if rel == "." {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-		if d.IsDir() {
-			out[rel] = syncfixture.ModelFolderSentinel
-			return nil
-		}
-		data, readErr := os.ReadFile(p) //nolint:gosec // test reads its own temp tree
-		if readErr != nil {
-			return fmt.Errorf("read %s: %w", p, readErr)
-		}
-		out[rel] = string(data)
-		return nil
-	})
+	out, err := readModelLocalTree(r.syncRoot)
 
 	return out, err == nil
 }

@@ -744,6 +744,9 @@ func TestMoveStateDBs_KeepsLeftoversWhileTheirStoreIsLocked(t *testing.T) {
 // Validates: R-3.7.2
 func TestMoveStateDBs_ASourceThatCannotBeCheckedIsAnError(t *testing.T) {
 	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a folder without permissions, so the source can be checked")
+	}
 
 	locked := filepath.Join(t.TempDir(), "unreadable")
 	require.NoError(t, os.Mkdir(locked, 0o700))

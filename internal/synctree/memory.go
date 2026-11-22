@@ -4,7 +4,8 @@ import (
 	"errors"
 
 	"golang.org/x/text/cases"
-	"golang.org/x/text/unicode/norm"
+
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // Capabilities says how an in-memory volume compares names. The zero value
@@ -28,8 +29,10 @@ var ErrOutsideMemoryVolume = errors.New("an in-memory sync folder has nothing ou
 // fold maps a name onto the key the volume compares, so two names are one
 // entry exactly when their keys are equal.
 func (c Capabilities) fold(name string) string {
+	// The stored (NFC) form equates exactly the canonically equivalent
+	// spellings, as the NFD form APFS keeps does.
 	if c.FoldNormalization {
-		name = norm.NFD.String(name)
+		name = namekey.Stored(name)
 	}
 	if c.FoldCase {
 		name = cases.Fold().String(name)

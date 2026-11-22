@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // The identity-keyed planner reconciles three trees whose nodes are keyed by
@@ -88,6 +90,9 @@ type identityNode struct {
 	// confidence is the local join's (identityByPath for a node with no
 	// baseline row or no local row).
 	confidence identityConfidence
+	// remoteReplaced: OneDrive's row joined by the baseline path, not the
+	// item ID; OneDrive deleted the item and has a new one in its place.
+	remoteReplaced bool
 }
 
 // identityOutcome is a node's decision: its actions in order (each depends
@@ -133,51 +138,91 @@ func PlanIdentityKeyed(in *IdentityInputs) (*syncdomain.ActionPlan, error) {
 		outcomes = append(outcomes, outcome)
 	}
 
-	return assembleIdentityPlan(settleIdentityPositions(outcomes, in.DriveID)), nil
+	settled := settleIdentityPositions(outcomes, in.DriveID)
+	preserveIdentityParentFolders(settled)
+
+	return assembleIdentityPlan(settled), nil
 }
 
-// joinIdentityNodes builds one node per identity.
+// joinIdentityNodes builds one node per identity: the baseline rows first,
+// then the remote rows by item ID, then the local rows by local identity,
+// falling back to the path for a local row the identity cannot place.
 func joinIdentityNodes(in *IdentityInputs) []*identityNode {
-	var nodes []*identityNode
-	byItemID := make(map[string]*identityNode)
-	byPath := make(map[string]*identityNode)
-	byLocalIdentity := make(map[localIdentityKey]*identityNode)
+	join := &identityJoin{
+		byItemID:        make(map[string]*identityNode),
+		byPath:          make(map[string]*identityNode),
+		byLocalIdentity: make(map[localIdentityKey]*identityNode),
+	}
+	join.addBaseline(in.Baseline)
+	join.addRemote(in.Remote)
+	join.addLocal(in.Local)
 
-	paths := make([]string, 0, in.Baseline.Len())
-	in.Baseline.ForEachPath(func(p string, _ syncdomain.BaselineEntry) { paths = append(paths, p) })
+	return join.nodes
+}
+
+// identityJoin is the working set of one joinIdentityNodes call.
+type identityJoin struct {
+	nodes           []*identityNode
+	byItemID        map[string]*identityNode
+	byPath          map[string]*identityNode
+	byLocalIdentity map[localIdentityKey]*identityNode
+}
+
+func (j *identityJoin) addBaseline(baseline *syncdomain.BaselineSnapshot) {
+	paths := make([]string, 0, baseline.Len())
+	baseline.ForEachPath(func(p string, _ syncdomain.BaselineEntry) { paths = append(paths, p) })
 	sort.Strings(paths)
 	for _, p := range paths {
-		entry, _ := in.Baseline.GetByPath(p)
+		entry, _ := baseline.GetByPath(p)
 		if !identityPlansItem(p, entry.ItemType) {
 			continue
 		}
 		node := &identityNode{base: &entry}
-		nodes = append(nodes, node)
-		byPath[p] = node
+		j.nodes = append(j.nodes, node)
+		j.byPath[p] = node
 		if entry.ItemID != "" {
-			byItemID[entry.ItemID] = node
+			j.byItemID[entry.ItemID] = node
 		}
 		if entry.LocalHasIdentity {
-			byLocalIdentity[localIdentityKey{entry.LocalDevice, entry.LocalInode}] = node
+			j.byLocalIdentity[localIdentityKey{entry.LocalDevice, entry.LocalInode}] = node
 		}
 	}
+}
 
-	remoteRows := append([]syncdomain.RemoteStateRow(nil), in.Remote...)
-	sort.Slice(remoteRows, func(i, j int) bool { return remoteRows[i].Path < remoteRows[j].Path })
+// addRemote joins OneDrive's rows on the item ID first, so a synced item
+// that moved finds its node wherever it went; a row no item ID claims then
+// takes the baseline node at its own path when that node's item is gone
+// from OneDrive: the item was deleted and re-created there, or restored
+// under a new ID, and the baseline rebinds to it, as the current planner
+// does (R-2.10.49).
+func (j *identityJoin) addRemote(remote []syncdomain.RemoteStateRow) {
+	remoteRows := append([]syncdomain.RemoteStateRow(nil), remote...)
+	sort.Slice(remoteRows, func(i, k int) bool { return remoteRows[i].Path < remoteRows[k].Path })
+	var unjoined []*syncdomain.RemoteStateRow
 	for i := range remoteRows {
 		row := &remoteRows[i]
 		if !identityPlansItem(row.Path, row.ItemType) {
 			continue
 		}
-		if node, ok := byItemID[row.ItemID]; ok && node.remote == nil {
+		if node, ok := j.byItemID[row.ItemID]; ok && node.remote == nil {
 			node.remote = row
 			continue
 		}
-		nodes = append(nodes, &identityNode{remote: row})
+		unjoined = append(unjoined, row)
 	}
+	for _, row := range unjoined {
+		if node, ok := j.byPath[row.Path]; ok && node.remote == nil {
+			node.remote = row
+			node.remoteReplaced = true
+			continue
+		}
+		j.nodes = append(j.nodes, &identityNode{remote: row})
+	}
+}
 
-	localRows := append([]syncdomain.LocalStateRow(nil), in.Local...)
-	sort.Slice(localRows, func(i, j int) bool { return localRows[i].Path < localRows[j].Path })
+func (j *identityJoin) addLocal(local []syncdomain.LocalStateRow) {
+	localRows := append([]syncdomain.LocalStateRow(nil), local...)
+	sort.Slice(localRows, func(i, k int) bool { return localRows[i].Path < localRows[k].Path })
 	seen := make(map[localIdentityKey]int, len(localRows))
 	for i := range localRows {
 		if localRows[i].LocalHasIdentity {
@@ -190,30 +235,43 @@ func joinIdentityNodes(in *IdentityInputs) []*identityNode {
 		if !identityPlansItem(row.Path, row.ItemType) {
 			continue
 		}
-		key := localIdentityKey{row.LocalDevice, row.LocalInode}
-		node, ok := byLocalIdentity[key]
-		if !ok || !row.LocalHasIdentity || seen[key] > 1 || node.local != nil {
+		if !j.pairLocalByIdentity(row, seen) {
 			unpaired = append(unpaired, row)
-			continue
 		}
-		confidence := localJoinConfidence(node.base, row)
-		if confidence == identityByPath {
-			unpaired = append(unpaired, row)
-			continue
-		}
-		node.local = row
-		node.confidence = confidence
 	}
 	for _, row := range unpaired {
-		if node, ok := byPath[row.Path]; ok && node.local == nil {
+		if node, ok := j.byPath[row.Path]; ok && node.local == nil {
 			node.local = row
 			node.confidence = identityByPath
 			continue
 		}
-		nodes = append(nodes, &identityNode{local: row})
+		j.nodes = append(j.nodes, &identityNode{local: row})
 	}
+}
 
-	return nodes
+// pairLocalByIdentity joins row to the baseline node of its local identity
+// when that identity is unique among the local rows and confident enough for
+// what the join would decide.
+func (j *identityJoin) pairLocalByIdentity(row *syncdomain.LocalStateRow, seen map[localIdentityKey]int) bool {
+	key := localIdentityKey{row.LocalDevice, row.LocalInode}
+	node, ok := j.byLocalIdentity[key]
+	if !ok || !row.LocalHasIdentity || seen[key] > 1 || node.local != nil {
+		return false
+	}
+	confidence := localJoinConfidence(node.base, row)
+	if confidence == identityByPath {
+		return false
+	}
+	// Without birth times a rename and a reused inode look alike. Against
+	// OneDrive's delete, trusting the weak join at another path would delete
+	// a new entry the user made, so the row pairs by path instead.
+	if confidence == identityWeak && node.remote == nil && row.Path != node.base.Path {
+		return false
+	}
+	node.local = row
+	node.confidence = confidence
+
+	return true
 }
 
 // identityPlansItem reports whether an entry is an item the planner plans:
@@ -369,6 +427,7 @@ func decideIdentityNode(
 	base := node.base
 	local, remote := localChange(node, byBasePath), remoteChange(node, byBasePath)
 	state := identityDecisionState(base, local, remote)
+	addIdentityReplacements(&state, node, local, remote)
 	if err := state.Valid(); err != nil {
 		return identityOutcome{}, fmt.Errorf("sync: identity planner state of %s: %w", base.Path, err)
 	}
@@ -400,6 +459,29 @@ func decideIdentityNode(
 	out.actions = act.actions
 
 	return out, nil
+}
+
+// addIdentityReplacements gives the decision what the current planner reads
+// from rows at the baseline path: OneDrive's item there is a new one, and
+// the local entry there is another entry than the synced one (D-056). The
+// current planner reads them at a path, so a node a move carried elsewhere
+// has neither. Metadata drift, which only updates the baseline, is not
+// modeled (reasonBookkeeping).
+func addIdentityReplacements(state *syncdomain.DecisionState, node *identityNode, local, remote sideChange) {
+	state.RemoteItemReplaced = remote.present && node.remoteReplaced
+	state.LocalItemReplaced = local.present && local.path == node.base.Path && !sameLocalEntry(node.base, node.local)
+}
+
+// sameLocalEntry reports whether row is the entry base recorded, when both
+// carry an identity; without one either way it cannot tell, and says so.
+func sameLocalEntry(base *syncdomain.BaselineEntry, row *syncdomain.LocalStateRow) bool {
+	baseIdentity, baseKnown := base.FileIdentity()
+	rowIdentity, rowKnown := row.FileIdentity()
+	if !baseKnown || !rowKnown {
+		return true
+	}
+
+	return synctree.SameIdentity(baseIdentity, rowIdentity)
 }
 
 // identityDecisionState is a node's state for the decision table every
@@ -444,6 +526,13 @@ func decideIdentityOneSide(
 		}
 		act.addCreate(keptLocal, kept.path, base.ItemType)
 		out.claims, out.localContent, out.remoteContent = kept.path, keptLocal, !keptLocal
+	case syncdomain.ReconcileUnclassified, syncdomain.ReconcileNoop,
+		syncdomain.ReconcileBaselineRemove, syncdomain.ReconcileBaselineUpdate,
+		syncdomain.ReconcileUpload, syncdomain.ReconcileLocalMove, syncdomain.ReconcileRemoteMove,
+		syncdomain.ReconcileConflictEditEdit, syncdomain.ReconcileConflictCreateCreate,
+		syncdomain.ReconcileConflictKeepBoth, syncdomain.ReconcileReplaceRemote,
+		syncdomain.ReconcileReplaceLocal:
+		return unexpectedIdentityKind(base.Path, kind)
 	default:
 		return unexpectedIdentityKind(base.Path, kind)
 	}
@@ -503,6 +592,13 @@ func decideIdentityContent(act *identityActions, out *identityOutcome, final str
 	case syncdomain.ReconcileDownload:
 		act.add(syncdomain.ActionDownload, final, "")
 		out.localContent = false
+	case syncdomain.ReconcileUnclassified, syncdomain.ReconcileBaselineRemove,
+		syncdomain.ReconcileFolderCreateLocal, syncdomain.ReconcileFolderCreateRemote,
+		syncdomain.ReconcileLocalDelete, syncdomain.ReconcileRemoteDelete, syncdomain.ReconcileLocalMove,
+		syncdomain.ReconcileRemoteMove, syncdomain.ReconcileConflictEditDelete,
+		syncdomain.ReconcileConflictCreateCreate, syncdomain.ReconcileConflictKeepBoth,
+		syncdomain.ReconcileReplaceRemote, syncdomain.ReconcileReplaceLocal:
+		return unexpectedIdentityKind(final, kind)
 	default:
 		return unexpectedIdentityKind(final, kind)
 	}
@@ -561,16 +657,8 @@ func settleIdentityPositions(outcomes []identityOutcome, driveID driveid.ID) []i
 		if len(indexes) < 2 {
 			continue
 		}
-		localAt, remoteAt := -1, -1
-		for _, i := range indexes {
-			switch {
-			case outcomes[i].localContent && !outcomes[i].remoteContent:
-				localAt = i
-			case outcomes[i].remoteContent && !outcomes[i].localContent:
-				remoteAt = i
-			}
-		}
-		if localAt < 0 || remoteAt < 0 {
+		localAt, remoteAt, met := oneSidedClaimants(outcomes, indexes)
+		if !met {
 			continue
 		}
 		merged := mergeIdentityConflict(&outcomes[localAt], &outcomes[remoteAt], p, driveID)
@@ -586,6 +674,23 @@ func settleIdentityPositions(outcomes []identityOutcome, driveID driveid.ID) []i
 	}
 
 	return kept
+}
+
+// oneSidedClaimants finds, among the outcomes at indexes that claim one
+// path, the last that brings only local content and the last that brings
+// only OneDrive's; met says both exist.
+func oneSidedClaimants(outcomes []identityOutcome, indexes []int) (localAt, remoteAt int, met bool) {
+	localAt, remoteAt = -1, -1
+	for _, i := range indexes {
+		switch {
+		case outcomes[i].localContent && !outcomes[i].remoteContent:
+			localAt = i
+		case outcomes[i].remoteContent && !outcomes[i].localContent:
+			remoteAt = i
+		}
+	}
+
+	return localAt, remoteAt, localAt >= 0 && remoteAt >= 0
 }
 
 // mergeIdentityConflict is the outcome of local content (from localSide) and
@@ -686,6 +791,57 @@ func (b *identityActions) addCreate(fromLocal bool, p string, itemType syncdomai
 	default:
 		b.add(syncdomain.ActionDownload, p, "")
 	}
+}
+
+// preserveIdentityParentFolders keeps a folder whose delete would take work
+// planned below it: the delete becomes the folder's create on the side that
+// deleted it, as the current planner keeps it
+// (preserveParentFoldersForRunnableDescendants). A delete or cleanup below
+// it needs no parent.
+func preserveIdentityParentFolders(outcomes []identityOutcome) {
+	var needParent []string
+	for i := range outcomes {
+		for j := range outcomes[i].actions {
+			if !isDeleteAction(&outcomes[i].actions[j]) {
+				needParent = append(needParent, outcomes[i].actions[j].Path)
+			}
+		}
+	}
+	for i := range outcomes {
+		base := outcomes[i].node.base
+		if base == nil || base.ItemType != syncdomain.ItemTypeFolder {
+			continue
+		}
+		for j := range outcomes[i].actions {
+			action := &outcomes[i].actions[j]
+			if !holdsPathBelow(needParent, action.Path) {
+				continue
+			}
+			switch action.Type {
+			case syncdomain.ActionLocalDelete:
+				action.Type, action.CreateSide = syncdomain.ActionFolderCreate, syncdomain.CreateRemote
+			case syncdomain.ActionRemoteDelete:
+				action.Type, action.CreateSide = syncdomain.ActionFolderCreate, syncdomain.CreateLocal
+			case syncdomain.ActionCleanup, syncdomain.ActionDownload, syncdomain.ActionUpload,
+				syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove, syncdomain.ActionFolderCreate,
+				syncdomain.ActionConflictCopy, syncdomain.ActionBaselineUpdate:
+			default:
+				panic(syncdomain.OutsideTheEnum(action.Type))
+			}
+		}
+	}
+}
+
+// holdsPathBelow reports whether paths holds a path strictly below parent.
+func holdsPathBelow(paths []string, parent string) bool {
+	prefix := parent + "/"
+	for _, p := range paths {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // assembleIdentityPlan flattens the outcomes into a plan: each node's

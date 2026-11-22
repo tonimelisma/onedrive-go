@@ -206,6 +206,18 @@ linters:
               desc: the executor imports the vocabulary alone and reaches the store through its own interface
             - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
               desc: the executor imports the vocabulary alone and reaches the store through its own interface
+        sync-sched-only-domain:
+          list-mode: lax
+          files:
+            - "**/internal/sync/internal/syncsched/*.go"
+            - "!$test"
+          allow:
+            - github.com/tonimelisma/onedrive-go/internal/sync/syncdomain$
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
+              desc: the scheduler imports the vocabulary alone
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
+              desc: the scheduler imports the vocabulary alone
         sync-engine-no-test-helpers:
           list-mode: lax
           files:
@@ -218,11 +230,12 @@ linters:
             - github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan$
             - github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve$
             - github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec$
+            - github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched$
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/sync$
-              desc: the engine imports the six stage packages, never a test-helper package
+              desc: the engine imports its stage packages and its scheduler, never a test-helper package
             - pkg: github.com/tonimelisma/onedrive-go/internal/sync/
-              desc: the engine imports the six stage packages, never a test-helper package
+              desc: the engine imports its stage packages and its scheduler, never a test-helper package
         sync-fixture-only-domain:
           list-mode: lax
           files:

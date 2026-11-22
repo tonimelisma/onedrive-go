@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -36,9 +35,6 @@ import (
 // and anything outside the tree (detaching to a trash folder, moving a file
 // in), which fails with ErrOutsideMemoryVolume.
 
-// memoryVolumeSeq numbers volumes so each in-memory root has its own path.
-var memoryVolumeSeq atomic.Uint64
-
 // memoryRootParent is where in-memory roots claim to live. An unprivileged
 // process cannot create it, so a caller that wrongly reaches the root by its
 // path finds nothing instead of writing to the disk.
@@ -53,7 +49,19 @@ func OpenMemory(caps Capabilities) (*Root, error) {
 		return nil, err
 	}
 
-	dir := filepath.Join(memoryRootParent, strconv.FormatUint(memoryVolumeSeq.Add(1), 10))
+	// The root folder's memfd inode names the root: the kernel keeps it
+	// unique among live memfds, so each open volume has its own path.
+	rootInfo, err := vol.stat(".", "lstat")
+	if err != nil {
+		vol.root.release()
+		return nil, err
+	}
+	rootStat, isStat := rootInfo.Sys().(*syscall.Stat_t)
+	if !isStat {
+		vol.root.release()
+		return nil, fmt.Errorf("stating in-memory root: unexpected stat type %T", rootInfo.Sys())
+	}
+	dir := filepath.Join(memoryRootParent, strconv.FormatUint(rootStat.Ino, 10))
 	ops := defaultRootOps()
 	ops.openRoot = func(string) (rootHandle, error) { return &memoryHandle{vol: vol}, nil }
 	ops.rmdir = func(_ rootHandle, name string) error { return vol.rmdir(name) }
@@ -129,13 +137,27 @@ func pathError(op, name string, errno syscall.Errno) error {
 	return &os.PathError{Op: op, Path: name, Err: errno}
 }
 
+// errnoOf returns the Errno a unix call failed with; any other error, which
+// the unix package does not return, reads as EIO.
+func errnoOf(err error) syscall.Errno {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno
+	}
+
+	return syscall.EIO
+}
+
+// parentName is the name that climbs out of a folder.
+const parentName = ".."
+
 // nameParts splits a rooted name into its parts; "." is the root itself.
 func nameParts(name string) ([]string, error) {
 	clean := filepath.Clean(filepath.FromSlash(name))
 	if clean == "." {
 		return nil, nil
 	}
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	if filepath.IsAbs(clean) || clean == parentName || strings.HasPrefix(clean, parentName+string(filepath.Separator)) {
 		return nil, fmt.Errorf("path escapes from parent")
 	}
 
@@ -214,7 +236,7 @@ func (v *memoryVolume) info(node *memoryNode) (os.FileInfo, error) {
 	info := &memoryInfo{
 		name:  filepath.Base(node.name),
 		size:  st.Size,
-		mode:  os.FileMode(st.Mode & 0o777),
+		mode:  os.FileMode(st.Mode) & os.ModePerm,
 		mtime: time.Unix(st.Mtim.Sec, st.Mtim.Nsec),
 		sys:   st,
 	}
@@ -251,7 +273,7 @@ func reopen(node *memoryNode, name string, flag int) (*os.File, error) {
 	keep := flag & (unix.O_ACCMODE | unix.O_TRUNC | unix.O_APPEND | unix.O_SYNC | unix.O_DSYNC)
 	fd, err := unix.Open("/proc/self/fd/"+strconv.Itoa(node.fd), keep|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, pathError("open", name, err.(syscall.Errno)) //nolint:errorlint // unix.Open returns a bare Errno
+		return nil, pathError("open", name, errnoOf(err))
 	}
 
 	return os.NewFile(uintptr(fd), name), nil
@@ -427,15 +449,8 @@ func (v *memoryVolume) rename(oldname, newname string, noReplace bool) error {
 	}
 
 	if dst != nil && dst != src {
-		switch {
-		case noReplace:
-			return pathError("rename", newname, syscall.EEXIST)
-		case src.dir && !dst.dir:
-			return pathError("rename", newname, syscall.ENOTDIR)
-		case !src.dir && dst.dir:
-			return pathError("rename", newname, syscall.EISDIR)
-		case dst.dir && len(dst.children) > 0:
-			return pathError("rename", newname, syscall.ENOTEMPTY)
+		if errno, refused := replaceRefusal(src, dst, noReplace); refused {
+			return pathError("rename", newname, errno)
 		}
 		delete(dstParent.children, dst.name)
 		dst.release()
@@ -448,6 +463,23 @@ func (v *memoryVolume) rename(oldname, newname string, noReplace bool) error {
 	return nil
 }
 
+// replaceRefusal says why rename(2) would refuse to replace dst with src,
+// if it would.
+func replaceRefusal(src, dst *memoryNode, noReplace bool) (syscall.Errno, bool) {
+	switch {
+	case noReplace:
+		return syscall.EEXIST, true
+	case src.dir && !dst.dir:
+		return syscall.ENOTDIR, true
+	case !src.dir && dst.dir:
+		return syscall.EISDIR, true
+	case dst.dir && len(dst.children) > 0:
+		return syscall.ENOTEMPTY, true
+	default:
+		return 0, false
+	}
+}
+
 func (v *memoryVolume) chtimes(name string, atime, mtime time.Time) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -458,7 +490,7 @@ func (v *memoryVolume) chtimes(name string, atime, mtime time.Time) error {
 	}
 	times := []unix.Timespec{timespecOrOmit(atime), timespecOrOmit(mtime)}
 	if err := unix.UtimesNanoAt(unix.AT_FDCWD, "/proc/self/fd/"+strconv.Itoa(node.fd), times, 0); err != nil {
-		return pathError("chtimes", name, err.(syscall.Errno)) //nolint:errorlint // unix returns a bare Errno
+		return pathError("chtimes", name, errnoOf(err))
 	}
 
 	return nil
@@ -508,8 +540,8 @@ func (v *memoryVolume) removeVerified(name, displayName string, verify VerifyFun
 	defer file.Close() //nolint:errcheck // read-only descriptor held for verification
 
 	checked := &verifiedFile{file: file}
-	if err := checked.check(displayName, verify); err != nil {
-		return err
+	if checkErr := checked.check(displayName, verify); checkErr != nil {
+		return checkErr
 	}
 
 	v.mu.Lock()

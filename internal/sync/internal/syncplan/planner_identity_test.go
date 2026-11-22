@@ -193,6 +193,32 @@ func TestPlanIdentityKeyed_HardLinkFallsBackToPaths(t *testing.T) {
 	assert.Equal(t, "upload b", renderMatrixPlan(plan), "a stays the synced item by path, b is new")
 }
 
+// A folder OneDrive deleted, whose inode a new local folder at another path
+// now has, with no birth time to tell a rename from a reused inode: the weak
+// identity must not carry OneDrive's delete onto the new folder. The new
+// folder goes up and the deleted folder's row is cleaned up, as the current
+// planner plans it.
+//
+// Validates: R-2.3.1
+func TestPlanIdentityKeyed_WeakIdentityAtANewPathDoesNotTakeADelete(t *testing.T) {
+	t.Parallel()
+
+	entry := syncdomain.BaselineEntry{
+		Path: "old", ItemID: "item-1", ItemType: syncdomain.ItemTypeFolder,
+		LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true,
+	}
+	in := &IdentityInputs{
+		Baseline: syncdomain.NewBaselineSnapshot([]*syncdomain.BaselineEntry{&entry}),
+		Local: []syncdomain.LocalStateRow{
+			{Path: "new", ItemType: syncdomain.ItemTypeFolder, LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true},
+		},
+	}
+
+	plan, err := PlanIdentityKeyed(in)
+	require.NoError(t, err)
+	assert.Equal(t, "cleanup old; folder_create new (remote)", renderMatrixPlan(plan))
+}
+
 // Every node's actions depend on the one before them, in order, and nodes
 // do not depend on each other.
 //
@@ -270,4 +296,103 @@ func TestExplainPlanDifferences_KnownReasonsOnly(t *testing.T) {
 	require.Len(t, unexplained, 1)
 	assert.Equal(t, "other", unexplained[0].Path)
 	assert.Contains(t, unexplained[0].String(), "unexplained")
+}
+
+// Baseline updates alone are bookkeeping; a difference that also moves
+// content is not.
+//
+// Validates: R-2.3.1
+func TestExplainPlanDifferences_BaselineUpdatesAloneAreBookkeeping(t *testing.T) {
+	t.Parallel()
+
+	in := &IdentityInputs{Baseline: syncdomain.NewBaselineSnapshot(nil)}
+	diffs := []PlanDifference{
+		{Path: "a", Current: []string{"baseline_update a"}},
+		{Path: "b", Current: []string{"baseline_update b"}, Shadow: []string{"download b"}},
+	}
+	unexplained := ExplainPlanDifferences(in, &syncdomain.ActionPlan{}, &syncdomain.ActionPlan{}, diffs)
+	assert.Equal(t, reasonBookkeeping, diffs[0].Reason)
+	require.Len(t, unexplained, 1)
+	assert.Equal(t, "b", unexplained[0].Path)
+}
+
+// A local identity at two local paths, and an item ID or local identity at
+// two baseline paths, explain the differences at those paths only.
+//
+// Validates: R-2.3.1
+func TestExplainPlanDifferences_SharedIdentityAtTwoPaths(t *testing.T) {
+	t.Parallel()
+
+	old := syncdomain.BaselineEntry{Path: "old", ItemID: "item-1", ItemType: syncdomain.ItemTypeFile}
+	renamed := syncdomain.BaselineEntry{Path: "renamed", ItemID: "item-1", ItemType: syncdomain.ItemTypeFile}
+	in := &IdentityInputs{
+		Baseline: syncdomain.NewBaselineSnapshot([]*syncdomain.BaselineEntry{&old, &renamed}),
+		Local: []syncdomain.LocalStateRow{
+			{Path: "a", ItemType: syncdomain.ItemTypeFile, LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true},
+			{Path: "b", ItemType: syncdomain.ItemTypeFile, LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true},
+			{Path: "c", ItemType: syncdomain.ItemTypeFile, LocalDevice: 1, LocalInode: 8, LocalHasIdentity: true},
+		},
+	}
+	diffs := []PlanDifference{
+		{Path: "a", Shadow: []string{"upload a"}},
+		{Path: "old", Shadow: []string{"remote_delete old"}},
+		{Path: "c", Shadow: []string{"upload c"}},
+	}
+	unexplained := ExplainPlanDifferences(in, &syncdomain.ActionPlan{}, &syncdomain.ActionPlan{}, diffs)
+	assert.Equal(t, reasonSharedLocalIdentity, diffs[0].Reason)
+	assert.Equal(t, reasonSharedLocalIdentity, diffs[1].Reason)
+	require.Len(t, unexplained, 1)
+	assert.Equal(t, "c", unexplained[0].Path)
+}
+
+// OneDrive deleted a synced folder and has a new one at its path (a new item
+// ID): the baseline rebinds to the new folder and the local folder stays, as
+// the current planner plans it (R-2.10.49), instead of deleting the local
+// folder and creating OneDrive's anew.
+//
+// Validates: R-2.3.1, R-2.10.49
+func TestPlanIdentityKeyed_ReplacedRemoteFolderRebindsAtItsPath(t *testing.T) {
+	t.Parallel()
+
+	entry := syncdomain.BaselineEntry{
+		Path: "docs", ItemID: "item-old", ItemType: syncdomain.ItemTypeFolder,
+		LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true,
+	}
+	in := &IdentityInputs{
+		Baseline: syncdomain.NewBaselineSnapshot([]*syncdomain.BaselineEntry{&entry}),
+		Local: []syncdomain.LocalStateRow{
+			{Path: "docs", ItemType: syncdomain.ItemTypeFolder, LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true},
+		},
+		Remote: []syncdomain.RemoteStateRow{{ItemID: "item-new", Path: "docs", ItemType: syncdomain.ItemTypeFolder}},
+	}
+
+	plan, err := PlanIdentityKeyed(in)
+	require.NoError(t, err)
+	assert.NotContains(t, renderMatrixPlan(plan), "local_delete")
+	assert.NotContains(t, renderMatrixPlan(plan), "folder_create")
+}
+
+// A folder OneDrive deleted, with a new local file below it: the folder is
+// kept and goes back up, so the upload has a parent, as the current planner
+// keeps it.
+//
+// Validates: R-2.3.1
+func TestPlanIdentityKeyed_DeletedFolderWithNewWorkBelowIsKept(t *testing.T) {
+	t.Parallel()
+
+	entry := syncdomain.BaselineEntry{
+		Path: "docs", ItemID: "item-1", ItemType: syncdomain.ItemTypeFolder,
+		LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true,
+	}
+	in := &IdentityInputs{
+		Baseline: syncdomain.NewBaselineSnapshot([]*syncdomain.BaselineEntry{&entry}),
+		Local: []syncdomain.LocalStateRow{
+			{Path: "docs", ItemType: syncdomain.ItemTypeFolder, LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true},
+			{Path: "docs/new.txt", ItemType: syncdomain.ItemTypeFile, Hash: "h", LocalDevice: 1, LocalInode: 8, LocalHasIdentity: true},
+		},
+	}
+
+	plan, err := PlanIdentityKeyed(in)
+	require.NoError(t, err)
+	assert.Equal(t, "folder_create docs (remote); upload docs/new.txt", renderMatrixPlan(plan))
 }

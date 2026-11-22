@@ -522,6 +522,12 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 		},
 	}
 	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), withTestShortcutNamespace)
+	// The watch runtime takes the sink when it is built.
+	var published syncshortcut.ShortcutChildWorkSnapshot
+	eng.shortcutChildWorkSink = func(_ context.Context, publication syncshortcut.ShortcutChildWorkSnapshot) error {
+		published = publication
+		return nil
+	}
 	setupWatchEngine(t, eng)
 
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
@@ -542,12 +548,6 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 		LocalRootIdentity: &identity,
 	}}))
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
-
-	var published syncshortcut.ShortcutChildWorkSnapshot
-	eng.shortcutChildWorkSink = func(_ context.Context, publication syncshortcut.ShortcutChildWorkSnapshot) error {
-		published = publication
-		return nil
-	}
 	rt := testWatchRuntime(t, eng)
 
 	done, err := rt.handleWatchProtectedRootEventSignal(t.Context(), &syncshortcut.ProtectedRootEvent{}, true)

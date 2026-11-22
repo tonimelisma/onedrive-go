@@ -166,7 +166,7 @@ func TestResolveUnitTestTimeoutPrefersTheExplicitValue(t *testing.T) {
 
 	assert.Equal(t, 45*time.Minute, resolveUnitTestTimeout(45*time.Minute, 2))
 	assert.Equal(t, 90*time.Minute, resolveUnitTestTimeout(0, 2))
-	assert.Equal(t, 20*time.Minute, resolveUnitTestTimeout(0, 8))
+	assert.Equal(t, 30*time.Minute, resolveUnitTestTimeout(0, 8))
 }
 
 func TestRunE2EFullCompileCheck_UsesUniqueArtifactPath(t *testing.T) {

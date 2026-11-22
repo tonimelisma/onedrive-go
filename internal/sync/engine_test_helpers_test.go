@@ -555,11 +555,17 @@ func newTestEngineInputs(t *testing.T, mock *syncfixture.EngineMockClient, tmpDi
 // copy when it starts, so a live flow would not see the change.
 func refreshTestFlowInputs(eng *testEngine) {
 	in := eng.flowInputs()
+	// A flow holds its collaborators by name, each built from the engine's
+	// configuration, so a test that changed the engine rebuilds them too.
+	refresh := func(flow *engineFlow) {
+		flow.cfg, flow.deps, flow.hooks = in.cfg, in.deps, in.hooks
+		flow.roots, flow.remote, flow.local, flow.shortcuts = in.roots, in.remote, in.local, in.shortcuts
+	}
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
-		rt.cfg, rt.deps, rt.hooks = in.cfg, in.deps, in.hooks
+		refresh(rt.engineFlow)
 	}
 	if flow, ok := lookupTestEngineFlow(eng); ok {
-		flow.cfg, flow.deps, flow.hooks = in.cfg, in.deps, in.hooks
+		refresh(flow)
 	}
 }
 

@@ -26,7 +26,12 @@ func (ss *ScopeState) WindowPathCountForTest(key syncdomain.ScopeKey, now time.T
 // HasWindowForTest reports whether the scheduler's scope detection holds a
 // window for key.
 func (s *Scheduler) HasWindowForTest(key syncdomain.ScopeKey) bool {
-	return s.windows != nil && s.windows.HasWindowForTest(key)
+	if s.windows == nil {
+		return false
+	}
+	_, ok := s.windows.windows[key]
+
+	return ok
 }
 
 // WindowPathCountForTest is how many distinct paths the scheduler's window
@@ -35,8 +40,12 @@ func (s *Scheduler) WindowPathCountForTest(key syncdomain.ScopeKey, now time.Tim
 	if s.windows == nil {
 		return 0, false
 	}
+	window, ok := s.windows.windows[key]
+	if !ok {
+		return 0, false
+	}
 
-	return s.windows.WindowPathCountForTest(key, now)
+	return window.uniqueCount(now), true
 }
 
 // AddForTest registers one action and its dependencies in one call

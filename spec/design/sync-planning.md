@@ -1104,13 +1104,21 @@ local and remote rows. It is pure and not wired into any run. Where the
 current planner joins the three sides on path and recovers moves afterwards by
 pairing deletes with creates, it builds one node per item:
 
-- the baseline row and OneDrive's row join on the item ID;
+- the baseline row and OneDrive's row join on the item ID; a row no item ID
+  claims then joins the baseline row at its own path when that row's item is
+  gone from OneDrive (deleted and re-created there, or restored under a new
+  ID), and the baseline rebinds to it as in the current planner (R-2.10.49,
+  `TestPlanIdentityKeyed_ReplacedRemoteFolderRebindsAtItsPath`);
 - the baseline row and the local row join on the local identity (device and
   inode), with a confidence: strong when both carry the same non-zero birth
   time, weak when either birth time is unknown and the type is the same. An
   identity at two local paths (a hard link) or with two different birth times
   (a reused inode) has no confidence, and the row falls back to path pairing
-  with the baseline row at its path;
+  with the baseline row at its path. A weak join at another path than the
+  baseline row's is refused when OneDrive no longer has the item: without
+  birth times a rename and a reused inode look alike, and the join would
+  carry OneDrive's delete onto a new entry
+  (`TestPlanIdentityKeyed_WeakIdentityAtANewPathDoesNotTakeADelete`);
 - a side whose entry has another type than the baseline row is a new item at
   the same position, and the baseline item is gone on that side.
 - the drive root (the empty path) is the sync root itself, not an item, and
@@ -1125,10 +1133,17 @@ changes, with no move-pairing or ancestor-move flag, since position is the
 node's attribute. Against a delete on the other side, a moved file counts as
 changed, so the delete does not drop the move; a moved folder the other side
 deleted is deleted, as a folder has no content to change. A state the table
-does not hold valid is refused with an error. A second step settles position conflicts: local and OneDrive
-content ending at one path are a create/create conflict decided as the
-current planner decides one, and a retired baseline row at a path another
-node takes needs no cleanup of its own.
+does not hold valid is refused with an error. The state also carries what
+the current planner reads at the baseline path: OneDrive's item there is a
+new one, and the local entry there is another entry than the synced one
+(D-056). Metadata drift is not modeled: it only updates the baseline. A
+second step settles position conflicts: local and OneDrive content ending
+at one path are a create/create conflict decided as the current planner
+decides one, and a retired baseline row at a path another node takes needs
+no cleanup of its own. Last, a folder delete with anything but a delete or
+cleanup planned below it becomes the folder's create on the side that
+deleted it, as the current planner keeps a parent
+(`TestPlanIdentityKeyed_DeletedFolderWithNewWorkBelowIsKept`).
 
 Its answer for every cell of the reconciliation matrix is checked in as
 `testdata/reconcile/matrix.identity.golden`, and every cell where it differs
@@ -1144,9 +1159,13 @@ counting as the delete it holds (`TestDiffPlans_ComparesActionsPerPath`).
 `ExplainPlanDifferences` gives each difference a reason from the shape of the
 inputs: a path at or below an item that moved on either side, at or below an
 entry whose type differs from its baseline row's, at or below a path with an
-observation issue (which the shadow does not read), or below a conflict copy
-either plan makes; any other difference is unexplained
-(`TestExplainPlanDifferences_KnownReasonsOnly`). The planner model plans every
+observation issue (which the shadow does not read), below a conflict copy
+either plan makes, at an identity two rows of one tree share (two local rows
+of one local identity, or two baseline rows of one local identity or item
+ID: the join pairs at most one, `TestExplainPlanDifferences_SharedIdentityAtTwoPaths`),
+or where both plans hold baseline updates alone, which is bookkeeping
+(`TestExplainPlanDifferences_BaselineUpdatesAloneAreBookkeeping`); any other
+difference is unexplained (`TestExplainPlanDifferences_KnownReasonsOnly`). The planner model plans every
 round with both planners and fails on an unexplained difference, logging every
 difference with its reason in the seed's failure context
 (`TestPlannerModel_RandomTriplesConverge`); the engine model does the same for

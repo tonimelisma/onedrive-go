@@ -163,6 +163,9 @@ func TestRunOnce_APauseWaitedOutLeavesNothing(t *testing.T) {
 	assert.Empty(t, rows)
 }
 
+// supersededNewFile is the file the superseded-move scenario adds.
+const supersededNewFile = "new.txt"
+
 // supersededMoveTestEngine is an engine whose drive synced dir/a.txt, after
 // which this computer renamed dir and added new.txt. OneDrive refuses the
 // first move with a 412, so the run passes again; failNew decides the first
@@ -196,7 +199,7 @@ func supersededMoveTestEngine(
 		ctx context.Context, d driveid.ID, parentID, name string, content io.ReaderAt, size int64,
 		mtime time.Time, progress graph.ProgressFunc,
 	) (*graph.Item, error) {
-		if name == "new.txt" && uploads.Add(1) == 1 {
+		if name == supersededNewFile && uploads.Add(1) == 1 {
 			if err := failNew(syncRoot); err != nil {
 				return nil, err
 			}
@@ -211,7 +214,7 @@ func supersededMoveTestEngine(
 	installManualClockForTestEngine(eng, clock)
 	runScenarioPass(t, eng)
 	require.NoError(t, os.Rename(filepath.Join(syncRoot, "dir"), filepath.Join(syncRoot, "dir-moved")))
-	syncfixture.WriteLocalFile(t, syncRoot, "new.txt", "new\n")
+	syncfixture.WriteLocalFile(t, syncRoot, supersededNewFile, "new\n")
 
 	return eng, remote, client, clock
 }
@@ -230,7 +233,7 @@ func TestRunOnce_AFailureTheNextPassNoLongerNeedsIsNotLeft(t *testing.T) {
 	t.Parallel()
 
 	eng, remote, _, _ := supersededMoveTestEngine(t, func(syncRoot string) error {
-		if err := os.Remove(filepath.Join(syncRoot, "new.txt")); err != nil {
+		if err := os.Remove(filepath.Join(syncRoot, supersededNewFile)); err != nil {
 			return fmt.Errorf("removing new.txt: %w", err)
 		}
 		return lastPassTestServerError()
@@ -265,7 +268,7 @@ func TestRunOnce_AFailureALaterPassFinishesIsNotLeft(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Failed, "the first pass failed new.txt: %+v", report)
 	assert.False(t, report.LeftWork().Any(), "%+v", report)
-	assert.Equal(t, "new\n", remote.tree()["new.txt"], "a later pass uploaded it")
+	assert.Equal(t, "new\n", remote.tree()[supersededNewFile], "a later pass uploaded it")
 }
 
 // advanceBeforeTheNextPass moves the clock an hour on at the first remote

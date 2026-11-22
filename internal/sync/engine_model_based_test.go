@@ -368,10 +368,10 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 // checkShadowPlan is every pass's comparison with the identity-keyed shadow
 // plan: each difference is logged with its reason, and one no known reason
 // covers fails the seed. It runs on the engine's goroutine, so it reports
-// through the goroutine-safe t.Logf and t.Errorf only.
+// through the goroutine-safe t.Logf and assert.Failf only.
 func (r *modelRun) checkShadowPlan(comparison shadowPlanComparison) {
 	if comparison.err != nil {
-		r.t.Errorf("seed %d: the identity-keyed shadow planner failed: %v", r.seed, comparison.err)
+		assert.Failf(r.t, "shadow planner failed", "seed %d: the identity-keyed shadow planner failed: %v", r.seed, comparison.err)
 		return
 	}
 	lines := make([]string, 0, len(comparison.differences))
@@ -382,7 +382,7 @@ func (r *modelRun) checkShadowPlan(comparison shadowPlanComparison) {
 		r.t.Logf("seed %d shadow plan differences:\n  %s", r.seed, strings.Join(lines, "\n  "))
 	}
 	if comparison.unexplained > 0 {
-		r.t.Errorf("seed %d: %d shadow plan differences have no known reason:\n  %s",
+		assert.Failf(r.t, "unexplained shadow plan differences", "seed %d: %d shadow plan differences have no known reason:\n  %s",
 			r.seed, comparison.unexplained, strings.Join(lines, "\n  "))
 	}
 }
@@ -783,12 +783,21 @@ func (r *modelRun) requireUntouchedFilesUnchanged(
 // localTree is the sync root as path -> content, folders as "/", ignoring
 // the engine's own transfer artifacts.
 func (r *modelRun) localTree() map[string]string {
+	out, err := readModelLocalTree(r.syncRoot)
+	require.NoError(r.t, err)
+
+	return out
+}
+
+// readModelLocalTree reads the folder at syncRoot as path -> content,
+// folders as the model's folder sentinel.
+func readModelLocalTree(syncRoot string) (map[string]string, error) {
 	out := map[string]string{}
-	require.NoError(r.t, filepath.WalkDir(r.syncRoot, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	err := filepath.WalkDir(syncRoot, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		rel, relErr := filepath.Rel(r.syncRoot, p)
+		rel, relErr := filepath.Rel(syncRoot, p)
 		if relErr != nil {
 			return fmt.Errorf("relative path of %s: %w", p, relErr)
 		}
@@ -806,9 +815,12 @@ func (r *modelRun) localTree() map[string]string {
 		}
 		out[rel] = string(data)
 		return nil
-	}))
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read local tree %s: %w", syncRoot, err)
+	}
 
-	return out
+	return out, nil
 }
 
 func (r *modelRun) remoteTreeView() map[string]string { return r.remote.tree() }
