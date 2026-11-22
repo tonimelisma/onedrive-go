@@ -633,7 +633,7 @@ func (rt *watchRuntime) handleWatchHeldRelease(
 // counts moved since the previous tick; an unchanged tick goes to Debug so a
 // long transfer does not repeat the same line.
 func (rt *watchRuntime) logBootstrapWait(ctx context.Context) {
-	inFlight := rt.sched.graph.InFlightCount()
+	inFlight := rt.inFlightCount()
 	running := rt.sched.runningCount
 	held := len(rt.retries.heldByKey)
 	signature := fmt.Sprintf("%d/%d/%d", inFlight, running, held)
