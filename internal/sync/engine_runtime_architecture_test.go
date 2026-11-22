@@ -202,9 +202,10 @@ func TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError(t *tes
 	assert.False(t, done)
 	assert.True(t, rt.isDraining())
 	assert.Empty(t, rt.currentOutbox(), "shutdown drain must stay sealed after suppressed completion bookkeeping errors")
-	assert.Nil(t, p.replanReady)
-	assert.Nil(t, rt.resources.localBatches)
-	assert.Nil(t, rt.resources.remoteBatches)
+	// The phase table, not nil-ed channels, turns the intake off.
+	for _, in := range []watchInput{watchInputReplanReady, watchInputObservations} {
+		assert.False(t, watchInputOn(rt.phase(), in))
+	}
 }
 
 // Validates: R-2.10.33

@@ -861,6 +861,8 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 
 	ready := setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
+	// The refresh tick is read only once observers run.
+	setWatchPhase(rt, watchPhaseRunning)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
 	refreshC := make(chan time.Time, 1)
