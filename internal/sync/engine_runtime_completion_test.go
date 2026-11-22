@@ -16,9 +16,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -121,7 +121,7 @@ func TestEngineFlow_ProcessNormalDecision_RetryableTransientScopeEvidenceStaysUn
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.False(t, rt.scopes.hasActiveScope(syncdomain.SKService()))
+	assert.False(t, rt.sched.HasScope(syncdomain.SKService()))
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -158,7 +158,7 @@ func TestEngineFlow_ProcessNormalDecision_ServiceRetryAfterBlocksTheTriggeringWo
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.True(t, rt.scopes.hasActiveScope(syncdomain.SKService()))
+	assert.True(t, rt.sched.HasScope(syncdomain.SKService()))
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
 	assert.Equal(t, syncdomain.SKService(), retryRows[0].ScopeKey)
@@ -192,7 +192,7 @@ func TestEngineFlow_ProcessNormalDecision_BlockedRowFollowsTheActivatedScope(t *
 	}, nil, &syncdomain.ActionCompletion{Path: "full.bin", ActionType: syncdomain.ActionDownload, ErrMsg: "no space"}, nil)
 	require.NoError(t, err)
 
-	assert.True(t, rt.scopes.hasActiveScope(syncdomain.SKDiskLocal()))
+	assert.True(t, rt.sched.HasScope(syncdomain.SKDiskLocal()))
 	rows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, rows, 1)
 	assert.Equal(t, syncdomain.SKDiskLocal(), rows[0].ScopeKey)
@@ -211,7 +211,7 @@ func TestEngineFlow_ProcessNormalDecision_ServiceWindowBlocksTheCrossingWork(t *
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
 
-	for i := range syncexec.ServiceWindowThreshold {
+	for i := range syncsched.ServiceWindowThreshold {
 		completion := &syncdomain.ActionCompletion{
 			Path:       fmt.Sprintf("outage-%d.txt", i),
 			ActionType: syncdomain.ActionUpload,
@@ -223,11 +223,11 @@ func TestEngineFlow_ProcessNormalDecision_ServiceWindowBlocksTheCrossingWork(t *
 		require.NoError(t, err)
 	}
 
-	assert.True(t, rt.scopes.hasActiveScope(syncdomain.SKService()))
+	assert.True(t, rt.sched.HasScope(syncdomain.SKService()))
 	blocked, err := eng.baseline.ListBlockedRetryWork(t.Context())
 	require.NoError(t, err)
 	require.NotEmpty(t, blocked)
-	assert.Equal(t, fmt.Sprintf("outage-%d.txt", syncexec.ServiceWindowThreshold-1), blocked[len(blocked)-1].Path)
+	assert.Equal(t, fmt.Sprintf("outage-%d.txt", syncsched.ServiceWindowThreshold-1), blocked[len(blocked)-1].Path)
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
 }
 
@@ -250,7 +250,7 @@ func TestEngineFlow_ApplyCompletionSuccess_ClearsRetryWorkAndAdmitsDependents(t 
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []syncdomain.RetryWorkRow{row}})
 
-	current := rt.sched.graph.Add(&syncdomain.Action{
+	current := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "sync.txt",
 		DriveID: eng.driveID,
@@ -258,7 +258,7 @@ func TestEngineFlow_ApplyCompletionSuccess_ClearsRetryWorkAndAdmitsDependents(t 
 	}, 1, nil)
 	require.NotNil(t, current)
 
-	dependent := rt.sched.graph.Add(&syncdomain.Action{
+	dependent := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "next.txt",
 		DriveID: eng.driveID,
@@ -299,16 +299,16 @@ func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOr
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
 	flow.retryWork.rows[row.WorkKey()] = row
 
-	current := rt.sched.graph.Add(&syncdomain.Action{
+	current := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "stale.txt",
 		DriveID: eng.driveID,
 		ItemID:  "stale-item",
 	}, 1, nil)
 	require.NotNil(t, current)
-	rt.sched.markRunning(current)
+	rt.sched.Running(current)
 
-	dependent := rt.sched.graph.Add(&syncdomain.Action{
+	dependent := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "dependent.txt",
 		DriveID: eng.driveID,
@@ -327,9 +327,9 @@ func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOr
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.Equal(t, 0, rt.sched.runningCount)
-	assert.Empty(t, rt.sched.runningByID)
-	assert.Equal(t, 0, rt.sched.graph.InFlightCount(), "superseded dependents must not become runnable old-plan work")
+	assert.Equal(t, 0, rt.sched.RunningCount())
+	assert.Zero(t, rt.sched.RunningCount())
+	assert.Equal(t, 0, rt.sched.InFlight(), "superseded dependents must not become runnable old-plan work")
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 
 	succeeded, failed, errs := flow.resultStats()
@@ -486,7 +486,7 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionArmsRetryTimer
 	}
 	decision := classifyResult(r)
 
-	current := rt.sched.graph.Add(&syncdomain.Action{
+	current := rt.sched.AddForTest(&syncdomain.Action{
 		Path: "accessible/file.txt",
 		Type: syncdomain.ActionDownload,
 	}, 1, nil)
@@ -662,7 +662,7 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionEvidenceFallsBackToR
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blockedRow))
 	flow.retryWork.rows[blockedRow.WorkKey()] = *blockedRow
 
-	current := rt.sched.graph.Add(&syncdomain.Action{
+	current := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "file.txt",
 		DriveID: driveid.New(syncfixture.EngineTestDriveID),
@@ -726,7 +726,7 @@ func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedSco
 		AttemptCount: 1,
 	}))
 
-	current := rt.sched.graph.Add(&syncdomain.Action{
+	current := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "file.txt",
 		DriveID: eng.driveID,
@@ -756,9 +756,9 @@ func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedSco
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.True(t, rt.scopes.hasActiveScope(throttleScopeKey),
+	assert.True(t, rt.sched.HasScope(throttleScopeKey),
 		"trial retry fallback should activate the newly classified blocked scope")
-	assert.False(t, rt.scopes.hasActiveScope(trialScopeKey),
+	assert.False(t, rt.sched.HasScope(trialScopeKey),
 		"the old trial scope should be discarded once its blocked work is reclassified")
 	assert.True(t, rt.hasTrialTimer(), "new blocked scope should arm the watch trial timer")
 
@@ -791,7 +791,7 @@ func TestEngineFlow_ProcessTrialDecision_ServiceRetryAfterMovesTheTrialsOnlyWork
 		Blocked:      true,
 		AttemptCount: 1,
 	}))
-	current := rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionDownload, Path: "file.txt", DriveID: eng.driveID}, 1, nil)
+	current := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionDownload, Path: "file.txt", DriveID: eng.driveID}, 1, nil)
 	require.NotNil(t, current)
 
 	completion := &syncdomain.ActionCompletion{
@@ -810,8 +810,8 @@ func TestEngineFlow_ProcessTrialDecision_ServiceRetryAfterMovesTheTrialsOnlyWork
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.True(t, rt.scopes.hasActiveScope(syncdomain.SKService()))
-	assert.False(t, rt.scopes.hasActiveScope(trialScopeKey), "the throttle scope's only work moved away")
+	assert.True(t, rt.sched.HasScope(syncdomain.SKService()))
+	assert.False(t, rt.sched.HasScope(trialScopeKey), "the throttle scope's only work moved away")
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
 	assert.Equal(t, syncdomain.SKService(), retryRows[0].ScopeKey)
@@ -838,15 +838,15 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 	upsertBlockedRetryWorkForTest(t, eng, "file.txt", trialScopeKey)
 	upsertBlockedRetryWorkForTest(t, eng, "other.txt", trialScopeKey)
 
-	other := rt.sched.graph.Add(&syncdomain.Action{
+	other := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "other.txt",
 		DriveID: eng.driveID,
 	}, 1, nil)
 	require.NotNil(t, other)
-	rt.holdAction(other, heldReasonScope, trialScopeKey, time.Time{})
+	rt.sched.Hold(other, syncsched.HeldScope, trialScopeKey, time.Time{})
 
-	current := rt.sched.graph.Add(&syncdomain.Action{
+	current := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "file.txt",
 		DriveID: eng.driveID,
@@ -876,11 +876,11 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.True(t, rt.scopes.hasActiveScope(throttleScopeKey),
+	assert.True(t, rt.sched.HasScope(throttleScopeKey),
 		"trial retry fallback should activate the newly classified blocked scope")
-	assert.True(t, rt.scopes.hasActiveScope(trialScopeKey),
+	assert.True(t, rt.sched.HasScope(trialScopeKey),
 		"the original scope must stay active while unrelated blocked work still remains under it")
-	assert.Contains(t, rt.retries.heldByKey, syncdomain.RetryWorkKeyForAction(&other.Action),
+	assert.True(t, rt.sched.IsHeld(syncdomain.RetryWorkKeyForAction(&other.Action)),
 		"existing blocked work under the original scope must remain held in the runtime")
 
 	rowsByPath := retryRowsByPathForTest(t, eng)
@@ -925,13 +925,13 @@ func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEm
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), &row))
 	flow.retryWork.rows[row.WorkKey()] = row
 
-	current := rt.sched.graph.Add(&syncdomain.Action{
+	current := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "trial-stale.txt",
 		DriveID: eng.driveID,
 	}, 1, nil)
 	require.NotNil(t, current)
-	rt.sched.markRunning(current)
+	rt.sched.Running(current)
 
 	decision := classifyResult(&syncdomain.ActionCompletion{Err: syncdomain.ErrActionPreconditionChanged})
 	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &decision, current, &syncdomain.ActionCompletion{
@@ -946,8 +946,8 @@ func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEm
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	assert.Equal(t, 0, rt.sched.graph.InFlightCount())
-	assert.Equal(t, 0, rt.sched.runningCount)
+	assert.Equal(t, 0, rt.sched.InFlight())
+	assert.Equal(t, 0, rt.sched.RunningCount())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 	assert.False(t, isTestBlockScopeed(eng, trialScopeKey), "empty trial scope should be discarded, not extended")
 
@@ -1011,7 +1011,7 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 		TrialInterval: time.Minute,
 	})
 
-	current := rt.sched.graph.Add(&syncdomain.Action{
+	current := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "trial.txt",
 		DriveID: eng.driveID,
@@ -1019,7 +1019,7 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 	}, 1, nil)
 	require.NotNil(t, current)
 
-	dependent := rt.sched.graph.Add(&syncdomain.Action{
+	dependent := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "dependent.txt",
 		DriveID: eng.driveID,
@@ -1042,7 +1042,7 @@ func TestEngineFlow_ProcessActionCompletion_TrialSuccessReleasesScopeBeforeAdmit
 	require.Len(t, ready, 1)
 	assert.Equal(t, int64(2), ready[0].ID)
 	assert.Equal(t, "dependent.txt", ready[0].Action.Path)
-	assert.False(t, rt.scopes.hasActiveScope(scopeKey))
+	assert.False(t, rt.sched.HasScope(scopeKey))
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 }
 
@@ -1091,12 +1091,12 @@ func TestEngineFlow_ProcessActionCompletion_RetryPersistenceFailureTerminatesAnd
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	current := flow.sched.graph.Add(&syncdomain.Action{
+	current := flow.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "retry.txt",
 	}, 1, nil)
 	require.NotNil(t, current)
-	flow.sched.markRunning(current)
+	flow.sched.Running(current)
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
@@ -1110,9 +1110,9 @@ func TestEngineFlow_ProcessActionCompletion_RetryPersistenceFailureTerminatesAnd
 
 	require.ErrorContains(t, err, "record retry_work")
 	assert.Empty(t, ready)
-	assert.Zero(t, flow.sched.runningCount, "control-state persistence failure must still finish the completed action bookkeeping")
-	assert.Empty(t, flow.sched.runningByID)
-	assert.Equal(t, 1, flow.sched.graph.InFlightCount(), "the unresolved action must remain in the graph when the runtime fails closed")
+	assert.Zero(t, flow.sched.RunningCount(), "control-state persistence failure must still finish the completed action bookkeeping")
+	assert.Zero(t, flow.sched.RunningCount())
+	assert.Equal(t, 1, flow.sched.InFlight(), "the unresolved action must remain in the graph when the runtime fails closed")
 }
 
 // A 403 whose permission check cannot read the persisted boundaries fails the
@@ -1126,9 +1126,9 @@ func TestEngineFlow_ProcessActionCompletion_BoundaryReadFailureFailsTheCompletio
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
-	current := flow.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "Shared/file.txt"}, 1, nil)
+	current := flow.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "Shared/file.txt"}, 1, nil)
 	require.NotNil(t, current)
-	flow.sched.markRunning(current)
+	flow.sched.Running(current)
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
@@ -1143,7 +1143,7 @@ func TestEngineFlow_ProcessActionCompletion_BoundaryReadFailureFailsTheCompletio
 	require.ErrorContains(t, err, "list remote block scopes")
 	assert.NotContains(t, err.Error(), "record retry_work", "the failure is the boundary read, not a later write")
 	assert.Empty(t, ready)
-	assert.Zero(t, flow.sched.runningCount, "the completed action's bookkeeping is finished")
+	assert.Zero(t, flow.sched.RunningCount(), "the completed action's bookkeeping is finished")
 }
 
 // A scope trial's 403 whose permission check cannot read the persisted
@@ -1159,9 +1159,9 @@ func TestEngineFlow_ProcessTrialDecision_BoundaryReadFailureFailsTheCompletion(t
 	flow := testEngineFlow(t, eng)
 	scopeKey := syncdomain.SKService()
 	setTestBlockScope(t, eng, &syncdomain.BlockScope{Key: scopeKey, NextTrialAt: eng.nowFunc()})
-	current := flow.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "Shared/file.txt"}, 1, nil)
+	current := flow.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "Shared/file.txt"}, 1, nil)
 	require.NotNil(t, current)
-	flow.sched.markRunning(current)
+	flow.sched.Running(current)
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
@@ -1178,7 +1178,7 @@ func TestEngineFlow_ProcessTrialDecision_BoundaryReadFailureFailsTheCompletion(t
 	require.ErrorContains(t, err, "list remote block scopes")
 	assert.NotContains(t, err.Error(), "record retry_work", "the failure is the boundary read, not a later write")
 	assert.Empty(t, ready)
-	assert.Zero(t, flow.sched.runningCount, "the completed action's bookkeeping is finished")
+	assert.Zero(t, flow.sched.RunningCount(), "the completed action's bookkeeping is finished")
 }
 
 // Validates: R-2.10.66, R-2.14.1

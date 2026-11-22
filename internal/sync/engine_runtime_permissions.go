@@ -116,7 +116,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 	case permissionEvidenceNone:
 		return fmt.Errorf("apply permission failure for %s: missing permission evidence", work.Path)
 	case permissionEvidenceKnownActiveBoundary:
-		if blocking := flow.scopes.findBlockingScope(current); !blocking.IsZero() {
+		if blocking := flow.sched.BlockingScope(current); !blocking.IsZero() {
 			return flow.holdActionUnderScope(ctx, current, r, blocking)
 		}
 		return nil

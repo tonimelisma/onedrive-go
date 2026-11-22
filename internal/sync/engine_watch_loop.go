@@ -534,7 +534,7 @@ func (rt *watchRuntime) dispatchChannelForOutbox() (chan<- *syncdomain.TrackedAc
 		return nil, -1
 	}
 
-	return rt.sched.dispatchCh, next
+	return rt.dispatchCh, next
 }
 
 func (rt *watchRuntime) handleWatchReplanReady(
@@ -633,9 +633,9 @@ func (rt *watchRuntime) handleWatchHeldRelease(
 // counts moved since the previous tick; an unchanged tick goes to Debug so a
 // long transfer does not repeat the same line.
 func (rt *watchRuntime) logBootstrapWait(ctx context.Context) {
-	inFlight := rt.inFlightCount()
-	running := rt.sched.runningCount
-	held := len(rt.retries.heldByKey)
+	inFlight := rt.sched.InFlight()
+	running := rt.sched.RunningCount()
+	held := rt.sched.HeldCount()
 	signature := fmt.Sprintf("%d/%d/%d", inFlight, running, held)
 	level := slog.LevelInfo
 	if signature == rt.loop.lastBootstrapWait {
@@ -651,6 +651,6 @@ func (rt *watchRuntime) logBootstrapWait(ctx context.Context) {
 
 func (rt *watchRuntime) isBootstrapQuiescent() bool {
 	return len(rt.currentOutbox()) == 0 &&
-		rt.sched.runningCount == 0 &&
-		!rt.hasDueHeldWork(rt.deps.now())
+		rt.sched.RunningCount() == 0 &&
+		!rt.sched.HasDueHeldWork(rt.deps.now())
 }

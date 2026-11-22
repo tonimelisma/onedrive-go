@@ -861,14 +861,14 @@ func dispatchTestCreate(t *testing.T, rt *watchRuntime, id int64) *syncdomain.Tr
 func dispatchTestAction(t *testing.T, rt *watchRuntime, id int64, action *syncdomain.Action) *syncdomain.TrackedAction {
 	t.Helper()
 
-	queued := rt.sched.graph.Add(action, id, nil)
+	queued := rt.sched.AddForTest(action, id, nil)
 	require.NotNil(t, queued)
-	rt.sched.markQueued(queued)
+	rt.sched.Queued(queued)
 	rt.replaceOutbox([]*syncdomain.TrackedAction{queued})
 	_, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{runtime: rt}, nil)
 	require.NoError(t, err)
 	select {
-	case dispatched := <-rt.sched.dispatchCh:
+	case dispatched := <-rt.dispatchCh:
 		require.Equal(t, queued.ID, dispatched.ID)
 	default:
 		require.Fail(t, "the create was not dispatched")
@@ -1066,7 +1066,7 @@ func TestWatch_ReplanWaitsWhileAnUploadRunsBeforeItPrunesPendingCreates(t *testi
 
 	// The record was exposed: the prune a replan runs once nothing is
 	// running drops it.
-	w.rt.sched.markFinished(upload)
+	w.rt.sched.Finished(upload)
 	require.True(t, w.rt.canPrepareNow())
 	require.NoError(t, w.eng.baseline.PrunePendingCreates(t.Context(), syncstore.PassRefreshedLocalOnly, w.rt.localScanCoverage()))
 	requireNoPendingCreateAt(t, w.eng.baseline, "doc.txt", "the settled empty placeholder's record goes with the next replan")

@@ -7,6 +7,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -48,11 +49,12 @@ type engineFlow struct {
 	// flow has none.
 	admitted admittedWorkOwner
 
-	// The four owners below split this run's mutable state by authority; see
-	// engine_runtime_owners.go. One goroutine still owns all four.
-	sched   actionScheduler
-	retries retryLedger
-	scopes  scopeLedger
+	// One goroutine owns all the run state below (engine_runtime_owners.go).
+	// sched is the run's scheduling state (syncsched): the dependency graph,
+	// the queued and running sets, the slow start, the held work and the
+	// active block scopes. dispatchCh is the loop's channel to the workers.
+	sched      *syncsched.Scheduler
+	dispatchCh chan *syncdomain.TrackedAction
 	// retryWork is the run's one path to the retry_work table and its cache.
 	retryWork retryWork
 	results   runResults
@@ -177,9 +179,7 @@ func newEngineFlow(in *flowInputs) *engineFlow {
 		inspect:    noWatchInspector{},
 		admitted:   noAdmittedWork{},
 		runID:      in.runID,
-		sched:      newActionScheduler(),
-		retries:    newRetryLedger(),
-		scopes:     scopeLedger{ownerCheck: in.ownerCheck},
+		sched:      syncsched.New(in.deps.now, in.deps.logger, in.ownerCheck),
 		retryWork:  retryWork{rows: make(map[syncdomain.RetryWorkKey]syncdomain.RetryWorkRow)},
 
 		supersedeStreaks: make(map[string]int),

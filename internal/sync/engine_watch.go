@@ -194,23 +194,21 @@ func (rt *watchRuntime) initWatchInfra(
 	// The graph starts empty, and startRuntimeStage replaces it with each
 	// plan's. Active scope state is loaded from the persisted block_scopes
 	// table into watch-owned runtime state.
-	rt.sched.graph = syncexec.NewDepGraph(rt.deps.logger)
-	rt.sched.graph.SetOwnerCheck(rt.ownerCheck)
+	rt.sched.ResetGraph()
 	if err := rt.loadActiveScopes(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 
-	rt.scopes.state = syncexec.NewScopeState(rt.deps.now, rt.deps.logger)
-	rt.sched.nextActionID = 0
+	rt.sched.ResetWindows()
 
 	// dispatchCh feeds admitted actions to workers. Watch mode keeps this
 	// unbuffered so not-yet-started work remains engine-owned until a worker is
 	// actually ready to receive it.
-	rt.sched.dispatchCh = make(chan *syncdomain.TrackedAction, watchDispatchBuf)
+	rt.dispatchCh = make(chan *syncdomain.TrackedAction, watchDispatchBuf)
 
 	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{
 		Config:           rt.exec,
-		Dispatch:         rt.sched.dispatchCh,
+		Dispatch:         rt.dispatchCh,
 		Store:            executorStoreOf(rt.deps.store),
 		Logger:           rt.deps.logger,
 		CompletionBuffer: watchCompletionBuf,

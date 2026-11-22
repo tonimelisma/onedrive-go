@@ -127,7 +127,7 @@ removed shared folder that cannot be read reconciles the same batch empty.
 | A startup proof that cannot clear a stored sign-in requirement because another process holds the catalog logs one Warn, keeps the requirement and starts; the next start clears it (R-2.10.46). | `TestEngineStartup_LockedCatalogWarnsAndStarts` |
 | A planning-state load error reads the same in a one-shot pass, the watch bootstrap and a watch replan, and names the failed query once (R-6.2.16). | `TestPlanningLoadError_SameTextInOneShotAndWatch` |
 | A watch starts no observer before its fallible set-up has succeeded, returns only after the goroutines it started beside its loop have exited, and names, after one bound on the engine clock, a goroutine that ignores its context (R-6.3.4, R-6.3.9). | `TestStartObservers_LocalSetupFailureStartsNoObserver`, `TestRunWatch_ReturnsOnlyAfterObserversHaveExited`, `TestRunWatch_ObserverThatIgnoresItsContextIsNamedAfterTheBound`, `TestAckHandle_ConcurrentWithFullRefresh_IsRaceFree` |
-| The scope ledger, the watch timers and the dependency graph are owned by the run's goroutine without a lock; each accessor runs a test-installed owner check, and timer callbacks touch only their channels (R-6.3.4). | `TestOwnerCheck_DependencyGraphCatchesASecondGoroutine`, `TestOwnerCheck_ScopeLedgerCatchesASecondGoroutine`, `TestOwnerCheck_WatchTimersCatchASecondGoroutine`, `TestWatchRuntime_TimerCallbacksTouchOnlyChannels`, `TestRunOnce_UsesRunStateOnlyFromItsGoroutine`, `TestRunWatch_UsesRunStateOnlyFromItsGoroutine` |
+| The scheduler's scopes, the watch timers and the dependency graph are owned by the run's goroutine without a lock; each accessor runs a test-installed owner check, and timer callbacks touch only their channels (R-6.3.4). | `TestOwnerCheck_DependencyGraphCatchesASecondGoroutine`, `TestOwnerCheck_SchedulerScopesCatchASecondGoroutine`, `TestOwnerCheck_WatchTimersCatchASecondGoroutine`, `TestWatchRuntime_TimerCallbacksTouchOnlyChannels`, `TestRunOnce_UsesRunStateOnlyFromItsGoroutine`, `TestRunWatch_UsesRunStateOnlyFromItsGoroutine` |
 | The run's retry cache is written only from store results, in `engine_retry_work.go`: it equals the store after every completion, a scope discard deletes only the rows blocked under the scope and drops their cached rows, a release batch caches exactly what the store released, and a resolve clears the cached row and the hold whether or not the store had a row (R-2.10.33). | `TestEngineFlow_RetryCacheMatchesStoreAfterEveryCompletion`, `TestEngineFlow_DiscardScope_LeavesNoCachedRowTheStoreDeleted`, `TestEngineFlow_ReleaseScopeBatch_CacheEqualsStore`, `TestEngineFlow_ResolveWithoutStoreRow_ClearsTheCachedRow`, `TestRetryWork_IsTheOnlyEngineWriterOfRetryWork` |
 
 ## The Engine Clock Is One Capability
@@ -278,13 +278,25 @@ D-092):
 
 ## Run State Is Split By Authority
 
-`engineFlow`'s mutable state lives in four owners, each answering one question
-about a run:
+`engineFlow`'s mutable state lives in two owners, each answering one
+question about a run:
 
-- `actionScheduler` -- which actions exist, which are queued, which are running
-- `retryLedger` -- what is held, and in what order it releases
-- `scopeLedger` -- the active shared blockers
+- `syncsched.Scheduler` -- the run's scheduling state behind one API: the
+  dependency graph of the installed plan, which actions are queued and
+  running, the plan's slow start, the work held for a retry or a block scope
+  and the order it releases in, the active shared blockers and the windows
+  that detect new ones, and the admission decision that joins them
+  (`Admit`). It is pure decisions and bookkeeping: no store, no timers, no
+  channels, no goroutines, no locks, and it imports only `syncdomain`. The
+  loop applies the effects: every store write, every timer, the dispatch
+  channel. `Install` starts every per-plan structure over
+  (`TestScheduler_InstallReplacesEveryPerPlanStructure`); the windows and the
+  action ID counter outlive a plan, and a watch's start resets the graph and
+  the windows.
 - `runResults` -- what the run will report when it finishes
+
+Tests reach the scheduler through the same API the loop uses; nothing in
+package `sync` reads its maps.
 
 Beside them, `retryWork` (`engine_retry_work.go`) is the run's one path to the
 `retry_work` table: the only engine code that calls a `retry_work` mutator of
@@ -295,11 +307,11 @@ test holds the sources to the one write path
 (`TestRetryWork_IsTheOnlyEngineWriterOfRetryWork`).
 
 One goroutine, the one running `RunOnce` or `RunWatch`, owns all of them, and
-none has a lock -- the scope ledger, the watch timers and the dependency graph
-included -- so the race detector reports the first access from a second
+none has a lock -- the scheduler's scopes, the watch timers and the dependency
+graph included -- so the race detector reports the first access from a second
 goroutine (R-6.3.4). Each carries an `ownerCheck` hook, nil in
 production; a test sets `engineHooks.ownerCheckFactory`, which `beginRun` calls on
-the run's goroutine, and the run's scope ledger, timers and every dependency
+the run's goroutine, and the run's scheduler, timers and every dependency
 graph it builds carry the check it returns, which counts a call from another
 goroutine. The
 engine's housekeeping streak flags and trash purge time (owned by its
@@ -311,12 +323,11 @@ which owner a method touches, so "this decision is about scheduling" or "this
 decision is about retry timing" is visible in the code rather than inferred
 from field names on a struct that carried several dozen of them.
 
-Methods that touch exactly one owner moved onto it -- `markRunning` is
-scheduler state, `snapshotActiveScopes` is scope state. Methods that span
-owners stayed on `engineFlow`, because spanning owners is what they are for:
-holding an action moves it out of the scheduler and into the retry ledger, and
-releasing due trials reads the scope ledger to decide which held keys are
-eligible.
+What only reads and writes scheduling state is the scheduler's: holding an
+action takes it out of the running set and into the held work, and the due
+trials are read against the active scopes, inside one type. What also
+touches the store, a timer or the dispatch channel stays on `engineFlow`,
+which calls the scheduler for the decision and applies the effect.
 
 `engineFlow` is still large. Splitting the state was the part that could be
 done without changing behavior; splitting the coordination is a separate
@@ -1835,7 +1846,7 @@ scope is actually removed.
 
 Two follow-ups measured on the same live account after the ramp landed.
 
-- **A fresh plan slow-starts** (R-6.8.25, `engine_runtime_cold_start.go`).
+- **A fresh plan slow-starts** (R-6.8.25, `syncsched/cold_start.go`).
   The ramp above paces re-admission once a scope exists; a plan with no
   scope opened at full `transfer_workers` concurrency, and eight workers of
   small uploads on a personal drive made 19 requests a second and drew the

@@ -8,11 +8,7 @@ import (
 )
 
 func (flow *engineFlow) completeDepGraphAction(actionID int64, reason string) []*syncdomain.TrackedAction {
-	if flow.sched.graph == nil {
-		panic(fmt.Sprintf("dep_graph: complete action %d during %s with nil graph", actionID, reason))
-	}
-
-	ready, ok := flow.sched.graph.Complete(actionID)
+	ready, ok := flow.sched.Complete(actionID)
 	if !ok {
 		panic(fmt.Sprintf("dep_graph: complete unknown action ID %d during %s", actionID, reason))
 	}
@@ -25,7 +21,7 @@ func (flow *engineFlow) applyCompletedSubtree(
 	actionID int64,
 	reason string,
 ) {
-	flow.sched.markFinished(current)
+	flow.sched.Finished(current)
 	if current == nil {
 		return
 	}

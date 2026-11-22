@@ -87,7 +87,7 @@ func (r *oneShotRunner) pollImmediateCompletion(
 	completions <-chan syncdomain.ActionCompletion,
 	fatalErr error,
 ) (error, bool) {
-	if len(r.outbox) != 0 || r.sched.runningCount != 0 {
+	if len(r.outbox) != 0 || r.sched.RunningCount() != 0 {
 		return fatalErr, false
 	}
 
@@ -107,10 +107,10 @@ func (r *oneShotRunner) pollImmediateCompletion(
 // releases no due held work: its held actions stay for the next sync.
 func (r *oneShotRunner) finishResultsLoopIfSettled(fatalErr error) (bool, error) {
 	switch {
-	case fatalErr == nil && len(r.outbox) == 0 && r.sched.runningCount == 0 &&
-		(r.stop != nil || !r.hasDueHeldWork(r.deps.now())):
+	case fatalErr == nil && len(r.outbox) == 0 && r.sched.RunningCount() == 0 &&
+		(r.stop != nil || !r.sched.HasDueHeldWork(r.deps.now())):
 		return true, nil
-	case fatalErr != nil && len(r.outbox) == 0 && r.sched.runningCount == 0:
+	case fatalErr != nil && len(r.outbox) == 0 && r.sched.RunningCount() == 0:
 		return true, fatalErr
 	default:
 		return false, nil
@@ -135,7 +135,7 @@ func (r *oneShotRunner) runResultsLoopIdle(
 		}
 		return r.handleOneShotCompletion(ctx, cancel, bl, fatalErr, &completion), false
 	case <-resultsLoopCtxDone(ctx, fatalErr):
-		return fatalErr, r.sched.runningCount == 0
+		return fatalErr, r.sched.RunningCount() == 0
 	}
 }
 
@@ -147,7 +147,7 @@ func (r *oneShotRunner) releaseIdleDueHeldWork(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 ) (error, bool) {
-	if r.stop != nil || r.sched.runningCount != 0 || !r.hasDueHeldWork(r.deps.now()) {
+	if r.stop != nil || r.sched.RunningCount() != 0 || !r.sched.HasDueHeldWork(r.deps.now()) {
 		return nil, false
 	}
 
@@ -191,18 +191,18 @@ func (r *oneShotRunner) runResultsLoopWithOutbox(
 	)
 	switch {
 	case next >= 0:
-		dispatchCh, nextAction = r.sched.dispatchCh, r.outbox[next]
+		dispatchCh, nextAction = r.dispatchCh, r.outbox[next]
 	case !admitAt.IsZero():
 		// Members of a released ramp batch wait for their admission instant
 		// inside the loop (R-6.8.24): a one-shot pass has no runtime
 		// signals, and ending the pass with them parked would leave them
 		// for the next sync. The wait is bounded by
-		// releaseBatchAdmissionWindow, and a completion still interrupts it.
+		// syncsched.ReleaseBatchAdmissionWindow, and a completion still interrupts it.
 		due := make(chan struct{})
 		timer := r.deps.clock.AfterFunc(admitAt.Sub(now), func() { close(due) })
 		defer timer.Stop()
 		admitDue = due
-	case r.sched.runningCount == 0:
+	case r.sched.RunningCount() == 0:
 		// Every queued action is held back by the slow start, yet nothing
 		// is in flight to finish and make room: the in-flight accounting is
 		// broken. Said loudly rather than waited on forever.
@@ -265,7 +265,7 @@ func (r *oneShotRunner) handleOneShotCompletion(
 func (r *oneShotRunner) completeQueuedDispatchAsShutdown() {
 	for {
 		select {
-		case ta := <-r.sched.dispatchCh:
+		case ta := <-r.dispatchCh:
 			r.completeTrackedActionAsShutdown(ta)
 		default:
 			return

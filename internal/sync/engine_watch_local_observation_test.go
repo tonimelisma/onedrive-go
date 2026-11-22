@@ -302,7 +302,7 @@ func TestWatchRuntime_BootstrapWaitLogsOnlyWhenCountsChange(t *testing.T) {
 	}
 	assert.Equal(t, 1, strings.Count(logBuf.String(), "Waiting for the remaining changes to finish"))
 
-	rt.sched.runningCount++
+	rt.sched.Running(&syncdomain.TrackedAction{ID: 1 << 40, Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "running.txt"}})
 	rt.logBootstrapWait(t.Context())
 	assert.Equal(t, 2, strings.Count(logBuf.String(), "Waiting for the remaining changes to finish"))
 }

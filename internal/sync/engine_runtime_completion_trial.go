@@ -39,7 +39,7 @@ func (flow *engineFlow) applyTrialExtendDecision(
 	r *syncdomain.ActionCompletion,
 	trialScopeKey syncdomain.ScopeKey,
 ) error {
-	flow.sched.markFinished(current)
+	flow.sched.Finished(current)
 	if err := flow.rehomeBlockedRetryWork(ctx, r, trialScopeKey); err != nil {
 		return err
 	}
@@ -58,7 +58,7 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 	bl syncdomain.BaselineView,
 	trialScopeKey syncdomain.ScopeKey,
 ) error {
-	flow.sched.markFinished(current)
+	flow.sched.Finished(current)
 	reclassified, err := flow.applyTrialReclassification(ctx, decision, r, bl)
 	if err != nil {
 		return err

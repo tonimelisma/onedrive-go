@@ -25,6 +25,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
@@ -219,8 +220,8 @@ func completionsToBlockTheService(t *testing.T, err error) int {
 	t.Helper()
 
 	now := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
-	detection := syncexec.NewScopeState(func() time.Time { return now }, slog.New(slog.DiscardHandler))
-	for paths := 1; paths <= 2*syncexec.ServiceWindowThreshold; paths++ {
+	detection := syncsched.NewScopeState(func() time.Time { return now }, slog.New(slog.DiscardHandler))
+	for paths := 1; paths <= 2*syncsched.ServiceWindowThreshold; paths++ {
 		result := detection.UpdateScope(&syncdomain.ActionCompletion{
 			Path:       fmt.Sprintf("file-%d", paths),
 			Err:        err,
@@ -247,7 +248,7 @@ func TestClassifyResult_EveryTimedOutRequestIsOutageEvidenceLikeA504(t *testing.
 	answered := &graph.GraphError{StatusCode: http.StatusGatewayTimeout, Err: graph.ErrServerError}
 	gatewayTimeout := classifyResult(&syncdomain.ActionCompletion{HTTPStatus: http.StatusGatewayTimeout, Err: answered})
 	require.Equal(t, syncdomain.SKService(), gatewayTimeout.ScopeEvidence)
-	require.Equal(t, syncexec.ServiceWindowThreshold, completionsToBlockTheService(t, answered))
+	require.Equal(t, syncsched.ServiceWindowThreshold, completionsToBlockTheService(t, answered))
 
 	for _, request := range timedOutRequests() {
 		t.Run(request.name, func(t *testing.T) {
@@ -262,7 +263,7 @@ func TestClassifyResult_EveryTimedOutRequestIsOutageEvidenceLikeA504(t *testing.
 			assert.Equal(t, gatewayTimeout.ScopeEvidence, got.ScopeEvidence, "the scope a 504 is evidence of")
 			assert.Equal(t, gatewayTimeout.RunScopeDetection, got.RunScopeDetection)
 			assert.Equal(t, gatewayTimeout.TrialHint, got.TrialHint, "a trial that times out is the scope's evidence")
-			assert.Equal(t, syncexec.ServiceWindowThreshold, completionsToBlockTheService(t, err), "the window a 504 crosses")
+			assert.Equal(t, syncsched.ServiceWindowThreshold, completionsToBlockTheService(t, err), "the window a 504 crosses")
 		})
 	}
 }
@@ -299,11 +300,11 @@ func stalledOutageEngine(t *testing.T, folders int, logger *slog.Logger) (*testE
 func TestRunOnce_TimeoutsAgainstOneSilentServiceOpenOneOutageScope(t *testing.T) {
 	t.Parallel()
 
-	eng, requests := stalledOutageEngine(t, syncexec.ServiceWindowThreshold, slog.New(slog.DiscardHandler))
+	eng, requests := stalledOutageEngine(t, syncsched.ServiceWindowThreshold, slog.New(slog.DiscardHandler))
 
 	report, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
-	assert.Equal(t, int64(syncexec.ServiceWindowThreshold), requests.Load(), "errors: %v", report.Errors)
+	assert.Equal(t, int64(syncsched.ServiceWindowThreshold), requests.Load(), "errors: %v", report.Errors)
 
 	scopes, err := eng.baseline.ListBlockScopes(t.Context())
 	require.NoError(t, err)
@@ -312,7 +313,7 @@ func TestRunOnce_TimeoutsAgainstOneSilentServiceOpenOneOutageScope(t *testing.T)
 
 	rows, err := eng.baseline.ListRetryWork(t.Context())
 	require.NoError(t, err)
-	require.Len(t, rows, syncexec.ServiceWindowThreshold)
+	require.Len(t, rows, syncsched.ServiceWindowThreshold)
 	blocked := 0
 	for i := range rows {
 		assert.Equal(t, syncdomain.SKService(), rows[i].ScopeKey, "each timeout is the outage's evidence: %s", rows[i].Path)
@@ -355,7 +356,7 @@ func TestRunOnce_AnOutageOfTimeoutsIsOneConditionNotOnePerFile(t *testing.T) {
 	t.Parallel()
 
 	logger, logs := syncfixture.NewCapturedLogger()
-	eng, _ := stalledOutageEngine(t, syncexec.ServiceWindowThreshold+2, logger)
+	eng, _ := stalledOutageEngine(t, syncsched.ServiceWindowThreshold+2, logger)
 
 	_, err := eng.RunOnce(t.Context(), syncdomain.SyncUploadOnly, RunOptions{})
 	require.NoError(t, err)
@@ -394,7 +395,7 @@ func TestEngineFlow_ProcessTrialDecision_ATimedOutTrialKeepsTheOutageScope(t *te
 		Blocked:      true,
 		AttemptCount: 1,
 	}))
-	current := rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionFolderCreate, Path: "dir", DriveID: eng.driveID}, 1, nil)
+	current := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionFolderCreate, Path: "dir", DriveID: eng.driveID}, 1, nil)
 	require.NotNil(t, current)
 
 	timedOut := stalledGraphRequestError(t, clientTimeoutKind())
@@ -412,7 +413,7 @@ func TestEngineFlow_ProcessTrialDecision_ATimedOutTrialKeepsTheOutageScope(t *te
 	_, err := flow.applyTrialCompletionDecision(t.Context(), syncdomain.SKService(), &decision, current, completion, nil)
 	require.NoError(t, err)
 
-	scope, active := rt.scopes.lookupActiveScope(syncdomain.SKService())
+	scope, active := rt.sched.Scope(syncdomain.SKService())
 	require.True(t, active, "the outage goes on")
 	assert.Equal(t, eng.nowFunc().Add(time.Minute), scope.NextTrialAt, "the next trial is a trial interval away")
 	rows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -425,7 +426,7 @@ func TestEngineFlow_ProcessTrialDecision_ATimedOutTrialKeepsTheOutageScope(t *te
 // servicePathsInWindow is the count of paths the service window of flow's
 // scope detection holds now.
 func servicePathsInWindow(flow *engineFlow) int {
-	count, _ := flow.scopes.state.WindowPathCountForTest(syncdomain.SKService(), flow.deps.now())
+	count, _ := flow.sched.WindowPathCountForTest(syncdomain.SKService(), flow.deps.now())
 
 	return count
 }
@@ -559,7 +560,7 @@ func TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
-	for i := range syncexec.ServiceWindowThreshold {
+	for i := range syncsched.ServiceWindowThreshold {
 		completion := wedged
 		completion.Path = fmt.Sprintf("folder-%d", i)
 		completion.ActionID = int64(i + 1)
@@ -567,7 +568,7 @@ func TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure(t *testing.T) {
 		_, err := flow.applyNormalCompletionDecision(t.Context(), &perFile, nil, &completion, nil)
 		require.NoError(t, err)
 	}
-	assert.False(t, rt.scopes.hasActiveScope(syncdomain.SKService()), "a store that stopped answering is no outage of OneDrive")
+	assert.False(t, rt.sched.HasScope(syncdomain.SKService()), "a store that stopped answering is no outage of OneDrive")
 }
 
 // unansweringRecordStore is a pending-create store whose record of a created

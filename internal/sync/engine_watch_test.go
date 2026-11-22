@@ -414,7 +414,7 @@ func TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare(t *t
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.sched.runningCount = 1
+	rt.sched.Running(&syncdomain.TrackedAction{ID: 1 << 40, Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "running.txt"}})
 
 	err = rt.handleWatchReplanReady(ctx, &watchPipeline{
 		bl:   bl,

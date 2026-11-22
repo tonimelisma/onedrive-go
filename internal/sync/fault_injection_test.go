@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
@@ -37,7 +38,7 @@ func TestFault_ContextCancel_WorkerPool(t *testing.T) {
 	// Create a local file so the upload has something to read.
 	syncfixture.WriteExecTestFile(t, syncRoot, "file.txt", "content")
 
-	dg := syncexec.NewDepGraph(syncfixture.TestLogger(t))
+	dg := syncsched.NewDepGraph(syncfixture.TestLogger(t))
 	dispatchCh := make(chan *syncdomain.TrackedAction, 4)
 	mgr := syncstoretest.NewTestManager(t)
 	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{Config: cfg, Dispatch: dispatchCh, Store: mgr, Logger: syncfixture.TestLogger(t), CompletionBuffer: 10})

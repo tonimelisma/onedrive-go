@@ -8,6 +8,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
@@ -258,7 +259,7 @@ func (e *Engine) oneShotScopeWait(ctx context.Context, runner *oneShotRunner, pa
 	if result.report == nil || ctx.Err() != nil || runner == nil || pass >= e.oneShotPasses() {
 		return "", false
 	}
-	trialAt, ok := runner.scopes.earliestPauseTrialAt()
+	trialAt, ok := runner.sched.EarliestPauseTrialAt()
 	if !ok {
 		return "", false
 	}
@@ -299,7 +300,7 @@ func (r *oneShotRunner) countWorkBlockedUnderPause(ctx context.Context) int {
 	}
 	count := 0
 	for i := range rows {
-		if isPauseScope(rows[i].ScopeKey) {
+		if syncsched.IsPauseScope(rows[i].ScopeKey) {
 			count++
 		}
 	}
@@ -448,7 +449,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	// results loop's outbox, until a worker actually takes it, so a scope
 	// that activates can still take it back (R-6.8.24). A plan-sized buffer
 	// moved the whole outbox into the channel at once.
-	r.sched.dispatchCh = make(chan *syncdomain.TrackedAction)
+	r.dispatchCh = make(chan *syncdomain.TrackedAction)
 	initialOutbox, done, err := r.dispatchInitialReadyActions(ctx, bl, runtime, report)
 	if err != nil {
 		return err
@@ -459,7 +460,7 @@ func (r *oneShotRunner) executePreparedPlan(
 
 	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{
 		Config:           r.exec,
-		Dispatch:         r.sched.dispatchCh,
+		Dispatch:         r.dispatchCh,
 		Store:            executorStoreOf(r.deps.store),
 		Logger:           r.deps.logger,
 		CompletionBuffer: len(plan.Actions),

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
@@ -31,7 +32,7 @@ func (rt *watchRuntime) loadActiveScopes(ctx context.Context) error {
 	for i := range blocks {
 		activeScopes = append(activeScopes, syncdomain.ActiveScopeFromBlockScopeRow(blocks[i]))
 	}
-	flow.scopes.replaceActiveScopes(activeScopes)
+	flow.sched.ReplaceScopes(activeScopes)
 
 	return nil
 }
@@ -117,7 +118,7 @@ func (flow *engineFlow) persistActiveScope(ctx context.Context, block *syncdomai
 	if err := flow.deps.store.UpsertBlockScope(ctx, persisted); err != nil {
 		return err
 	}
-	flow.scopes.upsertActiveScope(block)
+	flow.sched.PutScope(block)
 
 	return nil
 }
@@ -134,10 +135,10 @@ func (flow *engineFlow) newBlockActivation(key syncdomain.ScopeKey, interval tim
 		NextTrialAt:   now.Add(interval),
 		Generation:    1,
 	}
-	if current, ok := flow.scopes.lookupActiveScope(key); ok {
+	if current, ok := flow.sched.Scope(key); ok {
 		block.Generation = current.Generation + 1
 		block.NextTrialAt = latestTrialDeadline(&current, block.NextTrialAt)
-		block.SlowStartThreshold = slowStartThresholdAfterThrottle(
+		block.SlowStartThreshold = syncsched.SlowStartThresholdAfterThrottle(
 			flow.cfg.transferWorkers, current.ReleaseAllowance, current.SlowStartThreshold)
 	}
 
@@ -168,7 +169,7 @@ func (flow *engineFlow) extendScopeTrial(
 	scopeKey syncdomain.ScopeKey,
 	retryAfter time.Duration,
 ) error {
-	block, ok := flow.scopes.lookupActiveScope(scopeKey)
+	block, ok := flow.sched.Scope(scopeKey)
 	if !ok {
 		return nil
 	}
@@ -187,7 +188,7 @@ func (flow *engineFlow) extendScopeTrial(
 	// the scope blocks is taken back.
 	block.NextTrialAt = latestTrialDeadline(&block, nextAt)
 	block.TrialInterval = newInterval
-	block.SlowStartThreshold = slowStartThresholdAfterThrottle(
+	block.SlowStartThreshold = syncsched.SlowStartThresholdAfterThrottle(
 		flow.cfg.transferWorkers, block.ReleaseAllowance, block.SlowStartThreshold)
 	block.ReleaseAllowance = 0
 	block.BatchOutstanding = 0
@@ -206,7 +207,7 @@ func (flow *engineFlow) extendScopeTrial(
 }
 
 func (flow *engineFlow) rearmScopeTrial(ctx context.Context, scopeKey syncdomain.ScopeKey) error {
-	block, ok := flow.scopes.lookupActiveScope(scopeKey)
+	block, ok := flow.sched.Scope(scopeKey)
 	if !ok {
 		return nil
 	}
@@ -267,11 +268,7 @@ func (flow *engineFlow) rearmOrDiscardScope(ctx context.Context, scopeKey syncdo
 // scope row, before activating it (persistFailureWithScopeEffects). A completion with no status is fed
 // too: a request OneDrive never answered is outage evidence.
 func (flow *engineFlow) detectScope(r *syncdomain.ActionCompletion) syncdomain.ScopeUpdateResult {
-	if flow.scopes.state == nil {
-		return syncdomain.ScopeUpdateResult{}
-	}
-
-	return flow.scopes.state.UpdateScope(r)
+	return flow.sched.ObserveFailure(r)
 }
 
 // blockActivation is a block scope a failure activates, prepared before the
@@ -303,7 +300,7 @@ func (flow *engineFlow) prepareBlockActivation(sr syncdomain.ScopeUpdateResult) 
 		block:     block,
 		row:       row,
 		interval:  interval,
-		wasActive: flow.scopes.hasActiveScope(sr.ScopeKey),
+		wasActive: flow.sched.HasScope(sr.ScopeKey),
 	}, nil
 }
 
@@ -332,7 +329,7 @@ func (flow *engineFlow) recordActivatingBlockedRetryWork(
 // admitted work it blocks is taken back, and its trial is armed.
 func (flow *engineFlow) applyBlockActivation(ctx context.Context, activation *blockActivation) error {
 	key := activation.update.ScopeKey
-	flow.scopes.upsertActiveScope(activation.block)
+	flow.sched.PutScope(activation.block)
 	flow.deps.emit(syncdomain.EngineDebugEvent{
 		Type:     syncdomain.EngineDebugEventScopeActivated,
 		ScopeKey: key,
@@ -361,7 +358,7 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 	activation *blockActivation,
 ) error {
 	to := activation.update.ScopeKey
-	flow.scopes.upsertActiveScope(activation.block)
+	flow.sched.PutScope(activation.block)
 	flow.deps.emit(syncdomain.EngineDebugEvent{
 		Type:     syncdomain.EngineDebugEventScopeActivated,
 		ScopeKey: to,
@@ -518,12 +515,12 @@ func (flow *engineFlow) discardScope(ctx context.Context, key syncdomain.ScopeKe
 	}
 	now := flow.deps.now()
 	for _, work := range deleted {
-		if ta := flow.retries.releaseHeldAction(work); ta != nil {
-			flow.holdAction(ta, heldReasonRetry, syncdomain.ScopeKey{}, now)
+		if ta := flow.sched.Release(work); ta != nil {
+			flow.sched.Hold(ta, syncsched.HeldRetry, syncdomain.ScopeKey{}, now)
 		}
 	}
 
-	flow.scopes.removeActiveScope(key)
+	flow.sched.DropScope(key)
 	flow.signals.armTrialTimer()
 	if len(deleted) > 0 {
 		flow.signals.armRetryTimer()
@@ -584,7 +581,7 @@ func (flow *engineFlow) holdActionFromPersistedRetryState(
 		return fmt.Errorf("hold action %s from persisted retry state: missing retry_work row", work.Path)
 	}
 	if row.Blocked {
-		flow.holdAction(current, heldReasonScope, row.ScopeKey, time.Time{})
+		flow.sched.Hold(current, syncsched.HeldScope, row.ScopeKey, time.Time{})
 		return nil
 	}
 
@@ -592,7 +589,7 @@ func (flow *engineFlow) holdActionFromPersistedRetryState(
 	if syncdomain.StoredTimeIsSet(row.NextRetryAt) {
 		nextRetry = time.Unix(0, row.NextRetryAt)
 	}
-	flow.holdAction(current, heldReasonRetry, syncdomain.ScopeKey{}, nextRetry)
+	flow.sched.Hold(current, syncsched.HeldRetry, syncdomain.ScopeKey{}, nextRetry)
 	return nil
 }
 
@@ -609,7 +606,7 @@ func (flow *engineFlow) holdActionUnderScope(
 	if err := flow.persistBlockedRetryWork(ctx, syncdomain.RetryWorkKeyForCompletion(r), scopeKey); err != nil {
 		return err
 	}
-	flow.holdAction(current, heldReasonScope, scopeKey, time.Time{})
+	flow.sched.Hold(current, syncsched.HeldScope, scopeKey, time.Time{})
 	flow.signals.armHeldTimers()
 	return nil
 }
@@ -628,8 +625,8 @@ func (flow *engineFlow) drainDueHeldWorkNow(
 	now := flow.deps.now()
 	var ready []*syncdomain.TrackedAction
 
-	for _, key := range flow.dueRetryKeys(now) {
-		ta := flow.retries.releaseHeldAction(key)
+	for _, key := range flow.sched.DueRetries(now) {
+		ta := flow.sched.Release(key)
 		if ta == nil {
 			continue
 		}
@@ -640,23 +637,23 @@ func (flow *engineFlow) drainDueHeldWorkNow(
 		ready = append(ready, ta)
 	}
 
-	for _, key := range flow.dueTrialKeys(now) {
-		held := flow.retries.heldByKey[key]
-		if held == nil {
+	for _, key := range flow.sched.DueTrials(now) {
+		held, ok := flow.sched.HeldWork(key)
+		if !ok {
 			continue
 		}
 
-		ta := flow.retries.releaseHeldAction(key)
+		ta := flow.sched.Release(key)
 		if ta == nil {
 			continue
 		}
 		// A due trial means the ramp stalled (or never started): whatever
 		// batch was outstanding is not coming back, so the trial's success
 		// releases the next batch outright.
-		if scope, ok := flow.scopes.lookupActiveScope(held.ScopeKey); ok {
+		if scope, ok := flow.sched.Scope(held.ScopeKey); ok {
 			if scope.BatchOutstanding != 0 {
 				scope.BatchOutstanding = 0
-				flow.scopes.upsertActiveScope(&scope)
+				flow.sched.PutScope(&scope)
 			}
 			ta.TrialScopeGeneration = scope.Generation
 		}

@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -23,7 +22,7 @@ func startDrainLoop(t *testing.T) (chan syncdomain.ActionCompletion, func(), *te
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	rt.scopes.state = syncexec.NewScopeState(eng.nowFunc, eng.logger)
+	rt.sched.ResetWindows()
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 
 	results := make(chan syncdomain.ActionCompletion, 16)
@@ -108,7 +107,7 @@ func runResultDrainLoopWithOutboxForTest(
 	outbox []*syncdomain.TrackedAction,
 ) ([]*syncdomain.TrackedAction, bool) {
 	select {
-	case rt.sched.dispatchCh <- outbox[0]:
+	case rt.dispatchCh <- outbox[0]:
 		return outbox[1:], false
 	case workerResult, ok := <-results:
 		if !ok {

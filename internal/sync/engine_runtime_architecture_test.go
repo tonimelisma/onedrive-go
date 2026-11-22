@@ -14,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -41,7 +42,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 					ActionID:   1,
 				})
 				require.NoError(t, err)
-				assert.Equal(t, 0, rt.sched.graph.InFlightCount())
+				assert.Equal(t, 0, rt.sched.InFlight())
 			},
 		},
 		{
@@ -59,7 +60,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 					ActionID:   1,
 				})
 				require.NoError(t, err)
-				assert.Equal(t, 0, rt.sched.graph.InFlightCount())
+				assert.Equal(t, 0, rt.sched.InFlight())
 			},
 		},
 		{
@@ -69,7 +70,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 				seedDueRetryPublication(t, rt)
 				err := rt.handleWatchHeldRelease(t.Context(), &watchPipeline{bl: bl}, false)
 				require.NoError(t, err)
-				assert.Empty(t, rt.retries.heldByKey)
+				assert.Zero(t, rt.sched.HeldCount())
 				assert.Empty(t, listRetryWorkForTest(t, rt.deps.store, t.Context()))
 			},
 		},
@@ -80,7 +81,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 				seedDueTrialPublication(t, eng, rt)
 				err := rt.handleWatchHeldRelease(t.Context(), &watchPipeline{bl: bl}, true)
 				require.NoError(t, err)
-				assert.Empty(t, rt.retries.heldByKey)
+				assert.Zero(t, rt.sched.HeldCount())
 			},
 		},
 	}
@@ -108,7 +109,7 @@ func TestRuntimeArchitecture_ShutdownDrainDoesNotRoutePublicationWorkToWorkers(t
 	rt := testWatchRuntime(t, eng)
 	bl := seedPublicationBaseline(t, eng)
 
-	publication := rt.sched.graph.Add(&syncdomain.Action{
+	publication := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: rt.cfg.driveID,
@@ -121,7 +122,7 @@ func TestRuntimeArchitecture_ShutdownDrainDoesNotRoutePublicationWorkToWorkers(t
 
 	assert.True(t, rt.isDraining())
 	assert.Empty(t, rt.currentOutbox())
-	assert.Equal(t, 0, rt.sched.graph.InFlightCount())
+	assert.Equal(t, 0, rt.sched.InFlight())
 
 	_, found := bl.GetByPath("cleanup.txt")
 	assert.True(t, found, "shutdown drain should discard publication work instead of committing it through workers")
@@ -174,7 +175,7 @@ func TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError(t *tes
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	current := rt.sched.graph.Add(&syncdomain.Action{
+	current := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "drain.txt",
 		DriveID: eng.driveID,
@@ -311,7 +312,7 @@ func seedPublicationBaseline(t *testing.T, eng *testEngine) syncdomain.BaselineV
 func addPublicationDependencyPair(t *testing.T, rt *watchRuntime) {
 	t.Helper()
 
-	root := rt.sched.graph.Add(&syncdomain.Action{
+	root := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "sync.txt",
 		DriveID: rt.cfg.driveID,
@@ -319,7 +320,7 @@ func addPublicationDependencyPair(t *testing.T, rt *watchRuntime) {
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	dependent := rt.sched.graph.Add(&syncdomain.Action{
+	dependent := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: rt.cfg.driveID,
@@ -341,14 +342,14 @@ func seedDueRetryPublication(t *testing.T, rt *watchRuntime) {
 	require.NoError(t, rt.deps.store.UpsertRetryWork(t.Context(), &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []syncdomain.RetryWorkRow{row}})
 
-	publication := rt.sched.graph.Add(&syncdomain.Action{
+	publication := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: rt.cfg.driveID,
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
-	rt.holdAction(publication, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
+	rt.sched.Hold(publication, syncsched.HeldRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 }
 
 func seedDueTrialPublication(t *testing.T, eng *testEngine, rt *watchRuntime) {
@@ -362,14 +363,14 @@ func seedDueTrialPublication(t *testing.T, eng *testEngine, rt *watchRuntime) {
 		TrialInterval: 10 * time.Second,
 	})
 
-	publication := rt.sched.graph.Add(&syncdomain.Action{
+	publication := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: rt.cfg.driveID,
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
-	rt.holdAction(publication, heldReasonScope, scopeKey, time.Time{})
+	rt.sched.Hold(publication, syncsched.HeldScope, scopeKey, time.Time{})
 }
 
 // No run holds the engine: neither the flow, nor the runtimes that embed it,

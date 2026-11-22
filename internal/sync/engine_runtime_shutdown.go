@@ -157,7 +157,7 @@ func (flow *engineFlow) completeTrackedActionAsShutdown(ta *syncdomain.TrackedAc
 		return
 	}
 
-	flow.sched.markFinished(ta)
+	flow.sched.Finished(ta)
 	ready := flow.completeDepGraphAction(ta.ID, "completeTrackedActionAsShutdown")
 	flow.completeSubtree(ready)
 }
