@@ -7,10 +7,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
-func (rt *watchRuntime) beginWatchDrain(
-	ctx context.Context,
-	p *watchPipeline,
-) {
+func (rt *watchRuntime) beginWatchDrain(ctx context.Context) {
 	if rt.enterDraining() {
 		rt.stopDrainTimers()
 		// The stop's one bound for recording the completions still to come

@@ -45,7 +45,7 @@ func TestWatchPhase_TransitionTableIsTotal(t *testing.T) {
 func TestWatchPhase_NothingLeavesDrainingExceptDrained(t *testing.T) {
 	t.Parallel()
 
-	rng := rand.New(rand.NewPCG(1, 2))
+	rng := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // deterministic test RNG
 	for range 2000 {
 		phase := watchPhase(rng.IntN(int(watchPhaseCount)))
 		sealed := phase == watchPhaseDraining || phase == watchPhaseStopped
@@ -114,7 +114,8 @@ func TestWatchLoop_ServicesOnlyThePhasesEnabledInputs(t *testing.T) {
 			go func() {
 				defer close(stepped)
 				for ctx.Err() == nil {
-					_, _ = rt.runNonDrainingWatchStep(ctx, &watchPipeline{runtime: rt}, logC)
+					_, _ = rt.runNonDrainingWatchStep( //nolint:errcheck // the test drives steps; their results are not under test
+						ctx, &watchPipeline{runtime: rt}, logC)
 				}
 			}()
 			enabledRead := func() bool {

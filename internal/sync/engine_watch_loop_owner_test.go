@@ -31,13 +31,7 @@ func TestWatchRuntime_BeginWatchDrain_ObserverChannelsStayRuntimeOwned(t *testin
 	rt.resources.observerErrs = make(chan error)
 	rt.resources.activeObservers = 1
 
-	p := &watchPipeline{
-		runtime:      rt,
-		replanReady:  make(chan syncobserve.DirtyBatch),
-		maintenanceC: make(chan time.Time),
-	}
-
-	rt.beginWatchDrain(t.Context(), p)
+	rt.beginWatchDrain(t.Context())
 
 	// The phase table, not nil-ed channels, turns the intake off.
 	assert.True(t, rt.isDraining())

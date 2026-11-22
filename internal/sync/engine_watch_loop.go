@@ -107,7 +107,7 @@ func (rt *watchRuntime) drainAfterCanceledStepError(
 		return false
 	}
 
-	rt.beginWatchDrain(ctx, p)
+	rt.beginWatchDrain(ctx)
 
 	return true
 }
@@ -144,7 +144,7 @@ func (rt *watchRuntime) beginWatchDrainIfCanceled(ctx context.Context, p *watchP
 
 func (rt *watchRuntime) beginWatchDrainIfContextCanceled(ctx context.Context, p *watchPipeline) bool {
 	if ctx.Err() != nil && !rt.isDraining() {
-		rt.beginWatchDrain(ctx, p)
+		rt.beginWatchDrain(ctx)
 		return true
 	}
 
@@ -277,7 +277,7 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 		rt.logBootstrapWait(ctx)
 		return false, nil
 	case <-ctx.Done():
-		rt.beginWatchDrain(ctx, p)
+		rt.beginWatchDrain(ctx)
 		return false, nil
 	}
 }
@@ -591,7 +591,7 @@ func (rt *watchRuntime) handleWatchCompletionsClosed(
 	select {
 	case <-ctx.Done():
 		p.completions = nil
-		rt.beginWatchDrain(ctx, p)
+		rt.beginWatchDrain(ctx)
 		return nil
 	default:
 	}

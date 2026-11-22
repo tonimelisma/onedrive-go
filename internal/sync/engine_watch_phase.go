@@ -86,7 +86,7 @@ func (e watchEvent) String() string {
 }
 
 // watchTransitions is the whole lifecycle. An absent pair is refused.
-var watchTransitions = map[watchPhase]map[watchEvent]watchPhase{
+var watchTransitions = map[watchPhase]map[watchEvent]watchPhase{ //nolint:gochecknoglobals // the fixed lifecycle table, never written
 	watchPhaseStarting: {
 		watchEventBootstrapPlanned:  watchPhaseBootstrap,
 		watchEventBootstrapSettled:  watchPhaseReady,
@@ -147,14 +147,12 @@ const (
 	watchInputHeldTimers // trial, retry and admit timers
 	watchInputBootstrapLog
 	watchInputCancel
-
-	watchInputCount
 )
 
 // watchInputsEnabled says which inputs each phase reads; it replaces turning
 // inputs off by assigning nil to their channels. The draining row lists what
 // the drain step reads; observer errors there are read while observers remain.
-var watchInputsEnabled = map[watchPhase][]watchInput{
+var watchInputsEnabled = map[watchPhase][]watchInput{ //nolint:gochecknoglobals // the fixed per-phase input table, never written
 	watchPhaseBootstrap: {
 		watchInputDispatch, watchInputReplanReady, watchInputCompletions,
 		watchInputRefreshResults, watchInputMaintenance, watchInputHeldTimers,

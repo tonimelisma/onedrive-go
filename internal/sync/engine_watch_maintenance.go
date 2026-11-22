@@ -133,7 +133,7 @@ func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl syncdo
 
 	// The goroutine holds the observation and the send side of the result
 	// channel only: it cannot reach loop state.
-	obs, out := &rt.observation, (chan<- syncobserve.RemoteObservationBatch)(rt.resources.refreshResults)
+	obs, out := &rt.observation, rt.resources.refreshResults
 	rt.resources.goroutines.start(ctx, watchGoroutineFullRefresh, func(ctx context.Context) {
 		defer obs.recoverFullRemoteRefreshPanic(ctx, out)
 
