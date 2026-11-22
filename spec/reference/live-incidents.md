@@ -497,6 +497,9 @@ Evidence:
 - The emulated case-insensitive volume (`internal/synctest.CaseInsensitive`)
   folds NFC and NFD like macOS, so no unit test reproduced it;
   `TestRunOnce_LocalNFDNamedFileUploadsInOnePass` on the real filesystem did.
+  A byte-exact in-memory sync tree (`synctree.OpenMemory` with zero
+  `Capabilities`) now replays it on any host
+  (`TestMemoryVolume_NFDNamedFileIsMissingUnderItsStoredSpelling`).
 - The same mismatch affected every operation on an existing local entry: a
   download over the file would have written an NFC sibling, local deletes,
   moves and conflict copies saw the file as already absent, NFD-named folders
