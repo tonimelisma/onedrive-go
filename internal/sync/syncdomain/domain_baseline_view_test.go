@@ -35,13 +35,6 @@ func TestBaselineSnapshot_HandsOutValuesItOwns(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "etag-1", byID.ETag)
 
-	variants := snapshot.GetCaseVariants("docs", "README.TXT")
-	require.Len(t, variants, 1)
-	variants[0].ETag = "changed through a variant"
-	again := snapshot.GetCaseVariants("docs", "readme.txt")
-	require.Len(t, again, 1)
-	assert.Equal(t, "etag-1", again[0].ETag)
-
 	var seen []string
 	snapshot.ForEachPath(func(path string, entry BaselineEntry) {
 		seen = append(seen, path+"="+entry.ETag)
@@ -53,6 +46,5 @@ func TestBaselineSnapshot_HandsOutValuesItOwns(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = snapshot.GetByID("missing")
 	assert.False(t, ok)
-	assert.Empty(t, snapshot.GetCaseVariants("docs", "other.txt"))
 	assert.Equal(t, 0, NewBaselineSnapshot(nil).Len())
 }

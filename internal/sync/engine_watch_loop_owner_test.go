@@ -31,47 +31,44 @@ func TestWatchRuntime_BeginWatchDrain_ObserverChannelsStayRuntimeOwned(t *testin
 	rt.resources.observerErrs = make(chan error)
 	rt.resources.activeObservers = 1
 
-	p := &watchPipeline{
-		runtime:      rt,
-		replanReady:  make(chan syncobserve.DirtyBatch),
-		maintenanceC: make(chan time.Time),
+	rt.beginWatchDrain(t.Context())
+
+	// The phase table, not nil-ed channels, turns the intake off.
+	assert.True(t, rt.isDraining())
+	for _, in := range []watchInput{watchInputReplanReady, watchInputMaintenance, watchInputObservations} {
+		assert.False(t, watchInputOn(rt.phase(), in))
 	}
-
-	rt.beginWatchDrain(t.Context(), p)
-
-	assert.Nil(t, p.replanReady)
-	assert.Nil(t, p.maintenanceC)
-	assert.Nil(t, rt.resources.localBatches)
-	assert.Nil(t, rt.resources.remoteBatches)
 	assert.NotNil(t, rt.resources.observerErrs, "runtime must keep draining observer exits while observers are still active")
 	assert.Equal(t, 1, rt.resources.activeObservers)
 }
 
-func TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesAndReturnsToRunning(t *testing.T) {
+func TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesToReady(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.enterBootstrap()
+	setWatchPhase(rt, watchPhaseBootstrap)
 
-	err := rt.runWatchLoop(t.Context(), &watchPipeline{runtime: rt}, nil)
+	err := rt.runLoopSteps(t.Context(), &watchPipeline{runtime: rt}, nil, true)
 	require.NoError(t, err)
-	assert.Equal(t, watchRuntimePhaseRunning, rt.phase())
+	assert.Equal(t, watchPhaseReady, rt.phase())
 }
 
 // Validates: R-6.10.10
-func TestWatchRuntime_BeginObserverBackedRunningNormalizesBootstrapPhase(t *testing.T) {
+func TestWatchRuntime_BeginObserverBackedRunningStartsFromASettledBootstrap(t *testing.T) {
 	t.Parallel()
 
 	eng := newSingleOwnerEngine(t)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.enterBootstrap()
+	setWatchPhase(rt, watchPhaseBootstrap)
+	require.Error(t, rt.beginObserverBackedRunning(), "observers start only once bootstrap settled")
 
+	setWatchPhase(rt, watchPhaseReady)
 	require.NoError(t, rt.beginObserverBackedRunning())
 
-	assert.Equal(t, watchRuntimePhaseRunning, rt.phase())
+	assert.Equal(t, watchPhaseRunning, rt.phase())
 }
 
 // Validates: R-6.10.10
@@ -107,7 +104,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapDispatchUsesSharedHandler
 	}, 1, nil)
 	require.NotNil(t, action)
 	rt.replaceOutbox([]*syncdomain.TrackedAction{action})
-	rt.enterBootstrap()
+	setWatchPhase(rt, watchPhaseBootstrap)
 
 	done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{runtime: rt}, nil)
 	require.NoError(t, err)
@@ -184,7 +181,7 @@ func TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsFromBootstrapPhase(
 	eng := newSingleOwnerEngine(t)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.enterBootstrap()
+	setWatchPhase(rt, watchPhaseBootstrap)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 

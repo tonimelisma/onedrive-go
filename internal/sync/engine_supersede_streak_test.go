@@ -21,7 +21,7 @@ func TestRecordSupersede_WarnsOnceWhenTheSameActionKeepsGoingStale(t *testing.T)
 
 	var logBuf bytes.Buffer
 	flow := &engineFlow{
-		deps:             runtimeDeps{logger: slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))},
+		observation:      observation{deps: runtimeDeps{logger: slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))}},
 		supersedeStreaks: make(map[string]int),
 	}
 	move := &syncdomain.ActionCompletion{ActionType: syncdomain.ActionRemoteMove, OldPath: "movesrc", Path: "movedst", ErrMsg: "remote item changed"}
@@ -65,7 +65,7 @@ func TestApplySupersededCompletion_ParksTheSameActionAfterAStreak(t *testing.T) 
 	store := syncstoretest.NewTestStore(t)
 	signals := &recordingSignals{}
 	flow := &engineFlow{
-		deps:             runtimeDeps{store: store, logger: syncfixture.TestLogger(t)},
+		observation:      observation{deps: runtimeDeps{store: store, logger: syncfixture.TestLogger(t)}},
 		supersedeStreaks: make(map[string]int),
 		signals:          signals,
 	}

@@ -364,11 +364,10 @@ Static verification is a first-class architectural constraint, not a best-effort
   then asserts that nothing was emitted. The signal is a debug event of the
   engine's hook where one marks the decision as made (the local observer's
   start follows the wake-source decision, `waitForWakeSourceDecision`), an
-  event the handler sends after whatever the input would have emitted (the
-  delete after the collision peers it re-emits), or the observer's own report
+  event the handler sends after whatever the input would have emitted, or the observer's own report
   of the drop: a watch observer that drops an input by decision emits one
   debug event at the drop site through the same hook
-  (`local_case_collision_skipped`, `remote_wakes_coalesced`,
+  (`remote_wakes_coalesced`,
   `requireDroppedWithoutEvent`). The event vocabulary is in the domain family
   so the observers can name it (sync-domain.md). Inside a `testing/synctest`
   bubble the bubble's quiescence is the signal. A test of a new directory's

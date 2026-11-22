@@ -50,7 +50,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedP
 	require.NotNil(t, publication)
 	rt.holdAction(publication, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 	rt.kickRetryHeldReleaseNow()
-	rt.enterBootstrap()
+	setWatchPhase(rt, watchPhaseBootstrap)
 
 	done, err := rt.runNonDrainingWatchStep(ctx, &watchPipeline{bl: bl}, nil)
 	require.NoError(t, err)
@@ -99,7 +99,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 		ItemID:  "cleanup-item",
 	}, 2, []int64{1})
 	assert.Nil(t, dependent, "cleanup dependent should wait on its parent before bootstrap completion")
-	rt.enterBootstrap()
+	setWatchPhase(rt, watchPhaseBootstrap)
 
 	err = rt.handleWatchActionCompletion(ctx, &watchPipeline{
 		bl: bl,

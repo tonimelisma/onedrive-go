@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -123,7 +122,7 @@ func (flow *engineFlow) assertCurrentInvariants(ctx context.Context) error {
 // detached store access (DetachedStoreContext) so a wedged store cannot hold
 // it; inside a stopping run's drain it keeps the drain's one bound.
 func detachedInvariantCheckContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return syncexec.DetachedStoreContext(ctx, time.Now().Add(syncdomain.OutcomeCommitTimeout))
+	return syncexec.DetachedStoreContext(ctx, syncdomain.WallNow().Add(syncdomain.OutcomeCommitTimeout))
 }
 
 func (flow *engineFlow) assertWatchRuntimeInvariants() error {
@@ -139,7 +138,7 @@ func (flow *engineFlow) assertWatchRuntimeInvariants() error {
 		}
 	}
 
-	if flow.inspect.phase() == watchRuntimePhaseDraining {
+	if flow.inspect.isDraining() {
 		if flow.inspect.hasRetryTimer() {
 			return fmt.Errorf("draining runtime still has retry timer armed")
 		}

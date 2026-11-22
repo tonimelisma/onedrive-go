@@ -239,6 +239,13 @@ func runSyncDaemonWithFactory(
 		ApplyLogLevel:  applyLogLevelFunc(ctx),
 	})
 
+	if beating, ok := orch.(interface {
+		LoopAlive() (bool, string, time.Duration)
+	}); ok {
+		alive := loopAliveFunc(beating.LoopAlive)
+		serviceNotifier.loopAlive.Store(&alive)
+	}
+
 	console.Watching(standaloneSelection.Mounts, mode)
 
 	// A keepalive's panic is the cause of this function's own context, which

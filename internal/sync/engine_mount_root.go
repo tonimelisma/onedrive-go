@@ -17,7 +17,7 @@ import (
 
 // hasRemoteMountRoot reports whether the run syncs a remote folder rather
 // than the drive root.
-func (flow *engineFlow) hasRemoteMountRoot() bool {
+func (flow *observation) hasRemoteMountRoot() bool {
 	return flow.cfg.remoteRootItemID != ""
 }
 
@@ -38,7 +38,7 @@ type mountRootObservation struct {
 	orphansUndecided bool
 }
 
-func (flow *engineFlow) observeMountRootRemote(
+func (flow *observation) observeMountRootRemote(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 	fullReconcile bool,
@@ -308,7 +308,7 @@ func (flow *engineFlow) commitObservedItems(
 	return nil
 }
 
-func (rt *watchRuntime) watchMountRootRemote(
+func (rt *observation) watchMountRootRemote(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 	batches chan<- syncobserve.RemoteObservationBatch,
@@ -350,7 +350,7 @@ func (rt *watchRuntime) watchMountRootRemote(
 	}
 }
 
-func (rt *watchRuntime) handleMountRootObservationResult(
+func (rt *observation) handleMountRootObservationResult(
 	ctx context.Context,
 	batches chan<- syncobserve.RemoteObservationBatch,
 	interval time.Duration,
@@ -392,7 +392,7 @@ func shouldSkipMountRootWatchBatch(batch *syncobserve.RemoteObservationBatch) bo
 		batch.ObservationMode != syncdomain.RemoteObservationModeEnumerate
 }
 
-func (rt *watchRuntime) handleMountRootPollError(
+func (rt *observation) handleMountRootPollError(
 	ctx context.Context,
 	bo *retry.Backoff,
 	outage *syncobserve.PollOutageLog,
@@ -411,7 +411,7 @@ func (rt *watchRuntime) handleMountRootPollError(
 	return rt.sleepMountRootWatch(ctx, delay, "backoff")
 }
 
-func (rt *watchRuntime) dispatchMountRootBatch(
+func (rt *observation) dispatchMountRootBatch(
 	ctx context.Context,
 	batches chan<- syncobserve.RemoteObservationBatch,
 	batch *syncobserve.RemoteObservationBatch,
@@ -429,7 +429,7 @@ func (rt *watchRuntime) dispatchMountRootBatch(
 	return batch.WaitApplied(ctx)
 }
 
-func (rt *watchRuntime) sleepMountRootWatch(
+func (rt *observation) sleepMountRootWatch(
 	ctx context.Context,
 	delay time.Duration,
 	label string,

@@ -1883,14 +1883,14 @@ func TestSyncStore_CheckpointReportsFailure(t *testing.T) {
 }
 
 // Validates: R-6.3.4
-func TestBaselineCache_GetCaseVariantsCopyIsSafeAgainstConcurrentPut(t *testing.T) {
+func TestBaselineCache_GetByPathCopyIsSafeAgainstConcurrentPut(t *testing.T) {
 	t.Parallel()
 
 	baseline := cacheOf(&syncdomain.BaselineEntry{Path: "Docs/Report.txt", ItemID: "id-upper", ItemType: syncdomain.ItemTypeFile})
 
-	// A watch observer reads the variants on its own goroutine while a worker
-	// commits an outcome that replaces the same index element in place. The
-	// race detector fails this test when the index slice itself is returned.
+	// An observer reads an entry on its own goroutine while a worker commits
+	// an outcome that replaces it. The race detector fails this test when
+	// the index's own entry is returned.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -1900,16 +1900,17 @@ func TestBaselineCache_GetCaseVariantsCopyIsSafeAgainstConcurrentPut(t *testing.
 	}()
 
 	for range 200 {
-		for _, v := range baseline.GetCaseVariants("Docs", "report.txt") {
+		if v, ok := baseline.GetByPath("Docs/Report.txt"); ok {
 			assert.Equal(t, "Docs/Report.txt", v.Path)
 		}
 	}
 	syncfixture.ReceiveWithin(t, done, "the concurrent writer to finish")
 
-	variants := baseline.GetCaseVariants("Docs", "report.txt")
-	require.Len(t, variants, 1)
-	assert.Equal(t, "id-199", variants[0].ItemID)
-	assert.Nil(t, baseline.GetCaseVariants("Docs", "missing.txt"))
+	entry, ok := baseline.GetByPath("Docs/Report.txt")
+	require.True(t, ok)
+	assert.Equal(t, "id-199", entry.ItemID)
+	_, ok = baseline.GetByPath("Docs/missing.txt")
+	assert.False(t, ok)
 }
 
 // cacheOf returns a baseline cache holding copies of entries.

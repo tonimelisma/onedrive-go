@@ -120,6 +120,11 @@ type Orchestrator struct {
 	// clients. Durable recovery remains in parent shortcut_roots.
 	shortcutCleanupDiagnostics []synccontrol.ShortcutCleanupDiagnostic
 	reconcileTicks             func(time.Duration) (<-chan time.Time, func())
+	// heartbeat is the loop's progress for the watchdog (LoopAlive);
+	// heartbeatTicks wakes an idle loop to beat. Injectable so tests
+	// control time.
+	heartbeat      *loopHeartbeat
+	heartbeatTicks func(time.Duration) (<-chan time.Time, func())
 	// restartTimer arms the RunWatch loop's one-shot wake-ups: the earliest
 	// backed-off runner restart and the earliest timed-pause expiry.
 	// Injectable so tests control time.
@@ -159,7 +164,7 @@ type Orchestrator struct {
 // Token/client caching is handled by the SessionRuntime in cfg.Runtime.
 // Tests inject stubs via cfg.Runtime.TokenSourceFn and engineFactory.
 func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
-	return &Orchestrator{
+	o := &Orchestrator{
 		cfg: cfg,
 		engineFactory: func(ctx context.Context, req engineFactoryRequest) (engineRunner, error) {
 			mountCfg, err := engineMountConfigForMount(req.Mount, cfg.DataDir)
@@ -198,9 +203,20 @@ func NewOrchestrator(cfg *OrchestratorConfig) *Orchestrator {
 			ticker := time.NewTicker(interval)
 			return ticker.C, ticker.Stop
 		},
-		restartTimer: newOneShotTimer,
-		retireTimer:  newOneShotTimer,
+		heartbeatTicks: newIntervalTicker,
+		restartTimer:   newOneShotTimer,
+		retireTimer:    newOneShotTimer,
 	}
+	// The heartbeat reads the orchestrator's clock at each use, so a test
+	// that sets o.now before RunWatch drives it too.
+	o.heartbeat = newLoopHeartbeat(func() time.Time { return o.clockNow() })
+
+	return o
+}
+
+func newIntervalTicker(interval time.Duration) (<-chan time.Time, func()) {
+	ticker := time.NewTicker(interval)
+	return ticker.C, ticker.Stop
 }
 
 func newOneShotTimer(delay time.Duration) (<-chan time.Time, func()) {
