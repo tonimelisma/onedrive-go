@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_composition.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go
+GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_composition.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go, internal/sync/internal/syncplan/planner_identity.go
 
 Implements: R-2.1.3 [verified], R-2.1.7 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.2.16 [verified], R-6.4.2 [verified]
 
@@ -1095,3 +1095,39 @@ and does not hold the tree; the plan logs its count once, at Debug
 (`TestRunOnce_FinalDrainCreatesNothingNewLocally`). An entry the release took
 is therefore never downloaded back by a later drain
 (`TestRunOnce_ARefusalThatPersistsNeverDownloadsWhatTheReleaseTook`).
+
+## Identity-Keyed Planner (Shadow Only)
+
+`PlanIdentityKeyed` (`planner_identity.go`) is a second planner over the same
+rows the current planner reads: the baseline snapshot and the planner-visible
+local and remote rows. It is pure and not wired into any run. Where the
+current planner joins the three sides on path and recovers moves afterwards by
+pairing deletes with creates, it builds one node per item:
+
+- the baseline row and OneDrive's row join on the item ID;
+- the baseline row and the local row join on the local identity (device and
+  inode), with a confidence: strong when both carry the same non-zero birth
+  time, weak when either birth time is unknown and the type is the same. An
+  identity at two local paths (a hard link) or with two different birth times
+  (a reused inode) has no confidence, and the row falls back to path pairing
+  with the baseline row at its path;
+- a side whose entry has another type than the baseline row is a new item at
+  the same position, and the baseline item is gone on that side.
+
+Each node is decided on its own: first where it ends (a move on either side
+is an attribute of the node; OneDrive's position wins when both moved it to
+different places, as in the current planner), then its content at that
+position (an upload, a download, an agreed edit, or a conflict copy plus a
+download). A second step settles position conflicts: local and OneDrive
+content ending at one path are a create/create conflict decided as the
+current planner decides one, and a retired baseline row at a path another
+node takes needs no cleanup of its own.
+
+Its answer for every cell of the reconciliation matrix is checked in as
+`testdata/reconcile/matrix.identity.golden`, and every cell where it differs
+from `matrix.golden` is listed with its reason in the test
+(`TestReconcileMatrix_IdentityGolden`): all eight are moves composed with an
+edit, which it plans in one pass as a move plus a content action, where the
+current planner defers the edit or replaces the item with a delete and a new
+upload.
+
