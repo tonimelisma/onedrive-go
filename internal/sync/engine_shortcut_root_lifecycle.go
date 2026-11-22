@@ -9,24 +9,62 @@ import (
 	"path"
 	"path/filepath"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
+
+// shortcutRoots owns the shortcut roots below this mount: their rows in the
+// store, their local projections in the sync tree, and the child-work
+// snapshot it publishes to the multisync orchestrator. The watch loop, a
+// one-shot pass and the orchestrator's ack handle (on its own goroutine) all
+// enter it, so it touches only the store, the protected-root set (which
+// guards itself), the sync tree and values fixed at construction.
+type shortcutRoots struct {
+	store         *syncstore.SyncStore
+	syncTree      *synctree.Root
+	syncRoot      string
+	roots         *protectedRootSet
+	items         syncdomain.ItemClient
+	driveID       driveid.ID
+	namespaceID   string
+	sink          syncshortcut.ShortcutChildWorkSink
+	contentFilter syncdomain.ContentFilterConfig
+	logger        *slog.Logger
+}
+
+// shortcutRoots is the engine's shortcut roots as configured now. A run takes
+// them once (flowInputs); the ack handle takes them per acknowledgement.
+func (e *Engine) shortcutRoots() *shortcutRoots {
+	return &shortcutRoots{
+		store:         e.baseline,
+		syncTree:      e.syncTree,
+		syncRoot:      e.syncRoot,
+		roots:         e.protectedRoots,
+		items:         e.itemsClient,
+		driveID:       e.driveID,
+		namespaceID:   e.shortcutNamespaceID,
+		sink:          e.shortcutChildWorkSink,
+		contentFilter: e.contentFilter,
+		logger:        e.logger,
+	}
+}
 
 // This file is the shortcut-root local lifecycle shell. It gathers filesystem
 // and store facts, executes Graph/filesystem effects, and persists planner
 // outputs. Durable shortcut policy decisions stay in shortcut_root_planner_*.
-func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, error) {
-	if e == nil || e.baseline == nil {
+func (s *shortcutRoots) reconcileShortcutRootLocalState(ctx context.Context) (bool, error) {
+	if s == nil || s.store == nil {
 		return false, nil
 	}
-	records, err := e.baseline.ListShortcutRoots(ctx)
+	records, err := s.store.ListShortcutRoots(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: read shortcut roots for local lifecycle: %w", err)
 	}
-	localRows, err := e.baseline.ListLocalState(ctx)
+	localRows, err := s.store.ListLocalState(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: read local_state for shortcut root local lifecycle: %w", err)
 	}
@@ -34,7 +72,7 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 	nextRecords := make([]syncshortcut.ShortcutRootRecord, 0, len(records))
 	var newlyBlocked []shortcutRootCleanupBlockedReport
 	for i := range records {
-		step, recordErr := e.reconcileShortcutRootLocalStateRecord(ctx, &records[i], localRows)
+		step, recordErr := s.reconcileShortcutRootLocalStateRecord(ctx, &records[i], localRows)
 		if recordErr != nil {
 			return false, recordErr
 		}
@@ -51,7 +89,7 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 		// record first enters the blocked state (or its reason changes);
 		// an unchanged repeat stays at Debug.
 		if !step.changed {
-			e.logger.Debug("shortcut root release cleanup still blocked",
+			s.logger.Debug("shortcut root release cleanup still blocked",
 				slog.String("path", records[i].RelativeLocalPath),
 				slog.Any("error", step.releaseCleanupErr),
 			)
@@ -65,14 +103,14 @@ func (e *Engine) reconcileShortcutRootLocalState(ctx context.Context) (bool, err
 	if !changed {
 		return false, nil
 	}
-	if err := e.baseline.ReplaceShortcutRoots(ctx, nextRecords); err != nil {
+	if err := s.store.ReplaceShortcutRoots(ctx, nextRecords); err != nil {
 		return false, fmt.Errorf("sync: persist shortcut root local lifecycle: %w", err)
 	}
-	if err := e.protectedRoots.refresh(ctx); err != nil {
+	if err := s.roots.refresh(ctx); err != nil {
 		return false, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
 	for i := range newlyBlocked {
-		e.logger.Warn("Could not remove the local copy of removed shared folder "+
+		s.logger.Warn("Could not remove the local copy of removed shared folder "+
 			newlyBlocked[i].relativeLocalPath+
 			"; move or delete what is in the way and the next sync finishes the cleanup",
 			slog.Any("error", newlyBlocked[i].err),
@@ -94,7 +132,7 @@ type shortcutRootLocalReconcileStep struct {
 	releaseCleanupErr error
 }
 
-func (e *Engine) reconcileShortcutRootLocalStateRecord(
+func (s *shortcutRoots) reconcileShortcutRootLocalStateRecord(
 	ctx context.Context,
 	record *syncshortcut.ShortcutRootRecord,
 	localRows []syncdomain.LocalStateRow,
@@ -104,14 +142,14 @@ func (e *Engine) reconcileShortcutRootLocalStateRecord(
 	}
 	normalized := syncshortcut.NormalizeShortcutRootRecord(record)
 	if syncshortcut.ShortcutRootStateAwaitsReleaseCleanup(normalized.State) {
-		next, changed, err := e.finalizeShortcutRootReleaseRecord(&normalized)
+		next, changed, err := s.finalizeShortcutRootReleaseRecord(&normalized)
 		return shortcutRootLocalReconcileStep{
 			records:           next,
 			changed:           changed,
 			releaseCleanupErr: err,
 		}, nil
 	}
-	next, keep, changed, err := e.reconcileShortcutRootRecord(ctx, record, localRows)
+	next, keep, changed, err := s.reconcileShortcutRootRecord(ctx, record, localRows)
 	if err != nil {
 		return shortcutRootLocalReconcileStep{}, err
 	}
@@ -122,7 +160,7 @@ func (e *Engine) reconcileShortcutRootLocalStateRecord(
 	return step, nil
 }
 
-func (e *Engine) reconcileShortcutRootRecord(
+func (s *shortcutRoots) reconcileShortcutRootRecord(
 	ctx context.Context,
 	record *syncshortcut.ShortcutRootRecord,
 	localRows []syncdomain.LocalStateRow,
@@ -142,19 +180,19 @@ func (e *Engine) reconcileShortcutRootRecord(
 		syncshortcut.ShortcutRootStateDuplicateTarget:
 	case syncshortcut.ShortcutRootStateRemovedFinalDrain,
 		syncshortcut.ShortcutRootStateSamePathReplacementWaiting:
-		return e.reconcileRetiringShortcutRootLocalState(&normalized)
+		return s.reconcileRetiringShortcutRootLocalState(&normalized)
 	case syncshortcut.ShortcutRootStateRemovedReleasePending,
 		syncshortcut.ShortcutRootStateRemovedCleanupBlocked,
 		syncshortcut.ShortcutRootStateRemovedChildCleanupPending:
 		return normalized, true, false, nil
 	}
-	observation := e.observeShortcutRootLocalState(&normalized)
+	observation := s.observeShortcutRootLocalState(&normalized)
 	plan := syncshortcut.PlanShortcutRootLocalObservation(&normalized, &observation)
 	switch plan.Action {
 	case syncshortcut.ShortcutRootLocalKeepRecord:
 		return plan.Next, plan.Keep, plan.Changed, nil
 	case syncshortcut.ShortcutRootLocalMaterializeRoot:
-		return e.materializeShortcutRoot(&normalized, observation.RelativePath)
+		return s.materializeShortcutRoot(&normalized, observation.RelativePath)
 	case syncshortcut.ShortcutRootLocalDropRecord,
 		syncshortcut.ShortcutRootLocalMutateAlias,
 		syncshortcut.ShortcutRootLocalMoveProjection:
@@ -162,21 +200,21 @@ func (e *Engine) reconcileShortcutRootRecord(
 	case syncshortcut.ShortcutRootLocalNoop:
 	}
 	relativePath := observation.RelativePath
-	return e.reconcileMissingMaterializedShortcutRoot(ctx, &normalized, relativePath, localRows)
+	return s.reconcileMissingMaterializedShortcutRoot(ctx, &normalized, relativePath, localRows)
 }
 
-func (e *Engine) reconcileRetiringShortcutRootLocalState(
+func (s *shortcutRoots) reconcileRetiringShortcutRootLocalState(
 	record *syncshortcut.ShortcutRootRecord,
 ) (syncshortcut.ShortcutRootRecord, bool, bool, error) {
 	if record == nil {
 		return syncshortcut.ShortcutRootRecord{}, false, false, nil
 	}
-	observation := e.observeShortcutRootLocalState(record)
+	observation := s.observeShortcutRootLocalState(record)
 	plan := syncshortcut.PlanRetiringShortcutRootLocalObservation(record, &observation)
 	return plan.Next, plan.Keep, plan.Changed, nil
 }
 
-func (e *Engine) observeShortcutRootLocalState(record *syncshortcut.ShortcutRootRecord) syncshortcut.ShortcutRootLocalObservation {
+func (s *shortcutRoots) observeShortcutRootLocalState(record *syncshortcut.ShortcutRootRecord) syncshortcut.ShortcutRootLocalObservation {
 	relativePath, ok := syncshortcut.CleanShortcutRootRelativePath(record.RelativeLocalPath)
 	observation := syncshortcut.ShortcutRootLocalObservation{
 		RelativePath:   relativePath,
@@ -185,12 +223,12 @@ func (e *Engine) observeShortcutRootLocalState(record *syncshortcut.ShortcutRoot
 	if !ok {
 		return observation
 	}
-	onDisk := e.shortcutRootOnDisk(relativePath)
-	if err := e.syncTree.ValidateNoSymlinkAncestors(onDisk); err != nil {
+	onDisk := s.shortcutRootOnDisk(relativePath)
+	if err := s.syncTree.ValidateNoSymlinkAncestors(onDisk); err != nil {
 		observation.SymlinkErr = err
 		return observation
 	}
-	state, err := e.syncTree.PathStateNoFollow(onDisk)
+	state, err := s.syncTree.PathStateNoFollow(onDisk)
 	if err != nil {
 		observation.PathErr = err
 		return observation
@@ -199,7 +237,7 @@ func (e *Engine) observeShortcutRootLocalState(record *syncshortcut.ShortcutRoot
 	if !state.Exists || !state.IsDir {
 		return observation
 	}
-	identity, identityErr := e.syncTree.IdentityNoFollow(onDisk)
+	identity, identityErr := s.syncTree.IdentityNoFollow(onDisk)
 	if identityErr != nil {
 		observation.IdentityErr = identityErr
 		return observation
@@ -208,7 +246,7 @@ func (e *Engine) observeShortcutRootLocalState(record *syncshortcut.ShortcutRoot
 	return observation
 }
 
-func (e *Engine) materializeShortcutRoot(
+func (s *shortcutRoots) materializeShortcutRoot(
 	record *syncshortcut.ShortcutRootRecord,
 	relativePath string,
 ) (syncshortcut.ShortcutRootRecord, bool, bool, error) {
@@ -218,13 +256,13 @@ func (e *Engine) materializeShortcutRoot(
 	// Existing parents are addressed as spelled on disk; the folder itself,
 	// new, gets the stored name. It and any parent it needs are folders in
 	// the user's tree, like any other the sync tree creates (R-5.10.2).
-	onDisk := e.shortcutRootOnDisk(relativePath)
-	createErr := e.syncTree.MkdirAllNoFollow(onDisk)
+	onDisk := s.shortcutRootOnDisk(relativePath)
+	createErr := s.syncTree.MkdirAllNoFollow(onDisk)
 	if createErr != nil {
 		plan := syncshortcut.PlanShortcutRootMaterializeResult(record, syncshortcut.ShortcutRootMaterializeResult{CreateErr: createErr})
 		return syncshortcut.ShortcutRootLocalPlanResult(&plan)
 	}
-	identity, identityErr := e.syncTree.IdentityNoFollow(onDisk)
+	identity, identityErr := s.syncTree.IdentityNoFollow(onDisk)
 	if identityErr != nil {
 		plan := syncshortcut.PlanShortcutRootMaterializeResult(record, syncshortcut.ShortcutRootMaterializeResult{IdentityErr: identityErr})
 		return syncshortcut.ShortcutRootLocalPlanResult(&plan)
@@ -233,7 +271,7 @@ func (e *Engine) materializeShortcutRoot(
 	return syncshortcut.ShortcutRootLocalPlanResult(&plan)
 }
 
-func (e *Engine) reconcileMissingMaterializedShortcutRoot(
+func (s *shortcutRoots) reconcileMissingMaterializedShortcutRoot(
 	ctx context.Context,
 	record *syncshortcut.ShortcutRootRecord,
 	relativePath string,
@@ -242,17 +280,17 @@ func (e *Engine) reconcileMissingMaterializedShortcutRoot(
 	if record == nil || record.LocalRootIdentity == nil {
 		return syncshortcut.ShortcutRootRecord{}, false, false, nil
 	}
-	candidates, candidateErr := e.shortcutRootIdentityCandidates(relativePath, *record.LocalRootIdentity, localRows)
+	candidates, candidateErr := s.shortcutRootIdentityCandidates(relativePath, *record.LocalRootIdentity, localRows)
 	observation := syncshortcut.ShortcutRootLocalObservation{
 		RelativePath: relativePath,
 		Candidates:   candidates,
 		CandidateErr: candidateErr,
 	}
 	plan := syncshortcut.PlanMissingMaterializedShortcutRootObservation(record, &observation)
-	return e.executeMissingMaterializedShortcutRootPlan(ctx, record, &plan)
+	return s.executeMissingMaterializedShortcutRootPlan(ctx, record, &plan)
 }
 
-func (e *Engine) executeMissingMaterializedShortcutRootPlan(
+func (s *shortcutRoots) executeMissingMaterializedShortcutRootPlan(
 	ctx context.Context,
 	record *syncshortcut.ShortcutRootRecord,
 	plan *syncshortcut.ShortcutRootLocalPlan,
@@ -262,19 +300,19 @@ func (e *Engine) executeMissingMaterializedShortcutRootPlan(
 	}
 	switch plan.Action {
 	case syncshortcut.ShortcutRootMissingAliasMoveProjection:
-		return e.moveRemoteRenamedShortcutProjection(record, plan.FromRelativePath, plan.ToRelativePath)
+		return s.moveRemoteRenamedShortcutProjection(record, plan.FromRelativePath, plan.ToRelativePath)
 	case syncshortcut.ShortcutRootMissingAliasDelete:
 		result := syncshortcut.ShortcutRootAliasMutationResult{
-			MutationErr: e.applyShortcutAliasMutation(ctx, plan.Mutation),
+			MutationErr: s.applyShortcutAliasMutation(ctx, plan.Mutation),
 		}
 		resultPlan := syncshortcut.PlanMissingAliasDeleteResult(record, result)
 		return syncshortcut.ShortcutRootLocalActionResult(&resultPlan)
 	case syncshortcut.ShortcutRootMissingAliasRename:
 		result := syncshortcut.ShortcutRootAliasMutationResult{
-			MutationErr: e.applyShortcutAliasMutation(ctx, plan.Mutation),
+			MutationErr: s.applyShortcutAliasMutation(ctx, plan.Mutation),
 		}
 		if result.MutationErr == nil {
-			identity, identityErr := e.syncTree.IdentityNoFollow(e.shortcutRootOnDisk(plan.CandidatePath))
+			identity, identityErr := s.syncTree.IdentityNoFollow(s.shortcutRootOnDisk(plan.CandidatePath))
 			result.Identity = &identity
 			result.IdentityErr = identityErr
 		}
@@ -291,13 +329,13 @@ func (e *Engine) executeMissingMaterializedShortcutRootPlan(
 	}
 }
 
-func (e *Engine) shortcutRootIdentityCandidates(
+func (s *shortcutRoots) shortcutRootIdentityCandidates(
 	relativePath string,
 	identity synctree.FileIdentity,
 	localRows []syncdomain.LocalStateRow,
 ) ([]string, error) {
 	candidates := syncshortcut.ShortcutRootIdentityCandidatesFromLocalState(relativePath, identity, localRows)
-	liveCandidates, err := e.shortcutRootIdentityCandidatesFromFilesystem(relativePath, identity)
+	liveCandidates, err := s.shortcutRootIdentityCandidatesFromFilesystem(relativePath, identity)
 	if err != nil {
 		return nil, err
 	}
@@ -305,11 +343,11 @@ func (e *Engine) shortcutRootIdentityCandidates(
 	return syncshortcut.UniqueSortedShortcutRootCandidates(candidates), nil
 }
 
-func (e *Engine) shortcutRootIdentityCandidatesFromFilesystem(
+func (s *shortcutRoots) shortcutRootIdentityCandidatesFromFilesystem(
 	relativePath string,
 	identity synctree.FileIdentity,
 ) ([]string, error) {
-	if e == nil || e.syncTree == nil {
+	if s == nil || s.syncTree == nil {
 		return nil, nil
 	}
 	normalizedCurrent := syncshortcut.NormalizedProtectedRootPath(relativePath)
@@ -319,9 +357,9 @@ func (e *Engine) shortcutRootIdentityCandidatesFromFilesystem(
 	}
 	parentOnDisk := ""
 	if parent != "" {
-		parentOnDisk = e.shortcutRootOnDisk(parent)
+		parentOnDisk = s.shortcutRootOnDisk(parent)
 	}
-	entries, err := e.syncTree.ReadDir(parentOnDisk)
+	entries, err := s.syncTree.ReadDir(parentOnDisk)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -330,7 +368,7 @@ func (e *Engine) shortcutRootIdentityCandidatesFromFilesystem(
 	}
 	candidates := make([]string, 0)
 	for _, entry := range entries {
-		candidate, found, err := e.shortcutRootIdentityCandidateFromFilesystemEntry(
+		candidate, found, err := s.shortcutRootIdentityCandidateFromFilesystemEntry(
 			parent,
 			parentOnDisk,
 			normalizedCurrent,
@@ -352,7 +390,7 @@ func (e *Engine) shortcutRootIdentityCandidatesFromFilesystem(
 // path (NFC, under parent), the form records and the alias's own path use:
 // the alias itself, listed under an NFD name, is not a rename of itself
 // (R-2.13.2).
-func (e *Engine) shortcutRootIdentityCandidateFromFilesystemEntry(
+func (s *shortcutRoots) shortcutRootIdentityCandidateFromFilesystemEntry(
 	parent string,
 	parentOnDisk string,
 	normalizedCurrent string,
@@ -370,7 +408,7 @@ func (e *Engine) shortcutRootIdentityCandidateFromFilesystemEntry(
 	if parentOnDisk != "" {
 		onDisk = filepath.Join(parentOnDisk, entryName)
 	}
-	state, err := e.syncTree.PathStateNoFollow(onDisk)
+	state, err := s.syncTree.PathStateNoFollow(onDisk)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", false, nil
@@ -380,7 +418,7 @@ func (e *Engine) shortcutRootIdentityCandidateFromFilesystemEntry(
 	if !state.Exists || !state.IsDir {
 		return "", false, nil
 	}
-	candidateIdentity, err := e.syncTree.IdentityNoFollow(onDisk)
+	candidateIdentity, err := s.syncTree.IdentityNoFollow(onDisk)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", false, nil
@@ -393,7 +431,7 @@ func (e *Engine) shortcutRootIdentityCandidateFromFilesystemEntry(
 	return candidate, true, nil
 }
 
-func (e *Engine) moveRemoteRenamedShortcutProjection(
+func (s *shortcutRoots) moveRemoteRenamedShortcutProjection(
 	record *syncshortcut.ShortcutRootRecord,
 	fromRelativePath string,
 	toRelativePath string,
@@ -401,12 +439,12 @@ func (e *Engine) moveRemoteRenamedShortcutProjection(
 	if record == nil {
 		return syncshortcut.ShortcutRootRecord{}, false, false, nil
 	}
-	moveErr := e.moveShortcutRootProjection(fromRelativePath, toRelativePath)
+	moveErr := s.moveShortcutRootProjection(fromRelativePath, toRelativePath)
 	if moveErr != nil {
 		plan := syncshortcut.PlanShortcutProjectionMoveResult(record, syncshortcut.ShortcutRootProjectionMoveResult{MoveErr: moveErr})
 		return syncshortcut.ShortcutRootLocalPlanResult(&plan)
 	}
-	identity, identityErr := e.syncTree.IdentityNoFollow(e.shortcutRootOnDisk(toRelativePath))
+	identity, identityErr := s.syncTree.IdentityNoFollow(s.shortcutRootOnDisk(toRelativePath))
 	if identityErr != nil {
 		plan := syncshortcut.PlanShortcutProjectionMoveResult(record, syncshortcut.ShortcutRootProjectionMoveResult{IdentityErr: identityErr})
 		return syncshortcut.ShortcutRootLocalPlanResult(&plan)
@@ -415,23 +453,23 @@ func (e *Engine) moveRemoteRenamedShortcutProjection(
 	return syncshortcut.ShortcutRootLocalPlanResult(&plan)
 }
 
-func (e *Engine) moveShortcutRootProjection(fromRelativePath string, toRelativePath string) error {
+func (s *shortcutRoots) moveShortcutRootProjection(fromRelativePath string, toRelativePath string) error {
 	if fromRelativePath == "" || toRelativePath == "" || fromRelativePath == toRelativePath {
 		return nil
 	}
 	// Both endpoints as spelled on disk: the source, and the destination's
 	// existing parents (and an existing destination, a case-only rename).
-	fromRelativePath = e.shortcutRootOnDisk(fromRelativePath)
-	toRelativePath = e.shortcutRootOnDisk(toRelativePath)
-	if err := e.validateShortcutRootProjectionMove(fromRelativePath, toRelativePath); err != nil {
+	fromRelativePath = s.shortcutRootOnDisk(fromRelativePath)
+	toRelativePath = s.shortcutRootOnDisk(toRelativePath)
+	if err := s.validateShortcutRootProjectionMove(fromRelativePath, toRelativePath); err != nil {
 		return err
 	}
-	toState, err := e.syncTree.PathStateNoFollow(toRelativePath)
+	toState, err := s.syncTree.PathStateNoFollow(toRelativePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stating current shortcut alias projection: %w", err)
 	}
 	if toState.Exists {
-		moved, err := e.moveShortcutRootProjectionOntoExistingTarget(fromRelativePath, toRelativePath)
+		moved, err := s.moveShortcutRootProjectionOntoExistingTarget(fromRelativePath, toRelativePath)
 		if err != nil {
 			return err
 		}
@@ -440,27 +478,27 @@ func (e *Engine) moveShortcutRootProjection(fromRelativePath string, toRelativeP
 		}
 		return fmt.Errorf("%w: current shortcut alias projection already exists", synctree.ErrUnsafePath)
 	}
-	if err := e.syncTree.MkdirAllNoFollow(filepath.Dir(toRelativePath)); err != nil {
+	if err := s.syncTree.MkdirAllNoFollow(filepath.Dir(toRelativePath)); err != nil {
 		return fmt.Errorf("creating current shortcut alias parent: %w", err)
 	}
-	if err := e.syncTree.Rename(fromRelativePath, toRelativePath); err != nil {
+	if err := s.syncTree.Rename(fromRelativePath, toRelativePath); err != nil {
 		return fmt.Errorf("moving shortcut alias projection: %w", err)
 	}
 	return nil
 }
 
-func (e *Engine) moveShortcutRootProjectionOntoExistingTarget(
+func (s *shortcutRoots) moveShortcutRootProjectionOntoExistingTarget(
 	fromRelativePath string,
 	toRelativePath string,
 ) (bool, error) {
-	same, sameErr := e.syncTree.SameFile(fromRelativePath, toRelativePath)
+	same, sameErr := s.syncTree.SameFile(fromRelativePath, toRelativePath)
 	if sameErr != nil {
 		return false, fmt.Errorf("comparing shortcut alias projection identity: %w", sameErr)
 	}
 	if !same {
 		return false, nil
 	}
-	err := e.syncTree.RenameWithTemporarySibling(
+	err := s.syncTree.RenameWithTemporarySibling(
 		fromRelativePath,
 		toRelativePath,
 		syncshortcut.ShortcutRootCaseRenameTempInfix,
@@ -469,7 +507,7 @@ func (e *Engine) moveShortcutRootProjectionOntoExistingTarget(
 	switch {
 	case errors.Is(err, synctree.ErrSourceNotRemoved):
 		// Reached only by a file, which validateShortcutRootProjectionMove refuses; a folder is never linked.
-		e.logger.Warn("Moved shortcut alias projection "+toRelativePath+", but could not remove a name it was moved from",
+		s.logger.Warn("Moved shortcut alias projection "+toRelativePath+", but could not remove a name it was moved from",
 			slog.String("path", toRelativePath), slog.Any("error", err))
 	case err != nil:
 		return false, fmt.Errorf("moving case-only shortcut alias projection: %w", err)
@@ -477,14 +515,14 @@ func (e *Engine) moveShortcutRootProjectionOntoExistingTarget(
 	return true, nil
 }
 
-func (e *Engine) validateShortcutRootProjectionMove(fromRelativePath string, toRelativePath string) error {
-	if err := e.syncTree.ValidateNoSymlinkAncestors(fromRelativePath); err != nil {
+func (s *shortcutRoots) validateShortcutRootProjectionMove(fromRelativePath string, toRelativePath string) error {
+	if err := s.syncTree.ValidateNoSymlinkAncestors(fromRelativePath); err != nil {
 		return fmt.Errorf("validating previous shortcut alias projection: %w", err)
 	}
-	if err := e.syncTree.ValidateNoSymlinkAncestors(filepath.Dir(toRelativePath)); err != nil {
+	if err := s.syncTree.ValidateNoSymlinkAncestors(filepath.Dir(toRelativePath)); err != nil {
 		return fmt.Errorf("validating current shortcut alias parent: %w", err)
 	}
-	fromState, err := e.syncTree.PathStateNoFollow(fromRelativePath)
+	fromState, err := s.syncTree.PathStateNoFollow(fromRelativePath)
 	if err != nil {
 		return fmt.Errorf("stating previous shortcut alias projection: %w", err)
 	}
@@ -500,19 +538,19 @@ func (e *Engine) validateShortcutRootProjectionMove(fromRelativePath string, toR
 // with an NFD name on disk is missing under its stored spelling, and reading
 // it as missing deleted the alias online or materialized an empty duplicate
 // beside it.
-func (e *Engine) shortcutRootOnDisk(storedPath string) string {
-	return e.syncTree.Spelling(filepath.FromSlash(storedPath))
+func (s *shortcutRoots) shortcutRootOnDisk(storedPath string) string {
+	return s.syncTree.Spelling(filepath.FromSlash(storedPath))
 }
 
-func (e *Engine) releaseShortcutRootProjectionAfterDrain(ctx context.Context, ack syncshortcut.ShortcutChildDrainAck) error {
-	if e == nil || e.baseline == nil || ack.Ref.IsZero() {
+func (s *shortcutRoots) releaseShortcutRootProjectionAfterDrain(ctx context.Context, ack syncshortcut.ShortcutChildDrainAck) error {
+	if s == nil || s.store == nil || ack.Ref.IsZero() {
 		return nil
 	}
-	return e.finalizeShortcutRootReleaseByBinding(ctx, ack.Ref)
+	return s.finalizeShortcutRootReleaseByBinding(ctx, ack.Ref)
 }
 
-func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, ref syncshortcut.ShortcutChildAckRef) error {
-	records, err := e.baseline.ListShortcutRoots(ctx)
+func (s *shortcutRoots) finalizeShortcutRootReleaseByBinding(ctx context.Context, ref syncshortcut.ShortcutChildAckRef) error {
+	records, err := s.store.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read shortcut roots before child drain release: %w", err)
 	}
@@ -525,7 +563,7 @@ func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, ref s
 			nextRecords = append(nextRecords, record)
 			continue
 		}
-		next, recordChanged, recordErr := e.finalizeShortcutRootReleaseRecord(&record)
+		next, recordChanged, recordErr := s.finalizeShortcutRootReleaseRecord(&record)
 		changed = changed || recordChanged
 		nextRecords = append(nextRecords, next...)
 		if recordErr != nil {
@@ -533,7 +571,7 @@ func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, ref s
 		}
 	}
 	if changed {
-		if err := e.baseline.ReplaceShortcutRoots(ctx, nextRecords); err != nil {
+		if err := s.store.ReplaceShortcutRoots(ctx, nextRecords); err != nil {
 			return fmt.Errorf("sync: persist shortcut root release: %w", err)
 		}
 	}
@@ -543,7 +581,7 @@ func (e *Engine) finalizeShortcutRootReleaseByBinding(ctx context.Context, ref s
 	return nil
 }
 
-func (e *Engine) finalizeShortcutRootReleaseRecord(
+func (s *shortcutRoots) finalizeShortcutRootReleaseRecord(
 	record *syncshortcut.ShortcutRootRecord,
 ) ([]syncshortcut.ShortcutRootRecord, bool, error) {
 	if record == nil {
@@ -553,11 +591,11 @@ func (e *Engine) finalizeShortcutRootReleaseRecord(
 	if !syncshortcut.ShortcutRootStateAwaitsReleaseCleanup(normalized.State) {
 		return []syncshortcut.ShortcutRootRecord{normalized}, false, nil
 	}
-	result := e.removeShortcutRootProjection(normalized.RelativeLocalPath)
+	result := s.removeShortcutRootProjection(normalized.RelativeLocalPath)
 	if result.NotEmpty {
 		// The child released its tree before acknowledging, so something
 		// arrived since; the child, which owns that content, runs again.
-		e.logger.Debug("removed shared folder's local folder is not empty; its final sync runs again",
+		s.logger.Debug("removed shared folder's local folder is not empty; its final sync runs again",
 			slog.String("path", normalized.RelativeLocalPath))
 	}
 	plan := syncshortcut.PlanShortcutRootReleaseCleanup(&normalized, result)
@@ -569,18 +607,18 @@ func (e *Engine) finalizeShortcutRootReleaseRecord(
 // rule (engine_shortcut_release.go). The root goes only as an empty
 // directory: this engine never walks a tree it does not sync, and a root that
 // still holds something is the child's to release.
-func (e *Engine) removeShortcutRootProjection(relativeLocalPath string) syncshortcut.ShortcutRootReleaseResult {
+func (s *shortcutRoots) removeShortcutRootProjection(relativeLocalPath string) syncshortcut.ShortcutRootReleaseResult {
 	relativePath, ok := syncshortcut.CleanShortcutRootRelativePath(relativeLocalPath)
 	if !ok {
 		return syncshortcut.ShortcutRootReleaseResult{
 			Err: fmt.Errorf("%w: the shared folder's local path leaves the sync folder", synctree.ErrUnsafePath),
 		}
 	}
-	relativePath = e.shortcutRootOnDisk(relativePath)
-	if err := e.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
+	relativePath = s.shortcutRootOnDisk(relativePath)
+	if err := s.syncTree.ValidateNoSymlinkAncestors(relativePath); err != nil {
 		return syncshortcut.ShortcutRootReleaseResult{Err: fmt.Errorf("checking the removed shared folder's local folder: %w", err)}
 	}
-	state, err := e.syncTree.PathStateNoFollow(relativePath)
+	state, err := s.syncTree.PathStateNoFollow(relativePath)
 	if err != nil {
 		return syncshortcut.ShortcutRootReleaseResult{Err: fmt.Errorf("reading the removed shared folder's local folder: %w", err)}
 	}
@@ -592,16 +630,16 @@ func (e *Engine) removeShortcutRootProjection(relativeLocalPath string) syncshor
 			Err: fmt.Errorf("%w: the shared folder's local path is not a directory", synctree.ErrUnsafePath),
 		}
 	}
-	if notEmpty, err := e.shortcutRootHoldsEntries(relativePath); err != nil || notEmpty {
+	if notEmpty, err := s.shortcutRootHoldsEntries(relativePath); err != nil || notEmpty {
 		return syncshortcut.ShortcutRootReleaseResult{NotEmpty: notEmpty, Err: err}
 	}
-	removeErr := e.syncTree.RemoveEmptyDirNoFollow(relativePath)
+	removeErr := s.syncTree.RemoveEmptyDirNoFollow(relativePath)
 	if removeErr == nil {
 		return syncshortcut.ShortcutRootReleaseResult{}
 	}
 	// An entry that arrived after the check refuses the removal; that is the
 	// child's again, not a blocked cleanup.
-	if notEmpty, err := e.shortcutRootHoldsEntries(relativePath); err == nil && notEmpty {
+	if notEmpty, err := s.shortcutRootHoldsEntries(relativePath); err == nil && notEmpty {
 		return syncshortcut.ShortcutRootReleaseResult{NotEmpty: true}
 	}
 
@@ -610,8 +648,8 @@ func (e *Engine) removeShortcutRootProjection(relativeLocalPath string) syncshor
 
 // shortcutRootHoldsEntries reports whether the alias root at its on-disk
 // spelling holds any entry.
-func (e *Engine) shortcutRootHoldsEntries(onDisk string) (bool, error) {
-	empty, err := e.syncTree.DirEmptyNoFollow(onDisk)
+func (s *shortcutRoots) shortcutRootHoldsEntries(onDisk string) (bool, error) {
+	empty, err := s.syncTree.DirEmptyNoFollow(onDisk)
 	if err != nil {
 		return false, fmt.Errorf("reading the removed shared folder's local folder: %w", err)
 	}

@@ -129,7 +129,7 @@ func (flow *engineFlow) resolveRetryWorkAndLogResolution(
 		return err
 	}
 	// The work succeeded: whatever the store had, nothing holds it any more.
-	flow.retries.releaseHeldAction(work)
+	flow.sched.Release(work)
 	if !found || row == nil {
 		return nil
 	}

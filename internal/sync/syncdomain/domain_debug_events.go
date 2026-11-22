@@ -105,3 +105,10 @@ const (
 	EngineDebugEventWebsocketWakeSourceStopped          EngineDebugEventType = "websocket_wake_source_stopped"
 	EngineDebugEventWebsocketFallback                   EngineDebugEventType = "websocket_fallback"
 )
+
+// EngineDebugEventShadowPlanDiffered: a watch replan's plan differs from the
+// identity-keyed shadow plan of the same inputs. Count is the number of
+// differing paths, Path the first, Note the differences with their reasons
+// and how many no known reason covers; Error is the shadow planner's
+// failure. The shadow plan is never executed or recorded.
+const EngineDebugEventShadowPlanDiffered EngineDebugEventType = "shadow_plan_differed"

@@ -10,6 +10,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -59,7 +60,7 @@ func distinctJitter() func(time.Duration) time.Duration {
 // Validates: R-6.8.24
 //
 // A released ramp batch reached the drive in one instant. Its members must
-// be admitted at distinct instants spread over releaseBatchAdmissionWindow
+// be admitted at distinct instants spread over syncsched.ReleaseBatchAdmissionWindow
 // of the release, on the engine clock; the trial that honors the
 // server-given Retry-After is not jittered; and a one-shot pass, which has
 // no runtime signals, waits for its parked members in-loop and still
@@ -115,12 +116,12 @@ func TestReleaseJitter_OneShotBatchIsAdmittedOverAWindow(t *testing.T) {
 	assert.False(t, ok, "the scope is released with its last batch")
 
 	dispatches := trace.dispatchesInPass(2)
-	require.GreaterOrEqual(t, len(dispatches), 1+firstReleaseAllowance(workers))
+	require.GreaterOrEqual(t, len(dispatches), 1+syncsched.FirstReleaseAllowance(workers))
 	assert.Equal(t, trialAt, dispatches[0], "the trial goes at the Retry-After deadline, unjittered")
-	firstBatch := dispatches[1 : 1+firstReleaseAllowance(workers)]
+	firstBatch := dispatches[1 : 1+syncsched.FirstReleaseAllowance(workers)]
 	for i, at := range firstBatch {
 		assert.True(t, at.After(trialAt), "member %d is admitted after the release", i)
-		assert.LessOrEqual(t, at.Sub(trialAt), releaseBatchAdmissionWindow, "member %d is admitted within the window", i)
+		assert.LessOrEqual(t, at.Sub(trialAt), syncsched.ReleaseBatchAdmissionWindow, "member %d is admitted within the window", i)
 	}
 	for i := 1; i < len(dispatches); i++ {
 		assert.True(t, dispatches[i].After(dispatches[i-1]),
@@ -157,7 +158,7 @@ func TestWatchRuntime_ParkedBatchMembersWaitForTheirAdmitInstant(t *testing.T) {
 
 	actions := make([]*syncdomain.TrackedAction, 0, 4)
 	for i := range 4 {
-		ta := rt.sched.graph.Add(&syncdomain.Action{
+		ta := rt.sched.AddForTest(&syncdomain.Action{
 			Type:    syncdomain.ActionUpload,
 			Path:    "file-" + string(rune('a'+i)) + ".txt",
 			DriveID: eng.driveID,

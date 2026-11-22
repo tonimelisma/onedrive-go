@@ -852,7 +852,7 @@ func dispatchTestCreate(t *testing.T, rt *watchRuntime, id int64) *syncdomain.Tr
 
 	const path = "doc.txt"
 	return dispatchTestAction(t, rt, id, &syncdomain.Action{
-		Type: syncdomain.ActionUpload, Path: path, DriveID: rt.engine.driveID, View: &syncdomain.PathView{Path: path},
+		Type: syncdomain.ActionUpload, Path: path, DriveID: rt.cfg.driveID, View: &syncdomain.PathView{Path: path},
 	})
 }
 
@@ -861,14 +861,14 @@ func dispatchTestCreate(t *testing.T, rt *watchRuntime, id int64) *syncdomain.Tr
 func dispatchTestAction(t *testing.T, rt *watchRuntime, id int64, action *syncdomain.Action) *syncdomain.TrackedAction {
 	t.Helper()
 
-	queued := rt.sched.graph.Add(action, id, nil)
+	queued := rt.sched.AddForTest(action, id, nil)
 	require.NotNil(t, queued)
-	rt.sched.markQueued(queued)
+	rt.sched.Queued(queued)
 	rt.replaceOutbox([]*syncdomain.TrackedAction{queued})
 	_, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{runtime: rt}, nil)
 	require.NoError(t, err)
 	select {
-	case dispatched := <-rt.sched.dispatchCh:
+	case dispatched := <-rt.dispatchCh:
 		require.Equal(t, queued.ID, dispatched.ID)
 	default:
 		require.Fail(t, "the create was not dispatched")
@@ -885,7 +885,7 @@ func failTestCreate(t *testing.T, rt *watchRuntime, bl syncdomain.BaselineView, 
 	clock.Advance(time.Second)
 	endedAt := clock.Now()
 	require.NoError(t, rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
-		Path: create.Action.Path, DriveID: rt.engine.driveID, ActionType: syncdomain.ActionUpload, ActionID: create.ID,
+		Path: create.Action.Path, DriveID: rt.cfg.driveID, ActionType: syncdomain.ActionUpload, ActionID: create.ID,
 		Err: scenarioCreateAnswerLost(filepath.Base(create.Action.Path)), ErrMsg: "create answer lost",
 	}))
 
@@ -1050,7 +1050,7 @@ func TestWatch_ReplanWaitsWhileAnUploadRunsBeforeItPrunesPendingCreates(t *testi
 		Path: "doc.txt", ItemType: syncdomain.ItemTypeFile, Hash: syncfixture.EmptyQuickXor, Size: 0,
 	}}))
 	upload := dispatchTestAction(t, w.rt, 1, &syncdomain.Action{
-		Type: syncdomain.ActionUpload, Path: "doc.txt", DriveID: w.rt.engine.driveID, ItemID: testPlaceholderID,
+		Type: syncdomain.ActionUpload, Path: "doc.txt", DriveID: w.rt.cfg.driveID, ItemID: testPlaceholderID,
 		View: &syncdomain.PathView{Path: "doc.txt"},
 	})
 
@@ -1066,7 +1066,7 @@ func TestWatch_ReplanWaitsWhileAnUploadRunsBeforeItPrunesPendingCreates(t *testi
 
 	// The record was exposed: the prune a replan runs once nothing is
 	// running drops it.
-	w.rt.sched.markFinished(upload)
+	w.rt.sched.Finished(upload)
 	require.True(t, w.rt.canPrepareNow())
 	require.NoError(t, w.eng.baseline.PrunePendingCreates(t.Context(), syncstore.PassRefreshedLocalOnly, w.rt.localScanCoverage()))
 	requireNoPendingCreateAt(t, w.eng.baseline, "doc.txt", "the settled empty placeholder's record goes with the next replan")

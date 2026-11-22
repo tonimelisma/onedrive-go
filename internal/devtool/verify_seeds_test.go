@@ -45,7 +45,7 @@ func runSeedsProfile(t *testing.T, runner *fakeRunner, seedStart uint64) (string
 
 // Validates: R-6.10.25
 //
-// The seeds profile runs the four families' tests over the sync tree, without
+// The seeds profile runs the five families' tests over the sync tree, without
 // the race detector, every family from the night's start seed with its
 // count, and the single-seed variables emptied so a seed in the caller's
 // environment cannot replace the range. The start comes from the UTC date,
@@ -78,16 +78,18 @@ func TestRunVerifySeedsSetsRotatedStart(t *testing.T) {
 				"ONEDRIVE_GO_MODEL_SEED_START=" + tc.start,
 				"ONEDRIVE_GO_PLANNER_SEED_START=" + tc.start,
 				"ONEDRIVE_GO_CHAOS_SEED_START=" + tc.start,
+				"ONEDRIVE_GO_WATCH_SEED_START=" + tc.start,
 				"ONEDRIVE_GO_MODEL_SEEDS=" + strconv.Itoa(seedsEngineCount),
 				"ONEDRIVE_GO_PLANNER_SEEDS=" + strconv.Itoa(seedsPlannerCount),
 				"ONEDRIVE_GO_CHAOS_SEEDS=" + strconv.Itoa(seedsChaosCount),
+				"ONEDRIVE_GO_WATCH_SEEDS=" + strconv.Itoa(seedsWatchCount),
 				"ONEDRIVE_GO_MODEL_SEED=",
 				"ONEDRIVE_GO_PLANNER_SEED=",
 				"ONEDRIVE_GO_DISPATCH_ORDER=",
 			} {
 				assertCommandHasEnvVar(t, command, entry)
 			}
-			starts := "==> model seeds start=" + tc.start + " engine and crash=12 planner=8 chaos=2\n"
+			starts := "==> model seeds start=" + tc.start + " watch=4 engine and crash=12 planner=8 chaos=2\n"
 			require.Contains(t, out, starts)
 			assert.Less(t, strings.Index(out, starts), strings.Index(out, "ok  \t"), "the start is printed before go test runs")
 		})
@@ -112,7 +114,7 @@ func TestNightlySeedStrideCoversEveryCount(t *testing.T) {
 		assert.GreaterOrEqual(t, nightlySeedStride, count, "%s=%d overlaps the next night", name, count)
 		assert.Positive(t, count, name)
 	}
-	assert.Len(t, seedsCounts(), 3, "engine and crash, planner, chaos")
+	assert.Len(t, seedsCounts(), 4, "engine and crash, planner, chaos, watch")
 }
 
 // Validates: R-6.10.25
@@ -123,10 +125,10 @@ func TestNightlySeedStrideCoversEveryCount(t *testing.T) {
 func TestSeedsRunPatternNamesExistingTests(t *testing.T) {
 	t.Parallel()
 
-	const familyCount = 4
+	const familyCount = 5
 	sources := syncTestSources(t)
 	names := strings.Split(strings.TrimSuffix(strings.TrimPrefix(seedsRunPattern(), "^("), ")$"), "|")
-	require.Len(t, names, familyCount, "engine, crash, planner, chaos")
+	require.Len(t, names, familyCount, "watch, engine, crash, planner, chaos")
 	for _, name := range names {
 		assert.Regexp(t, `(?m)^func `+regexp.QuoteMeta(name)+`\(t \*testing\.T\) \{$`, sources,
 			"the seeds pattern names %s, which the sync tree does not define", name)
@@ -134,7 +136,7 @@ func TestSeedsRunPatternNamesExistingTests(t *testing.T) {
 	for _, name := range []string{
 		seedsModelSeedEnv, seedsModelCountEnv, seedsModelStartEnv,
 		seedsPlannerSeedEnv, seedsPlannerCountEnv, seedsPlannerStartEnv,
-		seedsChaosCountEnv, seedsChaosStartEnv, seedsDispatchOrderEnv,
+		seedsChaosCountEnv, seedsChaosStartEnv, seedsWatchCountEnv, seedsWatchStartEnv, seedsDispatchOrderEnv,
 	} {
 		assert.Contains(t, sources, `"`+name+`"`, "the sync tree's tests read no variable %s", name)
 	}

@@ -13,11 +13,11 @@ import (
 // applyShortcutAliasMutation mutates a shortcut placeholder in the parent
 // drive namespace. The parent engine owns the Graph mutation and parent
 // shortcut-root state; multisync is never a caller.
-func (e *Engine) applyShortcutAliasMutation(ctx context.Context, mutation syncshortcut.ShortcutAliasMutation) error {
+func (s *shortcutRoots) applyShortcutAliasMutation(ctx context.Context, mutation syncshortcut.ShortcutAliasMutation) error {
 	if ctx == nil {
 		return fmt.Errorf("sync: shortcut alias mutation context is required")
 	}
-	if e == nil || e.itemsClient == nil {
+	if s == nil || s.items == nil {
 		return fmt.Errorf("sync: shortcut alias mutation requires parent item client")
 	}
 	if mutation.BindingItemID == "" {
@@ -31,22 +31,22 @@ func (e *Engine) applyShortcutAliasMutation(ctx context.Context, mutation syncsh
 		}
 		// No time to keep: a shortcut's own modification time is never
 		// compared or synced.
-		if _, err := e.itemsClient.MoveItem(ctx, e.driveID, mutation.BindingItemID, "", mutation.LocalAlias, time.Time{}); err != nil {
+		if _, err := s.items.MoveItem(ctx, s.driveID, mutation.BindingItemID, "", mutation.LocalAlias, time.Time{}); err != nil {
 			return fmt.Errorf("sync: rename shortcut alias: %w", err)
 		}
-		return e.recordShortcutAliasRename(ctx, mutation)
+		return s.recordShortcutAliasRename(ctx, mutation)
 	case syncshortcut.ShortcutAliasMutationDelete:
-		if err := e.itemsClient.DeleteItem(ctx, e.driveID, mutation.BindingItemID); err != nil && !errors.Is(err, graph.ErrNotFound) {
+		if err := s.items.DeleteItem(ctx, s.driveID, mutation.BindingItemID); err != nil && !errors.Is(err, graph.ErrNotFound) {
 			return fmt.Errorf("sync: delete shortcut alias: %w", err)
 		}
-		return e.recordShortcutAliasDelete(ctx, mutation)
+		return s.recordShortcutAliasDelete(ctx, mutation)
 	default:
 		return fmt.Errorf("sync: unsupported shortcut alias mutation %q", mutation.Kind)
 	}
 }
 
-func (e *Engine) recordShortcutAliasRename(ctx context.Context, mutation syncshortcut.ShortcutAliasMutation) error {
-	records, err := e.baseline.ListShortcutRoots(ctx)
+func (s *shortcutRoots) recordShortcutAliasRename(ctx context.Context, mutation syncshortcut.ShortcutAliasMutation) error {
+	records, err := s.store.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read shortcut roots after alias rename: %w", err)
 	}
@@ -62,14 +62,14 @@ func (e *Engine) recordShortcutAliasRename(ctx context.Context, mutation syncsho
 	if !changed {
 		return nil
 	}
-	if err := e.baseline.ReplaceShortcutRoots(ctx, records); err != nil {
+	if err := s.store.ReplaceShortcutRoots(ctx, records); err != nil {
 		return fmt.Errorf("sync: persist shortcut roots after alias rename: %w", err)
 	}
 	return nil
 }
 
-func (e *Engine) recordShortcutAliasDelete(ctx context.Context, mutation syncshortcut.ShortcutAliasMutation) error {
-	records, err := e.baseline.ListShortcutRoots(ctx)
+func (s *shortcutRoots) recordShortcutAliasDelete(ctx context.Context, mutation syncshortcut.ShortcutAliasMutation) error {
+	records, err := s.store.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read shortcut roots after alias delete: %w", err)
 	}
@@ -85,7 +85,7 @@ func (e *Engine) recordShortcutAliasDelete(ctx context.Context, mutation syncsho
 	if !changed {
 		return nil
 	}
-	if err := e.baseline.ReplaceShortcutRoots(ctx, records); err != nil {
+	if err := s.store.ReplaceShortcutRoots(ctx, records); err != nil {
 		return fmt.Errorf("sync: persist shortcut roots after alias delete: %w", err)
 	}
 	return nil

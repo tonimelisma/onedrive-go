@@ -8,6 +8,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
@@ -61,12 +62,12 @@ func (e *Engine) runOnce(ctx context.Context, mode syncdomain.SyncMode, opts Run
 		slog.Bool("dry_run", opts.DryRun),
 	)
 
-	bl, err := runner.runStartupStage(ctx)
+	bl, err := e.runStartup(ctx, runner.engineFlow)
 	if err != nil {
 		return nil, err
 	}
 
-	fullReconcile, err := e.shouldRunFullRemoteRefresh(ctx, opts.FullReconcile)
+	fullReconcile, err := runner.shouldRunFullRemoteRefresh(ctx, opts.FullReconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +114,7 @@ func (e *Engine) runOnce(ctx context.Context, mode syncdomain.SyncMode, opts Run
 		if bl, err = e.baseline.Load(ctx); err != nil {
 			return total, fmt.Errorf("sync: loading baseline for follow-up pass: %w", err)
 		}
-		if opts.FullReconcile, err = e.shouldRunFullRemoteRefresh(ctx, false); err != nil {
+		if opts.FullReconcile, err = runner.shouldRunFullRemoteRefresh(ctx, false); err != nil {
 			return total, err
 		}
 		opts.ConfirmDeletes = false
@@ -145,7 +146,7 @@ func (e *Engine) endOneShotRun(
 	executed bool,
 ) error {
 	if executed || opts.ReleaseLocalTree {
-		runner.engine.upkeep.afterSync(ctx)
+		runner.upkeep.afterSync(ctx)
 	}
 	if err := e.reportWhatTheRunLeft(ctx, total, last, stoppedAtPassBound); err != nil {
 		return err
@@ -258,7 +259,7 @@ func (e *Engine) oneShotScopeWait(ctx context.Context, runner *oneShotRunner, pa
 	if result.report == nil || ctx.Err() != nil || runner == nil || pass >= e.oneShotPasses() {
 		return "", false
 	}
-	trialAt, ok := runner.scopes.earliestPauseTrialAt()
+	trialAt, ok := runner.sched.EarliestPauseTrialAt()
 	if !ok {
 		return "", false
 	}
@@ -299,7 +300,7 @@ func (r *oneShotRunner) countWorkBlockedUnderPause(ctx context.Context) int {
 	}
 	count := 0
 	for i := range rows {
-		if isPauseScope(rows[i].ScopeKey) {
+		if syncsched.IsPauseScope(rows[i].ScopeKey) {
 			count++
 		}
 	}
@@ -343,7 +344,7 @@ func (e *Engine) runOneShotLivePass(
 	if err != nil {
 		return oneShotPass{}, err
 	}
-	if err := e.publishShortcutChildWorkSnapshot(ctx, runtime.ChildPublication); err != nil {
+	if err := runner.shortcuts.publishShortcutChildWorkSnapshot(ctx, runtime.ChildPublication); err != nil {
 		return oneShotPass{}, err
 	}
 
@@ -448,7 +449,7 @@ func (r *oneShotRunner) executePreparedPlan(
 	// results loop's outbox, until a worker actually takes it, so a scope
 	// that activates can still take it back (R-6.8.24). A plan-sized buffer
 	// moved the whole outbox into the channel at once.
-	r.sched.dispatchCh = make(chan *syncdomain.TrackedAction)
+	r.dispatchCh = make(chan *syncdomain.TrackedAction)
 	initialOutbox, done, err := r.dispatchInitialReadyActions(ctx, bl, runtime, report)
 	if err != nil {
 		return err
@@ -458,13 +459,14 @@ func (r *oneShotRunner) executePreparedPlan(
 	}
 
 	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{
-		Config:           r.engine.execCfg,
-		Dispatch:         r.sched.dispatchCh,
+		Config:           r.exec,
+		Dispatch:         r.dispatchCh,
 		Store:            executorStoreOf(r.deps.store),
 		Logger:           r.deps.logger,
 		CompletionBuffer: len(plan.Actions),
 		Perf:             r.deps.perf,
 		Serialize:        r.hooks.serializeWorkers,
+		Clock:            r.deps.clock,
 	})
 	// The pass's context is the workers' run: a fatal completion ends it, and
 	// with it the run, so what it interrupts completes as a shutdown.
@@ -636,14 +638,10 @@ func (flow *observation) observeRemoteFullWithShortcutTopology(
 	bl syncdomain.BaselineView,
 	kind syncdomain.ResyncKind,
 ) (fullRemoteObservation, error) {
-	eng := flow.engine
-	obs := eng.buildRemoteObserver(bl, flow.deps.logger)
-	obs.SetItemClient(eng.itemsClient)
-	obs.SetRemotePathLookup(eng.remotePathLookup(ctx))
-	if err := eng.protectedRoots.refresh(ctx); err != nil {
+	if err := flow.roots.refresh(ctx); err != nil {
 		return fullRemoteObservation{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
-	obs.SetShortcutTopology(flow.cfg.shortcutNamespaceID, eng.protectedRoots.current())
+	obs := flow.remote.observer(ctx, bl, flow.deps.logger, flow.cfg.shortcutNamespaceID, flow.roots.current())
 
 	// Full enumeration: empty token returns ALL items as create/modify
 	// events, plus the raw ID of every live item Graph returned. The seen set
@@ -674,7 +672,7 @@ func (flow *observation) observeRemoteFullWithShortcutTopology(
 
 	// A complete enumeration that omits an item is not proof it is gone
 	// (Graph omits items transiently); only a live 404 or deleted facet is.
-	orphans, undecided := eng.confirmEnumerationOrphans(ctx, orphans, nil)
+	orphans, undecided := flow.remote.confirmEnumerationOrphans(ctx, orphans, nil)
 	if !kind.OrphansAreDeletes() {
 		markOrphansForReupload(orphans)
 	}

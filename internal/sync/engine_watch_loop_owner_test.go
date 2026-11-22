@@ -96,7 +96,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapDispatchUsesSharedHandler
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	action := rt.sched.graph.Add(&syncdomain.Action{
+	action := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "bootstrap.txt",
 		DriveID: eng.driveID,
@@ -109,7 +109,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapDispatchUsesSharedHandler
 	done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{runtime: rt}, nil)
 	require.NoError(t, err)
 	assert.False(t, done)
-	assert.Equal(t, 1, rt.sched.runningCount)
+	assert.Equal(t, 1, rt.sched.RunningCount())
 	assert.Empty(t, rt.currentOutbox())
 }
 
@@ -252,14 +252,14 @@ func TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch(
 		replanReady := make(chan syncobserve.DirtyBatch, 1)
 		replanReady <- syncobserve.DirtyBatch{}
 
-		queued := rt.sched.graph.Add(&syncdomain.Action{
+		queued := rt.sched.AddForTest(&syncdomain.Action{
 			Type:    syncdomain.ActionDownload,
 			Path:    "old.txt",
 			DriveID: eng.driveID,
 			ItemID:  "old-item",
 		}, int64(attempt+1), nil)
 		require.NotNil(t, queued)
-		rt.sched.markQueued(queued)
+		rt.sched.Queued(queued)
 		rt.replaceOutbox([]*syncdomain.TrackedAction{queued})
 
 		done, err := rt.runNonDrainingWatchStep(t.Context(), &watchPipeline{
@@ -271,10 +271,10 @@ func TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch(
 		assert.False(t, done)
 		assert.True(t, rt.hasPendingReplan())
 		assert.Empty(t, rt.currentOutbox())
-		assert.Empty(t, rt.sched.queuedByID)
-		assert.Equal(t, 0, rt.sched.runningCount)
+		assert.Zero(t, rt.sched.QueuedCount())
+		assert.Equal(t, 0, rt.sched.RunningCount())
 		select {
-		case dispatched := <-rt.sched.dispatchCh:
+		case dispatched := <-rt.dispatchCh:
 			require.Failf(t, "old work dispatched after ready replan", "action=%+v", dispatched)
 		default:
 		}
@@ -292,18 +292,18 @@ func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	queued := rt.sched.graph.Add(&syncdomain.Action{
+	queued := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "old.txt",
 		DriveID: eng.driveID,
 		ItemID:  "old-item",
 	}, 1, nil)
 	require.NotNil(t, queued)
-	rt.sched.markQueued(queued)
+	rt.sched.Queued(queued)
 	rt.replaceOutbox([]*syncdomain.TrackedAction{queued})
 	rt.queuePendingReplan(syncobserve.DirtyBatch{FullRefresh: true})
 	require.Empty(t, rt.currentOutbox())
-	require.Empty(t, rt.sched.queuedByID)
+	require.Zero(t, rt.sched.QueuedCount())
 	require.NoError(t, os.RemoveAll(syncRoot))
 
 	replanned, err := rt.runPendingWatchReplan(t.Context(), &watchPipeline{
@@ -316,8 +316,8 @@ func TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal
 	assert.True(t, replanned)
 	assert.False(t, rt.hasPendingReplan())
 	assert.Empty(t, rt.currentOutbox())
-	assert.Empty(t, rt.sched.queuedByID)
-	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "retired outbox must stay retired after failed replacement replan")
+	assert.Zero(t, rt.sched.QueuedCount())
+	assert.Equal(t, 1, rt.sched.InFlight(), "retired outbox must stay retired after failed replacement replan")
 	batch := rt.resources.dirtyBuf.FlushImmediate()
 	require.NotNil(t, batch)
 	assert.True(t, batch.FullRefresh)
@@ -354,9 +354,9 @@ func TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal(t 
 			require.NoError(t, err)
 			assert.False(t, rt.hasPendingReplan())
 			assert.Empty(t, rt.currentOutbox())
-			assert.Empty(t, rt.sched.queuedByID)
-			assert.Equal(t, 0, rt.sched.runningCount)
-			assert.Equal(t, 0, rt.sched.graph.InFlightCount())
+			assert.Zero(t, rt.sched.QueuedCount())
+			assert.Equal(t, 0, rt.sched.RunningCount())
+			assert.Equal(t, 0, rt.sched.InFlight())
 			batch := rt.resources.dirtyBuf.FlushImmediate()
 			require.NotNil(t, batch)
 			assert.Equal(t, tc.fullRefresh, batch.FullRefresh)
@@ -375,14 +375,14 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	queued := rt.sched.graph.Add(&syncdomain.Action{
+	queued := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "old.txt",
 		DriveID: eng.driveID,
 		ItemID:  "old-item",
 	}, 1, nil)
 	require.NotNil(t, queued)
-	rt.sched.markQueued(queued)
+	rt.sched.Queued(queued)
 	rt.replaceOutbox([]*syncdomain.TrackedAction{queued})
 
 	rt.queuePendingReplan(syncobserve.DirtyBatch{})
@@ -390,8 +390,8 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	assert.True(t, rt.hasPendingReplan())
 	assert.True(t, rt.canPrepareNow())
 	assert.Empty(t, rt.currentOutbox())
-	assert.Empty(t, rt.sched.queuedByID)
-	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "retiring old outbox must not complete dependency nodes as success")
+	assert.Zero(t, rt.sched.QueuedCount())
+	assert.Equal(t, 1, rt.sched.InFlight(), "retiring old outbox must not complete dependency nodes as success")
 	assert.Equal(t, 1, eng.collector().Snapshot().SupersededPendingReplanRetirementCount)
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
 		return event.Type == syncdomain.EngineDebugEventOldOutboxRetired && event.Count == 1
@@ -431,14 +431,14 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 
-	root := rt.sched.graph.Add(&syncdomain.Action{
+	root := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "parent.txt",
 		DriveID: eng.driveID,
 		ItemID:  "parent-item",
 	}, 1, nil)
 	require.NotNil(t, root)
-	child := rt.sched.graph.Add(&syncdomain.Action{
+	child := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "child.txt",
 		DriveID: eng.driveID,
@@ -446,7 +446,7 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 		View:    &syncdomain.PathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	require.Nil(t, child)
-	rt.sched.markRunning(root)
+	rt.sched.Running(root)
 	rt.queuePendingReplan(syncobserve.DirtyBatch{})
 	advance(10 * time.Millisecond)
 
@@ -463,8 +463,8 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	assert.True(t, rt.hasPendingReplan())
 	assert.True(t, rt.canPrepareNow())
 	assert.Empty(t, rt.currentOutbox(), "ready dependents from old graph should not be appended while replan is pending")
-	assert.Empty(t, rt.sched.queuedByID)
-	assert.Equal(t, 1, rt.sched.graph.InFlightCount(), "released child should remain uncompleted until replacement runtime is installed")
+	assert.Zero(t, rt.sched.QueuedCount())
+	assert.Equal(t, 1, rt.sched.InFlight(), "released child should remain uncompleted until replacement runtime is installed")
 	assert.Equal(t, int64(10), eng.collector().Snapshot().ReplanIdleWaitingDrainMS)
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
 		return event.Type == syncdomain.EngineDebugEventWaitingForRunningActions &&
@@ -500,8 +500,8 @@ func TestWatchRuntime_InitWatchInfraUsesUnbufferedDispatch(t *testing.T) {
 		pipe.cleanup()
 	}()
 
-	assert.Equal(t, watchDispatchBuf, cap(rt.sched.dispatchCh))
-	assert.Equal(t, 0, cap(rt.sched.dispatchCh), "watch dispatch must stay unbuffered so queued work remains engine-owned")
+	assert.Equal(t, watchDispatchBuf, cap(rt.dispatchCh))
+	assert.Equal(t, 0, cap(rt.dispatchCh), "watch dispatch must stay unbuffered so queued work remains engine-owned")
 	assert.Equal(t, watchCompletionBuf, cap(pipe.completions))
 }
 
@@ -522,6 +522,12 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 		},
 	}
 	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), withTestShortcutNamespace)
+	// The watch runtime takes the sink when it is built.
+	var published syncshortcut.ShortcutChildWorkSnapshot
+	eng.shortcutChildWorkSink = func(_ context.Context, publication syncshortcut.ShortcutChildWorkSnapshot) error {
+		published = publication
+		return nil
+	}
 	setupWatchEngine(t, eng)
 
 	aliasRoot := filepath.Join(syncRoot, "Shared", "Docs")
@@ -542,12 +548,6 @@ func TestWatchRuntime_HandleProtectedRootEventOwnsLocalAliasRename(t *testing.T)
 		LocalRootIdentity: &identity,
 	}}))
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
-
-	var published syncshortcut.ShortcutChildWorkSnapshot
-	eng.shortcutChildWorkSink = func(_ context.Context, publication syncshortcut.ShortcutChildWorkSnapshot) error {
-		published = publication
-		return nil
-	}
 	rt := testWatchRuntime(t, eng)
 
 	done, err := rt.handleWatchProtectedRootEventSignal(t.Context(), &syncshortcut.ProtectedRootEvent{}, true)

@@ -13,69 +13,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
-
-// Validates: R-6.8.24
-func TestNextReleaseAllowance_RampsFromTheWorkerCountAndDoubles(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name            string
-		transferWorkers int
-		lastAllowance   int
-		threshold       int
-		want            int
-	}{
-		{name: "first batch is at least four with a small pool", transferWorkers: 1, lastAllowance: 0, want: 4},
-		{name: "first batch is at least four with no pool size", transferWorkers: 0, lastAllowance: 0, want: 4},
-		{name: "first batch is the worker count when larger", transferWorkers: 8, lastAllowance: 0, want: 8},
-		{name: "first batch ignores the threshold", transferWorkers: 4, lastAllowance: 0, threshold: 16, want: 4},
-		{name: "second batch doubles the first", transferWorkers: 4, lastAllowance: 4, want: 8},
-		{name: "third batch doubles again", transferWorkers: 4, lastAllowance: 8, want: 16},
-		{name: "doubling continues past the worker count", transferWorkers: 8, lastAllowance: 64, want: 128},
-		{name: "doubling stops at the threshold", transferWorkers: 4, lastAllowance: 8, threshold: 16, want: 16},
-		{name: "doubling lands on the threshold when it would pass it", transferWorkers: 4, lastAllowance: 8, threshold: 12, want: 12},
-		{name: "above the threshold the batch grows by one", transferWorkers: 4, lastAllowance: 16, threshold: 16, want: 17},
-		{name: "additive growth continues", transferWorkers: 4, lastAllowance: 17, threshold: 16, want: 18},
-		{name: "the cap holds", transferWorkers: 4, lastAllowance: releaseRampMaxBatch, want: releaseRampMaxBatch},
-		{name: "the last doubling lands on the cap", transferWorkers: 4, lastAllowance: releaseRampMaxBatch / 2, want: releaseRampMaxBatch},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tc.want, nextReleaseAllowance(tc.transferWorkers, tc.lastAllowance, tc.threshold))
-		})
-	}
-}
-
-// Validates: R-6.8.24
-func TestSlowStartThresholdAfterThrottle_RemembersHalfTheBatchThatDrewThe429(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name                string
-		transferWorkers     int
-		allowanceAtThrottle int
-		previous            int
-		want                int
-	}{
-		{name: "half the batch", transferWorkers: 4, allowanceAtThrottle: 32, want: 16},
-		{name: "never below the first batch", transferWorkers: 4, allowanceAtThrottle: 6, want: 4},
-		{name: "the first batch follows the worker count", transferWorkers: 8, allowanceAtThrottle: 6, want: 8},
-		{name: "a 429 outside a ramp keeps the previous threshold", transferWorkers: 4, allowanceAtThrottle: 0, previous: 16, want: 16},
-		{name: "a 429 outside a ramp with no memory leaves none", transferWorkers: 4, allowanceAtThrottle: 0, want: 0},
-		{name: "a later 429 replaces the memory", transferWorkers: 4, allowanceAtThrottle: 18, previous: 16, want: 9},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tc.want, slowStartThresholdAfterThrottle(tc.transferWorkers, tc.allowanceAtThrottle, tc.previous))
-		})
-	}
-}
 
 // rampTestEngine is a watch-shaped engine whose logs are captured, with a
 // manual clock and a throttle scope that is due for a trial.
@@ -101,7 +42,7 @@ func holdBlockedUploadsForTest(t *testing.T, eng *testEngine, rt *watchRuntime, 
 	held := make([]*syncdomain.TrackedAction, 0, count)
 	for i := range count {
 		id := firstID + int64(i)
-		ta := rt.sched.graph.Add(&syncdomain.Action{
+		ta := rt.sched.AddForTest(&syncdomain.Action{
 			Type:    syncdomain.ActionUpload,
 			Path:    fmt.Sprintf("blocked-%02d.txt", id),
 			DriveID: eng.driveID,
@@ -109,7 +50,7 @@ func holdBlockedUploadsForTest(t *testing.T, eng *testEngine, rt *watchRuntime, 
 		}, id, nil)
 		require.NotNil(t, ta)
 		require.NoError(t, rt.persistBlockedRetryWork(t.Context(), syncdomain.RetryWorkKeyForAction(&ta.Action), key))
-		rt.holdAction(ta, heldReasonScope, key, time.Time{})
+		rt.sched.Hold(ta, syncsched.HeldScope, key, time.Time{})
 		held = append(held, ta)
 	}
 
@@ -157,10 +98,10 @@ func TestEngineFlow_TrialSuccess_ReleasesOneBatchAndKeepsTheScopeOnProbation(t *
 	setTestBlockScope(t, eng, &syncdomain.BlockScope{Key: key, TrialInterval: time.Minute, NextTrialAt: eng.nowFunc().Add(-time.Second)})
 	held := holdBlockedUploadsForTest(t, eng, rt, key, 1, 10)
 
-	trial := rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "trial.txt", DriveID: eng.driveID}, 99, nil)
+	trial := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "trial.txt", DriveID: eng.driveID}, 99, nil)
 	require.NotNil(t, trial)
 	trial.IsTrial, trial.TrialScopeKey = true, key
-	rt.sched.markRunning(trial)
+	rt.sched.Running(trial)
 
 	batch, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(trial), syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
@@ -170,12 +111,12 @@ func TestEngineFlow_TrialSuccess_ReleasesOneBatchAndKeepsTheScopeOnProbation(t *
 		assert.True(t, ta.IsTrial, "a batch member is a trial of the scope")
 		assert.Equal(t, key, ta.TrialScopeKey)
 	}
-	scope, active := rt.scopes.lookupActiveScope(key)
+	scope, active := rt.sched.Scope(key)
 	require.True(t, active, "the scope stays on probation")
 	assert.Equal(t, 4, scope.ReleaseAllowance)
 	assert.True(t, isTestBlockScopeed(eng, key), "the scope row stays while blocked rows remain")
 	assert.Equal(t, 6, blockedRetryRowsForTest(t, eng, key))
-	assert.Len(t, rt.retries.heldByScope[key], 6)
+	assert.Equal(t, 6, rt.sched.HeldUnderScope(key))
 	assert.Zero(t, strings.Count(logs.String(), "Resumed syncing"), "a batch is not a release")
 
 	// The batch's first three successes only count it down: releasing on
@@ -185,7 +126,7 @@ func TestEngineFlow_TrialSuccess_ReleasesOneBatchAndKeepsTheScopeOnProbation(t *
 		require.NoError(t, memberErr)
 		assert.Empty(t, ready, "%s finishing does not release the next batch yet", member.Action.Path)
 	}
-	scope, _ = rt.scopes.lookupActiveScope(key)
+	scope, _ = rt.sched.Scope(key)
 	assert.Equal(t, 1, scope.BatchOutstanding)
 	assert.Equal(t, 6, blockedRetryRowsForTest(t, eng, key))
 
@@ -194,7 +135,7 @@ func TestEngineFlow_TrialSuccess_ReleasesOneBatchAndKeepsTheScopeOnProbation(t *
 	rest, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(batch[3]), syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
 	require.Len(t, rest, 6)
-	assert.False(t, rt.scopes.hasActiveScope(key), "the last blocked row released removes the scope")
+	assert.False(t, rt.sched.HasScope(key), "the last blocked row released removes the scope")
 	assert.False(t, isTestBlockScopeed(eng, key))
 	assert.Zero(t, blockedRetryRowsForTest(t, eng, key))
 	assert.Equal(t, 1, strings.Count(logs.String(), "Resumed syncing"))
@@ -222,10 +163,10 @@ func TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndRe
 	setTestBlockScope(t, eng, &syncdomain.BlockScope{Key: key, TrialInterval: time.Minute, NextTrialAt: eng.nowFunc().Add(-time.Second)})
 	holdBlockedUploadsForTest(t, eng, rt, key, 1, 10)
 
-	trial := rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "trial.txt", DriveID: eng.driveID}, 99, nil)
+	trial := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "trial.txt", DriveID: eng.driveID}, 99, nil)
 	require.NotNil(t, trial)
 	trial.IsTrial, trial.TrialScopeKey = true, key
-	rt.sched.markRunning(trial)
+	rt.sched.Running(trial)
 	batch, err := rt.applyRuntimeCompletionStage(ctx, trialSuccessForTest(trial), syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
 	require.Len(t, batch, 4)
@@ -246,7 +187,7 @@ func TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndRe
 	require.NoError(t, err)
 	assert.Empty(t, ready)
 
-	scope, active := rt.scopes.lookupActiveScope(key)
+	scope, active := rt.sched.Scope(key)
 	require.True(t, active)
 	assert.Zero(t, scope.ReleaseAllowance, "a 429 inside the ramp resets it")
 	assert.Equal(t, 4, scope.SlowStartThreshold, "the ramp remembers half the batch that drew the 429, at least the first batch")
@@ -255,13 +196,13 @@ func TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndRe
 	assert.Equal(t, clock.Now().Add(30*time.Second), scope.NextTrialAt)
 	assert.Empty(t, rt.currentOutbox(), "admitted members the scope blocks are taken back")
 	for _, ta := range batch[1:] {
-		heldEntry := rt.retries.heldByKey[syncdomain.RetryWorkKeyForAction(&ta.Action)]
+		heldEntry, _ := rt.sched.HeldWork(syncdomain.RetryWorkKeyForAction(&ta.Action))
 		require.NotNil(t, heldEntry, "%s is held again", ta.Action.Path)
-		assert.Equal(t, heldReasonScope, heldEntry.Reason)
+		assert.Equal(t, syncsched.HeldScope, heldEntry.Reason)
 		assert.Equal(t, key, heldEntry.ScopeKey)
 	}
 	assert.Equal(t, 10, blockedRetryRowsForTest(t, eng, key), "every member is blocked again")
-	assert.Empty(t, rt.sched.queuedByID)
+	assert.Zero(t, rt.sched.QueuedCount())
 	output := logs.String()
 	assert.Zero(t, strings.Count(output, "OneDrive is limiting requests"), "a re-block of an announced scope is not announced again")
 	assert.Zero(t, strings.Count(output, "Resumed syncing"))
@@ -276,14 +217,14 @@ func TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndRe
 func requireStaleSuccessReleasesNothing(t *testing.T, eng *testEngine, rt *watchRuntime, key syncdomain.ScopeKey, generation uint64) {
 	t.Helper()
 
-	stale := rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "stale.txt", DriveID: eng.driveID}, 98, nil)
+	stale := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "stale.txt", DriveID: eng.driveID}, 98, nil)
 	require.NotNil(t, stale)
 	stale.IsTrial, stale.TrialScopeKey, stale.TrialScopeGeneration = true, key, generation
-	rt.sched.markRunning(stale)
+	rt.sched.Running(stale)
 	ready, err := rt.applyRuntimeCompletionStage(t.Context(), trialSuccessForTest(stale), syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
 	assert.Empty(t, ready)
-	scope, _ := rt.scopes.lookupActiveScope(key)
+	scope, _ := rt.sched.Scope(key)
 	assert.Zero(t, scope.ReleaseAllowance)
 	assert.Equal(t, 10, blockedRetryRowsForTest(t, eng, key))
 }
@@ -296,18 +237,18 @@ func requireNextTrialRampsFromTheFirstBatch(
 ) {
 	t.Helper()
 
-	scope, _ := rt.scopes.lookupActiveScope(key)
+	scope, _ := rt.sched.Scope(key)
 	clock.Advance(scope.NextTrialAt.Sub(clock.Now()))
 	trials, err := rt.drainDueHeldWorkNow(t.Context())
 	require.NoError(t, err)
 	require.Len(t, trials, 1)
 	assert.Equal(t, generation, trials[0].TrialScopeGeneration)
-	rt.sched.markRunning(trials[0])
+	rt.sched.Running(trials[0])
 	batch, err := rt.applyRuntimeCompletionStage(t.Context(), trialSuccessForTest(trials[0]), syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
-	assert.Len(t, batch, nextReleaseAllowance(eng.transferWorkers, 0, 0))
-	scope, _ = rt.scopes.lookupActiveScope(key)
-	assert.Equal(t, nextReleaseAllowance(eng.transferWorkers, 0, 0), scope.ReleaseAllowance)
+	assert.Len(t, batch, syncsched.NextReleaseAllowance(eng.transferWorkers, 0, 0))
+	scope, _ = rt.sched.Scope(key)
+	assert.Equal(t, syncsched.NextReleaseAllowance(eng.transferWorkers, 0, 0), scope.ReleaseAllowance)
 }
 
 // Validates: R-6.8.24
@@ -325,12 +266,12 @@ func TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks(t *testing.T) {
 	key := syncdomain.SKThrottleDrive(eng.driveID)
 	otherDrive := driveid.New("0000000000000002")
 
-	first := rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "first.txt", DriveID: eng.driveID}, 1, nil)
-	other := rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionDownload, Path: "other.txt", DriveID: otherDrive, ItemID: "other-item"}, 2, nil)
-	second := rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "second.txt", DriveID: eng.driveID}, 3, nil)
+	first := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "first.txt", DriveID: eng.driveID}, 1, nil)
+	other := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionDownload, Path: "other.txt", DriveID: otherDrive, ItemID: "other-item"}, 2, nil)
+	second := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "second.txt", DriveID: eng.driveID}, 3, nil)
 	for _, ta := range []*syncdomain.TrackedAction{first, other, second} {
 		require.NotNil(t, ta)
-		rt.sched.markQueued(ta)
+		rt.sched.Queued(ta)
 	}
 	rt.replaceOutbox([]*syncdomain.TrackedAction{first, other, second})
 
@@ -341,15 +282,15 @@ func TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks(t *testing.T) {
 
 	require.Equal(t, []*syncdomain.TrackedAction{other}, rt.currentOutbox(), "only work the scope does not block stays admitted")
 	for _, ta := range []*syncdomain.TrackedAction{first, second} {
-		heldEntry := rt.retries.heldByKey[syncdomain.RetryWorkKeyForAction(&ta.Action)]
+		heldEntry, _ := rt.sched.HeldWork(syncdomain.RetryWorkKeyForAction(&ta.Action))
 		require.NotNil(t, heldEntry, "%s is held under the scope", ta.Action.Path)
-		assert.Equal(t, heldReasonScope, heldEntry.Reason)
+		assert.Equal(t, syncsched.HeldScope, heldEntry.Reason)
 		assert.Equal(t, key, heldEntry.ScopeKey)
-		_, queued := rt.sched.queuedByID[ta.ID]
+		queued := rt.sched.IsQueued(ta.ID)
 		assert.False(t, queued)
 	}
 	assert.Equal(t, 3, blockedRetryRowsForTest(t, eng, key), "the retired work is persisted blocked under the scope")
-	assert.Equal(t, 3, rt.sched.graph.InFlightCount(), "retiring must not complete dependency nodes")
+	assert.Equal(t, 3, rt.sched.InFlight(), "retiring must not complete dependency nodes")
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
 		return event.Type == syncdomain.EngineDebugEventAdmittedWorkRetired && event.ScopeKey == key && event.Count == 2
 	}, 1, "the retirement is instrumented once with its count")
@@ -365,22 +306,22 @@ func TestOneShotRunner_ScopeActivationRetiresPendingOutbox(t *testing.T) {
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction)
-	runner.scopes.state = syncexec.NewScopeState(eng.nowFunc, eng.logger)
+	runner.sched.NewGraph()
+	runner.dispatchCh = make(chan *syncdomain.TrackedAction)
+	runner.sched.ResetWindows()
 	ctx := t.Context()
 	key := syncdomain.SKThrottleDrive(eng.driveID)
 	otherDrive := driveid.New("0000000000000002")
 
-	failing := runner.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "failing.txt", DriveID: eng.driveID}, 1, nil)
-	pending := runner.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "pending.txt", DriveID: eng.driveID}, 2, nil)
-	other := runner.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionDownload, Path: "other.txt", DriveID: otherDrive, ItemID: "other-item"}, 3, nil)
+	failing := runner.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "failing.txt", DriveID: eng.driveID}, 1, nil)
+	pending := runner.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "pending.txt", DriveID: eng.driveID}, 2, nil)
+	other := runner.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionDownload, Path: "other.txt", DriveID: otherDrive, ItemID: "other-item"}, 3, nil)
 	require.NotNil(t, failing)
 	require.NotNil(t, pending)
 	require.NotNil(t, other)
-	runner.sched.markRunning(failing)
-	runner.sched.markQueued(pending)
-	runner.sched.markQueued(other)
+	runner.sched.Running(failing)
+	runner.sched.Queued(pending)
+	runner.sched.Queued(other)
 	runner.outbox = []*syncdomain.TrackedAction{pending, other}
 
 	err := runner.handleOneShotCompletion(ctx, nil, nil, nil, &syncdomain.ActionCompletion{
@@ -396,13 +337,13 @@ func TestOneShotRunner_ScopeActivationRetiresPendingOutbox(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, []*syncdomain.TrackedAction{other}, runner.outbox)
-	heldEntry := runner.retries.heldByKey[syncdomain.RetryWorkKeyForAction(&pending.Action)]
+	heldEntry, _ := runner.sched.HeldWork(syncdomain.RetryWorkKeyForAction(&pending.Action))
 	require.NotNil(t, heldEntry)
-	assert.Equal(t, heldReasonScope, heldEntry.Reason)
+	assert.Equal(t, syncsched.HeldScope, heldEntry.Reason)
 	assert.Equal(t, key, heldEntry.ScopeKey)
 	assert.Equal(t, 2, blockedRetryRowsForTest(t, eng, key))
-	assert.True(t, runner.scopes.hasActiveScope(key))
-	assert.Zero(t, runner.sched.runningCount)
+	assert.True(t, runner.sched.HasScope(key))
+	assert.Zero(t, runner.sched.RunningCount())
 }
 
 // Validates: R-2.8.5, R-6.8.24
@@ -430,7 +371,7 @@ func TestEngineFlow_ReleaseScopeBatch_ReportsThroughRuntimeSignals(t *testing.T)
 
 	assert.Empty(t, released)
 	assert.Equal(t, 1, rec.trial, "release must ask the runtime to rearm the trial timer")
-	assert.False(t, flow.scopes.hasActiveScope(key))
+	assert.False(t, flow.sched.HasScope(key))
 	assert.False(t, isTestBlockScopeed(eng, key))
 }
 
@@ -456,17 +397,17 @@ func TestEngineFlow_LaterShorterRetryAfterNeverPullsTheTrialEarlier(t *testing.T
 	activateScopeForTest(t, rt.engineFlow, syncfixture.TestRetryWorkKey("second-429.txt", "", syncdomain.ActionUpload), syncdomain.ScopeUpdateResult{
 		Block: true, ScopeKey: key, ConditionType: syncdomain.IssueRateLimited, RetryAfter: 10 * time.Second,
 	})
-	scope, active := rt.scopes.lookupActiveScope(key)
+	scope, active := rt.sched.Scope(key)
 	require.True(t, active)
 	assert.Equal(t, now.Add(40*time.Second), scope.NextTrialAt, "a re-activation keeps the later deadline")
 	assert.Equal(t, uint64(2), scope.Generation, "and is still a new activation")
 
 	require.NoError(t, rt.extendScopeTrial(ctx, key, 20*time.Second))
-	scope, _ = rt.scopes.lookupActiveScope(key)
+	scope, _ = rt.sched.Scope(key)
 	assert.Equal(t, now.Add(40*time.Second), scope.NextTrialAt, "an extension keeps the later deadline too")
 
 	require.NoError(t, rt.extendScopeTrial(ctx, key, 60*time.Second))
-	scope, _ = rt.scopes.lookupActiveScope(key)
+	scope, _ = rt.sched.Scope(key)
 	assert.Equal(t, now.Add(60*time.Second), scope.NextTrialAt, "a later deadline moves the trial out")
 
 	persisted, ok := getTestBlockScope(eng, key)
@@ -477,9 +418,9 @@ func TestEngineFlow_LaterShorterRetryAfterNeverPullsTheTrialEarlier(t *testing.T
 	// deadline: the 429 that ends the probation sets the deadline outright.
 	scope.ReleaseAllowance = 4
 	scope.NextTrialAt = now.Add(5 * time.Minute)
-	rt.scopes.upsertActiveScope(&scope)
+	rt.sched.PutScope(&scope)
 	require.NoError(t, rt.extendScopeTrial(ctx, key, 30*time.Second))
-	scope, _ = rt.scopes.lookupActiveScope(key)
+	scope, _ = rt.sched.Scope(key)
 	assert.Equal(t, now.Add(30*time.Second), scope.NextTrialAt, "a 429 during probation is the deadline")
 	assert.Zero(t, scope.ReleaseAllowance)
 }

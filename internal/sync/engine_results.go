@@ -40,7 +40,7 @@ func (rt *watchRuntime) armRetryTimer() {
 		return
 	}
 
-	earliest, ok := rt.retries.earliestHeldRetryAt()
+	earliest, ok := rt.sched.EarliestHeldRetryAt()
 	if !ok {
 		rt.resetRetryTimer(nil)
 		return

@@ -4,81 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // Re-admission after a timed block scope ramps instead of flooding
-// (R-6.8.24). Measured on a live account on 2026-11-01: a successful trial
-// released a 10,000-upload backlog at once, the workers drained it through
-// 429 after 429, and the next trial repeated the flood -- 22-28 requests a
-// second, thousands of 429s per five minutes, about ten files uploaded. The
-// ramp bounds what one trial lets through, and a 429 inside it re-blocks.
-
-const (
-	// releaseRampMinimumBatch is the first batch after a successful trial
-	// when fewer transfer workers are configured: enough to keep a small
-	// pool busy, few enough that a 429 costs little.
-	releaseRampMinimumBatch = 4
-
-	// releaseRampMaxBatch caps the doubling. In practice a batch this size
-	// is the whole backlog; the cap only keeps the arithmetic bounded.
-	releaseRampMaxBatch = 1 << 16
-
-	// releaseBatchAdmissionWindow is how far a released batch's members are
-	// spread: each is admitted at a uniformly random instant within this
-	// window of the release, through the engine clock, so a batch of 32
-	// does not reach the drive as one spike (R-6.8.24; Google SRE's
-	// randomized retries, Brooker's jitter). The server-given Retry-After
-	// gets no jitter: the trial that honors it is one request.
-	releaseBatchAdmissionWindow = time.Second
-)
-
-// nextReleaseAllowance is the ramp policy: the size of the next batch a scope
-// on probation releases, given the transfer worker count, the batch it last
-// released (zero when the scope is not on probation yet) and the slow-start
-// threshold its last 429 left (zero when none has). The first batch is the
-// worker count, at least releaseRampMinimumBatch; each batch that completed
-// without a further 429 doubles the next, up to the threshold; from there
-// the batch grows by one. Pure doubling overshoots the limit by up to 2x on
-// every cycle, and each overshoot costs a full Retry-After plus Microsoft's
-// penalty for requests made while throttled (RFC 5681 §3.1 eq. 4 is the
-// same remedy).
-func nextReleaseAllowance(transferWorkers, lastAllowance, slowStartThreshold int) int {
-	if lastAllowance <= 0 {
-		return firstReleaseAllowance(transferWorkers)
-	}
-	if lastAllowance >= releaseRampMaxBatch {
-		return releaseRampMaxBatch
-	}
-	doubled := min(lastAllowance*2, releaseRampMaxBatch)
-	if slowStartThreshold <= 0 || doubled <= slowStartThreshold {
-		return doubled
-	}
-	if lastAllowance < slowStartThreshold {
-		return slowStartThreshold
-	}
-
-	return lastAllowance + 1
-}
-
-func firstReleaseAllowance(transferWorkers int) int {
-	return max(transferWorkers, releaseRampMinimumBatch)
-}
-
-// slowStartThresholdAfterThrottle is the ramp's memory after a 429: half the
-// batch that drew it, at least the first batch. A 429 that interrupted no
-// ramp (the probe itself, or an episode's first failures) says nothing new
-// and keeps the previous threshold.
-func slowStartThresholdAfterThrottle(transferWorkers, allowanceAtThrottle, previous int) int {
-	if allowanceAtThrottle <= 0 {
-		return previous
-	}
-
-	return max(allowanceAtThrottle/2, firstReleaseAllowance(transferWorkers))
-}
+// (R-6.8.24); the ramp's arithmetic is the scheduler's
+// (syncsched/release_ramp.go).
 
 // admittedWorkOwner is the runtime that holds admitted, not yet dispatched
 // work: the watch loop's outbox or the one-shot results loop's. A block scope
@@ -102,7 +35,7 @@ func (noAdmittedWork) takeAdmittedWorkBlockedBy(syncdomain.ScopeKey) []*syncdoma
 // sides.
 func takeOutboxBlockedBy(outbox []*syncdomain.TrackedAction, key syncdomain.ScopeKey) (taken, kept []*syncdomain.TrackedAction) {
 	for _, ta := range outbox {
-		if ta != nil && syncexec.ScopeBlocksTrackedAction(key, ta, ta.Action.ThrottleTargetKey()) {
+		if ta != nil && syncsched.ScopeBlocksTrackedAction(key, ta, ta.Action.ThrottleTargetKey()) {
 			taken = append(taken, ta)
 			continue
 		}
@@ -122,11 +55,11 @@ func (flow *engineFlow) retireAdmittedWorkBlockedBy(ctx context.Context, key syn
 		return nil
 	}
 
-	decisions := make([]admissionDecision, 0, len(taken))
+	decisions := make([]syncsched.Admission, 0, len(taken))
 	for _, ta := range taken {
-		decisions = append(decisions, admissionDecision{
+		decisions = append(decisions, syncsched.Admission{
 			Action:       ta,
-			Kind:         admissionHoldScope,
+			Kind:         syncsched.HoldForScope,
 			ScopeKey:     key,
 			RetryWorkKey: syncdomain.RetryWorkKeyForAction(&ta.Action),
 		})
@@ -148,34 +81,18 @@ func (flow *engineFlow) retireAdmittedWorkBlockedBy(ctx context.Context, key syn
 	return nil
 }
 
-// heldScopeBatch is the first `limit` held entries of a scope in held order:
-// the next ramp batch.
-func (flow *engineFlow) heldScopeBatch(key syncdomain.ScopeKey, limit int) []syncdomain.RetryWorkKey {
-	batch := make([]syncdomain.RetryWorkKey, 0, limit)
-	for _, work := range flow.retries.heldByScope[key] {
-		if len(batch) == limit {
-			break
-		}
-		if held := flow.retries.heldByKey[work]; held != nil && held.Reason == heldReasonScope {
-			batch = append(batch, work)
-		}
-	}
-
-	return batch
-}
-
 // noteProbationMemberFinished records that a member of the scope's current
 // batch finished other than with a success (held for an ordinary retry,
 // superseded). Nothing is released for it: a batch whose last member failed
 // waits for the next due trial, one interval out, which resets the count and
 // continues the ramp from its success.
 func (flow *engineFlow) noteProbationMemberFinished(key syncdomain.ScopeKey, generation uint64) {
-	scope, active := flow.scopes.lookupActiveScope(key)
+	scope, active := flow.sched.Scope(key)
 	if !active || scope.Generation != generation || scope.ReleaseAllowance == 0 {
 		return
 	}
 	scope.BatchOutstanding = max(scope.BatchOutstanding-1, 0)
-	flow.scopes.upsertActiveScope(&scope)
+	flow.sched.PutScope(&scope)
 }
 
 // releaseScopeBatch is what a successful trial of key releases: the next ramp
@@ -194,7 +111,7 @@ func (flow *engineFlow) releaseScopeBatch(
 	key syncdomain.ScopeKey,
 	generation uint64,
 ) ([]*syncdomain.TrackedAction, error) {
-	scope, active := flow.scopes.lookupActiveScope(key)
+	scope, active := flow.sched.Scope(key)
 	if !active || scope.Generation != generation {
 		flow.deps.logger.Debug("trial succeeded for a scope that was re-blocked or released meanwhile; releasing nothing",
 			slog.String("scope_key", key.String()),
@@ -205,14 +122,14 @@ func (flow *engineFlow) releaseScopeBatch(
 	if scope.ReleaseAllowance > 0 {
 		scope.BatchOutstanding = max(scope.BatchOutstanding-1, 0)
 		if scope.BatchOutstanding > 0 {
-			flow.scopes.upsertActiveScope(&scope)
+			flow.sched.PutScope(&scope)
 			return nil, nil
 		}
 	}
 
 	now := flow.deps.now()
-	allowance := nextReleaseAllowance(flow.cfg.transferWorkers, scope.ReleaseAllowance, scope.SlowStartThreshold)
-	batchKeys := flow.heldScopeBatch(key, allowance)
+	allowance := syncsched.NextReleaseAllowance(flow.cfg.transferWorkers, scope.ReleaseAllowance, scope.SlowStartThreshold)
+	batchKeys := flow.sched.HeldBatch(key, allowance)
 
 	_, removed, err := flow.retryWork.releaseScope(ctx, flow.deps.store, key, batchKeys, now)
 	if err != nil {
@@ -221,19 +138,19 @@ func (flow *engineFlow) releaseScopeBatch(
 
 	batch := make([]*syncdomain.TrackedAction, 0, len(batchKeys))
 	for _, work := range batchKeys {
-		ta := flow.retries.releaseHeldAction(work)
+		ta := flow.sched.Release(work)
 		if ta == nil {
 			continue
 		}
 		ta.IsTrial = true
 		ta.TrialScopeKey = key
 		ta.TrialScopeGeneration = scope.Generation
-		ta.AdmitAt = now.Add(flow.deps.clock.Jitter(releaseBatchAdmissionWindow))
+		ta.AdmitAt = now.Add(flow.deps.clock.Jitter(syncsched.ReleaseBatchAdmissionWindow))
 		batch = append(batch, ta)
 	}
 
 	if removed {
-		flow.scopes.removeActiveScope(key)
+		flow.sched.DropScope(key)
 		flow.deps.emit(syncdomain.EngineDebugEvent{
 			Type:     syncdomain.EngineDebugEventScopeReleased,
 			ScopeKey: key,
@@ -265,7 +182,7 @@ func (flow *engineFlow) releaseScopeBatch(
 			slog.Int("released", len(batch)),
 			slog.Int("allowance", allowance),
 			slog.Int("slow_start_threshold", scope.SlowStartThreshold),
-			slog.Int("still_held", len(flow.retries.heldByScope[key])),
+			slog.Int("still_held", flow.sched.HeldUnderScope(key)),
 		)
 	}
 	flow.signals.armTrialTimer()

@@ -124,7 +124,7 @@ func TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing(t *te
 		{ObservedItem: syncdomain.ObservedItem{ItemID: "unresolvable", Path: "g.txt", IsDeleted: true}},
 	}
 
-	confirmed, _ := eng.confirmMountRootOrphans(t.Context(), listed, orphans)
+	confirmed, _ := eng.remoteSource().confirmMountRootOrphans(t.Context(), listed, orphans)
 
 	var ids []string
 	for i := range confirmed {
@@ -206,7 +206,7 @@ func TestApplyShortcutRootCompleteOmission_ConfirmedLiveBindingStaysActive(t *te
 
 			// A complete enumeration that omitted the placeholder.
 			topology := syncshortcut.ShortcutTopologyBatch{NamespaceID: syncfixture.ShortcutNamespaceTestID, Kind: syncshortcut.ShortcutTopologyObservationComplete}
-			require.NoError(t, eng.confirmShortcutCompleteOmissions(t.Context(), &topology))
+			require.NoError(t, eng.shortcutRoots().confirmShortcutCompleteOmissions(t.Context(), &topology))
 			_, err := eng.baseline.ApplyShortcutTopology(t.Context(), topology)
 			require.NoError(t, err)
 

@@ -7,26 +7,10 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
-
-type admissionDecisionKind int
-
-const (
-	admissionDispatchNow admissionDecisionKind = iota
-	admissionHoldRetry
-	admissionHoldScope
-)
-
-type admissionDecision struct {
-	Action        *syncdomain.TrackedAction
-	Kind          admissionDecisionKind
-	ScopeKey      syncdomain.ScopeKey
-	NextRetryAt   time.Time
-	ClearScopeKey syncdomain.ScopeKey
-	RetryWorkKey  syncdomain.RetryWorkKey
-}
 
 // admitReady applies exact retry/block-scope admission to a ready action set.
 // Dependency readiness is already satisfied; admission decides whether the
@@ -53,16 +37,16 @@ func (flow *engineFlow) admitReady(
 
 func (flow *engineFlow) filterFreshAdmissionDecisions(
 	ctx context.Context,
-	decisions []admissionDecision,
-) ([]admissionDecision, []*syncdomain.TrackedAction, error) {
-	filtered := make([]admissionDecision, 0, len(decisions))
+	decisions []syncsched.Admission,
+) ([]syncsched.Admission, []*syncdomain.TrackedAction, error) {
+	filtered := make([]syncsched.Admission, 0, len(decisions))
 	for i := range decisions {
 		decision := decisions[i]
 		ta := decision.Action
 		if ta == nil {
 			continue
 		}
-		if decision.Kind != admissionDispatchNow {
+		if decision.Kind != syncsched.AdmitNow {
 			filtered = append(filtered, decision)
 			continue
 		}
@@ -87,10 +71,10 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 	return filtered, nil, nil
 }
 
-func admissionDispatchActions(decisions []admissionDecision) []*syncdomain.TrackedAction {
+func admissionDispatchActions(decisions []syncsched.Admission) []*syncdomain.TrackedAction {
 	actions := make([]*syncdomain.TrackedAction, 0, len(decisions))
 	for i := range decisions {
-		if decisions[i].Kind == admissionDispatchNow && decisions[i].Action != nil {
+		if decisions[i].Kind == syncsched.AdmitNow && decisions[i].Action != nil {
 			actions = append(actions, decisions[i].Action)
 		}
 	}
@@ -101,61 +85,23 @@ func admissionDispatchActions(decisions []admissionDecision) []*syncdomain.Track
 func (flow *engineFlow) decideAdmission(
 	now time.Time,
 	ready []*syncdomain.TrackedAction,
-) []admissionDecision {
-	decisions := make([]admissionDecision, 0, len(ready))
+) []syncsched.Admission {
+	decisions := make([]syncsched.Admission, 0, len(ready))
 
 	for _, ta := range ready {
 		if ta == nil {
 			continue
 		}
 
-		decision := flow.newAdmissionDecision(ta)
-		flow.retries.applyPersistedRetryAdmission(now, ta, &decision, &flow.retryWork)
-		flow.applyActiveScopeAdmission(ta, &decision)
-		decisions = append(decisions, decision)
+		decisions = append(decisions, flow.sched.Admit(now, ta, flow.retryWork.row))
 	}
 
 	return decisions
 }
 
-func (flow *engineFlow) newAdmissionDecision(ta *syncdomain.TrackedAction) admissionDecision {
-	decision := admissionDecision{
-		Action:       ta,
-		Kind:         admissionDispatchNow,
-		RetryWorkKey: syncdomain.RetryWorkKeyForAction(&ta.Action),
-	}
-
-	if ta.IsTrial && !ta.TrialScopeKey.IsZero() &&
-		!ta.TrialScopeKey.BlocksAction(ta.Action.Path, ta.Action.ThrottleTargetKey(), ta.Action.Type) {
-		decision.ClearScopeKey = ta.TrialScopeKey
-	}
-
-	return decision
-}
-
-func (flow *engineFlow) applyActiveScopeAdmission(
-	ta *syncdomain.TrackedAction,
-	decision *admissionDecision,
-) {
-	if ta == nil || decision == nil || decision.Kind != admissionDispatchNow {
-		return
-	}
-
-	scopeKey := flow.scopes.findBlockingScope(ta)
-	if scopeKey.IsZero() {
-		return
-	}
-	if ta.IsTrial && !ta.TrialScopeKey.IsZero() && scopeKey == ta.TrialScopeKey {
-		return
-	}
-
-	decision.Kind = admissionHoldScope
-	decision.ScopeKey = scopeKey
-}
-
 func (flow *engineFlow) applyAdmissionDecisions(
 	ctx context.Context,
-	decisions []admissionDecision,
+	decisions []syncsched.Admission,
 ) ([]*syncdomain.TrackedAction, error) {
 	var dispatch []*syncdomain.TrackedAction
 
@@ -171,16 +117,16 @@ func (flow *engineFlow) applyAdmissionDecisions(
 		}
 
 		switch decision.Kind {
-		case admissionDispatchNow:
-			flow.sched.markQueued(ta)
+		case syncsched.AdmitNow:
+			flow.sched.Queued(ta)
 			dispatch = append(dispatch, ta)
-		case admissionHoldRetry:
-			flow.holdAction(ta, heldReasonRetry, syncdomain.ScopeKey{}, decision.NextRetryAt)
-		case admissionHoldScope:
+		case syncsched.HoldForRetry:
+			flow.sched.Hold(ta, syncsched.HeldRetry, syncdomain.ScopeKey{}, decision.NextRetryAt)
+		case syncsched.HoldForScope:
 			if err := flow.persistHeldScopeDecision(ctx, ta, decision); err != nil {
 				return dispatch, err
 			}
-			flow.holdAction(ta, heldReasonScope, decision.ScopeKey, time.Time{})
+			flow.sched.Hold(ta, syncsched.HeldScope, decision.ScopeKey, time.Time{})
 		}
 	}
 
@@ -191,7 +137,7 @@ func (flow *engineFlow) applyAdmissionDecisions(
 
 func (flow *engineFlow) applyAdmissionScopeClear(
 	ctx context.Context,
-	decision *admissionDecision,
+	decision *syncsched.Admission,
 ) error {
 	if decision == nil || decision.ClearScopeKey.IsZero() {
 		return nil
@@ -203,7 +149,7 @@ func (flow *engineFlow) applyAdmissionScopeClear(
 func (flow *engineFlow) persistHeldScopeDecision(
 	ctx context.Context,
 	ta *syncdomain.TrackedAction,
-	decision *admissionDecision,
+	decision *syncsched.Admission,
 ) error {
 	if ta == nil || decision == nil || decision.ScopeKey.IsZero() {
 		return nil
@@ -235,7 +181,7 @@ func (flow *engineFlow) persistHeldScopeDecision(
 // discardScopeWithoutBlockedWork discards an active scope that no blocked
 // retry work names any more.
 func (flow *engineFlow) discardScopeWithoutBlockedWork(ctx context.Context, scopeKey syncdomain.ScopeKey) error {
-	if !flow.scopes.hasActiveScope(scopeKey) {
+	if !flow.sched.HasScope(scopeKey) {
 		return nil
 	}
 	hasBlockedWork, err := flow.scopeHasBlockedRetryWork(ctx, scopeKey)

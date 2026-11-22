@@ -42,7 +42,7 @@ func TestPlanning_UsesBaselineFromTheComparisonSnapshot(t *testing.T) {
 	// The planner takes the snapshot type alone, so the cached view cannot
 	// be handed to it. Before: "sync: missing baseline entry for comparison
 	// path" tore down the drive runner.
-	plan, err := eng.buildCurrentActionPlanFromInputs(&inputs, syncdomain.SyncBidirectional, RunOptions{})
+	plan, err := newEngineFlow(eng.flowInputs()).planCurrentActions(&inputs, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.NotNil(t, plan)
 }

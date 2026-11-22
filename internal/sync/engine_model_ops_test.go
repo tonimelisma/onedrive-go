@@ -41,7 +41,9 @@ const (
 // operation; now and then a batch wipes one side instead, and the next sync
 // must hold those deletes (D-002) until the model confirms them.
 func (r *modelRun) applyBatchEdits(label string) []syncfixture.ModelEdit {
-	if r.rng.IntN(modelWipeOdds) == 0 {
+	// The draw is made either way, so a run without wipes draws the same
+	// stream as one with them.
+	if wipe := r.rng.IntN(modelWipeOdds) == 0; wipe && !r.noWipe {
 		if edits := r.wipeSide(); len(edits) > 0 {
 			return edits
 		}

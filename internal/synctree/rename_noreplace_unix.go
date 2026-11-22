@@ -62,6 +62,13 @@ func (r *Root) RenameNoReplace(srcRel, dstRel string) error {
 	if err != nil {
 		return err
 	}
+	if r.memory != nil {
+		err = r.memory.rename(srcClean, dstClean, true)
+		if err != nil && !errors.Is(err, os.ErrExist) {
+			err = r.normalizeDescriptorFailure(srcClean, err)
+		}
+		return noReplaceResult("renaming", srcClean, dstClean, err)
+	}
 
 	srcParent, err := r.openParentFolder(srcClean)
 	if err != nil {
@@ -108,6 +115,9 @@ func (r *Root) MoveInNoReplace(srcAbs, dstRel string) error {
 	if err != nil {
 		return err
 	}
+	if r.memory != nil {
+		return noReplaceResult("moving", srcAbs, dstClean, ErrOutsideMemoryVolume)
+	}
 
 	srcParent, err := localpath.OpenFile(filepath.Dir(srcAbs), parentFolderFlags, 0)
 	if err != nil {
@@ -138,7 +148,7 @@ func (r *Root) WithoutNoReplaceFlagOrHardLinks() *Root {
 	ops.renameExclusive = refuseNoReplaceFlag
 	ops.link = func(*os.File, string, *os.File, string) error { return unix.EPERM }
 
-	return &Root{dir: r.dir, ops: ops}
+	return &Root{dir: r.dir, ops: ops, memory: r.memory}
 }
 
 // WithoutNoReplaceFlagAndUnremovableName returns a Root over the same folder
@@ -159,7 +169,7 @@ func (r *Root) WithoutNoReplaceFlagAndUnremovableName(name string) *Root {
 		return unlink(dir, base)
 	}
 
-	return &Root{dir: r.dir, ops: ops}
+	return &Root{dir: r.dir, ops: ops, memory: r.memory}
 }
 
 // refuseNoReplaceFlag is renameExclusive on a system that refuses the flag.

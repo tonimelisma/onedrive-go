@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -41,14 +42,14 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedP
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []syncdomain.RetryWorkRow{row}})
 
-	publication := rt.sched.graph.Add(&syncdomain.Action{
+	publication := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
-	rt.holdAction(publication, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
+	rt.sched.Hold(publication, syncsched.HeldRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 	rt.kickRetryHeldReleaseNow()
 	setWatchPhase(rt, watchPhaseBootstrap)
 
@@ -56,7 +57,7 @@ func TestWatchRuntime_RunNonDrainingWatchStep_BootstrapRetryTickReducesReleasedP
 	require.NoError(t, err)
 	assert.False(t, done)
 	assert.Empty(t, rt.currentOutbox(), "bootstrap retry release must re-enter publication drain before worker dispatch")
-	assert.Empty(t, rt.retries.heldByKey)
+	assert.Zero(t, rt.sched.HeldCount())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
 
 	_, found := bl.GetByPath("cleanup.txt")
@@ -84,7 +85,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
 
-	root := rt.sched.graph.Add(&syncdomain.Action{
+	root := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "sync.txt",
 		DriveID: eng.driveID,
@@ -92,7 +93,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	dependent := rt.sched.graph.Add(&syncdomain.Action{
+	dependent := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
@@ -113,7 +114,7 @@ func TestWatchRuntime_HandleWatchActionCompletion_DrainsPublicationOnlyDependent
 	})
 	require.NoError(t, err)
 	assert.Empty(t, rt.currentOutbox(), "bootstrap completion should drain publication-only dependents on the engine side")
-	assert.Equal(t, 0, rt.sched.graph.InFlightCount())
+	assert.Equal(t, 0, rt.sched.InFlight())
 
 	_, found := bl.GetByPath("cleanup.txt")
 	assert.False(t, found, "cleanup publication should commit immediately during bootstrap completion")

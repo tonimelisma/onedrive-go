@@ -14,8 +14,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -25,11 +25,11 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork(t *testing
 
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 16)
+	runner.sched.NewGraph()
+	runner.dispatchCh = make(chan *syncdomain.TrackedAction, 16)
 
 	for _, actionID := range []int64{1, 2, 3} {
-		runner.sched.graph.Add(&syncdomain.Action{
+		runner.sched.AddForTest(&syncdomain.Action{
 			Path: "action.txt",
 			Type: syncdomain.ActionUpload,
 		}, actionID, nil)
@@ -76,20 +76,20 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction)
+	runner.sched.NewGraph()
+	runner.dispatchCh = make(chan *syncdomain.TrackedAction)
 
-	runner.sched.graph.Add(&syncdomain.Action{
+	runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
 		View: &syncdomain.PathView{Path: "root.txt"},
 	}, 1, nil)
-	runner.sched.graph.Add(&syncdomain.Action{
+	runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "child.txt",
 		View: &syncdomain.PathView{Path: "child.txt"},
 	}, 2, []int64{1})
-	runner.sched.graph.Add(&syncdomain.Action{
+	runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionDownload,
 		Path: "auth.txt",
 		View: &syncdomain.PathView{Path: "auth.txt"},
@@ -116,7 +116,7 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 		return runner.runResultsLoopWithInitialOutbox(ctx, nil, nil, results, nil)
 	})
 	require.ErrorIs(t, err, graph.ErrUnauthorized)
-	assert.Equal(t, 0, runner.sched.graph.InFlightCount())
+	assert.Equal(t, 0, runner.sched.InFlight())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 	assert.Empty(t, actionableObservationIssuesForTest(t, eng.baseline, t.Context()))
 
@@ -195,18 +195,18 @@ func TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOr
 
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
+	runner.sched.NewGraph()
+	runner.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 
-	root := runner.sched.graph.Add(&syncdomain.Action{
+	root := runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
 		View: &syncdomain.PathView{Path: "root.txt"},
 	}, 1, nil)
 	require.NotNil(t, root)
-	runner.sched.markRunning(root)
+	runner.sched.Running(root)
 
-	child := runner.sched.graph.Add(&syncdomain.Action{
+	child := runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionDownload,
 		Path: "child.txt",
 	}, 2, []int64{1})
@@ -228,8 +228,8 @@ func TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOr
 
 	require.NoError(t, err)
 	assert.Empty(t, runner.outbox)
-	assert.Equal(t, 0, runner.sched.graph.InFlightCount())
-	assert.Equal(t, 0, runner.sched.runningCount)
+	assert.Equal(t, 0, runner.sched.InFlight())
+	assert.Equal(t, 0, runner.sched.RunningCount())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, t.Context()))
 
 	succeeded, failed, errs := runner.resultStats()
@@ -244,26 +244,26 @@ func TestEngineFlow_CompleteQueuedDispatchAsShutdown_CompletesQueuedSubtree(t *t
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
+	runner.sched.NewGraph()
+	runner.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 
-	root := runner.sched.graph.Add(&syncdomain.Action{
+	root := runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := runner.sched.graph.Add(&syncdomain.Action{
+	child := runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "child.txt",
 		View: &syncdomain.PathView{Path: "child.txt"},
 	}, 2, []int64{1})
 	assert.Nil(t, child)
 
-	runner.sched.dispatchCh <- root
+	runner.dispatchCh <- root
 	runner.completeQueuedDispatchAsShutdown()
 
-	assert.Equal(t, 0, runner.sched.graph.InFlightCount())
+	assert.Equal(t, 0, runner.sched.InFlight())
 }
 
 // Validates: R-2.10.5
@@ -272,15 +272,15 @@ func TestEngineFlow_CompleteOutboxAsShutdown_CompletesTrackedActions(t *testing.
 
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
-	flow.sched.graph = syncexec.NewDepGraph(eng.logger)
+	flow.sched.NewGraph()
 
-	root := flow.sched.graph.Add(&syncdomain.Action{
+	root := flow.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := flow.sched.graph.Add(&syncdomain.Action{
+	child := flow.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "child.txt",
 	}, 2, []int64{1})
@@ -288,7 +288,7 @@ func TestEngineFlow_CompleteOutboxAsShutdown_CompletesTrackedActions(t *testing.
 
 	flow.completeOutboxAsShutdown([]*syncdomain.TrackedAction{root})
 
-	assert.Equal(t, 0, flow.sched.graph.InFlightCount())
+	assert.Equal(t, 0, flow.sched.InFlight())
 }
 
 // Validates: R-2.10.5, R-6.8
@@ -297,17 +297,17 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterFatalCompletesReleasedReadyA
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
+	runner.sched.NewGraph()
+	runner.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 
-	root := runner.sched.graph.Add(&syncdomain.Action{
+	root := runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
 		View: &syncdomain.PathView{Path: "root.txt"},
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := runner.sched.graph.Add(&syncdomain.Action{
+	child := runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "child.txt",
 		View: &syncdomain.PathView{Path: "child.txt"},
@@ -329,7 +329,7 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterFatalCompletesReleasedReadyA
 
 	require.ErrorIs(t, err, assert.AnError)
 	assert.Empty(t, runner.outbox, "shutdown completion should consume newly-ready dependents immediately")
-	assert.Equal(t, 0, runner.sched.graph.InFlightCount(), "released dependents should complete as shutdown work, not remain dispatchable")
+	assert.Equal(t, 0, runner.sched.InFlight(), "released dependents should complete as shutdown work, not remain dispatchable")
 }
 
 // Validates: R-2.10.5, R-6.8
@@ -338,16 +338,16 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReady
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
+	runner.sched.NewGraph()
+	runner.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 
-	root := runner.sched.graph.Add(&syncdomain.Action{
+	root := runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "root.txt",
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := runner.sched.graph.Add(&syncdomain.Action{
+	child := runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "child.txt",
 	}, 2, []int64{1})
@@ -371,7 +371,7 @@ func TestOneShotRunner_HandleOneShotCompletion_AfterCancelCompletesReleasedReady
 
 	require.NoError(t, err)
 	assert.Empty(t, runner.outbox, "canceled shutdown completion should consume newly-ready dependents immediately")
-	assert.Equal(t, 0, runner.sched.graph.InFlightCount(), "released dependents should complete as shutdown work after cancellation too")
+	assert.Equal(t, 0, runner.sched.InFlight(), "released dependents should complete as shutdown work after cancellation too")
 }
 
 // Validates: R-2.10.33
@@ -380,16 +380,16 @@ func TestOneShotRunner_RunResultsLoopIdle_ReleasesDueHeldWorkBeforeBlocking(t *t
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
+	runner.sched.NewGraph()
+	runner.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 
-	action := runner.sched.graph.Add(&syncdomain.Action{
+	action := runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "retry.txt",
 		View: &syncdomain.PathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, action)
-	runner.holdAction(action, heldReasonRetry, syncdomain.ScopeKey{}, eng.nowFunc().Add(-time.Second))
+	runner.sched.Hold(action, syncsched.HeldRetry, syncdomain.ScopeKey{}, eng.nowFunc().Add(-time.Second))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	results := make(chan syncdomain.ActionCompletion, 1)
@@ -397,7 +397,7 @@ func TestOneShotRunner_RunResultsLoopIdle_ReleasesDueHeldWorkBeforeBlocking(t *t
 	syncfixture.RunInBackground(t, ctx, func(workerCtx context.Context) error {
 		defer close(results)
 		select {
-		case dispatched := <-runner.sched.dispatchCh:
+		case dispatched := <-runner.dispatchCh:
 			results <- syncdomain.ActionCompletion{
 				ActionID:   dispatched.ID,
 				Path:       dispatched.Action.Path,
@@ -415,8 +415,8 @@ func TestOneShotRunner_RunResultsLoopIdle_ReleasesDueHeldWorkBeforeBlocking(t *t
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, 0, runner.sched.graph.InFlightCount())
-	assert.Empty(t, runner.retries.heldByKey)
+	assert.Equal(t, 0, runner.sched.InFlight())
+	assert.Zero(t, runner.sched.HeldCount())
 }
 
 // Validates: R-2.10.33
@@ -425,26 +425,26 @@ func TestOneShotRunner_ReleaseIdleDueHeldWork_ClearsShutdownCompletedOutboxOnRed
 
 	eng := newSingleOwnerEngine(t)
 	runner := newOneShotRunner(eng.Engine)
-	runner.sched.graph = syncexec.NewDepGraph(eng.logger)
-	runner.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
+	runner.sched.NewGraph()
+	runner.dispatchCh = make(chan *syncdomain.TrackedAction, 1)
 	now := eng.nowFunc()
 
-	concrete := runner.sched.graph.Add(&syncdomain.Action{
+	concrete := runner.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "retry.txt",
 		View: &syncdomain.PathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, concrete)
-	runner.holdAction(concrete, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
+	runner.sched.Hold(concrete, syncsched.HeldRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 
-	publication := runner.sched.graph.Add(&syncdomain.Action{
+	publication := runner.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
 		DriveID: eng.driveID,
 		ItemID:  "cleanup-item",
 	}, 2, nil)
 	require.NotNil(t, publication)
-	runner.holdAction(publication, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
+	runner.sched.Hold(publication, syncsched.HeldRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
@@ -452,10 +452,10 @@ func TestOneShotRunner_ReleaseIdleDueHeldWork_ClearsShutdownCompletedOutboxOnRed
 	require.True(t, handled)
 	require.ErrorContains(t, err, "reading observation state for action freshness")
 	assert.Empty(t, runner.outbox, "shutdown-completed releases must not be queued for a second completion pass")
-	assert.Equal(t, 1, runner.sched.graph.InFlightCount(), "only the failing publication action should remain unresolved")
+	assert.Equal(t, 1, runner.sched.InFlight(), "only the failing publication action should remain unresolved")
 
-	_, concretePresent := runner.sched.graph.Get(1)
+	_, concretePresent := runner.sched.Tracked(1)
 	assert.False(t, concretePresent)
-	_, publicationPresent := runner.sched.graph.Get(2)
+	_, publicationPresent := runner.sched.Tracked(2)
 	assert.True(t, publicationPresent)
 }

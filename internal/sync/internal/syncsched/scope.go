@@ -16,7 +16,7 @@
 // The types it works with live in the sync domain: ScopeKey and ScopeKeyKind
 // in scope_key.go, BlockScope and ScopeUpdateResult in scope_block.go.
 
-package syncexec
+package syncsched
 
 import (
 	"log/slog"

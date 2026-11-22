@@ -46,6 +46,6 @@ func TestUpsertBlockScope_SaturatedTrialSurvivesAReload(t *testing.T) {
 	require.Len(t, blocks, 1)
 	assert.Equal(t, trialInterval, blocks[0].TrialInterval)
 	assert.Equal(t, time.Unix(0, math.MaxInt64).UTC(), blocks[0].NextTrialAt, "the trial reads back as the last storable time")
-	assert.Empty(t, dueTrials([]syncdomain.ActiveScope{syncdomain.ActiveScopeFromBlockScopeRow(blocks[0])}, now),
+	assert.True(t, now.Before(syncdomain.ActiveScopeFromBlockScopeRow(blocks[0]).NextTrialAt),
 		"a trial OneDrive put past 2262 is not due after a restart")
 }

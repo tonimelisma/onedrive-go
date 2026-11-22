@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 type debounceTimer interface {
@@ -71,6 +72,8 @@ type DirtyBuffer struct {
 	// newDeadlineTimer builds the max-wait timer; a separate seam so tests
 	// can drive the quiet-period timer and the deadline independently.
 	newDeadlineTimer func(time.Duration) debounceTimer
+	// clock starts the debounce loop's goroutine.
+	clock syncdomain.SyncClock
 }
 
 // minDirtyMaxWait is the floor of the longest a dirty signal waits for a
@@ -90,11 +93,18 @@ func dirtyMaxWait(debounce time.Duration) time.Duration {
 	return max(minDirtyMaxWait, dirtyMaxWaitDebounceFactor*debounce)
 }
 
+// NewDirtyBuffer is NewDirtyBufferOn with the real clock.
 func NewDirtyBuffer(logger *slog.Logger) *DirtyBuffer {
+	return NewDirtyBufferOn(logger, syncdomain.RealClock{})
+}
+
+// NewDirtyBufferOn is a buffer whose debounce loop clock starts.
+func NewDirtyBufferOn(logger *slog.Logger, clock syncdomain.SyncClock) *DirtyBuffer {
 	return &DirtyBuffer{
 		logger:           logger,
 		newTimer:         newRealDebounceTimer,
 		newDeadlineTimer: newRealDebounceTimer,
+		clock:            clock,
 	}
 }
 
@@ -143,7 +153,7 @@ func (b *DirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration
 	b.notify = make(chan struct{}, 1)
 	b.mu.Unlock()
 
-	go b.debounceLoop(ctx, debounce, out)
+	b.clock.Go(func() { b.debounceLoop(ctx, debounce, out) })
 
 	return out
 }

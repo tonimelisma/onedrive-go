@@ -11,9 +11,11 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 )
 
-// SyncClock is the engine's single time capability. Every time-dependent
-// decision in the runtime -- now, delayed callbacks, tickers, sleeps, and
-// retry jitter -- goes through one value.
+// SyncClock is the engine's single time and scheduling capability. Every
+// time-dependent decision in the runtime -- now, delayed callbacks, tickers,
+// sleeps, and retry jitter -- goes through one value, and so does every
+// goroutine the sync tree starts (Go): a test that owns the clock owns when
+// work runs, not only what time it reads.
 //
 // It is one interface rather than five injectable function fields because the
 // five are not independent. A test that replaced only `now` kept a real
@@ -27,6 +29,9 @@ type SyncClock interface {
 	NewTicker(interval time.Duration) SyncTicker
 	Sleep(ctx context.Context, delay time.Duration) error
 	Jitter(maxDelay time.Duration) time.Duration
+	// Go runs fn on a goroutine of its own. It is the one place the sync
+	// tree starts a goroutine; fn keeps whatever panic boundary it had.
+	Go(fn func())
 }
 
 // RealClock is the production wall-clock implementation of SyncClock. The
@@ -150,6 +155,11 @@ func (RealClock) Sleep(ctx context.Context, delay time.Duration) error {
 
 func (RealClock) Jitter(maxDelay time.Duration) time.Duration {
 	return realJitter(maxDelay)
+}
+
+// Go starts fn on a new goroutine.
+func (RealClock) Go(fn func()) {
+	go fn()
 }
 
 // SyncTimer is the engine-owned timer boundary. Production uses wall-clock

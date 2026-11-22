@@ -129,7 +129,7 @@ func TestRunVerifyPublicSkipsOnlyTheCoverageGateAfterUnitTestsFail(t *testing.T)
 	repoRoot := t.TempDir()
 	writeCoverageRequirement(t, repoRoot, testCoverageRequirement)
 	coverFile := filepath.Join(repoRoot, "cover.out")
-	unitTimeout := 20 * time.Minute
+	unitTimeout := 30 * time.Minute
 	unitTestKey := strings.Join([]string{
 		"go", "test", "-race", "-timeout=" + unitTimeout.String(), "-coverpkg=./...", "-coverprofile=" + coverFile, "./...",
 	}, " ")

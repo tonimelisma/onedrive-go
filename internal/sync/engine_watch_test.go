@@ -47,9 +47,8 @@ func (s *stubSocketIOWakeSource) Run(ctx context.Context, wakes chan<- struct{})
 func TestResolveDebounce_DefaultIsFiveSeconds(t *testing.T) {
 	t.Parallel()
 
-	eng := &Engine{}
-	assert.Equal(t, 5*time.Second, eng.resolveDebounce(WatchOptions{}))
-	assert.Equal(t, 1500*time.Millisecond, eng.resolveDebounce(WatchOptions{Debounce: 1500 * time.Millisecond}))
+	assert.Equal(t, 5*time.Second, resolveDebounce(WatchOptions{}))
+	assert.Equal(t, 1500*time.Millisecond, resolveDebounce(WatchOptions{Debounce: 1500 * time.Millisecond}))
 }
 
 // Validates: R-2.8.3, R-6.10.10
@@ -415,7 +414,7 @@ func TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare(t *t
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.sched.runningCount = 1
+	rt.sched.Running(&syncdomain.TrackedAction{ID: 1 << 40, Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "running.txt"}})
 
 	err = rt.handleWatchReplanReady(ctx, &watchPipeline{
 		bl:   bl,

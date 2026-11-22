@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -82,9 +83,9 @@ func TestEngineFlow_DiscardScope_LeavesNoCachedRowTheStoreDeleted(t *testing.T) 
 	assertRetryCacheEqualsStore(t, eng, rt)
 	_, cached := rt.retryWork.row(syncdomain.RetryWorkKeyForAction(&held.Action))
 	assert.False(t, cached, "the deleted blocked row left the cache")
-	heldNow, ok := rt.retries.heldByKey[syncdomain.RetryWorkKeyForAction(&held.Action)]
+	heldNow, ok := rt.sched.HeldWork(syncdomain.RetryWorkKeyForAction(&held.Action))
 	require.True(t, ok, "the action is held again, now as retry work")
-	assert.Equal(t, heldReasonRetry, heldNow.Reason)
+	assert.Equal(t, syncsched.HeldRetry, heldNow.Reason)
 	assert.True(t, heldNow.NextRetry.Equal(clock.Now()), "due at once")
 
 	row, err := rt.retryWork.recordFailure(ctx, eng.baseline, evidence, delay)
@@ -108,7 +109,7 @@ func TestEngineFlow_ReleaseScopeBatch_CacheEqualsStore(t *testing.T) {
 	retryAt := syncdomain.StoredTimeNano(eng.nowFunc().Add(time.Hour))
 	require.NoError(t, eng.baseline.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow(held[1].Action.Path, "", syncdomain.ActionUpload, 1, retryAt)))
 	installRetryCacheFromStore(t, eng, rt)
-	scope, active := rt.scopes.lookupActiveScope(key)
+	scope, active := rt.sched.Scope(key)
 	require.True(t, active)
 
 	released, err := rt.releaseScopeBatch(ctx, key, scope.Generation)
@@ -131,17 +132,17 @@ func TestEngineFlow_ResolveWithoutStoreRow_ClearsTheCachedRow(t *testing.T) {
 
 	eng, rt, _, _ := rampTestEngine(t, 2)
 	ctx := t.Context()
-	ta := rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "gone.txt", DriveID: eng.driveID}, 1, nil)
+	ta := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "gone.txt", DriveID: eng.driveID}, 1, nil)
 	require.NotNil(t, ta)
 	work := syncdomain.RetryWorkKeyForAction(&ta.Action)
 	rt.retryWork.rows[work] = *syncfixture.TestDelayedRetryWorkRow(work.Path, "", syncdomain.ActionUpload, 1, syncdomain.StoredTimeNano(eng.nowFunc().Add(time.Minute)))
-	rt.holdAction(ta, heldReasonRetry, syncdomain.ScopeKey{}, eng.nowFunc().Add(time.Minute))
+	rt.sched.Hold(ta, syncsched.HeldRetry, syncdomain.ScopeKey{}, eng.nowFunc().Add(time.Minute))
 
 	require.NoError(t, rt.resolveRetryWorkAndLogResolution(ctx, work, retryResolutionSourceActionSuperseded))
 
 	_, cached := rt.retryWork.row(work)
 	assert.False(t, cached, "the cached row is gone")
-	assert.NotContains(t, rt.retries.heldByKey, work, "and so is the hold")
+	assert.False(t, rt.sched.IsHeld(work), "and so is the hold")
 }
 
 // retryWorkMutators are the store's methods that change retry_work.

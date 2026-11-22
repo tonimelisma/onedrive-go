@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
@@ -64,10 +65,12 @@ func TestApplySupersededCompletion_ParksTheSameActionAfterAStreak(t *testing.T) 
 
 	store := syncstoretest.NewTestStore(t)
 	signals := &recordingSignals{}
+	logger := syncfixture.TestLogger(t)
 	flow := &engineFlow{
-		observation:      observation{deps: runtimeDeps{store: store, logger: syncfixture.TestLogger(t)}},
+		observation:      observation{deps: runtimeDeps{store: store, logger: logger}},
 		supersedeStreaks: make(map[string]int),
 		signals:          signals,
+		sched:            syncsched.New(time.Now, logger, func() {}),
 	}
 	flow.retryWork.rows = map[syncdomain.RetryWorkKey]syncdomain.RetryWorkRow{}
 	stale := &syncdomain.ActionCompletion{ActionType: syncdomain.ActionRemoteMove, OldPath: "movesrc", Path: "movedst", ErrMsg: "remote item changed"}

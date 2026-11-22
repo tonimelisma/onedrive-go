@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// The seeds profile searches new seeds of the four seeded model families of
+// The seeds profile searches new seeds of the five seeded model families of
 // internal/sync every night, without the race detector, where a seed costs a
 // fraction of what it costs under it. The night's start seed is a function of
 // the UTC date alone, so a rerun on the same UTC day runs the same seeds; a
@@ -26,6 +26,7 @@ const (
 	seedsEngineCount  = 12
 	seedsPlannerCount = 8
 	seedsChaosCount   = 2
+	seedsWatchCount   = 4
 	// seedsTimeout is go test's deadline for the seeds step, which took 11.5
 	// minutes on a shared, loaded 2-core host (November 2026).
 	seedsTimeout = "30m"
@@ -46,6 +47,8 @@ const (
 	seedsPlannerStartEnv = "ONEDRIVE_GO_PLANNER_SEED_START"
 	seedsChaosCountEnv   = "ONEDRIVE_GO_CHAOS_SEEDS"
 	seedsChaosStartEnv   = "ONEDRIVE_GO_CHAOS_SEED_START"
+	seedsWatchCountEnv   = "ONEDRIVE_GO_WATCH_SEEDS"
+	seedsWatchStartEnv   = "ONEDRIVE_GO_WATCH_SEED_START"
 	// seedsDispatchOrderEnv pins the order the engine dispatches a ready
 	// frontier in, in place of a seed's own shuffle; a seed run under it
 	// replays only with it.
@@ -70,7 +73,8 @@ type seededFamily struct {
 	pkg     string
 }
 
-// seededFamilies are the four families, the one table of them devtool holds:
+// seededFamilies are the five families, the one table of them devtool holds,
+// the primary one, the watch model, first:
 // the seeds profile runs their tests, the replay reader accepts their
 // variables, and a failing subtest of one names its seed
 // (TestSeedsRunPatternNamesExistingTests and
@@ -78,6 +82,7 @@ type seededFamily struct {
 // internal/sync's tests).
 func seededFamilies() []seededFamily {
 	return []seededFamily{
+		{test: "TestModel_WatchModeConverges", seedEnv: seedsModelSeedEnv, pkg: seedEnginePackage},
 		{test: "TestRunOnce_RandomizedBidirectionalEditsConverge", seedEnv: seedsModelSeedEnv, pkg: seedEnginePackage},
 		{test: "TestModel_CrashAtSeededPointsRecovers", seedEnv: seedsModelSeedEnv, pkg: seedEnginePackage},
 		{test: "TestPlannerModel_RandomTriplesConverge", seedEnv: seedsPlannerSeedEnv, pkg: seedPlannerPackage},
@@ -111,7 +116,7 @@ func seededFamilyOf(test string) (seededFamily, bool) {
 	return seededFamily{}, false
 }
 
-// seedsRunPattern selects the four families' tests and nothing else.
+// seedsRunPattern selects the five families' tests and nothing else.
 func seedsRunPattern() string {
 	tests := make([]string, 0, len(seededFamilies()))
 	for _, family := range seededFamilies() {
@@ -144,6 +149,7 @@ func seedsCounts() map[string]int {
 		seedsModelCountEnv:   seedsEngineCount,
 		seedsPlannerCountEnv: seedsPlannerCount,
 		seedsChaosCountEnv:   seedsChaosCount,
+		seedsWatchCountEnv:   seedsWatchCount,
 	}
 }
 
@@ -161,6 +167,7 @@ func seedsEnv(env []string, start uint64) []string {
 		seedsModelStartEnv+"="+first,
 		seedsPlannerStartEnv+"="+first,
 		seedsChaosStartEnv+"="+first,
+		seedsWatchStartEnv+"="+first,
 	)
 	for name, count := range seedsCounts() {
 		seeded = append(seeded, name+"="+strconv.Itoa(count))
@@ -169,7 +176,7 @@ func seedsEnv(env []string, start uint64) []string {
 	return seeded
 }
 
-// runSeedsVerification runs the seeds profile: the four families' tests over
+// runSeedsVerification runs the seeds profile: the five families' tests over
 // the sync tree, without -short (they are exhaustive tests), without the race
 // detector and never from go test's cache, through the empty-run guard. It
 // prints its start seed and counts before go test starts, so a later rerun
@@ -195,9 +202,9 @@ func runSeedsVerification(
 	}
 
 	return collector.runStepWithOutcome(seedsStepName, func() (stepOutcome, error) {
-		status := fmt.Sprintf("==> model seeds start=%d engine and crash=%d planner=%d chaos=%d\n"+
+		status := fmt.Sprintf("==> model seeds start=%d watch=%d engine and crash=%d planner=%d chaos=%d\n"+
 			"==> go test -count=1 -timeout=%s -run %s %s\n",
-			start, seedsEngineCount, seedsPlannerCount, seedsChaosCount, seedsTimeout, seedsRunPattern(), syncTestTree)
+			start, seedsWatchCount, seedsEngineCount, seedsPlannerCount, seedsChaosCount, seedsTimeout, seedsRunPattern(), syncTestTree)
 		if err := writeStatus(stdout, status); err != nil {
 			return stepOutcome{}, fmt.Errorf("write status: %w", err)
 		}

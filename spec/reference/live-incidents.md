@@ -62,6 +62,7 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261121-01 | The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline | fixed | test harness | 2026-11-21 | yes |
 | LI-20261115-01 | Graph answered an ordinary folder move with 400 `Invalid request` | mitigated | graph quirk | 2026-11-15 | yes |
 | LI-20261115-02 | The stress lane's race runs of the sync tree ran past a fixed 40-minute deadline | fixed | test harness | 2026-11-15 | yes |
 | LI-20261115-03 | Nightly incremental-delta E2E read only the last converge pass for a download an earlier pass made | fixed | test bug | 2026-11-15 | no |
@@ -112,6 +113,32 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261121-01: The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline
+
+First seen: 2026-11-20
+Last seen: 2026-11-21
+Area: `internal/devtool/verify.go` (`unitTestBaseTimeout`)
+Suite / test: nightly `verify public`, reported as
+`internal/sync.TestReverseDispatch_RunOnceScenariosPass`
+Classification: test harness
+Status: fixed
+Recurring: yes (LI-20261115-02 is the stress lane's form of the same growth)
+Summary: go test's deadline is per package, and the test running when it
+expires is the one reported. Under race and coverage the `internal/sync`
+package took 1136 s on the 2026-11-20 nightly and passed the 1200 s deadline
+on 2026-11-21; no test was hung, the package had outgrown the budget.
+
+Evidence:
+- The 2026-11-20 nightly finished the package in 1136 s, 64 s under the
+  deadline; the 2026-11-21 nightly stopped at it.
+- The named test was the one in flight when the deadline expired; no test
+  of the package was hung.
+
+Fix: the full tier's base deadline is 30 minutes on a host with at least 3
+cores (`unitTestBaseTimeout`), still inside the 45-minute `verify-full` job
+timeout (`TestCIJobTimeoutsCoverEveryGoTestDeadline`); the small-host budget
+of 180 core-minutes is unchanged.
 
 ## LI-20261115-01: Graph answered an ordinary folder move with 400 `Invalid request`
 
@@ -497,6 +524,9 @@ Evidence:
 - The emulated case-insensitive volume (`internal/synctest.CaseInsensitive`)
   folds NFC and NFD like macOS, so no unit test reproduced it;
   `TestRunOnce_LocalNFDNamedFileUploadsInOnePass` on the real filesystem did.
+  A byte-exact in-memory sync tree (`synctree.OpenMemory` with zero
+  `Capabilities`) now replays it on any host
+  (`TestMemoryVolume_NFDNamedFileIsMissingUnderItsStoredSpelling`).
 - The same mismatch affected every operation on an existing local entry: a
   download over the file would have written an NFC sibling, local deletes,
   moves and conflict copies saw the file as already absent, NFD-named folders

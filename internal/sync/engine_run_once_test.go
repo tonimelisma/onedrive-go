@@ -1007,9 +1007,12 @@ func TestNewEngine_InvalidDBPath(t *testing.T) {
 	t.Parallel()
 
 	logger := syncfixture.TestLogger(t)
+	// A folder under a regular file cannot be created, by root either.
+	notAFolder := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(notAFolder, nil, 0o600))
 
 	_, err := newEngine(t.Context(), &engineInputs{
-		DBPath:    "/nonexistent/deeply/nested/path/test.db",
+		DBPath:    filepath.Join(notAFolder, "nested", "test.db"),
 		SyncRoot:  t.TempDir(),
 		DriveID:   driveid.New(syncfixture.EngineTestDriveID),
 		Fetcher:   &syncfixture.EngineMockClient{},

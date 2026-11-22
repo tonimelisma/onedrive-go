@@ -291,7 +291,7 @@ func TestEngineBuildsOneRealClockAndEveryObserverRunsOnIt(t *testing.T) {
 	assert.Equal(t, []string{"NewRealClock"}, literals, "a real clock with timer panics is built only by NewRealClock")
 	assert.Equal(t, []string{"newEngine"}, clocks, "one real clock with the engine's timer panics, built in newEngine")
 	assert.ElementsMatch(t,
-		[]string{"NewLocalObserver from buildLocalObserver", "NewRemoteObserver from buildRemoteObserver"},
+		[]string{"NewLocalObserver from observer", "NewRemoteObserver from observer"},
 		constructorCalls, "every observer the engine builds gets the engine's real clock")
 }
 

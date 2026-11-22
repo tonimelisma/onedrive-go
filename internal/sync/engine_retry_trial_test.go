@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -17,21 +18,21 @@ func TestReleaseDueHeldRetriesNow_ReleasesHeldRetryEntriesOnly(t *testing.T) {
 
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
-	ta := rt.sched.graph.Add(&syncdomain.Action{
+	ta := rt.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "retry.txt",
 		View: &syncdomain.PathView{Path: "retry.txt"},
 	}, 1, nil)
 	require.NotNil(t, ta)
 
-	rt.holdAction(ta, heldReasonRetry, syncdomain.ScopeKey{}, eng.nowFunc().Add(-time.Second))
+	rt.sched.Hold(ta, syncsched.HeldRetry, syncdomain.ScopeKey{}, eng.nowFunc().Add(-time.Second))
 
 	outbox, err := rt.releaseDueHeldRetriesNow(t.Context(), nil)
 	require.NoError(t, err)
 	require.Len(t, outbox, 1)
 	assert.Equal(t, "retry.txt", outbox[0].Action.Path)
 	assert.False(t, outbox[0].IsTrial)
-	assert.Empty(t, rt.retries.heldByKey)
+	assert.Zero(t, rt.sched.HeldCount())
 }
 
 // Validates: R-2.10.33
@@ -72,12 +73,12 @@ func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testi
 		TrialInterval: 10 * time.Second,
 	})
 
-	first := rt.sched.graph.Add(&syncdomain.Action{
+	first := rt.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "first.txt",
 		View: &syncdomain.PathView{Path: "first.txt"},
 	}, 1, nil)
-	second := rt.sched.graph.Add(&syncdomain.Action{
+	second := rt.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionDownload,
 		Path: "second.txt",
 		View: &syncdomain.PathView{Path: "second.txt"},
@@ -85,8 +86,8 @@ func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testi
 	require.NotNil(t, first)
 	require.NotNil(t, second)
 
-	rt.holdAction(first, heldReasonScope, scopeKey, time.Time{})
-	rt.holdAction(second, heldReasonScope, scopeKey, time.Time{})
+	rt.sched.Hold(first, syncsched.HeldScope, scopeKey, time.Time{})
+	rt.sched.Hold(second, syncsched.HeldScope, scopeKey, time.Time{})
 
 	outbox, err := rt.releaseDueHeldTrialsNow(t.Context(), nil)
 	require.NoError(t, err)
@@ -95,8 +96,8 @@ func TestReleaseDueHeldTrialsNow_ReleasesFirstHeldScopeCandidateAsTrial(t *testi
 	assert.True(t, outbox[0].IsTrial)
 	assert.Equal(t, scopeKey, outbox[0].TrialScopeKey)
 
-	require.Len(t, rt.retries.heldByKey, 1)
-	assert.Contains(t, rt.retries.heldByKey, syncdomain.RetryWorkKeyForAction(&second.Action))
+	require.Equal(t, 1, rt.sched.HeldCount())
+	assert.True(t, rt.sched.IsHeld(syncdomain.RetryWorkKeyForAction(&second.Action)))
 }
 
 // Validates: R-2.10.5

@@ -5,23 +5,34 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // engineFlow holds mutable per-run execution state shared by one-shot and
-// watch coordinators. It reads the engine's configuration, hooks and ambient
-// capabilities from the copies flowInputs took when the run started; the
-// engine pointer remains for its collaborators and the state it owns
-// (the protected-root set, the housekeeper).
+// watch coordinators. It holds no pointer to the engine: everything it reads
+// of the engine (configuration, hooks, capabilities, collaborators and the
+// engine-owned state that guards itself) it was handed by name when the run
+// started (flowInputs).
 type engineFlow struct {
-	// observation is the engine's collaborators, the run's configuration
-	// and its capabilities: everything code off the loop goroutine may
-	// reach (engine_observation.go).
+	// observation is the engine's observing collaborators, the run's
+	// configuration and its capabilities: everything code off the loop
+	// goroutine may reach (engine_observation.go).
 	observation
 
 	// hooks are the engine's test seams as they were when the run started.
 	hooks engineHooks
+
+	// The collaborators only the loop goroutine uses.
+	planner *syncplan.Planner
+	exec    *syncexec.ExecutorConfig
+	perms   *permissionHandler
+	upkeep  *housekeeper
+	// ownerCheck is the run's owner check (beginRun), nil in production.
+	ownerCheck func()
 
 	// signals is how this flow asks for future work. Watch supplies the live
 	// runtime; one-shot supplies no-ops, because a one-shot pass has no future
@@ -38,11 +49,12 @@ type engineFlow struct {
 	// flow has none.
 	admitted admittedWorkOwner
 
-	// The four owners below split this run's mutable state by authority; see
-	// engine_runtime_owners.go. One goroutine still owns all four.
-	sched   actionScheduler
-	retries retryLedger
-	scopes  scopeLedger
+	// One goroutine owns all the run state below (engine_runtime_owners.go).
+	// sched is the run's scheduling state (syncsched): the dependency graph,
+	// the queued and running sets, the slow start, the held work and the
+	// active block scopes. dispatchCh is the loop's channel to the workers.
+	sched      *syncsched.Scheduler
+	dispatchCh chan *syncdomain.TrackedAction
 	// retryWork is the run's one path to the retry_work table and its cache.
 	retryWork retryWork
 	results   runResults
@@ -91,20 +103,30 @@ type runConfig struct {
 	accountCanonicalID driveid.CanonicalID
 }
 
-// flowInputs is everything newEngineFlow builds a run's flow from.
+// flowInputs is everything newEngineFlow builds a run's flow from, each by
+// name.
 type flowInputs struct {
-	engine *Engine
-	cfg    runConfig
-	deps   runtimeDeps
-	hooks  engineHooks
-	runID  string
+	cfg   runConfig
+	deps  runtimeDeps
+	hooks engineHooks
+	runID string
+
+	roots     *protectedRootSet
+	remote    *remoteSource
+	local     *localSource
+	shortcuts *shortcutRoots
+
+	planner    *syncplan.Planner
+	exec       *syncexec.ExecutorConfig
+	perms      *permissionHandler
+	upkeep     *housekeeper
+	ownerCheck func()
 }
 
 // flowInputs is the one place a run reads the engine's configuration, hooks
 // and capabilities. Each call takes the next run ID.
 func (e *Engine) flowInputs() *flowInputs {
 	return &flowInputs{
-		engine: e,
 		cfg: runConfig{
 			driveID:             e.driveID,
 			remoteRootItemID:    e.remoteRootItemID,
@@ -123,25 +145,42 @@ func (e *Engine) flowInputs() *flowInputs {
 		deps:  newRuntimeDeps(e),
 		hooks: e.hooks,
 		runID: e.nextRuntimeRunID(),
+
+		roots:     e.protectedRoots,
+		remote:    e.remoteSource(),
+		local:     e.localSource(),
+		shortcuts: e.shortcutRoots(),
+
+		planner:    e.planner,
+		exec:       e.execCfg,
+		perms:      e.permHandler,
+		upkeep:     e.upkeep,
+		ownerCheck: e.runOwnerCheck,
 	}
 }
 
 func newEngineFlow(in *flowInputs) *engineFlow {
 	flow := &engineFlow{
 		observation: observation{
-			engine: in.engine,
-			cfg:    in.cfg,
-			deps:   in.deps,
+			cfg:       in.cfg,
+			deps:      in.deps,
+			roots:     in.roots,
+			remote:    in.remote,
+			local:     in.local,
+			shortcuts: in.shortcuts,
 		},
-		hooks:     in.hooks,
-		signals:   noRuntimeSignals{},
-		inspect:   noWatchInspector{},
-		admitted:  noAdmittedWork{},
-		runID:     in.runID,
-		sched:     newActionScheduler(),
-		retries:   newRetryLedger(),
-		scopes:    scopeLedger{ownerCheck: in.engine.runOwnerCheck},
-		retryWork: retryWork{rows: make(map[syncdomain.RetryWorkKey]syncdomain.RetryWorkRow)},
+		hooks:      in.hooks,
+		planner:    in.planner,
+		exec:       in.exec,
+		perms:      in.perms,
+		upkeep:     in.upkeep,
+		ownerCheck: in.ownerCheck,
+		signals:    noRuntimeSignals{},
+		inspect:    noWatchInspector{},
+		admitted:   noAdmittedWork{},
+		runID:      in.runID,
+		sched:      syncsched.New(in.deps.now, in.deps.logger, in.ownerCheck),
+		retryWork:  retryWork{rows: make(map[syncdomain.RetryWorkKey]syncdomain.RetryWorkRow)},
 
 		supersedeStreaks: make(map[string]int),
 		stopBound:        syncdomain.OutcomeCommitTimeout,

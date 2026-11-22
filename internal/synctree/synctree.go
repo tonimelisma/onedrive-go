@@ -226,6 +226,11 @@ func defaultRootOps() rootOps {
 type Root struct {
 	dir string
 	ops rootOps
+	// memory is the in-memory volume the root runs on (OpenMemory), nil on
+	// a real folder. The operations that reach the filesystem by descriptor
+	// rather than through the handle (a no-replace rename, removing a
+	// verified file, detaching one out of the tree) run on it instead.
+	memory *memoryVolume
 }
 
 // Interpose returns a Root over the same folder whose every rooted operation
@@ -246,7 +251,7 @@ func (r *Root) Interpose(wrap func(Handle) Handle) *Root {
 		return wrap(handle), nil
 	}
 
-	return &Root{dir: r.dir, ops: ops}
+	return &Root{dir: r.dir, ops: ops, memory: r.memory}
 }
 
 // ErrUnsafePath classifies a path the sync folder must not touch: outside the

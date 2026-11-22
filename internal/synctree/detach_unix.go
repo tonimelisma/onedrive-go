@@ -127,6 +127,9 @@ type VerifyFunc func(f *os.File, info os.FileInfo) error
 // ErrDetachRaced. dest lands by rename on the same filesystem and by copy
 // through the verified descriptor across filesystems.
 func (r *Root) DetachRegularFile(rel string, verify VerifyFunc, dest string) error {
+	if r.memory != nil {
+		return destinationFailed(fmt.Errorf("moving %s to %s: %w", rel, dest, ErrOutsideMemoryVolume))
+	}
 	out, err := r.openDestination(dest)
 	if err != nil {
 		return err
@@ -157,6 +160,16 @@ func (r *Root) DetachRegularFile(rel string, verify VerifyFunc, dest string) err
 // RemoveVerifiedRegularFile permanently removes the regular file at rel, but
 // only the inode verify approved; see DetachRegularFile for the binding.
 func (r *Root) RemoveVerifiedRegularFile(rel string, verify VerifyFunc) error {
+	if r.memory != nil {
+		clean, err := cleanRelative(rel)
+		if err != nil {
+			return err
+		}
+		if clean == "." {
+			return unsafePathf("refusing to remove the sync folder itself")
+		}
+		return r.memory.removeVerified(clean, r.nameForMessage(clean), verify)
+	}
 	v, err := r.openVerifiedRegular(rel, verify)
 	if err != nil {
 		return err
@@ -188,6 +201,9 @@ func (r *Root) RemoveVerifiedRegularFile(rel string, verify VerifyFunc) error {
 // time of the link, whose name is taken, or a copy into it that fails, is
 // ErrDestinationFailed.
 func (r *Root) PreserveRegularFile(rel string, verify VerifyFunc, dest string) error {
+	if r.memory != nil {
+		return destinationFailed(fmt.Errorf("preserving %s at %s: %w", rel, dest, ErrOutsideMemoryVolume))
+	}
 	out, err := r.openDestination(dest)
 	if err != nil {
 		return err

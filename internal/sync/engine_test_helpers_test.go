@@ -19,7 +19,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
@@ -283,13 +282,13 @@ func setupWatchEngine(t *testing.T, eng *testEngine) <-chan *syncdomain.TrackedA
 	t.Helper()
 
 	rt := newWatchRuntime(eng.Engine)
-	rt.sched.graph = syncexec.NewDepGraph(eng.logger)
-	rt.sched.dispatchCh = make(chan *syncdomain.TrackedAction, 1024)
-	rt.scopes.state = syncexec.NewScopeState(eng.nowFunc, eng.logger)
+	rt.sched.NewGraph()
+	rt.dispatchCh = make(chan *syncdomain.TrackedAction, 1024)
+	rt.sched.ResetWindows()
 	eng.runtime = rt
 	eng.flow = rt.engineFlow
 
-	return rt.sched.dispatchCh
+	return rt.dispatchCh
 }
 
 // newTestWatchState initializes watch state on an engine for testing.
@@ -341,7 +340,7 @@ func setTestBlockScope(t *testing.T, eng *testEngine, block *syncdomain.BlockSco
 	require.NoError(t, eng.baseline.UpsertBlockScope(context.Background(), block))
 	if eng.runtime != nil {
 		active := syncdomain.ActiveScopeFromBlockScopeRow(block)
-		eng.runtime.scopes.upsertActiveScope(&active)
+		eng.runtime.sched.PutScope(&active)
 	}
 }
 
@@ -440,7 +439,7 @@ func runFullRemoteRefreshAsyncForTest(t *testing.T, eng *testEngine, ctx context
 
 func isTestBlockScopeed(eng *testEngine, key syncdomain.ScopeKey) bool {
 	if eng.runtime != nil {
-		if eng.runtime.scopes.hasActiveScope(key) {
+		if eng.runtime.sched.HasScope(key) {
 			return true
 		}
 	}
@@ -459,7 +458,7 @@ func isTestBlockScopeed(eng *testEngine, key syncdomain.ScopeKey) bool {
 
 func getTestBlockScope(eng *testEngine, key syncdomain.ScopeKey) (syncdomain.BlockScope, bool) {
 	if eng.runtime != nil {
-		if block, ok := eng.runtime.scopes.lookupActiveScope(key); ok {
+		if block, ok := eng.runtime.sched.Scope(key); ok {
 			row, err := syncdomain.BlockScopeRowFromActiveScope(block)
 			if err != nil {
 				panic(fmt.Sprintf("BlockScopeRowFromActiveScope: %v", err))
@@ -556,11 +555,17 @@ func newTestEngineInputs(t *testing.T, mock *syncfixture.EngineMockClient, tmpDi
 // copy when it starts, so a live flow would not see the change.
 func refreshTestFlowInputs(eng *testEngine) {
 	in := eng.flowInputs()
+	// A flow holds its collaborators by name, each built from the engine's
+	// configuration, so a test that changed the engine rebuilds them too.
+	refresh := func(flow *engineFlow) {
+		flow.cfg, flow.deps, flow.hooks = in.cfg, in.deps, in.hooks
+		flow.roots, flow.remote, flow.local, flow.shortcuts = in.roots, in.remote, in.local, in.shortcuts
+	}
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
-		rt.cfg, rt.deps, rt.hooks = in.cfg, in.deps, in.hooks
+		refresh(rt.engineFlow)
 	}
 	if flow, ok := lookupTestEngineFlow(eng); ok {
-		flow.cfg, flow.deps, flow.hooks = in.cfg, in.deps, in.hooks
+		refresh(flow)
 	}
 }
 
@@ -568,4 +573,9 @@ func refreshTestFlowInputs(eng *testEngine) {
 // so it protects the shortcut child roots its store holds.
 func withTestShortcutNamespace(inputs *engineInputs) {
 	inputs.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
+}
+
+// observationOf is the observation a run of eng starts with.
+func observationOf(eng *Engine) *observation {
+	return &newEngineFlow(eng.flowInputs()).observation
 }

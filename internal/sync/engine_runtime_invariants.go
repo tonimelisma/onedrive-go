@@ -127,7 +127,7 @@ func detachedInvariantCheckContext(ctx context.Context) (context.Context, contex
 
 func (flow *engineFlow) assertWatchRuntimeInvariants() error {
 	{
-		activeScopes := flow.scopes.snapshotActiveScopes()
+		activeScopes := flow.sched.Scopes()
 		seen := make(map[syncdomain.ScopeKey]struct{}, len(activeScopes))
 		for i := range activeScopes {
 			key := activeScopes[i].Key
@@ -250,7 +250,7 @@ func (links persistedScopeLinks) hasRelatedRows(key syncdomain.ScopeKey) bool {
 }
 
 func (flow *engineFlow) assertReleasedScope(ctx context.Context, key syncdomain.ScopeKey) error {
-	if flow.scopes.hasActiveScope(key) {
+	if flow.sched.HasScope(key) {
 		return fmt.Errorf("released scope %s still active in runtime state", key.String())
 	}
 
@@ -278,7 +278,7 @@ func (flow *engineFlow) assertReleasedScope(ctx context.Context, key syncdomain.
 }
 
 func (flow *engineFlow) assertDiscardedScope(ctx context.Context, key syncdomain.ScopeKey) error {
-	if flow.scopes.hasActiveScope(key) {
+	if flow.sched.HasScope(key) {
 		return fmt.Errorf("discarded scope %s still active in runtime state", key.String())
 	}
 

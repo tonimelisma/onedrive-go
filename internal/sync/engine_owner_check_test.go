@@ -14,8 +14,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
@@ -61,9 +61,9 @@ func installOwnerCheck(t *testing.T, rt *watchRuntime) {
 	check := newOwnerCheck(t, func() {
 		assert.Fail(t, "a run-owned structure was used off the run's goroutine")
 	})
-	rt.scopes.ownerCheck = check
+	rt.sched.SetOwnerCheck(check)
 	rt.timers.ownerCheck = check
-	rt.sched.graph.SetOwnerCheck(check)
+	rt.sched.SetOwnerCheck(check)
 }
 
 // assertOwnerCheckFires proves an owner check installed through install
@@ -91,7 +91,7 @@ func assertOwnerCheckFires(t *testing.T, install func(func()), access func()) {
 func TestOwnerCheck_DependencyGraphCatchesASecondGoroutine(t *testing.T) {
 	t.Parallel()
 
-	graph := syncexec.NewDepGraph(synctest.TestLogger(t))
+	graph := syncsched.NewDepGraph(synctest.TestLogger(t))
 	assertOwnerCheckFires(t,
 		func(check func()) { graph.SetOwnerCheck(check) },
 		func() { graph.InFlightCount() },
@@ -99,13 +99,13 @@ func TestOwnerCheck_DependencyGraphCatchesASecondGoroutine(t *testing.T) {
 }
 
 // Validates: R-6.3.4
-func TestOwnerCheck_ScopeLedgerCatchesASecondGoroutine(t *testing.T) {
+func TestOwnerCheck_SchedulerScopesCatchASecondGoroutine(t *testing.T) {
 	t.Parallel()
 
-	var ledger scopeLedger
+	scheduler := syncsched.New(time.Now, synctest.TestLogger(t), nil)
 	assertOwnerCheckFires(t,
-		func(check func()) { ledger.ownerCheck = check },
-		func() { ledger.hasActiveScope(syncdomain.SKService()) },
+		func(check func()) { scheduler.SetOwnerCheck(check) },
+		func() { scheduler.HasScope(syncdomain.SKService()) },
 	)
 }
 
@@ -140,10 +140,12 @@ func TestWatchRuntime_TimerCallbacksTouchOnlyChannels(t *testing.T) {
 	installOwnerCheck(t, rt)
 	due := clock.Now().Add(time.Minute)
 
-	rt.scopes.upsertActiveScope(&syncdomain.ActiveScope{Key: syncdomain.SKService(), TrialInterval: time.Minute, NextTrialAt: due})
-	rt.retries.heldByScope[syncdomain.SKService()] = []syncdomain.RetryWorkKey{{Path: "scoped.txt"}}
+	rt.sched.PutScope(&syncdomain.ActiveScope{Key: syncdomain.SKService(), TrialInterval: time.Minute, NextTrialAt: due})
+	rt.sched.Hold(&syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "scoped.txt"}},
+		syncsched.HeldScope, syncdomain.SKService(), time.Time{})
 	rt.armTrialTimer()
-	rt.retries.heldByKey[syncdomain.RetryWorkKey{Path: "held.txt"}] = &heldAction{Reason: heldReasonRetry, NextRetry: due}
+	rt.sched.Hold(&syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "held.txt"}},
+		syncsched.HeldRetry, syncdomain.ScopeKey{}, due)
 	rt.armRetryTimer()
 	rt.armAdmitTimer(due)
 	require.NoError(t, rt.armFullRefreshTimer(t.Context()))
@@ -180,7 +182,7 @@ func ownerOfCheck() string {
 	frames := runtime.CallersFrames(pcs[:runtime.Callers(ownerCheckCallerSkip, pcs)])
 	for {
 		frame, more := frames.Next()
-		for _, owner := range []string{"(*DepGraph)", "(*scopeLedger)", "(*watchTimerState)"} {
+		for _, owner := range []string{"(*DepGraph)", "(*Scheduler)", "(*watchTimerState)"} {
 			if strings.Contains(frame.Function, owner) {
 				return owner
 			}
@@ -251,7 +253,7 @@ func TestRunOnce_UsesRunStateOnlyFromItsGoroutine(t *testing.T) {
 	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	require.Equal(t, 1, report.Downloads)
-	ownership.assertRunOwned(t, "(*DepGraph)", "(*scopeLedger)")
+	ownership.assertRunOwned(t, "(*DepGraph)", "(*Scheduler)")
 }
 
 // A watch whose bootstrap downloads a file uses the scope ledger, its timers
@@ -278,5 +280,5 @@ func TestRunWatch_UsesRunStateOnlyFromItsGoroutine(t *testing.T) {
 		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	syncfixture.StopWatch(t, cancel, done)
-	ownership.assertRunOwned(t, "(*DepGraph)", "(*scopeLedger)", "(*watchTimerState)")
+	ownership.assertRunOwned(t, "(*DepGraph)", "(*Scheduler)", "(*watchTimerState)")
 }

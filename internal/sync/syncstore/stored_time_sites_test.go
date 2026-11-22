@@ -45,7 +45,7 @@ func TestStoredTimes_EveryDecodeIsDeclared(t *testing.T) {
 		"internal/sync/syncdomain/domain_stored_time.go":         {decodesRangeBound: 2, decodesRemoteModTime: 1},
 		"internal/sync/syncstore/block_scope_rows.go":            {decodesOrderedTime: 1},
 		"internal/sync/engine_runtime_lifecycle.go":              {decodesOrderedTime: 1},
-		"internal/sync/engine_runtime_owners.go":                 {decodesOrderedTime: 1},
+		"internal/sync/internal/syncsched/admission.go":          {decodesOrderedTime: 1},
 		"internal/sync/engine_watch_maintenance.go":              {decodesOrderedTime: 3},
 		"internal/sync/syncdomain/domain_pending_create.go":      {decodesOrderedTime: 1},
 		"internal/sync/internal/syncobserve/local_hash_reuse.go": {inMemoryValue: 1},
