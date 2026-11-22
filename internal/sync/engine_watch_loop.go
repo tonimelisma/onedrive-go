@@ -350,18 +350,18 @@ func (rt *watchRuntime) handleWatchProtectedRootEventSignal(
 	if _, refreshErr := rt.refreshAndCommitLocalCurrentState(ctx, bl); refreshErr != nil {
 		return false, fmt.Errorf("sync: refresh local_state for protected root event: %w", refreshErr)
 	}
-	changed, err := rt.engine.reconcileShortcutRootLocalState(ctx)
+	changed, err := rt.shortcuts.reconcileShortcutRootLocalState(ctx)
 	if err != nil {
 		return false, err
 	}
-	if !changed || rt.engine.shortcutChildWorkSink == nil {
+	if !changed || rt.shortcuts.sink == nil {
 		return false, nil
 	}
 	roots, err := rt.deps.store.ListShortcutRoots(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: read shortcut roots after protected root event: %w", err)
 	}
-	return false, rt.engine.shortcutChildWorkSink(ctx, syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(
+	return false, rt.shortcuts.sink(ctx, syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 		rt.cfg.shortcutNamespaceID,
 		rt.cfg.syncRoot,
 		rt.cfg.contentFilter,

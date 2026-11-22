@@ -852,7 +852,7 @@ func dispatchTestCreate(t *testing.T, rt *watchRuntime, id int64) *syncdomain.Tr
 
 	const path = "doc.txt"
 	return dispatchTestAction(t, rt, id, &syncdomain.Action{
-		Type: syncdomain.ActionUpload, Path: path, DriveID: rt.engine.driveID, View: &syncdomain.PathView{Path: path},
+		Type: syncdomain.ActionUpload, Path: path, DriveID: rt.cfg.driveID, View: &syncdomain.PathView{Path: path},
 	})
 }
 
@@ -885,7 +885,7 @@ func failTestCreate(t *testing.T, rt *watchRuntime, bl syncdomain.BaselineView, 
 	clock.Advance(time.Second)
 	endedAt := clock.Now()
 	require.NoError(t, rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
-		Path: create.Action.Path, DriveID: rt.engine.driveID, ActionType: syncdomain.ActionUpload, ActionID: create.ID,
+		Path: create.Action.Path, DriveID: rt.cfg.driveID, ActionType: syncdomain.ActionUpload, ActionID: create.ID,
 		Err: scenarioCreateAnswerLost(filepath.Base(create.Action.Path)), ErrMsg: "create answer lost",
 	}))
 
@@ -1050,7 +1050,7 @@ func TestWatch_ReplanWaitsWhileAnUploadRunsBeforeItPrunesPendingCreates(t *testi
 		Path: "doc.txt", ItemType: syncdomain.ItemTypeFile, Hash: syncfixture.EmptyQuickXor, Size: 0,
 	}}))
 	upload := dispatchTestAction(t, w.rt, 1, &syncdomain.Action{
-		Type: syncdomain.ActionUpload, Path: "doc.txt", DriveID: w.rt.engine.driveID, ItemID: testPlaceholderID,
+		Type: syncdomain.ActionUpload, Path: "doc.txt", DriveID: w.rt.cfg.driveID, ItemID: testPlaceholderID,
 		View: &syncdomain.PathView{Path: "doc.txt"},
 	})
 

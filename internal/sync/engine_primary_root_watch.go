@@ -34,10 +34,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		return
 	}
 
-	remoteObs := rt.engine.buildRemoteObserver(bl, rt.deps.logger)
-	remoteObs.SetItemClient(rt.engine.itemsClient)
-	remoteObs.SetRemotePathLookup(rt.engine.remotePathLookup(ctx))
-	remoteObs.SetShortcutTopology(rt.cfg.shortcutNamespaceID, rt.engine.protectedRoots.current())
+	remoteObs := rt.remote.observer(ctx, bl, rt.deps.logger, rt.cfg.shortcutNamespaceID, rt.roots.current())
 	remoteObs.SetDeltaExpiredRecovery(func(ctx context.Context, kind syncdomain.ResyncKind) (syncobserve.RemoteObservationBatch, error) {
 		batch, err := obs.executeDriveRootFullObservation(ctx, bl, kind)
 		if err != nil {
@@ -80,7 +77,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			func(
 				_ context.Context, polledEvents []syncdomain.RemoteItem, newToken string, topology syncshortcut.ShortcutTopologyBatch,
 			) (syncobserve.RemoteObservationBatch, error) {
-				batch := buildPrimaryWatchBatch(obs.engine, bl, polledEvents, newToken)
+				batch := buildPrimaryWatchBatch(obs.deps.logger, bl, polledEvents, newToken)
 				batch.ShortcutTopology = topology
 				if topology.ShouldApply() && batch.CursorToken == "" {
 					batch.CursorToken = newToken

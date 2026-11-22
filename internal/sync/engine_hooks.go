@@ -89,12 +89,3 @@ func (e *Engine) runClock() syncdomain.SyncClock {
 
 	return e.wallClock
 }
-
-// newSocketIOWakeSource builds the watch-mode websocket wake source.
-func (e *Engine) newSocketIOWakeSource(opts syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
-	if e.hooks.socketIOWakeSourceFactory != nil {
-		return e.hooks.socketIOWakeSourceFactory(e.socketIOFetcher, e.driveID, opts)
-	}
-
-	return syncobserve.NewSocketIOWakeSourceWithOptions(e.socketIOFetcher, e.driveID, opts)
-}

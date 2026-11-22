@@ -35,7 +35,7 @@ func newBootstrapWatchPipelineForTest(
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.scopes.state = syncexec.NewScopeState(eng.nowFunc, eng.logger)
-	bl, err := rt.runStartupStage(ctx)
+	bl, err := eng.runStartup(ctx, rt.engineFlow)
 	require.NoError(t, err)
 
 	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{Config: eng.execCfg, Dispatch: rt.sched.dispatchCh, Store: eng.baseline, Logger: eng.logger, CompletionBuffer: 1024})

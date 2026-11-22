@@ -41,6 +41,6 @@ func TestEngineHooks_ZeroValueIsProduction(t *testing.T) {
 	assert.False(t, newEngineFlow(eng.flowInputs()).invariantChecksEnabled(), "invariant checks are off")
 	assert.Equal(t, sqliteSynchronousFull, storeSynchronous(t, eng), "the store commits with synchronous=FULL")
 
-	wake := eng.newSocketIOWakeSource(syncobserve.SocketIOWakeSourceOptions{})
+	wake := eng.remoteSource().newWakeSource(syncobserve.SocketIOWakeSourceOptions{})
 	assert.Equal(t, "*syncobserve.socketIOWakeSource", fmt.Sprintf("%T", wake), "the wake source is the real one")
 }

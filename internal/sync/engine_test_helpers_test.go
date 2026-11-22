@@ -569,3 +569,8 @@ func refreshTestFlowInputs(eng *testEngine) {
 func withTestShortcutNamespace(inputs *engineInputs) {
 	inputs.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 }
+
+// observationOf is the observation a run of eng starts with.
+func observationOf(eng *Engine) *observation {
+	return &newEngineFlow(eng.flowInputs()).observation
+}

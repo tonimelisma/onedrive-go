@@ -25,7 +25,7 @@ func (flow *engineFlow) startRuntimeStage(
 
 	flow.initializeRuntimeState(runtime)
 	flow.sched.graph = syncexec.NewDepGraph(flow.deps.logger)
-	flow.sched.graph.SetOwnerCheck(flow.engine.runOwnerCheck)
+	flow.sched.graph.SetOwnerCheck(flow.ownerCheck)
 
 	if len(plan.Actions) == 0 {
 		return nil, false, nil
@@ -98,10 +98,10 @@ func (flow *engineFlow) registerPlanActions(plan *syncdomain.ActionPlan) []*sync
 	if flow.sched.graph == nil || plan == nil || len(plan.Actions) == 0 {
 		return nil
 	}
-	if flow.engine != nil {
+	if flow.exec != nil {
 		// A new plan reads every parent live again before its first
 		// create into it; the memo is per plan.
-		flow.engine.execCfg.ResetRemoteParentChecks()
+		flow.exec.ResetRemoteParentChecks()
 	}
 
 	actionIDs := flow.sched.allocatePlanActionIDs(len(plan.Actions))

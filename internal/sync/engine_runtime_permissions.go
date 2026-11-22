@@ -62,11 +62,11 @@ func (flow *engineFlow) handleRemote403PermissionFailure(
 	r *syncdomain.ActionCompletion,
 	bl syncdomain.BaselineView,
 ) (bool, error) {
-	if bl == nil || flow.engine.permHandler.permChecker == nil {
+	if bl == nil || flow.perms.permChecker == nil {
 		return false, nil
 	}
 
-	evidence, err := flow.engine.permHandler.handle403(ctx, bl, r.Path, r.ActionType)
+	evidence, err := flow.perms.handle403(ctx, bl, r.Path, r.ActionType)
 	if err != nil {
 		return false, err
 	}
@@ -89,7 +89,7 @@ func (flow *engineFlow) handleLocalPermissionFailure(
 	current *syncdomain.TrackedAction,
 	r *syncdomain.ActionCompletion,
 ) (bool, error) {
-	evidence := flow.engine.permHandler.handleLocalPermission(ctx, r)
+	evidence := flow.perms.handleLocalPermission(ctx, r)
 	if evidence.Kind == permissionEvidenceNone {
 		return false, nil
 	}
@@ -191,16 +191,16 @@ func (flow *engineFlow) permissionEvidenceForCompletion(
 ) (permissionEvidence, bool, error) {
 	switch {
 	case shouldHandleRemote403Permission(r):
-		if bl == nil || flow.engine.permHandler.permChecker == nil {
+		if bl == nil || flow.perms.permChecker == nil {
 			return permissionEvidence{}, false, nil
 		}
-		evidence, err := flow.engine.permHandler.handle403(ctx, bl, r.Path, r.ActionType)
+		evidence, err := flow.perms.handle403(ctx, bl, r.Path, r.ActionType)
 		if err != nil {
 			return permissionEvidence{}, true, err
 		}
 		return evidence, true, nil
 	case shouldHandleLocalPermission(r):
-		return flow.engine.permHandler.handleLocalPermission(ctx, r), true, nil
+		return flow.perms.handleLocalPermission(ctx, r), true, nil
 	default:
 		return permissionEvidence{}, false, nil
 	}

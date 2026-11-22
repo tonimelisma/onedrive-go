@@ -12,64 +12,72 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
 
-func (e *Engine) publishShortcutChildWorkSnapshot(
+func (s *shortcutRoots) publishShortcutChildWorkSnapshot(
 	ctx context.Context,
 	publication syncshortcut.ShortcutChildWorkSnapshot,
 ) error {
-	if e == nil || e.shortcutNamespaceID == "" || e.shortcutChildWorkSink == nil {
+	if s == nil || s.namespaceID == "" || s.sink == nil {
 		return nil
 	}
 	if publication.NamespaceID == "" {
-		publication.NamespaceID = e.shortcutNamespaceID
+		publication.NamespaceID = s.namespaceID
 	}
-	if err := e.shortcutChildWorkSink(ctx, publication); err != nil {
+	if err := s.sink(ctx, publication); err != nil {
 		return fmt.Errorf("sync: publish shortcut child work snapshot: %w", err)
 	}
 	return nil
 }
 
+// ShortcutChildAckHandle is how the multisync orchestrator, on its own
+// goroutine, acknowledges a shortcut child's final drain and artifact
+// cleanup. Each acknowledgement goes to the engine's shortcut roots as they
+// are when it arrives.
 func (e *Engine) ShortcutChildAckHandle() syncshortcut.ShortcutChildAckHandle {
 	if e == nil {
 		return syncshortcut.ShortcutChildAckHandle{}
 	}
 	return syncshortcut.NewShortcutChildAckHandle(
-		e.acknowledgeChildFinalDrain,
-		e.acknowledgeChildArtifactsPurged,
+		func(ctx context.Context, ack syncshortcut.ShortcutChildDrainAck) (syncshortcut.ShortcutChildWorkSnapshot, error) {
+			return e.shortcutRoots().acknowledgeChildFinalDrain(ctx, ack)
+		},
+		func(ctx context.Context, ack syncshortcut.ShortcutChildArtifactCleanupAck) (syncshortcut.ShortcutChildWorkSnapshot, error) {
+			return e.shortcutRoots().acknowledgeChildArtifactsPurged(ctx, ack)
+		},
 	)
 }
 
-func (e *Engine) acknowledgeChildFinalDrain(
+func (s *shortcutRoots) acknowledgeChildFinalDrain(
 	ctx context.Context,
 	ack syncshortcut.ShortcutChildDrainAck,
 ) (syncshortcut.ShortcutChildWorkSnapshot, error) {
 	if ctx == nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: shortcut child drain ack context is required")
 	}
-	if e == nil || e.baseline == nil || e.shortcutNamespaceID == "" {
+	if s == nil || s.store == nil || s.namespaceID == "" {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, nil
 	}
-	if _, err := e.baseline.MarkShortcutChildFinalDrainReleasePending(ctx, ack); err != nil {
+	if _, err := s.store.MarkShortcutChildFinalDrainReleasePending(ctx, ack); err != nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: mark shortcut child final drain release pending: %w", err)
 	}
-	if err := e.releaseShortcutRootProjectionAfterDrain(ctx, ack); err != nil {
+	if err := s.releaseShortcutRootProjectionAfterDrain(ctx, ack); err != nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, err
 	}
-	if _, err := e.reconcileShortcutRootLocalState(ctx); err != nil {
+	if _, err := s.reconcileShortcutRootLocalState(ctx); err != nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: reconcile shortcut roots after child final drain: %w", err)
 	}
-	snapshot, err := e.baseline.ShortcutChildWorkSnapshot(ctx, e.shortcutNamespaceID, e.syncRoot)
+	snapshot, err := s.store.ShortcutChildWorkSnapshot(ctx, s.namespaceID, s.syncRoot)
 	if err != nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: read shortcut child work snapshot after final drain: %w", err)
 	}
-	if e.shortcutChildWorkSink != nil {
-		roots, rootErr := e.baseline.ListShortcutRoots(ctx)
+	if s.sink != nil {
+		roots, rootErr := s.store.ListShortcutRoots(ctx)
 		if rootErr != nil {
 			return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: read parent shortcut roots after final drain: %w", rootErr)
 		}
-		if err := e.shortcutChildWorkSink(ctx, syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(
-			e.shortcutNamespaceID,
-			e.syncRoot,
-			e.contentFilter,
+		if err := s.sink(ctx, syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(
+			s.namespaceID,
+			s.syncRoot,
+			s.contentFilter,
 			roots,
 		)); err != nil {
 			return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: publish shortcut child work snapshot after final drain: %w", err)
@@ -78,25 +86,25 @@ func (e *Engine) acknowledgeChildFinalDrain(
 	return snapshot, nil
 }
 
-func (e *Engine) acknowledgeChildArtifactsPurged(
+func (s *shortcutRoots) acknowledgeChildArtifactsPurged(
 	ctx context.Context,
 	ack syncshortcut.ShortcutChildArtifactCleanupAck,
 ) (syncshortcut.ShortcutChildWorkSnapshot, error) {
 	if ctx == nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: shortcut child artifact cleanup ack context is required")
 	}
-	if e == nil || e.baseline == nil || e.shortcutNamespaceID == "" {
+	if s == nil || s.store == nil || s.namespaceID == "" {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, nil
 	}
-	if _, err := e.baseline.AcknowledgeShortcutChildArtifactsPurged(ctx, ack); err != nil {
+	if _, err := s.store.AcknowledgeShortcutChildArtifactsPurged(ctx, ack); err != nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: acknowledge shortcut child artifact cleanup: %w", err)
 	}
-	snapshot, err := e.baseline.ShortcutChildWorkSnapshot(ctx, e.shortcutNamespaceID, e.syncRoot)
+	snapshot, err := s.store.ShortcutChildWorkSnapshot(ctx, s.namespaceID, s.syncRoot)
 	if err != nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: read shortcut child work snapshot after artifact cleanup: %w", err)
 	}
-	if e.shortcutChildWorkSink != nil {
-		if err := e.shortcutChildWorkSink(ctx, snapshot); err != nil {
+	if s.sink != nil {
+		if err := s.sink(ctx, snapshot); err != nil {
 			return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: publish shortcut child work snapshot after artifact cleanup: %w", err)
 		}
 	}
@@ -115,11 +123,11 @@ func (e *Engine) acknowledgeChildArtifactsPurged(
 //   - 404, deleted, or now pointing elsewhere: it stays omitted and drains;
 //   - the lookup failed: it is marked target-unavailable, which keeps local
 //     data until a later observation settles it.
-func (e *Engine) confirmShortcutCompleteOmissions(ctx context.Context, topology *syncshortcut.ShortcutTopologyBatch) error {
-	if e == nil || topology == nil || topology.Kind != syncshortcut.ShortcutTopologyObservationComplete || e.itemsClient == nil {
+func (s *shortcutRoots) confirmShortcutCompleteOmissions(ctx context.Context, topology *syncshortcut.ShortcutTopologyBatch) error {
+	if s == nil || topology == nil || topology.Kind != syncshortcut.ShortcutTopologyObservationComplete || s.items == nil {
 		return nil
 	}
-	roots, err := e.baseline.ListShortcutRoots(ctx)
+	roots, err := s.store.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read shortcut roots to confirm omissions: %w", err)
 	}
@@ -132,21 +140,21 @@ func (e *Engine) confirmShortcutCompleteOmissions(ctx context.Context, topology 
 		if root.NamespaceID != "" && topology.NamespaceID != "" && root.NamespaceID != topology.NamespaceID {
 			continue
 		}
-		e.confirmShortcutOmission(ctx, topology, root)
+		s.confirmShortcutOmission(ctx, topology, root)
 	}
 
 	return nil
 }
 
-func (e *Engine) confirmShortcutOmission(
+func (s *shortcutRoots) confirmShortcutOmission(
 	ctx context.Context, topology *syncshortcut.ShortcutTopologyBatch, root *syncshortcut.ShortcutRootRecord,
 ) {
-	live, err := e.itemsClient.GetItem(ctx, e.driveID, root.BindingItemID)
+	live, err := s.items.GetItem(ctx, s.driveID, root.BindingItemID)
 	switch {
 	case errors.Is(err, graph.ErrNotFound):
 		return
 	case err != nil:
-		e.logger.Debug("could not confirm an omitted shortcut is gone; keeping its files",
+		s.logger.Debug("could not confirm an omitted shortcut is gone; keeping its files",
 			slog.String("path", root.RelativeLocalPath), slog.Any("error", err))
 		topology.Unavailable = append(topology.Unavailable, syncshortcut.ShortcutBindingUnavailable{
 			BindingItemID:     root.BindingItemID,
@@ -165,7 +173,7 @@ func (e *Engine) confirmShortcutOmission(
 		return
 	}
 
-	e.logger.Info("OneDrive's listing omitted a shared-folder shortcut that still exists; keeping it",
+	s.logger.Info("OneDrive's listing omitted a shared-folder shortcut that still exists; keeping it",
 		slog.String("path", root.RelativeLocalPath))
 	topology.Upserts = append(topology.Upserts, syncshortcut.ShortcutBindingUpsert{
 		BindingItemID:     root.BindingItemID,

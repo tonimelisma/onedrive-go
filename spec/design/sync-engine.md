@@ -177,7 +177,7 @@ interposer, plus the hooks of the packages the engine builds from:
 bounds), `syncstore.Hooks` (crash points, the database driver) and
 `syncobserve.Hooks` (the watcher factory, hashing, the safety-scan and watch
 loop callbacks, the write cooldown), which `newEngine` and
-`buildLocalObserver` pass through unchanged. `newEngine` builds the executor
+`localSource.observer` pass through unchanged. `newEngine` builds the executor
 configuration in one call from `syncexec.ExecutorInputs` (R-6.10.30), with
 the store as its pending-create record, the trash and transfer manager it
 built and the run clock (`nowFunc`), and every worker pool from
@@ -348,11 +348,30 @@ taken in one place, `Engine.flowInputs`, which also takes the run's ID
 (`TestEngine_EachRunGetsADistinctRunID`), and `newEngineFlow` builds the flow
 from that `flowInputs` value (`TestEngine_FlowInputsCopyTheConfigurationAndHooks`).
 
-They were reached through a back-pointer to the whole `Engine`. Passing them
-in narrows what a flow can reach for, and leaves the remaining engine
-references as what they actually are: the collaborators a particular decision
-consults (`permHandler`, `execCfg`, the shortcut-root methods) and the state
-the engine owns (protected roots, housekeeping streaks).
+They were reached through a back-pointer to the whole `Engine`, and the flow
+no longer holds one (`TestRuntimeArchitecture_NoRunStateHoldsTheEngine`).
+`flowInputs` names each collaborator a run consults: the planner, the
+executor configuration, the permission handler and the housekeeper, which
+only the loop uses, and on the `observation` the off-loop goroutines hold, the
+engine's `protectedRootSet`, a `remoteSource` (the Graph clients one by one,
+the mount root, the remote_state path lookup and the orphan confirmation of
+complete enumerations), a `localSource` (the sync tree, the folder identity,
+the local observer builder and the one commit of a full local scan) and
+`shortcutRoots`, the owner of the shortcut roots' rows, local projections and
+child-work publication. The activity feed and the engine's real clock (whose
+timer panics end a run) arrive with `runtimeDeps`. Start-up is the engine's:
+`Engine.runStartup` proves the drive identity and settles the account's
+sign-in requirement itself, and hands the flow only the scope normalization
+and the baseline load in between.
+
+`remoteSource`, `localSource` and `shortcutRoots` are built from the engine's
+fields when a run starts, so a test that sets a field before the run sees it
+in the run. The multisync orchestrator's ack handle takes a fresh
+`shortcutRoots` per acknowledgement, on its own goroutine; that is why the
+type touches only the store, the protected-root set (which guards itself), the
+sync tree and values fixed at construction. The state that outlives a run
+stays on the engine and is shared by pointer: the protected-root set, the
+housekeeper's streaks and the once-per-streak folder-delta fallback report.
 
 The snapshot is deliberate. A run's capabilities, configuration and hooks do
 not change underneath it, so the flow copies them at construction rather than

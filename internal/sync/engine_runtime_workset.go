@@ -34,7 +34,7 @@ func (flow *engineFlow) initializeRuntimeState(runtime *runtimePlan) {
 		flow.handOverColdStart(activeScopes[i].Key)
 	}
 	if flow.scopes.state == nil {
-		flow.scopes.state = syncexec.NewScopeState(flow.engine.nowFunc, flow.deps.logger)
+		flow.scopes.state = syncexec.NewScopeState(flow.deps.now, flow.deps.logger)
 	}
 }
 

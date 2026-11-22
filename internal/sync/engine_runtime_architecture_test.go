@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
-					DriveID:    rt.engine.driveID,
+					DriveID:    rt.cfg.driveID,
 					ActionType: syncdomain.ActionDownload,
 					Success:    true,
 					ActionID:   1,
@@ -52,7 +53,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
-					DriveID:    rt.engine.driveID,
+					DriveID:    rt.cfg.driveID,
 					ActionType: syncdomain.ActionDownload,
 					Success:    true,
 					ActionID:   1,
@@ -69,7 +70,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 				err := rt.handleWatchHeldRelease(t.Context(), &watchPipeline{bl: bl}, false)
 				require.NoError(t, err)
 				assert.Empty(t, rt.retries.heldByKey)
-				assert.Empty(t, listRetryWorkForTest(t, rt.engine.baseline, t.Context()))
+				assert.Empty(t, listRetryWorkForTest(t, rt.deps.store, t.Context()))
 			},
 		},
 		{
@@ -110,7 +111,7 @@ func TestRuntimeArchitecture_ShutdownDrainDoesNotRoutePublicationWorkToWorkers(t
 	publication := rt.sched.graph.Add(&syncdomain.Action{
 		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
-		DriveID: rt.engine.driveID,
+		DriveID: rt.cfg.driveID,
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
@@ -226,7 +227,7 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
-					DriveID:    rt.engine.driveID,
+					DriveID:    rt.cfg.driveID,
 					ActionType: syncdomain.ActionDownload,
 					Success:    true,
 					ActionID:   1,
@@ -243,7 +244,7 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
-					DriveID:    rt.engine.driveID,
+					DriveID:    rt.cfg.driveID,
 					ActionType: syncdomain.ActionDownload,
 					Success:    true,
 					ActionID:   1,
@@ -313,7 +314,7 @@ func addPublicationDependencyPair(t *testing.T, rt *watchRuntime) {
 	root := rt.sched.graph.Add(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "sync.txt",
-		DriveID: rt.engine.driveID,
+		DriveID: rt.cfg.driveID,
 		ItemID:  "sync-item",
 	}, 1, nil)
 	require.NotNil(t, root)
@@ -321,7 +322,7 @@ func addPublicationDependencyPair(t *testing.T, rt *watchRuntime) {
 	dependent := rt.sched.graph.Add(&syncdomain.Action{
 		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
-		DriveID: rt.engine.driveID,
+		DriveID: rt.cfg.driveID,
 		ItemID:  "cleanup-item",
 	}, 2, []int64{1})
 	assert.Nil(t, dependent, "cleanup dependent should wait on its parent before completion")
@@ -330,20 +331,20 @@ func addPublicationDependencyPair(t *testing.T, rt *watchRuntime) {
 func seedDueRetryPublication(t *testing.T, rt *watchRuntime) {
 	t.Helper()
 
-	now := rt.engine.nowFunc()
+	now := rt.deps.now()
 	row := syncdomain.RetryWorkRow{
 		Path:         "cleanup.txt",
 		ActionType:   syncdomain.ActionCleanup,
 		AttemptCount: 1,
 		NextRetryAt:  now.Add(-time.Second).UnixNano(),
 	}
-	require.NoError(t, rt.engine.baseline.UpsertRetryWork(t.Context(), &row))
+	require.NoError(t, rt.deps.store.UpsertRetryWork(t.Context(), &row))
 	rt.initializeRuntimeState(&runtimePlan{RetryRows: []syncdomain.RetryWorkRow{row}})
 
 	publication := rt.sched.graph.Add(&syncdomain.Action{
 		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
-		DriveID: rt.engine.driveID,
+		DriveID: rt.cfg.driveID,
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
@@ -354,7 +355,7 @@ func seedDueTrialPublication(t *testing.T, eng *testEngine, rt *watchRuntime) {
 	t.Helper()
 
 	scopeKey := syncdomain.SKService()
-	now := rt.engine.nowFunc()
+	now := rt.deps.now()
 	setTestBlockScope(t, eng, &syncdomain.BlockScope{
 		Key:           scopeKey,
 		NextTrialAt:   now.Add(-time.Second),
@@ -364,9 +365,55 @@ func seedDueTrialPublication(t *testing.T, eng *testEngine, rt *watchRuntime) {
 	publication := rt.sched.graph.Add(&syncdomain.Action{
 		Type:    syncdomain.ActionCleanup,
 		Path:    "cleanup.txt",
-		DriveID: rt.engine.driveID,
+		DriveID: rt.cfg.driveID,
 		ItemID:  "cleanup-item",
 	}, 1, nil)
 	require.NotNil(t, publication)
 	rt.holdAction(publication, heldReasonScope, scopeKey, time.Time{})
+}
+
+// No run holds the engine: neither the flow, nor the runtimes that embed it,
+// nor the observation the off-loop goroutines hold, nor any owner they reach
+// by value or pointer has a field of type *Engine. What a run reads of the
+// engine is what flowInputs handed it by name.
+//
+// Validates: R-6.10.29
+func TestRuntimeArchitecture_NoRunStateHoldsTheEngine(t *testing.T) {
+	t.Parallel()
+
+	engineType := reflect.TypeFor[*Engine]()
+	pkgPath := reflect.TypeFor[engineFlow]().PkgPath()
+	seen := make(map[reflect.Type]bool)
+	var found []string
+	var walk func(typ reflect.Type, path string)
+	walk = func(typ reflect.Type, path string) {
+		if typ.Kind() == reflect.Pointer {
+			typ = typ.Elem()
+		}
+		if typ.Kind() != reflect.Struct || typ.PkgPath() != pkgPath || seen[typ] {
+			return
+		}
+		seen[typ] = true
+		for i := range typ.NumField() {
+			field := typ.Field(i)
+			if field.Type == engineType {
+				found = append(found, path+"."+field.Name)
+				continue
+			}
+			walk(field.Type, path+"."+field.Name)
+		}
+	}
+	for _, root := range []reflect.Type{
+		reflect.TypeFor[watchRuntime](),
+		reflect.TypeFor[oneShotRunner](),
+		reflect.TypeFor[engineFlow](),
+		reflect.TypeFor[observation](),
+		reflect.TypeFor[flowInputs](),
+	} {
+		walk(root, root.Name())
+	}
+
+	assert.Empty(t, found, "run state that holds the engine")
+	assert.True(t, seen[reflect.TypeFor[shortcutRoots]()], "the walk reaches the shortcut roots")
+	assert.True(t, seen[reflect.TypeFor[remoteSource]()], "the walk reaches the remote source")
 }

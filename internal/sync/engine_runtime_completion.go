@@ -42,7 +42,7 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 		)
 	}
 	current := flow.sched.trackedActionForCompletion(r)
-	flow.engine.emitActivity(r, &decision, flow.conditionStartsWith(&decision, r))
+	flow.deps.activity(r, &decision, flow.conditionStartsWith(&decision, r))
 	if decision.Class != errclass.ClassSuperseded {
 		// The action ran: whatever came of it, its supersedes were not
 		// consecutive, so a wedge streak (D-059d) starts over.
@@ -665,7 +665,7 @@ func (flow *engineFlow) recordRetryWork(
 		// output says it to the user, so the log keeps the line at Info
 		// rather than warn it a second time; otherwise it warns.
 		level := slog.LevelWarn
-		if flow.engine.activitySaysConditionStarts(decision, r, conditionStarts) {
+		if flow.deps.activitySaysConditionStarts(decision, r, conditionStarts) {
 			level = slog.LevelInfo
 		}
 		flow.deps.logger.Log(ctx, level, "Not syncing "+r.Path+": "+r.ErrMsg,

@@ -3,20 +3,21 @@ package sync
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 func buildRemoteObservationBatch(
-	engine *Engine,
+	logger *slog.Logger,
 	mode syncdomain.RemoteObservationMode,
 	events []syncdomain.RemoteItem,
 	token string,
 	markFullRemoteRefresh bool,
 	findings syncdomain.ObservationFindingsBatch,
 ) syncobserve.RemoteObservationBatch {
-	projected := syncobserve.ProjectRemoteObservations(engine.logger, events)
+	projected := syncobserve.ProjectRemoteObservations(logger, events)
 
 	return syncobserve.RemoteObservationBatch{
 		ObservationMode:       mode,
@@ -46,13 +47,13 @@ func primaryObservationCursorToken(
 }
 
 func buildPrimaryWatchBatch(
-	engine *Engine,
+	logger *slog.Logger,
 	bl syncdomain.BaselineView,
 	primaryEvents []syncdomain.RemoteItem,
 	newToken string,
 ) syncobserve.RemoteObservationBatch {
 	batch := buildRemoteObservationBatch(
-		engine,
+		logger,
 		syncdomain.RemoteObservationModeDelta,
 		primaryEvents,
 		newToken,
@@ -64,14 +65,6 @@ func buildPrimaryWatchBatch(
 	batch.ApplyAck = make(chan error, 1)
 
 	return batch
-}
-
-func (e *Engine) preferredMountRootObservationMode() syncdomain.RemoteObservationMode {
-	if e.mountRootDeltaSupported() {
-		return syncdomain.RemoteObservationModeDelta
-	}
-
-	return syncdomain.RemoteObservationModeEnumerate
 }
 
 func (flow *observation) executePrimaryRootObservation(
@@ -93,7 +86,7 @@ func (flow *observation) rootReadFailureBatch(
 	mode syncdomain.RemoteObservationMode, issueType syncdomain.IssueType,
 ) syncobserve.RemoteObservationBatch {
 	return buildRemoteObservationBatch(
-		flow.engine,
+		flow.deps.logger,
 		mode,
 		nil,
 		"",
@@ -124,7 +117,7 @@ func (flow *observation) executeDriveRootObservation(
 	}
 
 	batch := buildRemoteObservationBatch(
-		flow.engine,
+		flow.deps.logger,
 		syncdomain.RemoteObservationModeDelta,
 		events,
 		token,
@@ -182,7 +175,7 @@ func (flow *observation) executeDriveRootFullObservation(
 	}
 
 	batch := buildRemoteObservationBatch(
-		flow.engine,
+		flow.deps.logger,
 		syncdomain.RemoteObservationModeDelta,
 		full.events,
 		full.token,
@@ -210,7 +203,7 @@ func (flow *observation) executeMountRootObservation(
 	// again, brings the next one forward on the undecided-refresh backoff.
 	completeDelta := observed.mode == syncdomain.RemoteObservationModeDelta && observed.complete
 	batch := buildRemoteObservationBatch(
-		flow.engine,
+		flow.deps.logger,
 		observed.mode,
 		observed.events,
 		observed.token,

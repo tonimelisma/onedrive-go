@@ -366,7 +366,7 @@ func TestShouldRunFullRemoteRefresh_NoCursor(t *testing.T) {
 
 	e, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 
-	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
+	shouldRun, err := observationOf(e.Engine).shouldRunFullRemoteRefresh(t.Context(), false)
 	require.NoError(t, err)
 	assert.True(t, shouldRun)
 }
@@ -386,7 +386,7 @@ func TestShouldRunFullRemoteRefresh_Overdue(t *testing.T) {
 		syncdomain.RemoteObservationModeDelta,
 	))
 
-	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
+	shouldRun, err := observationOf(e.Engine).shouldRunFullRemoteRefresh(t.Context(), false)
 	require.NoError(t, err)
 	assert.True(t, shouldRun)
 }
@@ -406,7 +406,7 @@ func TestShouldRunFullRemoteRefresh_WithinCadence(t *testing.T) {
 		syncdomain.RemoteObservationModeDelta,
 	))
 
-	shouldRun, err := e.shouldRunFullRemoteRefresh(t.Context(), false)
+	shouldRun, err := observationOf(e.Engine).shouldRunFullRemoteRefresh(t.Context(), false)
 	require.NoError(t, err)
 	assert.False(t, shouldRun)
 }
@@ -425,7 +425,7 @@ func TestFullRemoteRefreshDelay_UsesPersistedTimestamp(t *testing.T) {
 		syncdomain.RemoteObservationModeDelta,
 	))
 
-	delay, err := e.fullRemoteRefreshDelay(t.Context())
+	delay, err := observationOf(e.Engine).fullRemoteRefreshDelay(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, time.Hour, delay)
 }

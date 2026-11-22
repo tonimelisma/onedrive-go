@@ -14,7 +14,7 @@ import (
 // handleMaintenanceTick processes a periodic watch summary/maintenance tick.
 func (rt *watchRuntime) handleMaintenanceTick(ctx context.Context) {
 	rt.recoverDroppedLocalObservation(ctx)
-	rt.engine.upkeep.purgeExpiredTrash(false)
+	rt.upkeep.purgeExpiredTrash(false)
 	rt.logWatchSummary(ctx)
 	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventMaintenanceTickHandled})
 }
@@ -58,8 +58,8 @@ func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
 	)
 }
 
-func (e *Engine) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, error) {
-	state, err := e.baseline.ReadObservationState(ctx)
+func (flow *observation) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, error) {
+	state, err := flow.deps.store.ReadObservationState(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("sync: reading observation state for remote refresh cadence: %w", err)
 	}
@@ -68,7 +68,7 @@ func (e *Engine) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, err
 	}
 
 	dueAt := time.Unix(0, state.NextFullRemoteRefreshAt)
-	delay := dueAt.Sub(e.nowFunc())
+	delay := dueAt.Sub(flow.deps.now())
 	if delay < 0 {
 		return 0, nil
 	}
@@ -76,12 +76,12 @@ func (e *Engine) fullRemoteRefreshDelay(ctx context.Context) (time.Duration, err
 	return delay, nil
 }
 
-func (e *Engine) shouldRunFullRemoteRefresh(ctx context.Context, requested bool) (bool, error) {
+func (flow *observation) shouldRunFullRemoteRefresh(ctx context.Context, requested bool) (bool, error) {
 	if requested {
 		return true, nil
 	}
 
-	state, err := e.baseline.ReadObservationState(ctx)
+	state, err := flow.deps.store.ReadObservationState(ctx)
 	if err != nil {
 		return false, fmt.Errorf("sync: reading observation state for full remote refresh: %w", err)
 	}
@@ -90,11 +90,11 @@ func (e *Engine) shouldRunFullRemoteRefresh(ctx context.Context, requested bool)
 	}
 
 	dueAt := time.Unix(0, state.NextFullRemoteRefreshAt)
-	return !e.nowFunc().Before(dueAt), nil
+	return !flow.deps.now().Before(dueAt), nil
 }
 
 func (rt *watchRuntime) armFullRefreshTimer(ctx context.Context) error {
-	delay, err := rt.engine.fullRemoteRefreshDelay(ctx)
+	delay, err := rt.fullRemoteRefreshDelay(ctx)
 	if err != nil {
 		return err
 	}

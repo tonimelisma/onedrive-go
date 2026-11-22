@@ -27,7 +27,7 @@ func TestRunWatch_HousekeepingRunsBeforeTheFirstRefreshTimerIsArmed(t *testing.T
 	partial := filepath.Join(syncRoot, testOwnedPartialName("left.txt"))
 	require.NoError(t, os.WriteFile(partial, []byte("left"), 0o600))
 
-	refreshDelay, err := eng.fullRemoteRefreshDelay(t.Context())
+	refreshDelay, err := observationOf(eng.Engine).fullRemoteRefreshDelay(t.Context())
 	require.NoError(t, err)
 	var armedWithPartial []bool
 	rt.deps.clock = &syncfixture.ObservingClock{

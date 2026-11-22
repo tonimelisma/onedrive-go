@@ -162,7 +162,7 @@ func TestFilterLifecycle_LocalSnapshotRefreshAndRemoteRawReprojection(t *testing
 	refreshTestFlowInputs(eng)
 	bl, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	fullReconcile, err := eng.shouldRunFullRemoteRefresh(ctx, false)
+	fullReconcile, err := observationOf(eng.Engine).shouldRunFullRemoteRefresh(ctx, false)
 	require.NoError(t, err)
 	require.False(t, fullReconcile, "filter config changes must not force full remote refresh")
 
@@ -223,7 +223,7 @@ func TestRunBootstrapCurrentPlan_MatchesOneShotLiveCurrentPlan(t *testing.T) {
 
 	oneShotBaseline, err := oneShotEng.baseline.Load(ctx)
 	require.NoError(t, err)
-	fullReconcile, err := oneShotEng.shouldRunFullRemoteRefresh(ctx, false)
+	fullReconcile, err := observationOf(oneShotEng.Engine).shouldRunFullRemoteRefresh(ctx, false)
 	require.NoError(t, err)
 	oneShotRuntime, err := newOneShotRunner(oneShotEng.Engine).runLiveCurrentPlan(ctx, oneShotBaseline, syncdomain.SyncDownloadOnly, RunOptions{
 		FullReconcile: fullReconcile,
@@ -258,12 +258,12 @@ func TestRunStartupStage_OneShotAndWatchShareStartupNormalization(t *testing.T) 
 		NextTrialAt:   watchEng.nowFunc().Add(time.Minute),
 	}))
 
-	oneShotBaseline, err := newOneShotRunner(oneShotEng.Engine).runStartupStage(ctx)
+	oneShotBaseline, err := oneShotEng.runStartup(ctx, newOneShotRunner(oneShotEng.Engine).engineFlow)
 	require.NoError(t, err)
 	require.NotNil(t, oneShotBaseline)
 
 	setupWatchEngine(t, watchEng)
-	watchBaseline, err := testWatchRuntime(t, watchEng).runStartupStage(ctx)
+	watchBaseline, err := watchEng.runStartup(ctx, testWatchRuntime(t, watchEng).engineFlow)
 	require.NoError(t, err)
 	require.NotNil(t, watchBaseline)
 
@@ -311,7 +311,7 @@ func TestRunLiveCurrentPlan_FailsClosedWhenRemoteObservationReconcileFails(t *te
 		})
 	})
 
-	fullReconcile, err := eng.shouldRunFullRemoteRefresh(ctx, false)
+	fullReconcile, err := observationOf(eng.Engine).shouldRunFullRemoteRefresh(ctx, false)
 	require.NoError(t, err)
 	_, err = newOneShotRunner(eng.Engine).runLiveCurrentPlan(ctx, bl, syncdomain.SyncDownloadOnly, RunOptions{
 		FullReconcile: fullReconcile,
@@ -345,7 +345,7 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
-	bl, err := rt.runStartupStage(ctx)
+	bl, err := eng.runStartup(ctx, rt.engineFlow)
 	require.NoError(t, err)
 	var closeStore sync.Once
 	attachDebugEventRecorderWithHook(eng, func(event syncdomain.EngineDebugEvent) {

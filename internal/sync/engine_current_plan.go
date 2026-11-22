@@ -66,7 +66,7 @@ func (rt *watchRuntime) runBootstrapCurrentPlan(
 	bl syncdomain.BaselineView,
 	mode syncdomain.SyncMode,
 ) (*runtimePlan, error) {
-	fullRefresh, err := rt.engine.shouldRunFullRemoteRefresh(ctx, false)
+	fullRefresh, err := rt.shouldRunFullRemoteRefresh(ctx, false)
 	if err != nil {
 		return nil, fmt.Errorf("sync: deciding whether to rescan OneDrive: %w", err)
 	}
@@ -237,7 +237,7 @@ func (flow *engineFlow) observeAndCommitRemoteCurrentState(
 }
 
 func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch *syncobserve.RemoteObservationBatch) error {
-	if flow == nil || flow.engine == nil || batch == nil {
+	if flow == nil || flow.shortcuts == nil || batch == nil {
 		return nil
 	}
 
@@ -245,7 +245,7 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 	if topology.NamespaceID == "" {
 		topology.NamespaceID = flow.cfg.shortcutNamespaceID
 	}
-	if err := flow.engine.confirmShortcutCompleteOmissions(ctx, &topology); err != nil {
+	if err := flow.shortcuts.confirmShortcutCompleteOmissions(ctx, &topology); err != nil {
 		return err
 	}
 	remoteChanged := topology.ShouldApply()
@@ -254,24 +254,24 @@ func (flow *engineFlow) applyShortcutObservationBatch(ctx context.Context, batch
 			return fmt.Errorf("sync: persist parent shortcut root state: %w", err)
 		}
 	}
-	localChanged, err := flow.engine.reconcileShortcutRootLocalState(ctx)
+	localChanged, err := flow.shortcuts.reconcileShortcutRootLocalState(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: reconcile parent shortcut root local state: %w", err)
 	}
 	if !remoteChanged && !localChanged {
 		return nil
 	}
-	if refreshErr := flow.engine.protectedRoots.refresh(ctx); refreshErr != nil {
+	if refreshErr := flow.roots.refresh(ctx); refreshErr != nil {
 		return fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
 	parentRoots, err := flow.deps.store.ListShortcutRoots(ctx)
 	if err != nil {
 		return fmt.Errorf("sync: read parent shortcut root state: %w", err)
 	}
-	if flow.engine.shortcutChildWorkSink == nil {
+	if flow.shortcuts.sink == nil {
 		return nil
 	}
-	return flow.engine.shortcutChildWorkSink(ctx, syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(
+	return flow.shortcuts.sink(ctx, syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 		topology.NamespaceID,
 		flow.cfg.syncRoot,
 		flow.cfg.contentFilter,
@@ -313,20 +313,16 @@ func (flow *observation) observeRemoteWithShortcutTopology(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 ) ([]syncdomain.RemoteItem, string, syncshortcut.ShortcutTopologyBatch, error) {
-	eng := flow.engine
 	state, err := flow.deps.store.ReadObservationState(ctx)
 	if err != nil {
 		return nil, "", syncshortcut.ShortcutTopologyBatch{}, fmt.Errorf("sync: reading observation state: %w", err)
 	}
 	savedToken := state.Cursor
 
-	obs := eng.buildRemoteObserver(bl, flow.deps.logger)
-	obs.SetItemClient(eng.itemsClient)
-	obs.SetRemotePathLookup(eng.remotePathLookup(ctx))
-	if refreshErr := eng.protectedRoots.refresh(ctx); refreshErr != nil {
+	if refreshErr := flow.roots.refresh(ctx); refreshErr != nil {
 		return nil, "", syncshortcut.ShortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
-	obs.SetShortcutTopology(flow.cfg.shortcutNamespaceID, eng.protectedRoots.current())
+	obs := flow.remote.observer(ctx, bl, flow.deps.logger, flow.cfg.shortcutNamespaceID, flow.roots.current())
 
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, savedToken)
 	if err != nil {
@@ -354,12 +350,11 @@ func (flow *engineFlow) observeLocal(
 	bl syncdomain.BaselineView,
 	recordHashes bool,
 ) (syncobserve.ScanResult, error) {
-	eng := flow.engine
-	if err := eng.protectedRoots.refresh(ctx); err != nil {
+	if err := flow.roots.refresh(ctx); err != nil {
 		return syncobserve.ScanResult{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
 
-	obs := eng.buildLocalObserver(bl, flow.deps.logger)
+	obs := flow.local.observer(bl, flow.deps.logger)
 	// This scan runs no timers. Its racily-clean window is measured on the
 	// run's clock, the one every other time decision of the run reads.
 	if flow.deps.clock != nil {
@@ -373,9 +368,9 @@ func (flow *engineFlow) observeLocal(
 		obs.SetLocalHashCache(cache)
 	}
 	obs.SetFilterConfig(flow.cfg.contentFilter)
-	obs.SetProtectedRoots(eng.protectedRoots.current())
+	obs.SetProtectedRoots(flow.roots.current())
 	obs.SetObservationRules(flow.cfg.localRules)
-	obs.SetSyncRootIdentity(eng.syncRootIdentity)
+	obs.SetSyncRootIdentity(flow.local.identity)
 	mountFlags, err := flow.deps.store.ListMountBoundaries(ctx)
 	if err != nil {
 		return syncobserve.ScanResult{}, err
@@ -604,7 +599,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	}
 
 	planStart := flow.deps.now()
-	plan, err := flow.engine.buildCurrentActionPlanFromInputs(&observation.inputs, mode, opts)
+	plan, err := flow.planCurrentActions(&observation.inputs, mode, opts)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
@@ -732,7 +727,7 @@ func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *syncdom
 // never holds such a path, which says nothing about a file there.
 func (flow *engineFlow) localScanCoverage() func(path string) bool {
 	filter := syncdomain.NewContentFilter(flow.cfg.contentFilter)
-	protectedRoots := flow.engine.protectedRoots.current()
+	protectedRoots := flow.roots.current()
 
 	return func(path string) bool {
 		if _, reserved := syncshortcut.ProtectedRootPathReservation(path, protectedRoots); reserved {
@@ -761,12 +756,13 @@ func (flow *engineFlow) loadRuntimeState(ctx context.Context) ([]syncdomain.Retr
 // one transaction read. A removed shared folder's final drain
 // (RunOptions.ReleaseLocalTree) plans for a mount that releases its local
 // tree, so it creates nothing new locally (leaveOutNewLocalItems).
-func (e *Engine) buildCurrentActionPlanFromInputs(
+// planCurrentActions plans the current actionable set from the run's inputs.
+func (flow *engineFlow) planCurrentActions(
 	inputs *currentInputs,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) (*syncdomain.ActionPlan, error) {
-	return e.planner.PlanCurrentState(
+	return flow.planner.PlanCurrentState(
 		inputs.comparisons,
 		inputs.reconciliations,
 		inputs.localRows,
@@ -774,7 +770,7 @@ func (e *Engine) buildCurrentActionPlanFromInputs(
 		inputs.observationIssues,
 		inputs.baseline,
 		syncplan.PlannerMountContext{
-			DriveID:           e.driveID,
+			DriveID:           flow.cfg.driveID,
 			ReleasesLocalTree: opts.ReleaseLocalTree,
 		},
 		mode,
