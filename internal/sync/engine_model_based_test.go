@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -272,7 +273,7 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 		t: t, seed: seed, rng: rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)), //nolint:gosec // deterministic test RNG
 		remote: remote, syncRoot: h.syncRoot, harness: h,
 		caseSensitive: localFSIsCaseSensitive(t.TempDir()),
-		clock:         &modelClock{},
+		clock:         newModelClock(seed),
 		chaos:         chaos,
 	}
 	if chaos != nil {
@@ -531,18 +532,74 @@ func (r *modelRun) tracePass(label string, pass int, report *Report) {
 // non-convergence after eight instant passes.
 const modelPassInterval = time.Hour + time.Minute
 
-// modelClock is the wall clock plus an offset the model advances.
+// modelClock is a fake clock: the instant the run began plus an offset that
+// moves only when the model advances it or a wait the engine armed on it
+// ends, so time stands still between events and a seed replays the same
+// times. A timer or sleep still waits its real delay, then moves the clock
+// to the instant it was due, so a wait that re-reads the clock sees it pass.
+// Its jitter is drawn from the seed.
 type modelClock struct {
 	syncdomain.RealClock
 	mu     stdsync.Mutex
+	base   time.Time
 	offset time.Duration
+	jitter *rand.Rand
+}
+
+func newModelClock(seed uint64) *modelClock {
+	return &modelClock{
+		base:   time.Now(),
+		jitter: rand.New(rand.NewPCG(seed, seed^0x6a09e667f3bcc909)), //nolint:gosec // deterministic test RNG
+	}
 }
 
 func (c *modelClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return time.Now().Add(c.offset)
+	return c.base.Add(c.offset)
+}
+
+// Jitter draws from the seed's own stream, so retry jitter replays.
+func (c *modelClock) Jitter(maxDelay time.Duration) time.Duration {
+	if maxDelay <= 0 {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return time.Duration(c.jitter.Int64N(int64(maxDelay)))
+}
+
+// AfterFunc runs fn after delay, with the clock moved to the instant it was
+// due.
+func (c *modelClock) AfterFunc(delay time.Duration, fn func()) syncdomain.SyncTimer {
+	due := c.Now().Add(delay)
+
+	return c.RealClock.AfterFunc(delay, func() {
+		c.reach(due)
+		fn()
+	})
+}
+
+// Sleep waits delay and moves the clock to the instant it ended.
+func (c *modelClock) Sleep(ctx context.Context, delay time.Duration) error {
+	due := c.Now().Add(delay)
+	if err := c.RealClock.Sleep(ctx, delay); err != nil {
+		return err //nolint:wrapcheck // the real clock's own error
+	}
+	c.reach(due)
+
+	return nil
+}
+
+// reach moves the clock forward to t, never back.
+func (c *modelClock) reach(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if now := c.base.Add(c.offset); now.Before(t) {
+		c.offset += t.Sub(now)
+	}
 }
 
 func (c *modelClock) advance(d time.Duration) {

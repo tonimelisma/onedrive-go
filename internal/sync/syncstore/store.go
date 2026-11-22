@@ -39,6 +39,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/fsroot"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 
 	// Pure-Go SQLite driver (no CGO).
 	"modernc.org/sqlite"
@@ -175,7 +176,7 @@ func openSyncStoreWithHooks(
 	store := &SyncStore{
 		db:      db,
 		logger:  logger,
-		nowFunc: time.Now,
+		nowFunc: syncdomain.WallNow,
 		hooks:   hooks,
 	}
 

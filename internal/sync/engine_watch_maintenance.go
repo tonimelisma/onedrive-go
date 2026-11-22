@@ -131,11 +131,14 @@ func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl syncdo
 	rt.resources.refreshActive = true
 	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshStarted})
 
+	// The goroutine holds the observation and the send side of the result
+	// channel only: it cannot reach loop state.
+	obs, out := &rt.observation, rt.resources.refreshResults
 	rt.resources.goroutines.start(ctx, watchGoroutineFullRefresh, func(ctx context.Context) {
-		defer rt.recoverFullRemoteRefreshPanic(ctx)
+		defer obs.recoverFullRemoteRefreshPanic(ctx, out)
 
-		result := rt.performFullRemoteRefresh(ctx, bl)
-		rt.finishFullRemoteRefresh(ctx, &result)
+		result := obs.performFullRemoteRefresh(ctx, bl)
+		finishFullRemoteRefresh(ctx, out, &result)
 	})
 }
 
@@ -147,7 +150,9 @@ func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl syncdo
 // failure, and the ordinary retry-when-idle path would repeat it at every
 // refresh interval while the mount's status read healthy. Unrecovered, the
 // panic would end the process and every other mount with it.
-func (rt *watchRuntime) recoverFullRemoteRefreshPanic(ctx context.Context) {
+func (rt *observation) recoverFullRemoteRefreshPanic(
+	ctx context.Context, out chan<- syncobserve.RemoteObservationBatch,
+) {
 	r := recover()
 	if r == nil {
 		return
@@ -158,10 +163,10 @@ func (rt *watchRuntime) recoverFullRemoteRefreshPanic(ctx context.Context) {
 		Source:   syncobserve.RemoteObservationBatchFullRefresh,
 		FatalErr: fmt.Errorf("sync: %w", panicErr),
 	}
-	rt.finishFullRemoteRefresh(ctx, &result)
+	finishFullRemoteRefresh(ctx, out, &result)
 }
 
-func (rt *watchRuntime) performFullRemoteRefresh(
+func (rt *observation) performFullRemoteRefresh(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 ) syncobserve.RemoteObservationBatch {
@@ -206,12 +211,15 @@ func (rt *watchRuntime) performFullRemoteRefresh(
 	return result
 }
 
-func (rt *watchRuntime) finishFullRemoteRefresh(ctx context.Context, result *syncobserve.RemoteObservationBatch) {
+// finishFullRemoteRefresh hands a refresh's result to the loop on out.
+func finishFullRemoteRefresh(
+	ctx context.Context, out chan<- syncobserve.RemoteObservationBatch, result *syncobserve.RemoteObservationBatch,
+) {
 	select {
-	case rt.resources.refreshResults <- *result:
+	case out <- *result:
 	case <-ctx.Done():
 		select {
-		case rt.resources.refreshResults <- *result:
+		case out <- *result:
 		default:
 		}
 	}

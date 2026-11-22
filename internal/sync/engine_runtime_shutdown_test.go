@@ -211,7 +211,7 @@ func TestWatchRuntime_ADrainRecordsTheCompletionsItReceives(t *testing.T) {
 	rt := testWatchRuntime(t, eng)
 	p := &watchPipeline{completions: closedCompletions(stoppingRunCompletions(t, eng, rt.sched.graph))}
 	stopped := stoppedContext(t)
-	rt.beginWatchDrain(stopped, p)
+	rt.beginWatchDrain(stopped)
 
 	require.NoError(t, runWatchDrain(stopped, rt, p))
 
@@ -231,7 +231,7 @@ func TestWatchRuntime_AStoreThatDoesNotAnswerEndsTheDrainAtItsBound(t *testing.T
 	eng, rt, logs := stoppingWatchRuntime(t)
 	p := &watchPipeline{completions: closedCompletions(failedUploads(rt.sched.graph, 1, "a.txt", "b.txt"))}
 	stopped := stoppedContext(t)
-	rt.beginWatchDrain(stopped, p)
+	rt.beginWatchDrain(stopped)
 
 	release := holdStoreConnection(t, eng.baseline)
 	err := syncfixture.RunWithin(t, t.Context(), "the drain to end at its bound", func(context.Context) error {
@@ -271,7 +271,7 @@ func TestWatchRuntime_EveryRecordOfAStopSharesItsOneBound(t *testing.T) {
 	}
 	p := &watchPipeline{}
 	stopped := stoppedContext(t)
-	rt.beginWatchDrain(stopped, p)
+	rt.beginWatchDrain(stopped)
 
 	release := holdStoreConnection(t, eng.baseline)
 	_, err := rt.handleDrainingCompletion(stopped, p, &completions[0], true)
@@ -313,7 +313,7 @@ func TestWatchRuntime_AStopsBoundStartsAtItsCancel(t *testing.T) {
 		"the cancel is recorded")
 
 	seen := time.Now()
-	rt.beginWatchDrain(run, &watchPipeline{})
+	rt.beginWatchDrain(run)
 
 	require.NotNil(t, rt.stop)
 	assert.True(t, rt.stop.deadline.Equal(rt.canceledAt.Load().Add(rt.stopBound)),

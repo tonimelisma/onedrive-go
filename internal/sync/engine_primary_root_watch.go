@@ -17,16 +17,19 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	errs chan<- error,
 	pollInterval time.Duration,
 ) {
+	// The observer goroutines hold the observation and their send-only
+	// outputs only: they cannot reach loop state.
+	obs := &rt.observation
 	if rt.hasRemoteMountRoot() {
 		rt.warnMountRootWebsocketFallback()
 		rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
-			defer rt.deps.emit(syncdomain.EngineDebugEvent{
+			defer obs.deps.emit(syncdomain.EngineDebugEvent{
 				Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote,
 			})
 			defer close(batches)
-			defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
+			defer recoverObserverPanic(obs.deps.logger, observerNameRemote, errs)
 
-			errs <- observerExitError(observerNameRemote, rt.watchMountRootRemote(ctx, bl, batches, pollInterval))
+			errs <- observerExitError(observerNameRemote, obs.watchMountRootRemote(ctx, bl, batches, pollInterval))
 		})
 		return
 	}
@@ -36,7 +39,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	remoteObs.SetRemotePathLookup(rt.engine.remotePathLookup(ctx))
 	remoteObs.SetShortcutTopology(rt.cfg.shortcutNamespaceID, rt.engine.protectedRoots.current())
 	remoteObs.SetDeltaExpiredRecovery(func(ctx context.Context, kind syncdomain.ResyncKind) (syncobserve.RemoteObservationBatch, error) {
-		batch, err := rt.executeDriveRootFullObservation(ctx, bl, kind)
+		batch, err := obs.executeDriveRootFullObservation(ctx, bl, kind)
 		if err != nil {
 			return syncobserve.RemoteObservationBatch{}, err
 		}
@@ -62,11 +65,11 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	}
 
 	rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
-		defer rt.deps.emit(syncdomain.EngineDebugEvent{
+		defer obs.deps.emit(syncdomain.EngineDebugEvent{
 			Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote,
 		})
 		defer close(batches)
-		defer recoverObserverPanic(rt.deps.logger, observerNameRemote, errs)
+		defer recoverObserverPanic(obs.deps.logger, observerNameRemote, errs)
 
 		watchErr := remoteObs.Watch(
 			ctx,
@@ -77,7 +80,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			func(
 				_ context.Context, polledEvents []syncdomain.RemoteItem, newToken string, topology syncshortcut.ShortcutTopologyBatch,
 			) (syncobserve.RemoteObservationBatch, error) {
-				batch := buildPrimaryWatchBatch(rt.engine, bl, polledEvents, newToken)
+				batch := buildPrimaryWatchBatch(obs.engine, bl, polledEvents, newToken)
 				batch.ShortcutTopology = topology
 				if topology.ShouldApply() && batch.CursorToken == "" {
 					batch.CursorToken = newToken

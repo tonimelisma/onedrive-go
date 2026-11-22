@@ -33,12 +33,9 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncdomain.SyncMode, o
 	// unknown consistency, so the watch does not carry on. The drives stop
 	// first, the panic is logged once with its stack and returned, the CLI
 	// exits 1, and a service manager starts a fresh process (R-6.3.10).
-	defer func() {
-		if r := recover(); r != nil {
-			err = errors.Join(panicguard.Recovered(o.logger, "in the watch loop", r), err)
-		}
-	}()
+	defer func() { err = o.joinWatchLoopPanic(recover(), err) }()
 
+	o.heartbeat.beatFor("starting", watchStartupStepLimit)
 	o.watchReportMemory = newWatchReportState()
 	commands := make(chan controlCommand)
 	// fatal carries the end of a helper the watch cannot run without (the
@@ -83,6 +80,9 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncdomain.SyncMode, o
 	pauseExpiry := watchPauseExpiryWake{orchestrator: o}
 	defer pauseExpiry.stop()
 
+	heartbeatTickCh, stopHeartbeatTicks := o.heartbeatTicks(loopHeartbeatInterval)
+	defer stopHeartbeatTicks()
+
 	reloadTriggers, stopReloadTriggers := watchConfigReloadTriggers(ctx, configReloadWatch{
 		path:     o.configPath(),
 		interval: configFilePollInterval,
@@ -92,6 +92,9 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncdomain.SyncMode, o
 	defer stopReloadTriggers()
 
 	for {
+		// Every iteration beats, and the heartbeat tick wakes an idle loop
+		// to beat, so the watchdog can tell a hung loop from a quiet one.
+		o.heartbeat.beat()
 		restarts.arm()
 		pauseExpiry.arm()
 		// stuckErr is set when a runner this pass had to stop missed its
@@ -118,6 +121,8 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncdomain.SyncMode, o
 			stuckErr = o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 		case <-restarts.ch:
 			stuckErr = o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
+		case <-heartbeatTickCh:
+			// The beat is at the top of the next iteration.
 		case fatalErr := <-fatal:
 			// The deferred drain still stops the runners and closes the
 			// socket; the caller exits non-zero, so a service manager
@@ -130,6 +135,16 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncdomain.SyncMode, o
 			return stuckErr
 		}
 	}
+}
+
+// joinWatchLoopPanic turns a value RunWatch's deferred recover caught into
+// the watch's error, joined to the error it was already returning.
+func (o *Orchestrator) joinWatchLoopPanic(recovered any, err error) error {
+	if recovered == nil {
+		return err
+	}
+
+	return errors.Join(panicguard.Recovered(o.logger, "in the watch loop", recovered), err)
 }
 
 // drainWatch stops every runner the watch started, and says the watch

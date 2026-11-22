@@ -48,7 +48,7 @@ func TestRuntimeArchitecture_PublicationOnlyActionsNeverReachWorkerOutbox(t *tes
 			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
-				rt.enterBootstrap()
+				setWatchPhase(rt, watchPhaseBootstrap)
 				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",
@@ -116,8 +116,7 @@ func TestRuntimeArchitecture_ShutdownDrainDoesNotRoutePublicationWorkToWorkers(t
 	require.NotNil(t, publication)
 
 	rt.replaceOutbox([]*syncdomain.TrackedAction{publication})
-	p := &watchPipeline{bl: bl}
-	rt.beginWatchDrain(t.Context(), p)
+	rt.beginWatchDrain(t.Context())
 
 	assert.True(t, rt.isDraining())
 	assert.Empty(t, rt.currentOutbox())
@@ -189,7 +188,7 @@ func TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError(t *tes
 	rt.resources.remoteBatches = make(chan syncobserve.RemoteObservationBatch)
 
 	cancel()
-	rt.beginWatchDrain(ctx, p)
+	rt.beginWatchDrain(ctx)
 	require.NoError(t, eng.baseline.Close(context.Background()))
 
 	done, err := rt.handleDrainingCompletion(ctx, p, &syncdomain.ActionCompletion{
@@ -239,7 +238,7 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 			run: func(t *testing.T, _ *testEngine, rt *watchRuntime, bl syncdomain.BaselineView) {
 				t.Helper()
 				addPublicationDependencyPair(t, rt)
-				rt.enterBootstrap()
+				setWatchPhase(rt, watchPhaseBootstrap)
 				err := rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
 					Path:       "sync.txt",
 					ItemID:     "sync-item",

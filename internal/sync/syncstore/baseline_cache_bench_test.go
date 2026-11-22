@@ -41,9 +41,6 @@ func BenchmarkBaselineLookups(b *testing.B) {
 			sum += byID.LocalSize
 		}
 		view.ForEachPath(func(_ string, entry syncdomain.BaselineEntry) { sum += entry.LocalSize })
-		for i := 0; i < len(paths); i += benchFilesPerFolder {
-			sum += int64(len(view.GetCaseVariants("folder-0000", "file-000.txt")))
-		}
 		require.NotZero(b, sum, "the lookups found nothing")
 	}
 }

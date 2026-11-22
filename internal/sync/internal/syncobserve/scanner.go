@@ -139,6 +139,11 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 	var skipped []syncdomain.SkippedItem
 	var skippedEntries atomic.Int64
 	observed := make(map[string]bool)
+	// names is every entry the walk accepts, under its on-disk spelling:
+	// the collision phase compares new and changed entries against it.
+	names := make(ScanNames)
+	o.scanNames = names
+	defer func() { o.scanNames = nil }()
 	currentRows := make(map[string]syncdomain.LocalStateRow)
 	scanStartNano := o.clock.Now().UnixNano()
 	dirStack := rootObservedDirStack(syncRoot, o.logger)
@@ -187,11 +192,12 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 		skipped = append(skipped, hashSkipped...)
 	}
 
-	// Phase 3: Case collision detection, after hashing (events finalized).
+	// Phase 3: Case collision detection, after hashing (events finalized),
+	// against every name the walk found on disk.
 	// Colliding entries are dropped from events and recorded as findings;
 	// their rows stay, so a collider never reads as a local delete (R-2.12.1).
 	var caseSkipped []syncdomain.SkippedItem
-	events, caseSkipped = DetectCaseCollisions(events, o.baseline, observed)
+	events, caseSkipped = DetectCaseCollisions(events, names)
 	skipped = append(skipped, caseSkipped...)
 
 	o.logger.Info("local observer completed full scan",
@@ -419,7 +425,7 @@ func (o *LocalObserver) makeWalkFunc(
 			if !syncdomain.NewContentFilter(o.filterConfig).ShouldFollowSymlinks() {
 				o.rememberExcludedSymlink(dbRelPath)
 				o.recordSyncedPathReplaced(skipped, dbRelPath, "a symbolic link")
-				observed[dbRelPath] = true
+				o.observeSetAside(observed, dbRelPath, fsPath)
 				o.logger.Debug("skipping symlink", slog.String("path", dbRelPath))
 				return skipEntry(d)
 			}
@@ -589,13 +595,40 @@ func (o *LocalObserver) admitSyncedEntry(
 		return false, current.skipError()
 	case current.isSynced:
 		availability.dropEntry(first, dbRelPath, currentRows)
+		o.forgetScannedName(dbRelPath, first.fsPath)
 		entries[dbRelPath] = current
 		return true, nil
 	default:
 		availability.dropEntry(first, dbRelPath, currentRows)
+		o.forgetScannedName(dbRelPath, first.fsPath)
 		entries[dbRelPath] = first
 		currentRows[dbRelPath] = baselineLocalStateRow(&base)
 		return false, current.skipError()
+	}
+}
+
+// observeSetAside marks an entry the walk sets aside (an unfollowed symlink,
+// a special file, a protected root, a mount boundary) as present. When the
+// path holds a synced item, its spelling on disk also stays among the names
+// the collision phase compares against: OneDrive still holds that item under
+// that spelling, so a new case or normalization variant beside it is a
+// collision, not a fresh name whose upload would land in the synced item.
+func (o *LocalObserver) observeSetAside(observed map[string]bool, dbRelPath, fsPath string) {
+	observed[dbRelPath] = true
+	if o.scanNames == nil {
+		return
+	}
+	if _, synced := o.baseline.GetByPath(dbRelPath); synced {
+		o.scanNames.Add(dbRelPath, filepath.Base(fsPath))
+	}
+}
+
+// forgetScannedName takes an entry the walk set aside out of the names the
+// collision phase compares against: the twin finding above already reports
+// its path, and a set-aside entry is not one OneDrive will receive.
+func (o *LocalObserver) forgetScannedName(dbRelPath, fsPath string) {
+	if o.scanNames != nil {
+		o.scanNames.removeSpelling(dbRelPath, filepath.Base(fsPath))
 	}
 }
 
@@ -665,7 +698,7 @@ func (o *LocalObserver) processObservedInfo(
 			if currentIdentity, hasIdentity := synctree.IdentityFromFileInfo(info); hasIdentity {
 				identity = currentIdentity
 			}
-			observed[dbRelPath] = true
+			o.observeSetAside(observed, dbRelPath, fsPath)
 			currentRows[dbRelPath] = syncdomain.LocalStateRow{
 				Path:             dbRelPath,
 				ItemType:         syncdomain.ItemTypeFolder,
@@ -688,7 +721,7 @@ func (o *LocalObserver) processObservedInfo(
 	// observed keeps deletion detection from treating it as removed.
 	if isSpecialFile(info) {
 		o.recordSyncedPathReplaced(skipped, dbRelPath, "a FIFO, socket or device file")
-		observed[dbRelPath] = true
+		o.observeSetAside(observed, dbRelPath, fsPath)
 		o.logger.Debug("skipping special file",
 			slog.String("path", dbRelPath),
 			slog.String("mode", info.Mode().Type().String()))
@@ -712,19 +745,22 @@ func (o *LocalObserver) processObservedInfo(
 		identity, hasIdentity := synctree.IdentityFromFileInfo(info)
 		if o.isForeignMountPoint(o.scanAvailability, dbRelPath, identity, hasIdentity) {
 			*skipped = append(*skipped, MountBoundarySkippedItem(dbRelPath))
-			observed[dbRelPath] = true
+			o.observeSetAside(observed, dbRelPath, fsPath)
 			o.logger.Debug("not crossing into another filesystem", slog.String("path", dbRelPath))
 			return filepath.SkipDir
 		}
 		if o.flaggedMountIsGone(o.scanAvailability, dbRelPath) {
 			*skipped = append(*skipped, VanishedMountSkippedItem(dbRelPath))
-			observed[dbRelPath] = true
+			o.observeSetAside(observed, dbRelPath, fsPath)
 			o.logger.Debug("a crossed mount point is no longer mounted", slog.String("path", dbRelPath))
 			return filepath.SkipDir
 		}
 	}
 
 	observed[dbRelPath] = true
+	if o.scanNames != nil {
+		o.scanNames.Add(dbRelPath, filepath.Base(fsPath))
+	}
 	row := syncdomain.LocalStateRow{
 		Path:  dbRelPath,
 		Mtime: info.ModTime().UnixNano(),
@@ -887,45 +923,47 @@ func sortedLocalStateRows(current map[string]syncdomain.LocalStateRow) []syncdom
 	return rows
 }
 
-// DetectCaseCollisions finds events where two paths in the same directory
-// differ only in case. Both colliders are removed from events and returned
-// as SkippedItems. OneDrive uses a case-insensitive namespace — uploading
-// both would cause one to silently overwrite the other (R-2.12.1).
+// DetectCaseCollisions finds the new and changed entries whose name collides
+// with another entry of the same directory on disk: names OneDrive treats as
+// one (case, Unicode form, ignored characters, R-2.12.1). Each collider is
+// removed from events and returned as a SkippedItem; uploading both would
+// make one silently overwrite the other.
 //
-// observed is the set of paths this scan found on disk. A baseline variant
-// that is not on disk any more is the old name of a case-only rename (or a
-// local delete), not a collision; the planner orders the remote side so the
-// old item is gone before the new name is created (R-2.12.1). A nil observed
-// set treats every baseline variant as present.
+// names is every entry the scan found on disk (ScanNames). Only on-disk
+// rivals count: a synced name that is gone is the old name of a case-only
+// rename or a delete, which the planner orders, not a collision. An
+// unchanged synced entry has no event and gets no finding, so it keeps
+// syncing while the new name beside it waits (R-2.12.2). Two on-disk entries
+// with one stored form (an NFC and an NFD twin) collide even when one of them
+// is synced (R-2.13.2).
 //
-// O(n) time, O(n) memory. Pure function — no side effects.
+// O(n) time, O(n) memory. Pure function, no side effects.
 func DetectCaseCollisions(
-	events []syncdomain.ChangeEvent, baseline syncdomain.BaselineView, observed map[string]bool,
+	events []syncdomain.ChangeEvent, names ScanNames,
 ) (clean []syncdomain.ChangeEvent, collisions []syncdomain.SkippedItem) {
 	if len(events) == 0 {
 		return nil, nil
 	}
 
-	// Group event indices by (directory, OneDrive namespace key): case,
-	// Unicode form and ignored emoji all make two local names one remote one.
-	groups := make(map[caseGroupKey][]int, len(events))
+	changed := make(map[string]bool, len(events))
 	for i := range events {
-		key := caseGroupKey{dir: filepath.Dir(events[i].Path), nameKey: namekey.Of(filepath.Base(events[i].Path))}
-		groups[key] = append(groups[key], i)
+		changed[events[i].Path] = true
 	}
 
-	// Build the collider set — all indices that participate in a collision.
 	colliderSet := make(map[int]struct{})
-	for _, indices := range groups {
-		if len(indices) > 1 {
-			for _, idx := range indices {
-				colliderSet[idx] = struct{}{}
-			}
+	findings := make(map[int]nameCollision)
+	for i := range events {
+		d := names[filepath.Dir(events[i].Path)]
+		if d == nil {
+			continue
 		}
+		others, sameForm := d.rivals(filepath.Base(events[i].Path))
+		if len(others) == 0 && !sameForm {
+			continue
+		}
+		colliderSet[i] = struct{}{}
+		findings[i] = nameCollision{others: others, sameForm: sameForm}
 	}
-
-	// Cross-check single-event groups against baseline.
-	crossCheckBaseline(events, groups, baseline, observed, colliderSet)
 
 	// Suppress children of colliding directories.
 	childColliderSet, collidingDirPrefixes := suppressDirectoryChildren(events, colliderSet)
@@ -934,11 +972,8 @@ func DetectCaseCollisions(
 		return events, nil
 	}
 
-	// Build SkippedItems with Detail naming the other collider(s).
-	collisions = buildCollisionSkippedItems(
-		events, groups, colliderSet, childColliderSet, collidingDirPrefixes, baseline, observed)
+	collisions = buildCollisionSkippedItems(events, findings, changed, childColliderSet, collidingDirPrefixes)
 
-	// Build clean events — those not in the collider set.
 	clean = make([]syncdomain.ChangeEvent, 0, len(events)-len(colliderSet))
 	for i := range events {
 		if _, collider := colliderSet[i]; !collider {
@@ -949,53 +984,11 @@ func DetectCaseCollisions(
 	return clean, collisions
 }
 
-// caseGroupKey groups events by (directory, namespace key) for collision detection.
-type caseGroupKey struct {
-	dir     string
-	nameKey namekey.Key
-}
-
-// crossCheckBaseline flags single-event groups that collide with already-synced
-// baseline entries. A new file whose lowercased name matches a baseline entry
-// with different exact casing is a collision (the baseline file produced no event
-// because it was unchanged by the fast-path content-change check).
-func crossCheckBaseline(
-	events []syncdomain.ChangeEvent,
-	groups map[caseGroupKey][]int,
-	baseline syncdomain.BaselineView,
-	observed map[string]bool,
-	colliderSet map[int]struct{},
-) {
-	if baseline == nil {
-		return
-	}
-
-	for key, indices := range groups {
-		if len(indices) != 1 {
-			continue
-		}
-
-		if _, already := colliderSet[indices[0]]; already {
-			continue
-		}
-
-		ev := &events[indices[0]]
-		variants := baseline.GetCaseVariants(key.dir, filepath.Base(ev.Path))
-
-		for i := range variants {
-			if v := &variants[i]; v.Path != ev.Path && baselineVariantPresent(v.Path, observed) {
-				colliderSet[indices[0]] = struct{}{}
-
-				break
-			}
-		}
-	}
-}
-
-// baselineVariantPresent reports whether a baseline case variant still exists
-// on disk in this scan. Without an observed set every variant counts.
-func baselineVariantPresent(path string, observed map[string]bool) bool {
-	return observed == nil || observed[path]
+// nameCollision is what DetectCaseCollisions found for one entry: the
+// on-disk spellings of its rivals, and whether a twin shares its stored form.
+type nameCollision struct {
+	others   []string
+	sameForm bool
 }
 
 // suppressDirectoryChildren marks children of colliding directories as colliders.
@@ -1029,33 +1022,41 @@ func suppressDirectoryChildren(
 	return childColliderSet, collidingDirPrefixes
 }
 
-// buildCollisionSkippedItems constructs SkippedItems with Detail messages for
-// event-vs-event collisions, baseline cross-check collisions, and child collisions.
+// buildCollisionSkippedItems constructs one SkippedItem per colliding stored
+// path, with a Detail naming the other collider(s), and one per child of a
+// colliding directory.
 func buildCollisionSkippedItems(
 	events []syncdomain.ChangeEvent,
-	groups map[caseGroupKey][]int,
-	colliderSet, childColliderSet map[int]struct{},
+	findings map[int]nameCollision,
+	changed map[string]bool,
+	childColliderSet map[int]struct{},
 	collidingDirPrefixes []string,
-	baseline syncdomain.BaselineView,
-	observed map[string]bool,
 ) []syncdomain.SkippedItem {
-	collisions := make([]syncdomain.SkippedItem, 0, len(colliderSet))
+	collisions := make([]syncdomain.SkippedItem, 0, len(findings)+len(childColliderSet))
 
-	// Event-vs-event and baseline collisions.
-	for _, indices := range groups {
-		if len(indices) <= 1 {
-			collisions = appendSingleGroupCollision(
-				collisions, events, indices, colliderSet, childColliderSet, baseline, observed)
-
+	seen := make(map[string]bool, len(findings))
+	for idx := range events {
+		found, ok := findings[idx]
+		if !ok {
 			continue
 		}
-
-		collisions = appendMultiGroupCollisions(
-			collisions, events, indices, childColliderSet)
+		ev := &events[idx]
+		if seen[ev.Path] {
+			continue // the same stored path is reported once
+		}
+		seen[ev.Path] = true
+		collisions = append(collisions, syncdomain.SkippedItem{
+			Path:   ev.Path,
+			Reason: syncdomain.IssueCaseCollision,
+			Detail: nameCollisionDetail(ev.Path, found, changed),
+		})
 	}
 
 	// Child collisions — distinct Detail indicating the parent directory collision.
-	for idx := range childColliderSet {
+	for idx := range events {
+		if _, isChild := childColliderSet[idx]; !isChild {
+			continue
+		}
 		ev := &events[idx]
 
 		parentDir := ""
@@ -1078,44 +1079,35 @@ func buildCollisionSkippedItems(
 	return collisions
 }
 
-// appendSingleGroupCollision handles SkippedItem construction for a group with
-// exactly one event (flagged by baseline cross-check).
-func appendSingleGroupCollision(
-	collisions []syncdomain.SkippedItem,
-	events []syncdomain.ChangeEvent,
-	indices []int,
-	colliderSet, childColliderSet map[int]struct{},
-	baseline syncdomain.BaselineView,
-	observed map[string]bool,
-) []syncdomain.SkippedItem {
-	idx := indices[0]
-
-	if _, flagged := colliderSet[idx]; !flagged {
-		return collisions
-	}
-
-	if _, isChild := childColliderSet[idx]; isChild {
-		return collisions // handled in child pass
-	}
-
-	ev := &events[idx]
-
-	if baseline == nil {
-		return collisions
-	}
-
-	variants := baseline.GetCaseVariants(filepath.Dir(ev.Path), filepath.Base(ev.Path))
-	for i := range variants {
-		if v := &variants[i]; v.Path != ev.Path && baselineVariantPresent(v.Path, observed) {
-			return append(collisions, syncdomain.SkippedItem{
-				Path:   ev.Path,
-				Reason: syncdomain.IssueCaseCollision,
-				Detail: collisionDetail("conflicts with synced file", filepath.Base(ev.Path), []string{filepath.Base(v.Path)}),
-			})
+// nameCollisionDetail is the finding's detail for the entry stored at path. A
+// rival with no event of its own is a synced file the user did not change.
+func nameCollisionDetail(path string, found nameCollision, changed map[string]bool) string {
+	dir, name := filepath.Dir(path), filepath.Base(path)
+	others := make([]string, 0, len(found.others))
+	rivalChanged := false
+	for _, other := range found.others {
+		stored := namekey.Stored(other)
+		others = append(others, stored)
+		if changed[filepath.Join(dir, stored)] {
+			rivalChanged = true
 		}
 	}
 
-	return collisions
+	if found.sameForm {
+		detail := sameUnicodeFormCollisionDetail
+		if len(others) > 0 {
+			detail += "; it also conflicts with " + strings.Join(others, ", ")
+		}
+
+		return detail
+	}
+
+	prefix := "conflicts with synced file"
+	if rivalChanged {
+		prefix = "conflicts with"
+	}
+
+	return collisionDetail(prefix, name, others)
 }
 
 // collisionDetail names the other colliding file(s) and what to do. When the
@@ -1144,56 +1136,6 @@ func collisionDetail(prefix, name string, others []string) string {
 // same name twice.
 const sameUnicodeFormCollisionDetail = "another file here has the same name in a different Unicode form " +
 	"(for example é typed as e plus an accent); rename one of them"
-
-// appendMultiGroupCollisions handles SkippedItem construction for groups with
-// multiple events (event-vs-event collisions).
-func appendMultiGroupCollisions(
-	collisions []syncdomain.SkippedItem,
-	events []syncdomain.ChangeEvent,
-	indices []int,
-	childColliderSet map[int]struct{},
-) []syncdomain.SkippedItem {
-	seen := make(map[string]bool, len(indices))
-	for i, idx := range indices {
-		if _, isChild := childColliderSet[idx]; isChild {
-			continue
-		}
-
-		var others []string
-		sameForm := false
-		for j, otherIdx := range indices {
-			if j == i {
-				continue
-			}
-			if events[otherIdx].Path == events[idx].Path {
-				sameForm = true
-				continue
-			}
-			others = append(others, filepath.Base(events[otherIdx].Path))
-		}
-
-		if seen[events[idx].Path] {
-			continue // the same normalized path is reported once
-		}
-		seen[events[idx].Path] = true
-
-		detail := collisionDetail("conflicts with", filepath.Base(events[idx].Path), others)
-		if sameForm {
-			detail = sameUnicodeFormCollisionDetail
-			if len(others) > 0 {
-				detail += "; it also conflicts with " + strings.Join(others, ", ")
-			}
-		}
-
-		collisions = append(collisions, syncdomain.SkippedItem{
-			Path:   events[idx].Path,
-			Reason: syncdomain.IssueCaseCollision,
-			Detail: detail,
-		})
-	}
-
-	return collisions
-}
 
 // ---------------------------------------------------------------------------
 // File hashing

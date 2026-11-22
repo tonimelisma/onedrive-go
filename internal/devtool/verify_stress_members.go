@@ -18,6 +18,7 @@ const (
 	stressNonMemberWatchSummary = "a deterministic watch log summary"
 	stressNonMemberWatchLookup  = "a path recheck or a lookup structure, without goroutines"
 	stressNonMemberWatchHelpers = "the failure messages of the tests' wait helpers, in a child test binary"
+	stressNonMemberPhaseTable   = "a pure lookup of the watch lifecycle table"
 )
 
 // stressSyncConcurrencySelection is the sync step's selection: the tests of
@@ -99,6 +100,7 @@ func stressSyncRunWatchMembers() []string {
 		"TestRunWatchUntilQuiescent_BootstrapCompletionStaysClean",
 		"TestRunWatch_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown",
 		"TestRunWatch_BusyRuntimeQueuesPendingReplanInsteadOfOverlappingPrepare",
+		"TestRunWatch_CancelDuringBootstrapStopsWithoutStartingObservers",
 		"TestRunWatch_CancellationWinsOverFinalObserverExit",
 		"TestRunWatch_ContextCancel",
 		"TestRunWatch_CountsOnTheEngineCollectorWithoutAnOwnerWrap",
@@ -141,8 +143,8 @@ func stressSyncWatchRuntimeMembers() []string {
 		"TestWatchRuntime_AnObserverWhoseRequestTimedOutIsWarnedAndReturned",
 		"TestWatchRuntime_ArmRetryTimer_FiresAfterDelay",
 		"TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue",
-		"TestWatchRuntime_BeginObserverBackedRunningNormalizesBootstrapPhase",
 		"TestWatchRuntime_BeginObserverBackedRunningRejectsDrainingOrDuplicateObservers",
+		"TestWatchRuntime_BeginObserverBackedRunningStartsFromASettledBootstrap",
 		"TestWatchRuntime_BeginWatchDrain_ObserverChannelsStayRuntimeOwned",
 		"TestWatchRuntime_BootstrapWaitLogsOnlyWhenCountsChange",
 		"TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance",
@@ -178,7 +180,7 @@ func stressSyncWatchRuntimeMembers() []string {
 		"TestWatchRuntime_RunNonDrainingWatchStep_ClosedReplanWithoutCancelErrors",
 		"TestWatchRuntime_RunNonDrainingWatchStep_ConsumesReplanReady",
 		"TestWatchRuntime_RunNonDrainingWatchStep_ContextCancelStartsDrain",
-		"TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesAndReturnsToRunning",
+		"TestWatchRuntime_RunWatchLoop_BootstrapPhaseQuiescesToReady",
 		"TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsBeforeReturn",
 		"TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsFromBootstrapPhase",
 		"TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan",
@@ -196,6 +198,7 @@ func stressSyncWatchMembers() []string {
 		"TestRemoteObserverWatch_AFailedBatchEndsTheWatchUnlessItsRunEnded",
 		"TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal",
 		"TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff",
+		"TestWatchLoop_ServicesOnlyThePhasesEnabledInputs",
 		"TestWatchObserver_SeesBindingMadeAfterItWasBuilt",
 		"TestWatchPipelineCleanup_KeepsRefreshResultChannelUsable",
 		"TestWatch_FreshIntentOfAGoneFileIsDroppedAfterTheNextRemotePoll",
@@ -224,20 +227,16 @@ func stressSyncObserveWatchMembers() []string {
 		"TestWatch_BackoffOnError",
 		"TestWatch_BackoffWithAWakeChannelWaitsOnTheRunClock",
 		"TestWatch_BatchHandlerError_ReturnsError",
-		"TestWatch_CaseCollision_EventSuppressed",
 		"TestWatch_CommitsObservations",
 		"TestWatch_ContextCancellation",
 		"TestWatch_ContinuouslyWrittenFileBacksOff",
 		"TestWatch_CurrentDeltaToken",
-		"TestWatch_DeleteCollider_ReEmitsSurvivor",
-		"TestWatch_DeleteCollider_ThreeWay_StillBlocked",
 		"TestWatch_DeleteDirectoryRemovesWatch",
 		"TestWatch_DeltaExpiredRecoversThroughTheFullRefresh",
 		"TestWatch_DeltaExpiredResets",
 		"TestWatch_DetectsFileCreate",
 		"TestWatch_DetectsFileDelete",
 		"TestWatch_DetectsFileModify",
-		"TestWatch_DirectoryCollision_Suppressed",
 		"TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan",
 		"TestWatch_ENOSPC_ReturnsWatchLimitExhausted",
 		"TestWatch_EmptyCompleteTopologyApplyFailureDoesNotAdvanceCursor",
@@ -262,13 +261,11 @@ func stressSyncObserveWatchMembers() []string {
 		"TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations",
 		"TestWatch_RenamedDirectoryDescendantEventsUseNewPath",
 		"TestWatch_RepeatedlyFailingRecoveryBacksOff",
-		"TestWatch_SafetyScan_ClearsPeers",
 		"TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations",
 		"TestWatch_StartupSafetyScanCatchesChangeDuringWatchSetup",
 		"TestWatch_SustainedServerErrorsOnTheCursorResetIt",
 		"TestWatch_TopologyApplyFailureDoesNotAdvanceCursor",
 		"TestWatch_TransientErrorRetriesAndKeepsToken",
-		"TestWatch_TwoDirectoryCollision_Suppressed",
 		"TestWatch_VirtualTime_SafetyScanFindsAMissedFileAtItsInterval",
 		"TestWatch_WakeSignalTriggersImmediatePoll",
 		"TestWatch_WakeSignalsCoalesce",
@@ -409,7 +406,7 @@ func stressSyncExecShutdownAndCancellationMembers() []string {
 // These tests are in internal/sync/syncstore.
 func stressSyncStoreShutdownAndCancellationMembers() []string {
 	return []string{
-		"TestBaselineCache_GetCaseVariantsCopyIsSafeAgainstConcurrentPut",
+		"TestBaselineCache_GetByPathCopyIsSafeAgainstConcurrentPut",
 		"TestBaseline_ConcurrentAccess",
 		"TestCheckCacheConsistency_IsSafeAgainstConcurrentMutation",
 		"TestCheckStoreIntegrity_CanceledCheckIsNotDamage",
@@ -438,6 +435,8 @@ func stressSyncConcurrencyNonMembers() []stressNonMember {
 		{test: "TestWatchConditionSummary_StatesBreakdownAndHintOnce", reason: stressNonMemberWatchSummary},
 		{test: "TestWatchConditionSummary_WarnsOnlyForNewActionableKinds", reason: stressNonMemberWatchSummary},
 		{test: "TestWatchHelpers_FailNamingWhatTheyWaitedFor", reason: stressNonMemberWatchHelpers},
+		{test: "TestWatchPhase_NothingLeavesDrainingExceptDrained", reason: stressNonMemberPhaseTable},
+		{test: "TestWatchPhase_TransitionTableIsTotal", reason: stressNonMemberPhaseTable},
 	}
 }
 

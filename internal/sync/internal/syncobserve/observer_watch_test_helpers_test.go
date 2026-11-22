@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
@@ -17,9 +16,6 @@ import (
 type watchObserverTestOptions struct {
 	Baseline              syncdomain.BaselineView
 	WriteCoalesceCooldown time.Duration
-	CollisionPeers        map[string]map[string]struct{}
-	DirNameCache          map[string]map[namekey.Key][]string
-	RecentLocalDeletes    map[string]struct{}
 	HashFunc              func(ctx context.Context, path string) (string, error)
 	AfterFunc             func(time.Duration, func()) syncdomain.SyncTimer
 	AfterSafetyScan       func()
@@ -54,15 +50,6 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 	if opts.WriteCoalesceCooldown != 0 {
 		obs.hooks.WriteCoalesceCooldown = opts.WriteCoalesceCooldown
 	}
-	if opts.CollisionPeers != nil {
-		obs.CollisionPeers = opts.CollisionPeers
-	}
-	if opts.DirNameCache != nil {
-		obs.DirNameCache = opts.DirNameCache
-	}
-	if opts.RecentLocalDeletes != nil {
-		obs.RecentLocalDeletes = opts.RecentLocalDeletes
-	}
 	if opts.HashFunc != nil {
 		obs.hooks.HashFile = opts.HashFunc
 	}
@@ -78,34 +65,6 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 	obs.debugEvents = opts.DebugEvents
 
 	return obs
-}
-
-// requireDroppedWithoutEvent waits for the observer's debug report that it
-// dropped an input (match), failing at once on any local patch meanwhile.
-// The observer reports the drop on its watch goroutine after anything the
-// input sent, so once the report has arrived an empty batch channel shows
-// that the input sent nothing: no window decides the test. A report already
-// read by an earlier wait counts.
-func requireDroppedWithoutEvent(
-	t *testing.T, recorder *syncfixture.DebugEventRecorder, batches <-chan LocalObservation,
-	match func(syncdomain.EngineDebugEvent) bool, what string,
-) {
-	t.Helper()
-
-	timer := time.NewTimer(syncfixture.EventWait)
-	defer timer.Stop()
-	for !recorder.FindEvent(match) {
-		select {
-		case batch := <-batches:
-			if batch.Kind == LocalPatch {
-				require.FailNow(t, "unexpected local patch", "got %+v while waiting for %s", batch, what)
-			}
-		case <-recorder.Events:
-		case <-timer.C:
-			require.FailNow(t, "timed out waiting for "+what)
-		}
-	}
-	requireNoLocalPatch(t, batches, what)
 }
 
 // requireNoLocalPatch fails when batches holds a local patch. It never
@@ -194,26 +153,6 @@ func waitForLocalSnapshot(t *testing.T, batches <-chan LocalObservation, what st
 	}
 }
 
-// nextLocalPatch returns the next local patch on batches, skipping every
-// other observation.
-func nextLocalPatch(t *testing.T, batches <-chan LocalObservation, what string) LocalObservation {
-	t.Helper()
-
-	return waitForLocalPatch(t, batches, func(*LocalObservation) bool { return true }, what)
-}
-
-// nextLocalRow returns the one row of the next local patch on batches: the
-// patch an upsert of one path sends.
-func nextLocalRow(t *testing.T, batches <-chan LocalObservation, what string) syncdomain.LocalStateRow {
-	t.Helper()
-
-	patch := nextLocalPatch(t, batches, what)
-	require.Len(t, patch.Rows, 1, "%s: %+v", what, patch)
-	require.Empty(t, patch.DeletedPrefixes, "%s: %+v", what, patch)
-
-	return patch.Rows[0]
-}
-
 // waitForLocalRow waits for a local patch that writes a row for path and
 // returns that row.
 func waitForLocalRow(t *testing.T, batches <-chan LocalObservation, path string) syncdomain.LocalStateRow {
@@ -278,14 +217,6 @@ func patchRowPaths(patches []LocalObservation) []string {
 	return paths
 }
 
-// collisionSkipOf matches the local observer's report that it skipped the
-// entry at path for a case collision.
-func collisionSkipOf(path string) func(syncdomain.EngineDebugEvent) bool {
-	return func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventLocalCaseCollisionSkipped && event.Path == path
-	}
-}
-
 // startMockWatch runs obs.Watch on dir in the background (runInBackground)
 // and returns once the mock watcher has its first directory.
 func startMockWatch(
@@ -308,27 +239,6 @@ func startMockWatch(
 	case <-time.After(syncfixture.EventWait):
 		require.FailNow(t, "timed out waiting for mock watch setup")
 	}
-
-	return cancel, done
-}
-
-// startMockWatchInLoop is startMockWatch that also waits until the watch has
-// finished its setup walk and reads events, so a directory the test creates
-// afterwards is new to it. One that existed during setup is registered by
-// the walk, and its Create event is then a duplicate whose contents are not
-// scanned.
-func startMockWatchInLoop(
-	t *testing.T,
-	obs *LocalObserver,
-	watcher *syncfixture.MockFsWatcher,
-	dir string,
-) (context.CancelFunc, <-chan error) {
-	t.Helper()
-
-	looping := make(chan struct{})
-	obs.hooks.BeforeWatchLoop = func() { close(looping) }
-	cancel, done := startMockWatch(t, obs, watcher, dir)
-	syncfixture.ReceiveWithin(t, looping, "the watch to finish its setup")
 
 	return cancel, done
 }

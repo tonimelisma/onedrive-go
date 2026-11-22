@@ -15,19 +15,13 @@ import (
 // engine pointer remains for its collaborators and the state it owns
 // (the protected-root set, the housekeeper).
 type engineFlow struct {
-	// engine is the collaborators and engine-owned state this flow still
-	// reaches; its configuration and hooks it reads from cfg and hooks.
-	engine *Engine
-
-	// cfg is the engine's configuration, copied when the run starts.
-	cfg runConfig
+	// observation is the engine's collaborators, the run's configuration
+	// and its capabilities: everything code off the loop goroutine may
+	// reach (engine_observation.go).
+	observation
 
 	// hooks are the engine's test seams as they were when the run started.
 	hooks engineHooks
-
-	// deps are the capabilities this run needs regardless of what it decides.
-	// See runtimeDeps for why they are passed rather than reached for.
-	deps runtimeDeps
 
 	// signals is how this flow asks for future work. Watch supplies the live
 	// runtime; one-shot supplies no-ops, because a one-shot pass has no future
@@ -134,10 +128,12 @@ func (e *Engine) flowInputs() *flowInputs {
 
 func newEngineFlow(in *flowInputs) *engineFlow {
 	flow := &engineFlow{
-		engine:    in.engine,
-		cfg:       in.cfg,
+		observation: observation{
+			engine: in.engine,
+			cfg:    in.cfg,
+			deps:   in.deps,
+		},
 		hooks:     in.hooks,
-		deps:      in.deps,
 		signals:   noRuntimeSignals{},
 		inspect:   noWatchInspector{},
 		admitted:  noAdmittedWork{},

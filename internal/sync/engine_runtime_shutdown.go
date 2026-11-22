@@ -56,7 +56,8 @@ func isStoppingRun(ctx context.Context) bool {
 func (flow *engineFlow) noteRunCancel(ctx context.Context) func() bool {
 	return context.AfterFunc(ctx, func() {
 		defer flow.engine.wallClock.RecoverTimerPanic()
-		canceled := time.Now()
+		// The bound is a context deadline, enforced on wall time.
+		canceled := syncdomain.WallNow()
 		flow.canceledAt.CompareAndSwap(nil, &canceled)
 	})
 }
@@ -70,7 +71,7 @@ func (flow *engineFlow) beginStopDrain() {
 		return
 	}
 
-	start := time.Now()
+	start := syncdomain.WallNow()
 	if canceled := flow.canceledAt.Load(); canceled != nil && canceled.Before(start) {
 		start = *canceled
 	}

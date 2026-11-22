@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -48,7 +49,15 @@ type syncNotifier struct {
 	// could not save; every status a ready watch sends names them while it
 	// is set. Only the watch loop writes it.
 	unsavedSignIns []string
+	// loopAlive reads the watch loop's heartbeat once the orchestrator
+	// exists (multisync's LoopAlive); nil until then. The keepalive
+	// goroutine reads it.
+	loopAlive atomic.Pointer[loopAliveFunc]
 }
+
+// loopAliveFunc reports whether the watch loop made progress recently, the
+// long step it is in, and how long it has been silent.
+type loopAliveFunc func() (ok bool, step string, silent time.Duration)
 
 func newSyncNotifier(notifier *sdnotify.Notifier, logger *slog.Logger, console *syncConsole) *syncNotifier {
 	displayPath := func(p string) string { return p }
@@ -129,16 +138,42 @@ func (s *syncNotifier) failed(err error) {
 // ends. The keepalive proves the process is scheduling goroutines; the watch
 // loop's own health is reported through STATUS= and the exit status.
 func (s *syncNotifier) runWatchdog(ctx context.Context, ticks <-chan time.Time) {
+	silenceLogged := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticks:
+			silenceLogged = s.observeLoopSilence(silenceLogged)
 			if err := s.notifier.Watchdog(); err != nil {
 				s.logger.Debug("systemd watchdog keepalive failed", slog.Any("error", err))
 			}
 		}
 	}
+}
+
+// observeLoopSilence logs one Error when the watch loop has been silent past
+// its limit, and returns whether that silence has been logged. The keepalive
+// is still sent: the heartbeat only observes until a long soak has shown it
+// raises no false alarm.
+func (s *syncNotifier) observeLoopSilence(logged bool) bool {
+	alive := s.loopAlive.Load()
+	if alive == nil {
+		return logged
+	}
+	ok, step, silent := (*alive)()
+	if ok {
+		return false
+	}
+	if !logged {
+		attrs := []any{slog.Duration("silent", silent)}
+		if step != "" {
+			attrs = append(attrs, slog.String("step", step))
+		}
+		s.logger.Error("the sync loop has made no progress past its limit", attrs...)
+	}
+
+	return true
 }
 
 func (s *syncNotifier) report(err error) {

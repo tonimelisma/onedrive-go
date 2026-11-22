@@ -342,6 +342,11 @@ linters:
           msg: use fsroot, synctree, or localpath filesystem boundaries instead of raw os.* calls
         - pattern: ^time\.Sleep$
           msg: use explicit test synchronization instead of wall-clock sleep
+        # The sync engine reads time through its SyncClock, so a model can
+        # run it on a fake clock. The exclusions below scope this to the
+        # non-test files of internal/sync and name the clock's own files.
+        - pattern: ^time\.(Now|Since|Until|NewTimer|NewTicker|AfterFunc|After|Tick)$
+          msg: read time through the engine's SyncClock (syncdomain/domain_clock.go), not the wall clock
         # Every byte of JSON a command prints is encoded in
         # internal/cli/json_output.go (writeJSONDocument, writeJSONLine). The
         # exclusion rules below scope this to the non-test files of
@@ -539,6 +544,17 @@ linters:
         linters:
           - forbidigo
         text: models another system and is for tests only
+      # The wall-clock ban binds the sync engine's product code only. The
+      # clock file and the debounce timer are the wall clock's
+      # implementations; the test-helper packages are test code.
+      - path-except: ^internal/sync/
+        linters:
+          - forbidigo
+        text: read time through the engine's SyncClock
+      - path: (_test\.go|^internal/sync/syncdomain/domain_clock\.go|^internal/sync/internal/syncobserve/buffer\.go|^internal/sync/internal/(syncfixture|syncstoretest)/)
+        linters:
+          - forbidigo
+        text: read time through the engine's SyncClock
       # The sync tree's test-helper packages are test code that is not in
       # _test.go files: they keep the exemptions tests have.
       - path: internal/sync/internal/(syncfixture|syncstoretest)/

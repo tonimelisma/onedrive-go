@@ -46,7 +46,7 @@ func (noRuntimeSignals) markReplanNeeded()   {}
 // lifetimes: signals are a production path, while these reads happen only when
 // engine.hooks.assertInvariants is enabled, which production leaves off.
 type watchInspector interface {
-	phase() watchRuntimePhase
+	phase() watchPhase
 	isDraining() bool
 	hasRetryTimer() bool
 	hasTrialTimer() bool
@@ -58,9 +58,9 @@ type watchInspector interface {
 // satisfies: it never drains, arms no watch timers, and runs no refresh.
 type noWatchInspector struct{}
 
-func (noWatchInspector) phase() watchRuntimePhase { return watchRuntimePhaseRunning }
-func (noWatchInspector) isDraining() bool         { return false }
-func (noWatchInspector) hasRetryTimer() bool      { return false }
-func (noWatchInspector) hasTrialTimer() bool      { return false }
-func (noWatchInspector) hasAdmitTimer() bool      { return false }
-func (noWatchInspector) hasActiveRefresh() bool   { return false }
+func (noWatchInspector) phase() watchPhase      { return watchPhaseRunning }
+func (noWatchInspector) isDraining() bool       { return false }
+func (noWatchInspector) hasRetryTimer() bool    { return false }
+func (noWatchInspector) hasTrialTimer() bool    { return false }
+func (noWatchInspector) hasAdmitTimer() bool    { return false }
+func (noWatchInspector) hasActiveRefresh() bool { return false }

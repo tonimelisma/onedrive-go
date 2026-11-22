@@ -313,14 +313,11 @@ func (e *Engine) waitFor(ctx context.Context, d time.Duration) error {
 	if e.hooks.wait != nil {
 		return e.hooks.wait(ctx, d)
 	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("sync: one-shot pause wait: %w", ctx.Err())
+	if err := e.runClock().Sleep(ctx, d); err != nil {
+		return fmt.Errorf("sync: one-shot pause wait: %w", err)
 	}
+
+	return nil
 }
 
 // oneShotPasses is the most passes one RunOnce makes.
@@ -634,7 +631,7 @@ type fullRemoteObservation struct {
 // means. A refresh this client chose is ResyncKindApplyDifferences: an item
 // OneDrive no longer has was deleted. A resync that asked for local items to
 // be uploaded again, or did not say, turns orphans into re-uploads instead.
-func (flow *engineFlow) observeRemoteFullWithShortcutTopology(
+func (flow *observation) observeRemoteFullWithShortcutTopology(
 	ctx context.Context,
 	bl syncdomain.BaselineView,
 	kind syncdomain.ResyncKind,

@@ -1,7 +1,6 @@
 package syncobserve
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
@@ -351,120 +349,4 @@ func TestHashAndEmit_BaselineMatch_NoEvent(t *testing.T) {
 
 	// No patch should be sent since hash matches baseline.
 	requireNoLocalPatch(t, batches, "the no-op write's hash")
-}
-
-// ---------------------------------------------------------------------------
-// hashAndEmit case collision suppression (R-2.12.2)
-// ---------------------------------------------------------------------------
-
-// Validates: R-2.12.2
-func TestHashAndEmit_CaseCollision_Suppressed(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	// Create two files differing only in case.
-	syncfixture.WriteTestFile(t, dir, "Existing.txt", "content1")
-	filePath := syncfixture.WriteTestFile(t, dir, "existing.txt", "content2")
-
-	// On case-insensitive FS, only one file exists — skip test.
-	info1, err1 := os.Lstat(filepath.Join(dir, "Existing.txt"))
-	info2, err2 := os.Lstat(filepath.Join(dir, "existing.txt"))
-	if err1 != nil || err2 != nil || os.SameFile(info1, info2) {
-		t.Skip("case-insensitive filesystem — cannot create case-colliding files")
-	}
-
-	baseline := syncfixture.BaselineWith(&syncdomain.BaselineEntry{
-		Path: "existing.txt", DriveID: driveid.New("d"), ItemID: "i1",
-		ItemType: syncdomain.ItemTypeFile, LocalHash: hashContent(t, "old"),
-	})
-
-	mockWatcher := newMockFsWatcher()
-	clock := syncfixture.NewManualClock(time.Date(2026, time.April, 13, 12, 0, 0, 0, time.UTC))
-	recorder := syncfixture.NewDebugEventRecorder()
-	obs := newWatchTestObserver(t, mockWatcher, watchObserverTestOptions{
-		Baseline:              baseline,
-		AfterFunc:             clock.AfterFunc,
-		WriteCoalesceCooldown: 50 * time.Millisecond,
-		DebugEvents:           recorder.Record,
-	})
-
-	batches := localBatches(obs, 10)
-	cancel, done := startMockWatch(t, obs, mockWatcher, dir)
-
-	// Send a Write event for the lowercase file.
-	mockWatcher.EventsCh <- fsnotify.Event{
-		Name: filePath, Op: fsnotify.Write,
-	}
-
-	require.Eventually(t, func() bool {
-		return clock.ActiveTimerCount() == 1
-	}, syncfixture.EventWait, time.Millisecond)
-
-	clock.Advance(50 * time.Millisecond)
-
-	// The case collision suppresses the hashed write: the observer reports
-	// the skip and emits nothing.
-	requireDroppedWithoutEvent(t, recorder, batches, collisionSkipOf("existing.txt"), "the collision skip of existing.txt's write")
-
-	syncfixture.StopWatch(t, cancel, done)
-}
-
-// Validates: R-2.12.2
-// Platform-independent hashAndEmit collision test.
-// Uses pre-populated dirNameCache instead of relying on filesystem case sensitivity.
-func TestHashAndEmit_CaseCollision_CachedLookup(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-
-	// Create a single file — the collision is injected via the cache.
-	syncfixture.WriteTestFile(t, dir, "existing.txt", "content")
-
-	mockWatcher := newMockFsWatcher()
-	recorder := syncfixture.NewDebugEventRecorder()
-	obs := &LocalObserver{
-		baseline:    syncfixture.EmptyBaseline(),
-		logger:      synctest.TestLogger(t),
-		debugEvents: recorder.Record,
-		localWatchState: localWatchState{
-			CollisionPeers: make(map[string]map[string]struct{}),
-			// A differently cased sibling in the name cache simulates a
-			// collision without requiring a case-sensitive FS.
-			DirNameCache: map[string]map[namekey.Key][]string{
-				dir: {
-					"existing.txt": {"existing.txt", "Existing.txt"},
-				},
-			},
-			PendingTimers: make(map[string]syncdomain.SyncTimer),
-			HashRequests:  make(chan HashRequest, HashRequestBufSize),
-		},
-		clock: &observerTestClock{
-			SyncClock: syncdomain.RealClock{},
-			afterFunc: syncdomain.RealClock{}.AfterFunc,
-			sleep: func(_ context.Context, _ time.Duration) error {
-				return nil
-			},
-			tickCh: make(chan time.Time),
-		},
-		hooks: Hooks{
-			WriteCoalesceCooldown: 50 * time.Millisecond,
-			WatcherFactory: func() (FsWatcher, error) {
-				return mockWatcher, nil
-			},
-		},
-	}
-
-	batches := localBatches(obs, 10)
-	cancel, done := startMockWatch(t, obs, mockWatcher, dir)
-
-	// Send a Write event for "existing.txt" — hashAndEmit should detect
-	// the collision via the pre-populated cache and suppress the event.
-	mockWatcher.EventsCh <- fsnotify.Event{
-		Name: filepath.Join(dir, "existing.txt"),
-		Op:   fsnotify.Write,
-	}
-
-	requireDroppedWithoutEvent(t, recorder, batches, collisionSkipOf("existing.txt"), "the collision skip found through the cache")
-
-	syncfixture.StopWatch(t, cancel, done)
 }

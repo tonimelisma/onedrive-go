@@ -3,33 +3,27 @@ package syncstore
 import (
 	stdsync "sync"
 
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
-// baselineIndexes are the three lookups of a baseline: by path (primary), by
-// item ID (move detection) and by (directory, namespace key) for case
-// collision detection. They always change together, so a lookup never sees a
-// path present in one index and absent from another.
+// baselineIndexes are the two lookups of a baseline: by path (primary) and by
+// item ID (move detection). They always change together, so a lookup never
+// sees a path present in one index and absent from the other.
 type baselineIndexes struct {
-	byPath       map[string]*syncdomain.BaselineEntry
-	byID         map[string]*syncdomain.BaselineEntry                  // keyed by item_id within this per-mount DB
-	byDirNameKey map[syncdomain.DirNameKey][]*syncdomain.BaselineEntry // OneDrive-equivalent sibling index (namekey)
+	byPath map[string]*syncdomain.BaselineEntry
+	byID   map[string]*syncdomain.BaselineEntry // keyed by item_id within this per-mount DB
 }
 
 // indexBaselineEntries indexes entries. The entries become the cache's own:
 // the caller must not keep or change them.
 func indexBaselineEntries(entries []*syncdomain.BaselineEntry) baselineIndexes {
 	idx := baselineIndexes{
-		byPath:       make(map[string]*syncdomain.BaselineEntry, len(entries)),
-		byID:         make(map[string]*syncdomain.BaselineEntry, len(entries)),
-		byDirNameKey: make(map[syncdomain.DirNameKey][]*syncdomain.BaselineEntry, len(entries)),
+		byPath: make(map[string]*syncdomain.BaselineEntry, len(entries)),
+		byID:   make(map[string]*syncdomain.BaselineEntry, len(entries)),
 	}
 	for _, entry := range entries {
 		idx.byPath[entry.Path] = entry
 		idx.byID[entry.ItemID] = entry
-		dnk := syncdomain.DirNameKeyFromPath(entry.Path)
-		idx.byDirNameKey[dnk] = append(idx.byDirNameKey[dnk], entry)
 	}
 
 	return idx
@@ -76,16 +70,6 @@ func (b *baselineCache) GetByID(itemID string) (syncdomain.BaselineEntry, bool) 
 	return *entry, true
 }
 
-// GetCaseVariants implements syncdomain.BaselineView. The values are copied
-// under the read lock: the watch observer reads them on its own goroutine
-// while workers commit outcomes through put (R-6.3.4).
-func (b *baselineCache) GetCaseVariants(dir, name string) []syncdomain.BaselineEntry {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	return syncdomain.CopyBaselineEntries(b.idx.byDirNameKey[syncdomain.DirNameKey{Dir: dir, NameKey: namekey.Of(name)}])
-}
-
 // Len implements syncdomain.BaselineView.
 func (b *baselineCache) Len() int {
 	b.mu.RLock()
@@ -123,18 +107,9 @@ func (b *baselineCache) put(entry *syncdomain.BaselineEntry) {
 
 	b.idx.byPath[owned.Path] = owned
 	b.idx.byID[owned.ItemID] = owned
-
-	dnk := syncdomain.DirNameKeyFromPath(owned.Path)
-	for i, existing := range b.idx.byDirNameKey[dnk] {
-		if existing.Path == owned.Path {
-			b.idx.byDirNameKey[dnk][i] = owned
-			return
-		}
-	}
-	b.idx.byDirNameKey[dnk] = append(b.idx.byDirNameKey[dnk], owned)
 }
 
-// delete removes the entry at path from all three indexes.
+// delete removes the entry at path from both indexes.
 func (b *baselineCache) delete(path string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -148,20 +123,6 @@ func (b *baselineCache) deleteLocked(path string) {
 		delete(b.idx.byID, entry.ItemID)
 	}
 	delete(b.idx.byPath, path)
-
-	dnk := syncdomain.DirNameKeyFromPath(path)
-	entries := b.idx.byDirNameKey[dnk]
-	for i, existing := range entries {
-		if existing.Path != path {
-			continue
-		}
-		b.idx.byDirNameKey[dnk] = append(entries[:i], entries[i+1:]...)
-		if len(b.idx.byDirNameKey[dnk]) == 0 {
-			delete(b.idx.byDirNameKey, dnk)
-		}
-
-		return
-	}
 }
 
 // swap replaces every entry with idx, so every holder of b sees them.

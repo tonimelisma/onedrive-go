@@ -26,7 +26,7 @@ func TestRunWatchLoop_SteadyStateCompletionWithoutDrainingIsAnError(t *testing.T
 	// Bootstrap phase is quiescent here, so the shared loop reports done on
 	// its first step. Reached from the steady-state entry point, that is a
 	// stop without a drain.
-	rt.enterBootstrap()
+	setWatchPhase(rt, watchPhaseBootstrap)
 
 	err := rt.runWatchLoop(t.Context(), &watchPipeline{})
 	require.Error(t, err)
@@ -41,7 +41,7 @@ func TestRunWatchUntilQuiescent_BootstrapCompletionStaysClean(t *testing.T) {
 	rt := newWatchRuntime(eng.Engine)
 
 	require.NoError(t, rt.runWatchUntilQuiescent(t.Context(), &watchPipeline{}, nil))
-	assert.Equal(t, watchRuntimePhaseRunning, rt.phase())
+	assert.Equal(t, watchPhaseReady, rt.phase())
 }
 
 // Validates: R-2.11, R-6.7.1

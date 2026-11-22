@@ -78,6 +78,7 @@ func (o *Orchestrator) startWatchRunner(
 	opts syncengine.WatchOptions,
 	runnerEvents chan<- watchRunnerEvent,
 ) (*watchRunner, error) {
+	o.heartbeat.beatFor("starting a drive", watchRunnerStartStepLimit)
 	session, err := o.cfg.Runtime.SyncSession(mount.syncSessionConfig())
 	if err != nil {
 		// The caller reports this against the drive, so the text names only
