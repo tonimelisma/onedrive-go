@@ -636,6 +636,9 @@ func (flow *engineFlow) buildCurrentPlanStage(
 		}
 	}
 	logDeleteSafetyHold(flow.deps.logger, plan.HeldDeletes)
+	if flow.hooks.shadowPlanned != nil {
+		flow.hooks.shadowPlanned(flow.compareShadowPlan(&observation.inputs, plan))
+	}
 	flow.deps.perf.RecordPlan(len(plan.Actions), flow.deps.since(planStart))
 
 	counts := syncplan.CountByType(plan.Actions)

@@ -59,6 +59,8 @@ func identityInputsForStore(t *testing.T, s *pmState) *IdentityInputs {
 		Local:    in.localRows,
 		Remote:   in.remoteRows,
 		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+
+		ObservationIssues: in.observationIssues,
 	}
 }
 
@@ -208,4 +210,64 @@ func TestPlanIdentityKeyed_ActionsOfOneNodeAreOrdered(t *testing.T) {
 	assert.Equal(t, []string{"remote_move doc2 <- doc", "upload doc2"}, lines)
 	assert.Empty(t, plan.Deps[0])
 	assert.Equal(t, []int{0}, plan.Deps[1])
+}
+
+// DiffPlans compares plans path by path, ignoring order and dependencies; a
+// held delete counts as the delete it holds.
+//
+// Validates: R-2.3.1
+func TestDiffPlans_ComparesActionsPerPath(t *testing.T) {
+	t.Parallel()
+
+	current := &syncdomain.ActionPlan{
+		Actions: []syncdomain.Action{
+			{Type: syncdomain.ActionUpload, Path: "b"},
+			{Type: syncdomain.ActionRemoteDelete, Path: "doc"},
+			{Type: syncdomain.ActionUpload, Path: "doc2"},
+		},
+		HeldDeletes: []syncdomain.HeldDelete{{Path: "gone", Side: syncdomain.DeleteSafetySideRemote}},
+	}
+	shadow := &syncdomain.ActionPlan{
+		Actions: []syncdomain.Action{
+			{Type: syncdomain.ActionUpload, Path: "doc2"},
+			{Type: syncdomain.ActionRemoteMove, Path: "doc2", OldPath: "doc"},
+			{Type: syncdomain.ActionRemoteDelete, Path: "gone"},
+			{Type: syncdomain.ActionUpload, Path: "b"},
+		},
+	}
+
+	diffs := DiffPlans(current, shadow)
+	require.Len(t, diffs, 2)
+	assert.Equal(t, PlanDifference{Path: "doc", Current: []string{"remote_delete doc"}}, diffs[0])
+	assert.Equal(t, PlanDifference{
+		Path:    "doc2",
+		Current: []string{"upload doc2"},
+		Shadow:  []string{"remote_move doc2 <- doc", "upload doc2"},
+	}, diffs[1])
+	assert.Empty(t, DiffPlans(shadow, shadow))
+}
+
+// A difference at a moved item is explained; one at an item nobody moved,
+// replaced or saw an issue at is not.
+//
+// Validates: R-2.3.1
+func TestExplainPlanDifferences_KnownReasonsOnly(t *testing.T) {
+	t.Parallel()
+
+	s := newPMState(t)
+	s.addSynced(matrixPath, false, matrixA.content())
+	s.addSynced("other", false, matrixA.content())
+	moveTo("doc2", matrixB)(s, true)
+	s.writeStore()
+	in := identityInputsForStore(t, s)
+
+	diffs := []PlanDifference{
+		{Path: "doc2", Current: []string{"upload doc2"}},
+		{Path: "other", Shadow: []string{"upload other"}},
+	}
+	unexplained := ExplainPlanDifferences(in, &syncdomain.ActionPlan{}, &syncdomain.ActionPlan{}, diffs)
+	assert.Equal(t, reasonMovedItem, diffs[0].Reason)
+	require.Len(t, unexplained, 1)
+	assert.Equal(t, "other", unexplained[0].Path)
+	assert.Contains(t, unexplained[0].String(), "unexplained")
 }

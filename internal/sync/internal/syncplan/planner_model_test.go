@@ -695,6 +695,7 @@ func runPlannerModel(t *testing.T, seed uint64) {
 	quiet := false
 	for round := 1; round <= plannerModelMaxRounds && !quiet; round++ {
 		plan := r.plan()
+		r.requireShadowExplained(round, plan)
 		quiet = len(plan.Actions) == 0 && len(plan.HeldDeletes) == 0
 		r.logf("round %d: %d actions, %d held deletes", round, len(plan.Actions), len(plan.HeldDeletes))
 		r.apply(plan)
@@ -710,6 +711,20 @@ func runPlannerModel(t *testing.T, seed uint64) {
 	for _, edit := range r.mustSurvive {
 		assert.True(t, present[edit.Content], "%s %s of %s was lost; %s", edit.Side, edit.Kind, edit.Path, failure())
 	}
+}
+
+// requireShadowExplained plans the store the round just planned with the
+// identity-keyed planner too, logs where the two plans differ and why, and
+// fails on a difference no known reason covers (ExplainPlanDifferences).
+func (r *pmRun) requireShadowExplained(round int, plan *syncdomain.ActionPlan) {
+	r.t.Helper()
+
+	diffs, unexplained, err := ShadowPlanDifferences(identityInputsForStore(r.t, r.pmState), plan)
+	require.NoError(r.t, err, "the identity-keyed planner failed; %s", r.failureContext())
+	for i := range diffs {
+		r.logf("round %d shadow: %s", round, diffs[i].String())
+	}
+	require.Zero(r.t, unexplained, "the identity-keyed plan differs without a known reason; %s", r.failureContext())
 }
 
 // Validates: R-2.3.1

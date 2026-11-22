@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_composition.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go, internal/sync/internal/syncplan/planner_identity.go
+GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_composition.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go, internal/sync/internal/syncplan/planner_identity.go, internal/sync/internal/syncplan/planner_identity_diff.go
 
 Implements: R-2.1.3 [verified], R-2.1.7 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.2.16 [verified], R-6.4.2 [verified]
 
@@ -1136,3 +1136,18 @@ edit, which it plans in one pass as a move plus a content action, where the
 current planner defers the edit or replaces the item with a delete and a new
 upload.
 
+`DiffPlans` (`planner_identity_diff.go`) compares the current plan with the
+shadow plan path by path, ignoring order and dependency edges, a held delete
+counting as the delete it holds (`TestDiffPlans_ComparesActionsPerPath`).
+`ExplainPlanDifferences` gives each difference a reason from the shape of the
+inputs: a path at or below an item that moved on either side, at or below an
+entry whose type differs from its baseline row's, at or below a path with an
+observation issue (which the shadow does not read), or below a conflict copy
+either plan makes; any other difference is unexplained
+(`TestExplainPlanDifferences_KnownReasonsOnly`). The planner model plans every
+round with both planners and fails on an unexplained difference, logging every
+difference with its reason in the seed's failure context
+(`TestPlannerModel_RandomTriplesConverge`); the engine model does the same for
+every pass through the `shadowPlanned` engine hook
+(`TestRunOnce_RandomizedBidirectionalEditsConverge`). The shadow plan is never
+executed and never recorded.

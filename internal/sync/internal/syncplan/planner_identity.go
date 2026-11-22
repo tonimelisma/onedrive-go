@@ -43,6 +43,10 @@ type IdentityInputs struct {
 	Local    []syncdomain.LocalStateRow
 	Remote   []syncdomain.RemoteStateRow
 	DriveID  driveid.ID
+	// ObservationIssues are the pass's observation issues. The planner does
+	// not read them; ExplainPlanDifferences does, because the current
+	// planner suppresses work where truth is unavailable.
+	ObservationIssues []syncdomain.ObservationIssueRow
 }
 
 // identityConfidence is how sure the local join is that a local row is the

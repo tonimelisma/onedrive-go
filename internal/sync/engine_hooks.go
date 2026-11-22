@@ -49,6 +49,10 @@ type engineHooks struct {
 	// rule from it to prove the pass fails closed on the row that rule
 	// classified (R-6.2.16).
 	decideOverride syncstore.Decider
+	// shadowPlanned, when set, receives every pass's comparison of its plan
+	// with the identity-keyed shadow plan (compareShadowPlan). The models
+	// fail on a difference no known reason covers.
+	shadowPlanned func(shadowPlanComparison)
 	// clearAccountAuthRequirement replaces config.ClearAccountAuthRequirement
 	// for the startup proof's clear. Tests return a held catalog lock
 	// through it without waiting out the lock's timeout.
