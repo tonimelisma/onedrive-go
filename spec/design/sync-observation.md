@@ -646,13 +646,13 @@ Built-in local observation policy remains:
 - "the same name" means OneDrive's name, decided by `internal/namekey` (R-2.12.3):
   full case folding (`straße`/`STRASSE`), canonical equivalence (an NFD and an
   NFC twin), and supplementary-plane characters ignored (`a.txt` collides with
-  `a😀.txt`; the issue detail names both files and says why). Full scans and
-  watch-mode collision caches group by that key through one type,
+  `a😀.txt`; the issue detail names both files and says why). The full scan
+  every replan runs groups by that key through one type,
   `DirNames`, holding the names on disk: only an on-disk rival collides, so
   a synced name that is gone (the old name of a case-only rename) is none,
   and an unchanged synced file beside a new collider keeps syncing while the
   new name waits (`TestDirNames_ProbeCorpus`,
-  `TestLocalCollisions_ScanAndWatchAgree`,
+  `TestLocalCollisions_ScanJudgesTheNamesOnDisk`,
   `TestFullScan_UnchangedSyncedSiblingKeepsSyncing`,
   `TestFullScan_ModifiedSyncedSiblingOfNewColliderBlocksBoth`,
   `TestDetectCaseCollisions_CaseOnlyRenameIsNotACollision`). A second file or folder beside a synced item whose name differs only
