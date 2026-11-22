@@ -214,13 +214,14 @@ func (rt *watchRuntime) initWatchInfra(
 		CompletionBuffer: watchCompletionBuf,
 		Perf:             rt.deps.perf,
 		Serialize:        rt.hooks.serializeWorkers,
+		Clock:            rt.deps.clock,
 	})
 	pool.Start(ctx, rt.cfg.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse
 	// dirty/full-refresh signals only; snapshot refresh and planning happen
 	// after debounce.
-	dirtyBuf := syncobserve.NewDirtyBuffer(rt.deps.logger)
+	dirtyBuf := syncobserve.NewDirtyBufferOn(rt.deps.logger, rt.deps.clock)
 	rt.resources.dirtyBuf = dirtyBuf
 	replanReady := dirtyBuf.FlushDebounced(ctx, resolveDebounce(opts))
 
@@ -440,7 +441,7 @@ func (rt *watchRuntime) startLocalObserver(
 ) {
 	// The goroutine holds the observation and its send-only outputs only.
 	obs := &rt.observation
-	rt.resources.goroutines.start(ctx, watchGoroutineLocalObserver, func(ctx context.Context) {
+	rt.resources.goroutines.start(ctx, rt.deps.clock, watchGoroutineLocalObserver, func(ctx context.Context) {
 		defer obs.deps.emit(syncdomain.EngineDebugEvent{
 			Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverLocal,
 		})
@@ -543,7 +544,7 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 	})
 
 	obs := &rt.observation
-	rt.resources.goroutines.start(ctx, watchGoroutineWakeSource, func(ctx context.Context) {
+	rt.resources.goroutines.start(ctx, rt.deps.clock, watchGoroutineWakeSource, func(ctx context.Context) {
 		obs.runSocketIOWakeSource(ctx, wakeSource, wakeCh)
 	})
 

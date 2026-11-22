@@ -105,7 +105,9 @@ func (s *socketIOWakeSource) runConnection(
 	readCtx, cancelRead := context.WithCancel(ctx)
 	readResults := make(chan socketIOReadResult, 1)
 	conn.readerDone = make(chan struct{})
-	go s.readPackets(readCtx, conn.conn, readResults, conn.readerDone)
+	// The arguments are read here, as a go statement reads them.
+	ws, readerDone := conn.conn, conn.readerDone
+	s.clock.Go(func() { s.readPackets(readCtx, ws, readResults, readerDone) })
 	// The connection ends in order: the close frame first, so the server sees
 	// a normal closure (a canceled read drops the connection without one),
 	// then the reader's cancel and the wait for it, so no reader outlives its

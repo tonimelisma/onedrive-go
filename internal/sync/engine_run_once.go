@@ -466,6 +466,7 @@ func (r *oneShotRunner) executePreparedPlan(
 		CompletionBuffer: len(plan.Actions),
 		Perf:             r.deps.perf,
 		Serialize:        r.hooks.serializeWorkers,
+		Clock:            r.deps.clock,
 	})
 	// The pass's context is the workers' run: a fatal completion ends it, and
 	// with it the run, so what it interrupts completes as a shutdown.

@@ -53,6 +53,8 @@ type WorkerPool struct {
 	// serialize runs exactly one worker, below the minWorkers floor, so a
 	// test's dispatch order is also the execution order (D-090).
 	serialize bool
+	// clock starts the pool's goroutines.
+	clock syncdomain.SyncClock
 
 	cancel    context.CancelCauseFunc
 	wg        stdsync.WaitGroup
@@ -79,11 +81,20 @@ type WorkerPoolInputs struct {
 	// test's dispatch order is also the execution order (D-090). The engine
 	// passes its test seam through; production's is false.
 	Serialize bool
+	// Clock starts the workers' goroutines: the engine's clock, so a test
+	// that owns it owns when they run. Nil is the real clock.
+	Clock syncdomain.SyncClock
 }
 
 // NewWorkerPool creates a pool without starting any workers.
 func NewWorkerPool(in WorkerPoolInputs) *WorkerPool {
+	clock := in.Clock
+	if clock == nil {
+		clock = syncdomain.RealClock{}
+	}
+
 	return &WorkerPool{
+		clock:         clock,
 		cfg:           in.Config,
 		dispatchCh:    in.Dispatch,
 		baseline:      in.Store,
@@ -105,10 +116,10 @@ func (wp *WorkerPool) Start(ctx context.Context, total int) {
 	for range total {
 		wp.wg.Add(1)
 
-		go wp.worker(ctx)
+		wp.clock.Go(func() { wp.worker(ctx) })
 	}
 
-	go wp.closeCompletionsWhenWorkersExit()
+	wp.clock.Go(wp.closeCompletionsWhenWorkersExit)
 
 	wp.logger.Info("worker pool started",
 		slog.Int("workers", total),

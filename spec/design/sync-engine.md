@@ -148,6 +148,17 @@ never reach -- a clock that has jumped an hour while the tickers pacing the
 runtime have not moved. Assertions made under that mix prove nothing about
 production behavior.
 
+The clock is the sync tree's scheduler too: every goroutine its product code
+starts (the watch's observers, full refresh and socket.io wake source, the
+worker pool, the debounce loop, the socket.io reader) is started by
+`SyncClock.Go`, and the real clock's `Go` is the one `go` statement
+(`TestSyncTree_StartsGoroutinesOnlyThroughTheClock`). `Go`, `AfterFunc` and
+`Now` together are the seam a model owns: the watch model
+(`TestModel_WatchModeConverges`) runs a watch on the model clock, whose waits
+from a second to two hours end within milliseconds while the clock moves to
+their due instant, so a watch's retry backoff passes as it would over a long
+watch.
+
 One interface makes the incoherent combination unrepresentable rather than
 merely discouraged, which is the same "make illegal states unrepresentable"
 rule the rest of the codebase applies to domain types, applied to the test

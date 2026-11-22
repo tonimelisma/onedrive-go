@@ -22,7 +22,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	obs := &rt.observation
 	if rt.hasRemoteMountRoot() {
 		rt.warnMountRootWebsocketFallback()
-		rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
+		rt.resources.goroutines.start(ctx, rt.deps.clock, watchGoroutineRemoteObserver, func(ctx context.Context) {
 			defer obs.deps.emit(syncdomain.EngineDebugEvent{
 				Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote,
 			})
@@ -61,7 +61,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		savedToken = state.Cursor
 	}
 
-	rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
+	rt.resources.goroutines.start(ctx, rt.deps.clock, watchGoroutineRemoteObserver, func(ctx context.Context) {
 		defer obs.deps.emit(syncdomain.EngineDebugEvent{
 			Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote,
 		})
