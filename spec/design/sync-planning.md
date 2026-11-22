@@ -1113,6 +1113,8 @@ pairing deletes with creates, it builds one node per item:
   with the baseline row at its path;
 - a side whose entry has another type than the baseline row is a new item at
   the same position, and the baseline item is gone on that side.
+- the drive root (the empty path) is the sync root itself, not an item, and
+  joins no node.
 
 Each node is decided on its own: first where it ends (a move on either side
 is an attribute of the node; OneDrive's position wins when both moved it to

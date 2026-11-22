@@ -875,6 +875,14 @@ retirement, running-drain, local-observation, planning, new-plan, and
 first-post-replan-dispatch stages. Each event carries outbox, running, and idle
 worker counts so production/debug traces can distinguish workers waiting on
 legitimate replanning from coordinator stalls.
+Every steady-state watch replan also plans the same inputs with the
+identity-keyed shadow planner (`engine_shadow_plan.go`, sync-planning.md) and,
+when the two plans differ or the shadow planner fails, emits one
+`shadow_plan_differed` event: the number of differing paths, the first, and up
+to 20 differences with their reasons and the count no known reason covers. The
+shadow plan is never dispatched, executed or recorded
+(`TestRunSteadyStateReplan_ReportsAShadowPlanDifferenceAsADebugEvent`,
+`TestRunSteadyStateReplan_ReportsNothingWhenTheShadowPlanAgrees`).
 Refresh timer callbacks and full-refresh goroutines signal through stable
 runtime-owned channels for the lifetime of the watch session. The watch loop
 disables select cases by phase instead of mutating those channel pointers

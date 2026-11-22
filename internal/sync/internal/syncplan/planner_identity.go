@@ -148,6 +148,9 @@ func joinIdentityNodes(in *IdentityInputs) []*identityNode {
 	sort.Strings(paths)
 	for _, p := range paths {
 		entry, _ := in.Baseline.GetByPath(p)
+		if !identityPlansItem(p, entry.ItemType) {
+			continue
+		}
 		node := &identityNode{base: &entry}
 		nodes = append(nodes, node)
 		byPath[p] = node
@@ -163,6 +166,9 @@ func joinIdentityNodes(in *IdentityInputs) []*identityNode {
 	sort.Slice(remoteRows, func(i, j int) bool { return remoteRows[i].Path < remoteRows[j].Path })
 	for i := range remoteRows {
 		row := &remoteRows[i]
+		if !identityPlansItem(row.Path, row.ItemType) {
+			continue
+		}
 		if node, ok := byItemID[row.ItemID]; ok && node.remote == nil {
 			node.remote = row
 			continue
@@ -181,6 +187,9 @@ func joinIdentityNodes(in *IdentityInputs) []*identityNode {
 	var unpaired []*syncdomain.LocalStateRow
 	for i := range localRows {
 		row := &localRows[i]
+		if !identityPlansItem(row.Path, row.ItemType) {
+			continue
+		}
 		key := localIdentityKey{row.LocalDevice, row.LocalInode}
 		node, ok := byLocalIdentity[key]
 		if !ok || !row.LocalHasIdentity || seen[key] > 1 || node.local != nil {
@@ -205,6 +214,13 @@ func joinIdentityNodes(in *IdentityInputs) []*identityNode {
 	}
 
 	return nodes
+}
+
+// identityPlansItem reports whether an entry is an item the planner plans:
+// the drive root, at the empty path, is the sync root itself, never an item
+// to create, move or delete.
+func identityPlansItem(p string, itemType syncdomain.ItemType) bool {
+	return p != "" && itemType != syncdomain.ItemTypeRoot
 }
 
 // localJoinConfidence is how sure the identity join is that row is base's
