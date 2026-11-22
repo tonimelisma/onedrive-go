@@ -823,8 +823,9 @@ func runUnitTests(
 const (
 	// unitTestBaseTimeout is go test's per-package deadline in the full verify
 	// profiles (race detector on, every exhaustive test running) on a host
-	// with at least unitTestReferenceCores cores.
-	unitTestBaseTimeout = 20 * time.Minute
+	// with at least unitTestReferenceCores cores. It was 20 minutes until
+	// internal/sync outgrew it on the Linux nightly runner.
+	unitTestBaseTimeout = 30 * time.Minute
 
 	// unitTestReferenceCores is the core count the base deadline was set on:
 	// GitHub's macOS runner, which has 3 cores and is where internal/sync
