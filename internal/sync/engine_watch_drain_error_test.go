@@ -34,7 +34,7 @@ func TestDrainAfterCanceledStepError_CanceledStepFailureStartsTheDrain(t *testin
 
 	stepErr := fmt.Errorf("committing local observation: %w", context.Canceled)
 
-	require.True(t, rt.drainAfterCanceledStepError(ctx, &watchPipeline{runtime: rt}, stepErr))
+	require.True(t, rt.drainAfterCanceledStepError(ctx, stepErr))
 	assert.True(t, rt.isDraining(), "the loop must leave through the drain, not the error")
 }
 
@@ -49,7 +49,7 @@ func TestDrainAfterCanceledStepError_LiveContextReportsTheError(t *testing.T) {
 	rt := testWatchRuntime(t, eng)
 
 	assert.False(t, rt.drainAfterCanceledStepError(
-		t.Context(), &watchPipeline{runtime: rt}, errors.New("disk failure")))
+		t.Context(), errors.New("disk failure")))
 	assert.False(t, rt.isDraining())
 }
 
@@ -67,9 +67,8 @@ func TestDrainAfterCanceledStepError_AlreadyDrainingReportsTheError(t *testing.T
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	pipe := &watchPipeline{runtime: rt}
-	require.True(t, rt.drainAfterCanceledStepError(ctx, pipe, context.Canceled))
-	assert.False(t, rt.drainAfterCanceledStepError(ctx, pipe, context.Canceled),
+	require.True(t, rt.drainAfterCanceledStepError(ctx, context.Canceled))
+	assert.False(t, rt.drainAfterCanceledStepError(ctx, context.Canceled),
 		"a repeat failure while draining must be reported instead of looping")
 }
 
@@ -84,6 +83,6 @@ func TestDrainAfterCanceledStepError_NoErrorDoesNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	assert.False(t, rt.drainAfterCanceledStepError(ctx, &watchPipeline{runtime: rt}, nil))
+	assert.False(t, rt.drainAfterCanceledStepError(ctx, nil))
 	assert.False(t, rt.isDraining())
 }

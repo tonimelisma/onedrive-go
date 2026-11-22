@@ -217,7 +217,7 @@ func (rt *watchRuntime) enterDraining() bool {
 	// Every phase but the two draining ones moves to draining on this event,
 	// so a refusal is a bug in the transition table.
 	if err := rt.transition(watchEventShutdownRequested); err != nil {
-		rt.deps.logger.Error("watch lifecycle refused the shutdown", slog.String("error", err.Error()))
+		rt.deps.logger.Error("watch lifecycle refused the shutdown", slog.Any("error", err))
 	}
 
 	return true

@@ -61,7 +61,7 @@ func (rt *watchRuntime) runLoopSteps(
 	for {
 		done, err := rt.runWatchLoopStep(ctx, p, logC)
 		if err != nil {
-			if rt.drainAfterCanceledStepError(ctx, p, err) {
+			if rt.drainAfterCanceledStepError(ctx, err) {
 				continue
 			}
 
@@ -98,11 +98,7 @@ func (rt *watchRuntime) runLoopSteps(
 // observable shutdown boundary the design already promises for
 // cancellation-closed intake. A second failure while draining is returned
 // rather than converted, so this cannot spin.
-func (rt *watchRuntime) drainAfterCanceledStepError(
-	ctx context.Context,
-	p *watchPipeline,
-	err error,
-) bool {
+func (rt *watchRuntime) drainAfterCanceledStepError(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() == nil || rt.isDraining() {
 		return false
 	}
@@ -117,7 +113,7 @@ func (rt *watchRuntime) runWatchLoopStep(
 	p *watchPipeline,
 	logC <-chan time.Time,
 ) (bool, error) {
-	rt.beginWatchDrainIfCanceled(ctx, p)
+	rt.beginWatchDrainIfCanceled(ctx)
 
 	switch rt.phase() {
 	case watchPhaseDraining:
@@ -138,11 +134,11 @@ func (rt *watchRuntime) runWatchLoopStep(
 	return false, fmt.Errorf("sync: no watch loop step in phase %q", rt.phase())
 }
 
-func (rt *watchRuntime) beginWatchDrainIfCanceled(ctx context.Context, p *watchPipeline) {
-	_ = rt.beginWatchDrainIfContextCanceled(ctx, p)
+func (rt *watchRuntime) beginWatchDrainIfCanceled(ctx context.Context) {
+	_ = rt.beginWatchDrainIfContextCanceled(ctx)
 }
 
-func (rt *watchRuntime) beginWatchDrainIfContextCanceled(ctx context.Context, p *watchPipeline) bool {
+func (rt *watchRuntime) beginWatchDrainIfContextCanceled(ctx context.Context) bool {
 	if ctx.Err() != nil && !rt.isDraining() {
 		rt.beginWatchDrain(ctx)
 		return true
@@ -211,13 +207,13 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	p *watchPipeline,
 	logC <-chan time.Time,
 ) (bool, error) {
-	if rt.beginWatchDrainIfContextCanceled(ctx, p) {
+	if rt.beginWatchDrainIfContextCanceled(ctx) {
 		return false, nil
 	}
 
 	select {
 	case batch, ok := <-p.replanReady:
-		if rt.beginWatchDrainIfContextCanceled(ctx, p) {
+		if rt.beginWatchDrainIfContextCanceled(ctx) {
 			return false, nil
 		}
 		return rt.handleWatchReplanSignal(ctx, p, batch, ok)
@@ -244,7 +240,7 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 		rt.handleWatchDispatch(next)
 		return false, nil
 	case batch, ok := <-p.replanReady:
-		if rt.beginWatchDrainIfContextCanceled(ctx, p) {
+		if rt.beginWatchDrainIfContextCanceled(ctx) {
 			return false, nil
 		}
 		return rt.handleWatchReplanSignal(ctx, p, batch, ok)
@@ -299,7 +295,7 @@ func (rt *watchRuntime) handleWatchReplanSignal(
 	ok bool,
 ) (bool, error) {
 	if !ok {
-		if rt.beginWatchDrainIfContextCanceled(ctx, p) {
+		if rt.beginWatchDrainIfContextCanceled(ctx) {
 			return false, nil
 		}
 
@@ -609,7 +605,7 @@ func (rt *watchRuntime) handleWatchObserverError(
 	}
 
 	rt.logObserverError(ctx, observerErr)
-	rt.beginWatchDrainIfCanceled(ctx, p)
+	rt.beginWatchDrainIfCanceled(ctx)
 	if err := rt.handleObserverExit(p, ctx.Err() != nil); err != nil {
 		return err
 	}
