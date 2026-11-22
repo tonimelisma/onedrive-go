@@ -655,7 +655,7 @@ Built-in local observation policy remains:
   `TestLocalCollisions_ScanAndWatchAgree`,
   `TestFullScan_UnchangedSyncedSiblingKeepsSyncing`,
   `TestFullScan_ModifiedSyncedSiblingOfNewColliderBlocksBoth`,
-  `TestHashAndEmit_BaselineVariantNotOnDiskIsNotACollision`). A second file or folder beside a synced item whose name differs only
+  `TestDetectCaseCollisions_CaseOnlyRenameIsNotACollision`). A second file or folder beside a synced item whose name differs only
   in Unicode form has the synced item's stored path: neither entry is chosen,
   the path's row keeps describing the synced item (for a file the synced
   inode, or the baseline's facts when neither file is it), the twin's hash
