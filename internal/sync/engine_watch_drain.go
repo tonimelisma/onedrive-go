@@ -16,7 +16,7 @@ func (rt *watchRuntime) beginWatchDrain(ctx context.Context) {
 		rt.beginStopDrain()
 		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventShutdownStarted})
 		rt.deps.logger.Info("graceful shutdown: sealing new work admission",
-			slog.Int("in_flight", rt.sched.graph.InFlightCount()),
+			slog.Int("in_flight", rt.inFlightCount()),
 		)
 	}
 
@@ -172,4 +172,15 @@ func (rt *watchRuntime) handleDrainingObserverError(
 	}
 
 	return rt.drainLoopDone(p), nil
+}
+
+// inFlightCount is the graph's in-flight count, zero before the watch has a
+// graph: a stop that arrives that early has nothing in flight, and must not
+// fail on it.
+func (rt *watchRuntime) inFlightCount() int {
+	if rt.sched.graph == nil {
+		return 0
+	}
+
+	return rt.sched.graph.InFlightCount()
 }
