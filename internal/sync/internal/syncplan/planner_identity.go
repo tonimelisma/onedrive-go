@@ -32,7 +32,8 @@ import (
 //
 // Each node is decided on its own: where it ends up (a move on either side
 // is an attribute of the node, so a move and an edit compose), then what its
-// content is. A second step settles position conflicts, two nodes that end
+// content needs, by the decision table the current planner uses too
+// (syncdomain.Decide). A second step settles position conflicts, two nodes that end
 // at the same path.
 
 // IdentityInputs is what the identity-keyed planner reads: the baseline and
@@ -347,38 +348,99 @@ func decideIdentityNode(
 
 	base := node.base
 	local, remote := localChange(node, byBasePath), remoteChange(node, byBasePath)
+	state := identityDecisionState(base, local, remote)
+	if err := state.Valid(); err != nil {
+		return identityOutcome{}, fmt.Errorf("sync: identity planner state of %s: %w", base.Path, err)
+	}
+	kind := syncdomain.Decide(state).Reconciliation
 	act := identityActions{node: node, driveID: driveID}
 	out := identityOutcome{node: node}
 
 	switch {
 	case !local.present && !remote.present:
+		if kind != syncdomain.ReconcileBaselineRemove {
+			return out, unexpectedIdentityKind(base.Path, kind)
+		}
 		act.add(syncdomain.ActionCleanup, base.Path, "")
 		out.retires = true
-	case !local.present && !remote.moved && !remote.edited:
-		act.add(syncdomain.ActionRemoteDelete, remote.path, "")
 	case !local.present:
-		// OneDrive changed the item the local side deleted: its change wins
-		// and comes back down, at OneDrive's position.
-		if remote.path != base.Path {
-			act.add(syncdomain.ActionCleanup, base.Path, "")
+		if err := decideIdentityOneSide(&act, &out, base, remote, false, kind); err != nil {
+			return out, err
 		}
-		act.addCreate(false, remote.path, base.ItemType)
-		out.claims, out.remoteContent = remote.path, true
-	case !remote.present && !local.moved && !local.edited:
-		act.add(syncdomain.ActionLocalDelete, local.path, "")
 	case !remote.present:
-		if local.path != base.Path {
-			act.add(syncdomain.ActionCleanup, base.Path, "")
+		if err := decideIdentityOneSide(&act, &out, base, local, true, kind); err != nil {
+			return out, err
 		}
-		act.addCreate(true, local.path, base.ItemType)
-		out.claims, out.localContent = local.path, true
 	default:
 		final := decideIdentityPosition(&act, base.Path, local, remote)
-		decideIdentityContent(&act, &out, final, local, remote)
+		if err := decideIdentityContent(&act, &out, final, kind); err != nil {
+			return out, err
+		}
 	}
 	out.actions = act.actions
 
 	return out, nil
+}
+
+// identityDecisionState is a node's state for the decision table every
+// planner shares. Position is the node's own attribute, decided apart, so no
+// move-pairing or ancestor-move flag is set. A side that changed is a file
+// whose content changed, or, against a delete on the other side, a file that
+// moved: that move is a change the delete must not drop. A folder has no
+// content to change, so a moved folder the other side deleted is deleted.
+func identityDecisionState(base *syncdomain.BaselineEntry, local, remote sideChange) syncdomain.DecisionState {
+	baseType := syncdomain.SideTypeOf(base.ItemType)
+	isFile := base.ItemType == syncdomain.ItemTypeFile
+	state := syncdomain.DecisionState{Baseline: baseType}
+	if local.present {
+		state.Local = baseType
+		state.LocalChanged = local.edited || (isFile && local.moved && !remote.present)
+	}
+	if remote.present {
+		state.Remote = baseType
+		state.RemoteChanged = remote.edited || (isFile && remote.moved && !local.present)
+	}
+	if local.present && remote.present {
+		state.CurrentEqual = !isFile || local.hash == remote.hash
+	}
+
+	return state
+}
+
+// decideIdentityOneSide decides a node only one side still holds (the side
+// change kept): the delete goes across, or the kept side's change wins and
+// its item comes back to the other side at the kept side's position.
+func decideIdentityOneSide(
+	act *identityActions, out *identityOutcome, base *syncdomain.BaselineEntry,
+	kept sideChange, keptLocal bool, kind syncdomain.ReconciliationKind,
+) error {
+	switch kind {
+	case syncdomain.ReconcileRemoteDelete, syncdomain.ReconcileLocalDelete:
+		act.add(identityDeleteOf(kind), kept.path, "")
+	case syncdomain.ReconcileDownload, syncdomain.ReconcileFolderCreateLocal,
+		syncdomain.ReconcileConflictEditDelete, syncdomain.ReconcileFolderCreateRemote:
+		if kept.path != base.Path {
+			act.add(syncdomain.ActionCleanup, base.Path, "")
+		}
+		act.addCreate(keptLocal, kept.path, base.ItemType)
+		out.claims, out.localContent, out.remoteContent = kept.path, keptLocal, !keptLocal
+	default:
+		return unexpectedIdentityKind(base.Path, kind)
+	}
+
+	return nil
+}
+
+func identityDeleteOf(kind syncdomain.ReconciliationKind) syncdomain.ActionType {
+	if kind == syncdomain.ReconcileLocalDelete {
+		return syncdomain.ActionLocalDelete
+	}
+
+	return syncdomain.ActionRemoteDelete
+}
+
+func unexpectedIdentityKind(p string, kind syncdomain.ReconciliationKind) error {
+	return fmt.Errorf("sync: identity planner cannot plan %s for %s", kind, p)
 }
 
 // decideIdentityPosition adds the move that puts the node where it ends and
@@ -403,26 +465,29 @@ func decideIdentityPosition(act *identityActions, basePath string, local, remote
 	return local.path
 }
 
-// decideIdentityContent adds what the node's content needs at final.
-func decideIdentityContent(act *identityActions, out *identityOutcome, final string, local, remote sideChange) {
+// decideIdentityContent adds what the decision table says the node's
+// content needs at final, the path the position step put it at.
+func decideIdentityContent(act *identityActions, out *identityOutcome, final string, kind syncdomain.ReconciliationKind) error {
 	out.claims = final
-	switch {
-	case local.edited && remote.edited && local.hash == remote.hash:
+	out.localContent, out.remoteContent = true, true
+	switch kind {
+	case syncdomain.ReconcileNoop:
+	case syncdomain.ReconcileBaselineUpdate:
 		act.add(syncdomain.ActionBaselineUpdate, final, "")
-		out.localContent, out.remoteContent = true, true
-	case local.edited && remote.edited:
+	case syncdomain.ReconcileConflictEditEdit:
 		act.add(syncdomain.ActionConflictCopy, final, "")
 		act.add(syncdomain.ActionDownload, final, "")
-		out.localContent, out.remoteContent = true, true
-	case local.edited:
+	case syncdomain.ReconcileUpload:
 		act.add(syncdomain.ActionUpload, final, "")
-		out.localContent = true
-	case remote.edited:
+		out.remoteContent = false
+	case syncdomain.ReconcileDownload:
 		act.add(syncdomain.ActionDownload, final, "")
-		out.remoteContent = true
+		out.localContent = false
 	default:
-		out.localContent, out.remoteContent = true, true
+		return unexpectedIdentityKind(final, kind)
 	}
+
+	return nil
 }
 
 // decideNewIdentityNode decides an item only one side has. A local and a

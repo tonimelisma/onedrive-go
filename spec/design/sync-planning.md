@@ -1117,8 +1117,13 @@ pairing deletes with creates, it builds one node per item:
 Each node is decided on its own: first where it ends (a move on either side
 is an attribute of the node; OneDrive's position wins when both moved it to
 different places, as in the current planner), then its content at that
-position (an upload, a download, an agreed edit, or a conflict copy plus a
-download). A second step settles position conflicts: local and OneDrive
+position. The content is decided by the decision table both planners share
+(`syncdomain.Decide`), fed the node's own state: its side types and content
+changes, with no move-pairing or ancestor-move flag, since position is the
+node's attribute. Against a delete on the other side, a moved file counts as
+changed, so the delete does not drop the move; a moved folder the other side
+deleted is deleted, as a folder has no content to change. A state the table
+does not hold valid is refused with an error. A second step settles position conflicts: local and OneDrive
 content ending at one path are a create/create conflict decided as the
 current planner decides one, and a retired baseline row at a path another
 node takes needs no cleanup of its own.
