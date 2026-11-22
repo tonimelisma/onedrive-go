@@ -4,164 +4,19 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
-// A fresh plan opens into its backlog slowly (R-6.8.25). Measured on a
-// personal OneDrive on 2026-11-01: a cold start with eight transfer workers
-// and a backlog of small uploads made 19 requests a second and drew its first
-// 429 within a minute, before any block scope existed whose ramp could have
-// paced it (Microsoft's documented business budget is about 10 requests a
-// second per user; personal limits are unpublished). TCP's answer to
-// "unknown conditions" is slow start (RFC 5681 §3.1), and so is this one: a
-// per-target in-flight allowance that starts at coldStartInitialAllowance
-// and doubles per round of successful completions up to the worker pool
-// size. The first 429 hands the target to the scope machinery of R-6.8.24,
-// which owns the ramp from there; a target that already has an active
-// throttle scope when the plan starts is the scope's from the start. The
-// allowance is runtime state of one plan and starts over with the next.
-//
-// The watch-loop and one-shot dispatch pickers (nextDispatchable) consult it
-// before handing an action to a worker; the scheduler, the single owner of
-// dispatch state, keeps it.
-
-// coldStartInitialAllowance is how many of one target's actions a fresh plan
-// lets fly before any has completed: enough to overlap one request's latency,
-// few enough that a limit found at once costs one 429.
-const coldStartInitialAllowance = 2
-
-// coldStartRamp is one target's position in the slow start of the current
-// plan. A target is the drive a request goes to (Action.ThrottleTargetKey),
-// the unit Microsoft meters and the unit a throttle scope blocks.
-type coldStartRamp struct {
-	// allowance is how many of the target's actions may be in flight.
-	allowance int
-	// inFlight counts the target's actions handed to a worker and not yet
-	// finished; markRunning and markFinished keep it.
-	inFlight int
-	// successes counts successful completions in the current round; a round
-	// of `allowance` successes doubles the allowance.
-	successes int
-	// handedOver is set once a block scope owns admission to the target:
-	// the allowance no longer gates, the scope's ramp does.
-	handedOver bool
-}
-
-// coldStartTarget is the ramp key of an action: its throttle target, or ""
-// for an action that sends nothing to a drive, which no ramp gates.
-func coldStartTarget(ta *syncdomain.TrackedAction) string {
-	if ta == nil {
-		return ""
-	}
-
-	return ta.Action.ThrottleTargetKey()
-}
-
-// resetColdStart starts the slow start over for a fresh plan, with the
-// worker pool size as the ceiling the allowance doubles toward.
-func (s *actionScheduler) resetColdStart(ceiling int) {
-	s.coldStartCeiling = ceiling
-	s.coldStart = make(map[string]*coldStartRamp)
-	s.coldStartServiceHandedOver = false
-}
-
-// coldStartRampFor returns the target's ramp, creating it at the initial
-// allowance (bounded by the ceiling) on first use. A service-wide scope
-// that already took the plan over makes every new ramp handed over too.
-func (s *actionScheduler) coldStartRampFor(target string) *coldStartRamp {
-	if ramp, ok := s.coldStart[target]; ok {
-		return ramp
-	}
-	ramp := &coldStartRamp{allowance: min(coldStartInitialAllowance, s.coldStartCeiling)}
-	if ramp.allowance < 1 {
-		ramp.allowance = 1
-	}
-	if s.coldStartServiceHandedOver {
-		ramp.handedOver = true
-		ramp.allowance = s.coldStartCeiling
-	}
-	if s.coldStart == nil {
-		s.coldStart = make(map[string]*coldStartRamp)
-	}
-	s.coldStart[target] = ramp
-
-	return ramp
-}
-
-// coldStartAdmits reports whether the target's allowance has room for one
-// more action in flight. A scheduler with no ceiling (no plan installed) and
-// an action with no target are never gated.
-func (s *actionScheduler) coldStartAdmits(ta *syncdomain.TrackedAction) bool {
-	target := coldStartTarget(ta)
-	if target == "" || s.coldStartCeiling <= 0 {
-		return true
-	}
-	ramp := s.coldStartRampFor(target)
-
-	return ramp.handedOver || ramp.inFlight < ramp.allowance
-}
-
-// noteColdStartSuccess counts a successful completion of an action a worker
-// ran toward the target's round and reports the raised allowance when the
-// round completes (zero when it did not, or the ramp is over).
-func (s *actionScheduler) noteColdStartSuccess(ta *syncdomain.TrackedAction) int {
-	target := coldStartTarget(ta)
-	if target == "" || s.coldStartCeiling <= 0 {
-		return 0
-	}
-	ramp := s.coldStartRampFor(target)
-	if ramp.handedOver || ramp.allowance >= s.coldStartCeiling {
-		return 0
-	}
-	ramp.successes++
-	if ramp.successes < ramp.allowance {
-		return 0
-	}
-	ramp.successes = 0
-	ramp.allowance = min(ramp.allowance*2, s.coldStartCeiling)
-
-	return ramp.allowance
-}
-
-// handOverColdStart gives admission to every target key blocks to the scope:
-// a throttle scope takes its one drive, a service scope takes every target,
-// present and future. It returns the targets whose ramps were gating until
-// now, so the caller can say so once; other scope kinds say nothing about
-// request rate and change nothing.
-func (s *actionScheduler) handOverColdStart(key syncdomain.ScopeKey) []string {
-	if s.coldStartCeiling <= 0 {
-		return nil
-	}
-	var handed []string
-	switch key.Kind {
-	case syncdomain.ScopeThrottleTarget:
-		if ramp := s.coldStartRampFor(key.ThrottleTargetKey()); !ramp.handedOver {
-			ramp.handedOver = true
-			ramp.allowance = s.coldStartCeiling
-			handed = append(handed, key.ThrottleTargetKey())
-		}
-	case syncdomain.ScopeService:
-		s.coldStartServiceHandedOver = true
-		for target, ramp := range s.coldStart {
-			if ramp.handedOver {
-				continue
-			}
-			ramp.handedOver = true
-			ramp.allowance = s.coldStartCeiling
-			handed = append(handed, target)
-		}
-	case syncdomain.ScopeQuotaOwn, syncdomain.ScopePermDirRead, syncdomain.ScopePermDirWrite, syncdomain.ScopePermRemoteRead,
-		syncdomain.ScopePermRemoteWrite, syncdomain.ScopeDiskLocal, syncdomain.ScopeLocalReadOnly, syncdomain.ScopeDeleteSafety:
-	}
-
-	return handed
-}
+// A fresh plan opens into its backlog slowly (R-6.8.25); the slow start's
+// state and arithmetic are the scheduler's (syncsched/cold_start.go). The
+// flow's side below reports what changes and picks what to dispatch.
 
 // handOverColdStart is the flow's side of a block activation: the scope
 // owns admission to what it blocks from now on (R-6.8.24), so the cold
 // start stops gating it. Said once per target at Debug.
 func (flow *engineFlow) handOverColdStart(key syncdomain.ScopeKey) {
-	for _, target := range flow.sched.handOverColdStart(key) {
+	for _, target := range flow.sched.HandOverColdStart(key) {
 		flow.deps.emit(syncdomain.EngineDebugEvent{
 			Type:     syncdomain.EngineDebugEventColdStartHandedOver,
 			ScopeKey: key,
@@ -177,19 +32,19 @@ func (flow *engineFlow) handOverColdStart(key syncdomain.ScopeKey) {
 // noteColdStartSuccess counts a worker-run action's success toward its
 // target's slow-start round and reports a raised allowance at Debug.
 func (flow *engineFlow) noteColdStartSuccess(ta *syncdomain.TrackedAction) {
-	allowance := flow.sched.noteColdStartSuccess(ta)
+	allowance := flow.sched.NoteSuccess(ta)
 	if allowance == 0 {
 		return
 	}
 	flow.deps.emit(syncdomain.EngineDebugEvent{
 		Type:  syncdomain.EngineDebugEventColdStartAllowanceRaised,
-		Note:  coldStartTarget(ta),
+		Note:  syncsched.ColdStartTarget(ta),
 		Count: allowance,
 	})
 	flow.deps.logger.Debug("slow start: raising the in-flight allowance",
-		slog.String("target", coldStartTarget(ta)),
+		slog.String("target", syncsched.ColdStartTarget(ta)),
 		slog.Int("allowance", allowance),
-		slog.Int("ceiling", flow.sched.coldStartCeiling),
+		slog.Int("ceiling", flow.sched.ColdStartCeiling()),
 	)
 }
 
@@ -217,7 +72,7 @@ func (flow *engineFlow) nextDispatchable(outbox []*syncdomain.TrackedAction, now
 			}
 			continue
 		}
-		if flow.sched.coldStartAdmits(ta) {
+		if flow.sched.ColdStartAdmits(ta) {
 			return i, time.Time{}
 		}
 	}
@@ -229,11 +84,11 @@ func (flow *engineFlow) nextDispatchable(outbox []*syncdomain.TrackedAction, now
 // removes it from the outbox, which is returned, order kept.
 func (flow *engineFlow) markDispatched(outbox []*syncdomain.TrackedAction, i int) []*syncdomain.TrackedAction {
 	ta := outbox[i]
-	flow.sched.markRunning(ta)
+	flow.sched.Running(ta)
 	flow.deps.emit(syncdomain.EngineDebugEvent{
 		Type: syncdomain.EngineDebugEventActionDispatched,
 		Path: ta.Action.Path,
-		Note: coldStartTarget(ta),
+		Note: syncsched.ColdStartTarget(ta),
 	})
 
 	return append(outbox[:i], outbox[i+1:]...)

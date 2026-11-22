@@ -8,7 +8,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -38,9 +37,9 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	}}, "delta-1", remoteDriveID))
 
 	flow.initializeRuntimeState(&runtimePlan{})
-	flow.sched.graph = syncexec.NewDepGraph(eng.logger)
+	flow.sched.NewGraph()
 
-	root := flow.sched.graph.Add(&syncdomain.Action{
+	root := flow.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "download.txt",
 		ItemID:  "remote-1",
@@ -59,7 +58,7 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := flow.sched.graph.Add(&syncdomain.Action{
+	child := flow.sched.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionUpload,
 		Path: "dependent.txt",
 		View: &syncdomain.PathView{Path: "dependent.txt"},
@@ -69,7 +68,7 @@ func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependen
 	outbox, err := flow.admitReady(ctx, []*syncdomain.TrackedAction{root})
 	require.NoError(t, err)
 	assert.Empty(t, outbox)
-	assert.Equal(t, 0, flow.sched.graph.InFlightCount())
+	assert.Equal(t, 0, flow.sched.InFlight())
 	assert.Empty(t, listRetryWorkForTest(t, eng.baseline, ctx))
 	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
 	assert.Equal(t, 1, eng.collector().Snapshot().SupersededEngineAdmissionCount)

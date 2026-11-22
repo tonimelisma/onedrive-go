@@ -41,7 +41,7 @@ func testMountRootWatchBatch(
 	findings syncdomain.ObservationFindingsBatch,
 ) syncobserve.RemoteObservationBatch {
 	batch := buildRemoteObservationBatch(
-		engine,
+		engine.logger,
 		mode,
 		events,
 		cursorToken,
@@ -67,14 +67,15 @@ func TestHandleRemoteObservationBatch_EmptyCompleteTopologyApplyFailureDoesNotCo
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	setupWatchEngine(t, eng)
-	rt := testWatchRuntime(t, eng)
+	// The watch runtime takes the sink when it is built.
 	applyErr := errors.New("persist topology")
 	eng.shortcutChildWorkSink = func(_ context.Context, _ syncshortcut.ShortcutChildWorkSnapshot) error {
 		return applyErr
 	}
+	setupWatchEngine(t, eng)
+	rt := testWatchRuntime(t, eng)
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, nil, "cursor-empty-complete")
+	batch := buildPrimaryWatchBatch(eng.logger, nil, nil, "cursor-empty-complete")
 	batch.CursorToken = "cursor-empty-complete"
 	batch.ShortcutTopology = syncshortcut.ShortcutTopologyBatch{
 		NamespaceID: "personal:owner@example.com",
@@ -94,7 +95,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []syncdomain.RemoteItem{
+	batch := buildPrimaryWatchBatch(eng.logger, nil, []syncdomain.RemoteItem{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -118,7 +119,7 @@ func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *te
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 	ctx := t.Context()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []syncdomain.RemoteItem{
+	batch := buildPrimaryWatchBatch(eng.logger, nil, []syncdomain.RemoteItem{
 		testRemoteCreateEvent("hidden/remote.txt", "item-hidden", eng.driveID.String()),
 	}, "cursor-hidden")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -304,7 +305,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchClearsRemoteReadDeniedFindings
 	findings := rootReadFailureObservationFindingsBatch(eng.driveID, syncdomain.IssueRemoteReadDenied)
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &findings))
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []syncdomain.RemoteItem{
+	batch := buildPrimaryWatchBatch(eng.logger, nil, []syncdomain.RemoteItem{
 		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -330,7 +331,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCanceledContextReturnsCommitEr
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, []syncdomain.RemoteItem{
+	batch := buildPrimaryWatchBatch(eng.logger, nil, []syncdomain.RemoteItem{
 		testRemoteCreateEvent("primary-canceled.txt", "item-canceled", eng.driveID.String()),
 	}, "cursor-canceled")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -349,7 +350,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchReconcileFailureIsFatal(t *tes
 	ctx := t.Context()
 	require.NoError(t, eng.baseline.Close(ctx))
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, nil, "")
+	batch := buildPrimaryWatchBatch(eng.logger, nil, nil, "")
 	batch.Findings = rootReadFailureObservationFindingsBatch(eng.driveID, syncdomain.IssueRemoteReadDenied)
 
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
@@ -389,7 +390,7 @@ func TestHandleRemoteObservationBatch_FullRefreshApplyFailureMarksDirtyForRetry(
 	require.NoError(t, eng.baseline.Close(ctx))
 
 	batch := buildRemoteObservationBatch(
-		eng.Engine,
+		eng.logger,
 		syncdomain.RemoteObservationModeDelta,
 		nil,
 		"",
@@ -431,13 +432,13 @@ func TestHandleRemoteObservationBatch_DoesNotReloadActiveScopesAfterObservationR
 		TrialInterval: time.Minute,
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	}
-	rt.scopes.upsertActiveScope(serviceScope)
+	rt.sched.PutScope(serviceScope)
 
-	batch := buildPrimaryWatchBatch(eng.Engine, nil, nil, "")
+	batch := buildPrimaryWatchBatch(eng.logger, nil, nil, "")
 	batch.Findings = rootReadFailureObservationFindingsBatch(eng.driveID, syncdomain.IssueRemoteReadDenied)
 	require.NoError(t, rt.handleRemoteObservationBatch(ctx, &batch))
 
-	activeScopes := rt.scopes.snapshotActiveScopes()
+	activeScopes := rt.sched.Scopes()
 	require.Len(t, activeScopes, 1)
 	assert.Equal(t, syncdomain.SKService(), activeScopes[0].Key)
 
@@ -479,7 +480,7 @@ func TestHandleRemoteObservationBatch_SyncedFolderTombstonePullsFullRefreshForwa
 					{Path: "bin", DriveID: eng.driveID, ItemID: "item-bin", ParentID: "root", ItemType: syncdomain.ItemTypeFolder},
 				})
 			}
-			batch := buildPrimaryWatchBatch(eng.Engine, bl, []syncdomain.RemoteItem{{ObservedItem: syncdomain.ObservedItem{
+			batch := buildPrimaryWatchBatch(eng.logger, bl, []syncdomain.RemoteItem{{ObservedItem: syncdomain.ObservedItem{
 				Path:      "bin",
 				ItemID:    "item-bin",
 				ParentID:  "root",

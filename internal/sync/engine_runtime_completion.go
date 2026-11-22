@@ -17,7 +17,7 @@ import (
 )
 
 func (flow *engineFlow) failAfterControlStateError(current *syncdomain.TrackedAction, err error) error {
-	flow.sched.markFinished(current)
+	flow.sched.Finished(current)
 	return err
 }
 
@@ -41,8 +41,8 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 			slog.Any("error", r.Err),
 		)
 	}
-	current := flow.sched.trackedActionForCompletion(r)
-	flow.engine.emitActivity(r, &decision, flow.conditionStartsWith(&decision, r))
+	current := flow.sched.TrackedForCompletion(r)
+	flow.deps.activity(r, &decision, flow.conditionStartsWith(&decision, r))
 	if decision.Class != errclass.ClassSuperseded {
 		// The action ran: whatever came of it, its supersedes were not
 		// consecutive, so a wedge streak (D-059d) starts over.
@@ -56,7 +56,7 @@ func (flow *engineFlow) applyRuntimeCompletionStage(
 	// A trial whose scope is gone (the ramp's last batch released it while
 	// this member ran) is an ordinary action again: a success is just a
 	// success, and a 429 starts a new episode through scope detection.
-	if r.IsTrial && !r.TrialScopeKey.IsZero() && flow.scopes.hasActiveScope(r.TrialScopeKey) {
+	if r.IsTrial && !r.TrialScopeKey.IsZero() && flow.sched.HasScope(r.TrialScopeKey) {
 		dispatched, err = flow.applyTrialCompletionDecision(ctx, r.TrialScopeKey, &decision, current, r, bl)
 	} else {
 		dispatched, err = flow.applyNormalCompletionDecision(ctx, &decision, current, r, bl)
@@ -88,7 +88,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 		if err := flow.applyResultPersistence(ctx, decision, r, nil); err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
 		}
-		flow.sched.markFinished(current)
+		flow.sched.Finished(current)
 		return nil, fmt.Errorf("classify action completion: invalid failure class")
 	case errclass.ClassSuccess:
 		dispatched, err := flow.applyCompletionSuccess(ctx, current, r)
@@ -248,7 +248,7 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 	r *syncdomain.ActionCompletion,
 	depGraphReason string,
 ) ([]*syncdomain.TrackedAction, error) {
-	if flow.sched.markFinished(current) {
+	if flow.sched.Finished(current) {
 		flow.noteColdStartSuccess(current)
 	}
 	flow.results.succeeded++
@@ -262,8 +262,8 @@ func (flow *engineFlow) applyTrackedActionSuccess(
 	if clearErr != nil {
 		return nil, clearErr
 	}
-	if flow.scopes.state != nil && r != nil {
-		flow.scopes.state.RecordSuccess()
+	if r != nil {
+		flow.sched.ObserveSuccess()
 	}
 
 	actionID := int64(0)
@@ -348,7 +348,7 @@ func (flow *engineFlow) persistFailureWithScopeEffects(
 		persistAs = decisionBlockedUnder(decision, detected.ScopeKey)
 	case decision.RunScopeDetection &&
 		decision.Class == errclass.ClassScopeBlockingTransient &&
-		!flow.scopes.hasActiveScope(decision.ScopeKey):
+		!flow.sched.HasScope(decision.ScopeKey):
 		// The failure names a scope, but detection has not crossed its
 		// window yet (a 507 needs three paths in ten seconds) and no scope
 		// is active: there is nothing to block under. Recorded blocked, the
@@ -665,7 +665,7 @@ func (flow *engineFlow) recordRetryWork(
 		// output says it to the user, so the log keeps the line at Info
 		// rather than warn it a second time; otherwise it warns.
 		level := slog.LevelWarn
-		if flow.engine.activitySaysConditionStarts(decision, r, conditionStarts) {
+		if flow.deps.activitySaysConditionStarts(decision, r, conditionStarts) {
 			level = slog.LevelInfo
 		}
 		flow.deps.logger.Log(ctx, level, "Not syncing "+r.Path+": "+r.ErrMsg,
@@ -699,7 +699,7 @@ func (flow *engineFlow) retryWorkShouldBeBlocked(
 		return false
 	}
 
-	return flow.scopes.hasActiveScope(scopeKey)
+	return flow.sched.HasScope(scopeKey)
 }
 
 func (flow *engineFlow) applyResultPersistence(

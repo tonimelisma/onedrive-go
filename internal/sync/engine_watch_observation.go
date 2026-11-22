@@ -11,7 +11,7 @@ import (
 )
 
 // commitLocalScan commits one full local scan, a watch snapshot or the
-// replan's own, through the one snapshot commit (Engine.commitLocalSnapshot):
+// replan's own, through the one snapshot commit (localSource.commitSnapshot):
 // its finding set as the whole set of local findings (clearing earlier ones
 // the set lacks), its rows and the mounts it crossed, in one transaction. A
 // newly skipped file is reported first. It reports what the commit changed.
@@ -21,7 +21,6 @@ func (flow *engineFlow) commitLocalScan(
 	skipped []syncdomain.SkippedItem,
 	crossedMounts []string,
 ) (syncstore.LocalSnapshotCommitResult, error) {
-	eng := flow.engine
 	flow.logSkippedObservationFindings(skipped, flow.knownObservationIssues(ctx))
 	findings := localObservationFindingsBatchFromSkippedItems(flow.cfg.driveID, skipped)
 	flow.deps.emit(syncdomain.EngineDebugEvent{
@@ -29,7 +28,7 @@ func (flow *engineFlow) commitLocalScan(
 		Note: engineDebugNoteLocalSkipped,
 	})
 
-	return eng.commitLocalSnapshot(ctx, syncstore.LocalSnapshotCommit{
+	return flow.local.commitSnapshot(ctx, syncstore.LocalSnapshotCommit{
 		Rows:          rows,
 		Findings:      &findings,
 		CrossedMounts: crossedMounts,

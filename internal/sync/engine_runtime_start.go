@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -24,8 +23,7 @@ func (flow *engineFlow) startRuntimeStage(
 	}
 
 	flow.initializeRuntimeState(runtime)
-	flow.sched.graph = syncexec.NewDepGraph(flow.deps.logger)
-	flow.sched.graph.SetOwnerCheck(flow.engine.runOwnerCheck)
+	flow.sched.NewGraph()
 
 	if len(plan.Actions) == 0 {
 		return nil, false, nil
@@ -42,7 +40,7 @@ func (flow *engineFlow) startRuntimeStage(
 		return nil, false, err
 	}
 
-	return outbox, flow.sched.graph.InFlightCount() > 0, nil
+	return outbox, flow.sched.InFlight() > 0, nil
 }
 
 // reduceReadyFrontierStage owns the runtime handoff from "actions now ready"
@@ -95,20 +93,20 @@ func (flow *engineFlow) reduceReadyFrontier(
 
 func (flow *engineFlow) registerPlanActions(plan *syncdomain.ActionPlan) []*syncdomain.TrackedAction {
 	flow.pruneSupersedeStreaks(plan)
-	if flow.sched.graph == nil || plan == nil || len(plan.Actions) == 0 {
+	if plan == nil || len(plan.Actions) == 0 {
 		return nil
 	}
-	if flow.engine != nil {
+	if flow.exec != nil {
 		// A new plan reads every parent live again before its first
 		// create into it; the memo is per plan.
-		flow.engine.execCfg.ResetRemoteParentChecks()
+		flow.exec.ResetRemoteParentChecks()
 	}
 
-	actionIDs := flow.sched.allocatePlanActionIDs(len(plan.Actions))
+	actionIDs := flow.sched.AllocateIDs(len(plan.Actions))
 	initialReady := make([]*syncdomain.TrackedAction, 0, len(plan.Actions))
 
 	for i := range plan.Actions {
-		flow.sched.graph.Register(&plan.Actions[i], actionIDs[i])
+		flow.sched.Register(&plan.Actions[i], actionIDs[i])
 	}
 
 	for i := range plan.Actions {
@@ -117,7 +115,7 @@ func (flow *engineFlow) registerPlanActions(plan *syncdomain.ActionPlan) []*sync
 			depIDs = append(depIDs, actionIDs[depIdx])
 		}
 
-		if ta := flow.sched.graph.WireDeps(actionIDs[i], depIDs); ta != nil {
+		if ta := flow.sched.WireDeps(actionIDs[i], depIDs); ta != nil {
 			initialReady = append(initialReady, ta)
 		}
 	}

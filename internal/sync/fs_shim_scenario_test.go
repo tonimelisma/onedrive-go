@@ -10,6 +10,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
@@ -83,12 +84,12 @@ func TestErrnoShim_DownloadFailuresAreClassifiedThenHeal(t *testing.T) {
 					assert.False(t, row.Blocked, "%s", row.Path)
 				}
 			} else {
-				// A fresh plan slow-starts with coldStartInitialAllowance
+				// A fresh plan slow-starts with syncsched.ColdStartInitialAllowance
 				// downloads in flight (R-6.8.25); those meet the full disk,
 				// the scope activates and takes the rest back before a
 				// worker reaches it, so fewer than fsShimFileCount fail.
 				assert.Positive(t, report.Failed, "errors: %v", report.Errors)
-				assert.LessOrEqual(t, report.Failed, coldStartInitialAllowance,
+				assert.LessOrEqual(t, report.Failed, syncsched.ColdStartInitialAllowance,
 					"only the downloads in flight when the disk was found full fail; errors: %v", report.Errors)
 				assert.Contains(t, scopes, tc.scope)
 				assert.Len(t, scopes, 1, "one scope, not one per file")

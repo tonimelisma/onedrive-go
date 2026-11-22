@@ -286,6 +286,12 @@ func namedTimerWithBoundary() { time.AfterFunc(delay, s.loop) }
 func callbackWithoutBoundary() { stdcontext.AfterFunc(ctx, helper) }
 
 func clockTimer() { clock.AfterFunc(delay, helper) }
+
+func clockStartsNamed() { clock.Go(func() { s.loop() }) }
+
+func clockStartsHelper() { clock.Go(func() { helper() }) }
+
+func (realClock) Go(fn func()) { go fn() }
 `
 )
 
@@ -309,7 +315,7 @@ func TestBoundaryScans_RejectWhatTheyPolice(t *testing.T) {
 	used := make(map[string]bool)
 	findings := scan.goroutineFindings(exceptions, used)
 
-	assert.Len(t, findings, 10, "%v", findings)
+	assert.Len(t, findings, 11, "%v", findings)
 	assertFindingAt(t, findings, "internal/demo/demo.go:5:", "a literal with no boundary")
 	assertFindingAt(t, findings, "internal/demo/demo.go:20:", "a boundary registered after work")
 	assertFindingAt(t, findings, "internal/demo/demo.go:48:", "a named function with no boundary")
@@ -320,6 +326,7 @@ func TestBoundaryScans_RejectWhatTheyPolice(t *testing.T) {
 	assertFindingAt(t, findings, "internal/demo/demo.go:66:", "an imported package's function of a name this package declares")
 	assertFindingAt(t, findings, "internal/demo/timers.go:8:", "a timer callback literal with no boundary")
 	assertFindingAt(t, findings, "internal/demo/timers.go:23:", "a context callback, under a renamed import, of a named function with no boundary")
+	assertFindingAt(t, findings, "internal/demo/timers.go:29:", "a clock's Go call of a literal forwarding to a function with no boundary")
 	assert.True(t, used[demoTrivial])
 	assert.False(t, used[demoNeverUsed], "an exception no go statement uses stays unused")
 
@@ -539,17 +546,24 @@ type goroutineStart struct {
 }
 
 // launches are the goroutine starts of the package: go statements, the Go
-// calls of goroutine groups (errgroup.Group, sync.WaitGroup) whatever their
-// argument, and the callbacks of time.AfterFunc and context.AfterFunc.
+// calls of goroutine groups (errgroup.Group, sync.WaitGroup) and clocks
+// whatever their argument, and the callbacks of time.AfterFunc and
+// context.AfterFunc. A clock's Go method that only starts the function it is
+// handed is not one of its own: the call of that method is the start, as a
+// clock's AfterFunc is.
 func (s *packageScan) launches() []goroutineStart {
 	var starts []goroutineStart
 	for _, file := range s.pkg.files {
+		forwarding := forwardingGoStatements(file)
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch n := node.(type) {
 			case *ast.GoStmt:
+				if forwarding[n] {
+					return true
+				}
 				starts = append(starts, goroutineStart{at: n.Call, fn: n.Call.Fun, file: file})
 			case *ast.CallExpr:
-				if selector, ok := n.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "Go" && len(n.Args) == 1 {
+				if selector, ok := n.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == goMethodName && len(n.Args) == 1 {
 					starts = append(starts, goroutineStart{at: n, fn: n.Args[0], file: file})
 				}
 				if callback, ok := afterFuncCallback(n, file); ok {
@@ -561,6 +575,61 @@ func (s *packageScan) launches() []goroutineStart {
 	}
 
 	return starts
+}
+
+// goMethodName names the method of a goroutine group or a clock that starts
+// a goroutine.
+const goMethodName = "Go"
+
+// forwardingGoStatements are the go statements of file that a method named
+// Go uses to start its own function parameter: a clock's implementation of
+// the start its callers make.
+func forwardingGoStatements(file *ast.File) map[*ast.GoStmt]bool {
+	forwarding := make(map[*ast.GoStmt]bool)
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || fn.Name.Name != goMethodName || fn.Body == nil {
+			continue
+		}
+		params := make(map[string]bool)
+		for _, field := range fn.Type.Params.List {
+			for _, name := range field.Names {
+				params[name.Name] = true
+			}
+		}
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			if stmt, isGo := node.(*ast.GoStmt); isGo {
+				if ident, isIdent := stmt.Call.Fun.(*ast.Ident); isIdent && params[ident.Name] && len(stmt.Call.Args) == 0 {
+					forwarding[stmt] = true
+				}
+			}
+			return true
+		})
+	}
+
+	return forwarding
+}
+
+// forwardedCall is the function a literal whose whole body is one call
+// starts: func() { w.loop(ctx) } starts loop.
+func forwardedCall(literal *ast.FuncLit) (ast.Expr, bool) {
+	if len(literal.Body.List) != 1 {
+		return nil, false
+	}
+	stmt, ok := literal.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		return nil, false
+	}
+	call, ok := stmt.X.(*ast.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	switch call.Fun.(type) {
+	case *ast.Ident, *ast.SelectorExpr:
+		return call.Fun, true
+	default:
+		return nil, false
+	}
 }
 
 // afterFuncCallback is the callback of a time.AfterFunc or context.AfterFunc
@@ -647,6 +716,11 @@ func (s *packageScan) goroutineFindings(exceptions map[string]string, used map[s
 	var findings []string
 	for _, start := range s.launches() {
 		where := s.position(start.at)
+		if literal, ok := start.fn.(*ast.FuncLit); ok {
+			if callee, forwards := forwardedCall(literal); forwards {
+				start.fn = callee
+			}
+		}
 		if literal, ok := start.fn.(*ast.FuncLit); ok {
 			if problem := s.boundaryProblem(literal.Body); problem != "" {
 				findings = append(findings, where+" goroutine literal "+problem)

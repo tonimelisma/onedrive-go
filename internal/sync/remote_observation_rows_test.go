@@ -90,10 +90,10 @@ func TestRemoteObservation_RowsAndChangesForEveryItemKind(t *testing.T) {
 func TestRemoteBatch_AChangeWithoutAnItemIDStillCountsForTheCursor(t *testing.T) {
 	t.Parallel()
 
-	engine := &Engine{logger: synctest.TestLogger(t)}
-	withoutID := buildRemoteObservationBatch(engine, syncdomain.RemoteObservationModeDelta,
+	logger := synctest.TestLogger(t)
+	withoutID := buildRemoteObservationBatch(logger, syncdomain.RemoteObservationModeDelta,
 		[]syncdomain.RemoteItem{{ObservedItem: syncdomain.ObservedItem{Path: "a.txt", ItemType: syncdomain.ItemTypeFile}}}, "token", false, syncdomain.ObservationFindingsBatch{})
-	empty := buildRemoteObservationBatch(engine, syncdomain.RemoteObservationModeDelta, nil, "token", false, syncdomain.ObservationFindingsBatch{})
+	empty := buildRemoteObservationBatch(logger, syncdomain.RemoteObservationModeDelta, nil, "token", false, syncdomain.ObservationFindingsBatch{})
 
 	assert.Empty(t, withoutID.Observed, "an item without an ID stores no row")
 	assert.Equal(t, []syncobserve.RemoteChange{{Path: "a.txt", ItemType: syncdomain.ItemTypeFile}}, withoutID.Changes, "it is still a change")

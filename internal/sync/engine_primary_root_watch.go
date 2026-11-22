@@ -22,7 +22,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	obs := &rt.observation
 	if rt.hasRemoteMountRoot() {
 		rt.warnMountRootWebsocketFallback()
-		rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
+		rt.resources.goroutines.start(ctx, rt.deps.clock, watchGoroutineRemoteObserver, func(ctx context.Context) {
 			defer obs.deps.emit(syncdomain.EngineDebugEvent{
 				Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote,
 			})
@@ -34,10 +34,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		return
 	}
 
-	remoteObs := rt.engine.buildRemoteObserver(bl, rt.deps.logger)
-	remoteObs.SetItemClient(rt.engine.itemsClient)
-	remoteObs.SetRemotePathLookup(rt.engine.remotePathLookup(ctx))
-	remoteObs.SetShortcutTopology(rt.cfg.shortcutNamespaceID, rt.engine.protectedRoots.current())
+	remoteObs := rt.remote.observer(ctx, bl, rt.deps.logger, rt.cfg.shortcutNamespaceID, rt.roots.current())
 	remoteObs.SetDeltaExpiredRecovery(func(ctx context.Context, kind syncdomain.ResyncKind) (syncobserve.RemoteObservationBatch, error) {
 		batch, err := obs.executeDriveRootFullObservation(ctx, bl, kind)
 		if err != nil {
@@ -64,7 +61,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		savedToken = state.Cursor
 	}
 
-	rt.resources.goroutines.start(ctx, watchGoroutineRemoteObserver, func(ctx context.Context) {
+	rt.resources.goroutines.start(ctx, rt.deps.clock, watchGoroutineRemoteObserver, func(ctx context.Context) {
 		defer obs.deps.emit(syncdomain.EngineDebugEvent{
 			Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote,
 		})
@@ -80,7 +77,7 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 			func(
 				_ context.Context, polledEvents []syncdomain.RemoteItem, newToken string, topology syncshortcut.ShortcutTopologyBatch,
 			) (syncobserve.RemoteObservationBatch, error) {
-				batch := buildPrimaryWatchBatch(obs.engine, bl, polledEvents, newToken)
+				batch := buildPrimaryWatchBatch(obs.deps.logger, bl, polledEvents, newToken)
 				batch.ShortcutTopology = topology
 				if topology.ShouldApply() && batch.CursorToken == "" {
 					batch.CursorToken = newToken

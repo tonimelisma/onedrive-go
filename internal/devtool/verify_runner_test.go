@@ -151,9 +151,9 @@ func TestUnitTestTimeoutForCoresGivesSmallHostsACoreBudget(t *testing.T) {
 		{cores: 0, want: 180 * time.Minute},
 		{cores: 1, want: 180 * time.Minute},
 		{cores: 2, want: 90 * time.Minute},
-		{cores: 3, want: 20 * time.Minute},
-		{cores: 4, want: 20 * time.Minute},
-		{cores: 8, want: 20 * time.Minute},
+		{cores: 3, want: 30 * time.Minute},
+		{cores: 4, want: 30 * time.Minute},
+		{cores: 8, want: 30 * time.Minute},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, unitTestTimeoutForCores(tc.cores), "cores %d", tc.cores)
@@ -166,7 +166,7 @@ func TestResolveUnitTestTimeoutPrefersTheExplicitValue(t *testing.T) {
 
 	assert.Equal(t, 45*time.Minute, resolveUnitTestTimeout(45*time.Minute, 2))
 	assert.Equal(t, 90*time.Minute, resolveUnitTestTimeout(0, 2))
-	assert.Equal(t, 20*time.Minute, resolveUnitTestTimeout(0, 8))
+	assert.Equal(t, 30*time.Minute, resolveUnitTestTimeout(0, 8))
 }
 
 func TestRunE2EFullCompileCheck_UsesUniqueArtifactPath(t *testing.T) {

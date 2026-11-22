@@ -69,17 +69,17 @@ func (g *watchGoroutines) deadline(clock syncdomain.SyncClock) <-chan struct{} {
 	return g.expired
 }
 
-// start runs fn on a goroutine of its own, under a context derived from ctx
-// that stop cancels. fn returning, normally or through a recovered panic,
-// counts as the goroutine's exit.
-func (g *watchGoroutines) start(ctx context.Context, kind watchGoroutineKind, fn func(context.Context)) {
+// start runs fn on a goroutine of its own, started by clock, under a context
+// derived from ctx that stop cancels. fn returning, normally or through a
+// recovered panic, counts as the goroutine's exit.
+func (g *watchGoroutines) start(ctx context.Context, clock syncdomain.SyncClock, kind watchGoroutineKind, fn func(context.Context)) {
 	g.forgetExited()
 	//nolint:gosec // G118: the cancel is kept in started, which stop calls.
 	goroutineCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	g.started = append(g.started, watchGoroutine{kind: kind, cancel: cancel, done: done})
 
-	go runWatchGoroutine(goroutineCtx, done, fn)
+	clock.Go(func() { runWatchGoroutine(goroutineCtx, done, fn) })
 }
 
 // runWatchGoroutine runs fn and then closes done. It holds no panic boundary

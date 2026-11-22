@@ -809,9 +809,21 @@ func planCurrentStateForStoreWithMode(t *testing.T, store *syncstore.SyncStore, 
 	return planCurrentStateForStoreWithLogger(t, store, mode, syncfixture.TestLogger(t))
 }
 
-// planCurrentStateForStoreWithLogger plans what store holds, as the engine
-// reads it at the start of a pass, logging to logger.
-func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore, mode syncdomain.SyncMode, logger *slog.Logger) *syncdomain.ActionPlan {
+// plannerInputs is what a pass's planner reads of the store: the
+// comparison and reconciliation rows, the planner-visible local and remote
+// rows, the observation issues and the baseline.
+type plannerInputs struct {
+	comparisons       []syncdomain.SQLiteComparisonRow
+	reconciliations   []syncdomain.SQLiteReconciliationRow
+	localRows         []syncdomain.LocalStateRow
+	remoteRows        []syncdomain.RemoteStateRow
+	observationIssues []syncdomain.ObservationIssueRow
+	baseline          *syncdomain.BaselineSnapshot
+}
+
+// plannerInputsForStore reads what store holds as the engine reads it at the
+// start of a pass.
+func plannerInputsForStore(t *testing.T, store *syncstore.SyncStore) *plannerInputs {
 	t.Helper()
 
 	ctx := t.Context()
@@ -863,14 +875,30 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 		require.NoError(t, comparisons[i].DecisionState().Valid(), "the decision state of %q", comparisons[i].Path)
 	}
 
+	return &plannerInputs{
+		comparisons:       comparisons,
+		reconciliations:   reconciliations,
+		localRows:         visibleRows.Local,
+		remoteRows:        visibleRows.Remote,
+		observationIssues: observationIssues,
+		baseline:          bl,
+	}
+}
+
+// planCurrentStateForStoreWithLogger plans what store holds, as the engine
+// reads it at the start of a pass, logging to logger.
+func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore, mode syncdomain.SyncMode, logger *slog.Logger) *syncdomain.ActionPlan {
+	t.Helper()
+
+	in := plannerInputsForStore(t, store)
 	planner := NewPlanner(logger)
 	plan, err := planner.PlanCurrentState(
-		comparisons,
-		reconciliations,
-		visibleRows.Local,
-		visibleRows.Remote,
-		observationIssues,
-		bl,
+		in.comparisons,
+		in.reconciliations,
+		in.localRows,
+		in.remoteRows,
+		in.observationIssues,
+		in.baseline,
 		PlannerMountContext{DriveID: driveid.New(syncfixture.EngineTestDriveID)},
 		mode,
 	)

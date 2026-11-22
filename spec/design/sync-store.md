@@ -243,7 +243,7 @@ row, admission dispatched a pre-1970 retry at once, and a pending create's
 second record replaced its first intent's time
 (`TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange`,
 `TestEngineFlow_AssertPersistedInvariants_AllowsDelayedRetryWorkAtBothEndsOfTheStoredRange`,
-`TestRetryLedger_ADelayedRowTimedBefore1970IsHeldUntilItsTime`,
+`TestScheduler_ADelayedRowTimedBefore1970IsHeldUntilItsTime`,
 `TestPendingCreate_AnIntentRecordedBefore1970KeepsItsTimeAndStaysFresh`).
 
 Remote modification times are written by the item converter, the upload

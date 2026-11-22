@@ -237,7 +237,7 @@ func (rt *watchRuntime) replaceOutbox(outbox []*syncdomain.TrackedAction) {
 }
 
 func (rt *watchRuntime) canPrepareNow() bool {
-	return len(rt.loop.outbox) == 0 && rt.sched.runningCount == 0
+	return len(rt.loop.outbox) == 0 && rt.sched.RunningCount() == 0
 }
 
 func (rt *watchRuntime) queuePendingReplan(batch syncobserve.DirtyBatch) {
@@ -290,7 +290,7 @@ func (rt *watchRuntime) outboxEntry(i int) *syncdomain.TrackedAction {
 func (rt *watchRuntime) retireOutboxForPendingReplan() {
 	outbox := rt.currentOutbox()
 	if len(outbox) == 0 {
-		if rt.sched.runningCount > 0 {
+		if rt.sched.RunningCount() > 0 {
 			rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
 		}
 		return
@@ -300,12 +300,12 @@ func (rt *watchRuntime) retireOutboxForPendingReplan() {
 	for _, ta := range outbox {
 		// Retired old-runtime nodes stay unresolved; the replacement runtime
 		// rebuilds dependency state from current truth.
-		rt.sched.markFinished(ta)
+		rt.sched.Finished(ta)
 	}
 	rt.replaceOutbox(nil)
 	rt.deps.perf.RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(outbox))
 	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventOldOutboxRetired, "", len(outbox), rt.pendingReplanStartedAt())
-	if rt.sched.runningCount > 0 {
+	if rt.sched.RunningCount() > 0 {
 		rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
 	}
 }
@@ -329,7 +329,7 @@ func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*syncdomain.
 		return
 	}
 	for _, ta := range ready {
-		rt.sched.markFinished(ta)
+		rt.sched.Finished(ta)
 	}
 	rt.deps.perf.RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(ready))
 	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventOldOutboxRetired, "released_ready_frontier", len(ready), rt.pendingReplanStartedAt())
@@ -344,7 +344,7 @@ func (rt *watchRuntime) recordReplanWorkerIdle(phase perf.ReplanIdlePhase, start
 }
 
 func (rt *watchRuntime) startPendingReplanDrainIdleTracking(now time.Time) {
-	if rt.sched.runningCount == 0 || now.IsZero() {
+	if rt.sched.RunningCount() == 0 || now.IsZero() {
 		return
 	}
 
@@ -391,10 +391,10 @@ func (rt *watchRuntime) totalWorkers() int {
 
 func (rt *watchRuntime) idleWorkers() int {
 	total := rt.totalWorkers()
-	if total <= rt.sched.runningCount {
+	if total <= rt.sched.RunningCount() {
 		return 0
 	}
-	return total - rt.sched.runningCount
+	return total - rt.sched.RunningCount()
 }
 
 func (rt *watchRuntime) emitRuntimeDebugEvent(
@@ -408,7 +408,7 @@ func (rt *watchRuntime) emitRuntimeDebugEvent(
 		Note:        note,
 		Count:       count,
 		Outbox:      len(rt.currentOutbox()),
-		Running:     rt.sched.runningCount,
+		Running:     rt.sched.RunningCount(),
 		IdleWorkers: rt.idleWorkers(),
 	}
 	if !start.IsZero() {
@@ -421,8 +421,8 @@ func (rt *watchRuntime) earliestTrialAt() (time.Time, bool) {
 	var earliest time.Time
 	found := false
 
-	for _, scope := range rt.scopes.snapshotActiveScopes() {
-		if len(rt.retries.heldByScope[scope.Key]) == 0 {
+	for _, scope := range rt.sched.Scopes() {
+		if rt.sched.HeldUnderScope(scope.Key) == 0 {
 			continue
 		}
 		if !found || scope.NextTrialAt.Before(earliest) {
@@ -579,7 +579,7 @@ func (rt *watchRuntime) noteInstalledPlan(plan *syncdomain.ActionPlan) {
 // failed nothing.
 func (rt *watchRuntime) scheduleFollowUpIfSettled() {
 	f := &rt.loop.followUp
-	if !f.pending || len(rt.currentOutbox()) > 0 || rt.sched.runningCount > 0 || rt.resources.dirtyBuf == nil {
+	if !f.pending || len(rt.currentOutbox()) > 0 || rt.sched.RunningCount() > 0 || rt.resources.dirtyBuf == nil {
 		return
 	}
 	f.pending = false

@@ -226,74 +226,6 @@ func (tr *coldStartTrace) waitRaised(t *testing.T, want int) {
 }
 
 // Validates: R-6.8.25
-func TestColdStart_AllowanceDoublesPerRoundToThePoolSize(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		ceiling   int
-		successes int
-		want      []int
-	}{
-		{name: "eight workers: 2, 4, 8", ceiling: 8, successes: 14, want: []int{4, 8}},
-		{name: "the ceiling bounds the last doubling", ceiling: 6, successes: 6, want: []int{4, 6}},
-		{name: "a pool of one admits one and never grows", ceiling: 1, successes: 3, want: nil},
-		{name: "a round needs as many successes as the allowance", ceiling: 8, successes: 5, want: []int{4}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			s := newActionScheduler()
-			s.resetColdStart(tc.ceiling)
-			ta := &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "a.txt", DriveID: driveid.New(syncfixture.EngineTestDriveID)}}
-			assert.Equal(t, min(2, tc.ceiling), s.coldStartRampFor(coldStartTarget(ta)).allowance)
-
-			var raised []int
-			for range tc.successes {
-				if allowance := s.noteColdStartSuccess(ta); allowance > 0 {
-					raised = append(raised, allowance)
-				}
-			}
-			assert.Equal(t, tc.want, raised)
-		})
-	}
-}
-
-// Validates: R-6.8.25
-func TestColdStart_HandOverOpensTheTargetToTheScope(t *testing.T) {
-	t.Parallel()
-
-	driveA := driveid.New(syncfixture.EngineTestDriveID)
-	driveB := driveid.New("other-drive")
-	s := newActionScheduler()
-	s.resetColdStart(8)
-	a := &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "a.txt", DriveID: driveA}}
-	b := &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "b.txt", DriveID: driveB}}
-	local := &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionLocalDelete, Path: "c.txt"}}
-
-	a2 := &syncdomain.TrackedAction{ID: 2, Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "a2.txt", DriveID: driveA}}
-	s.markRunning(a)
-	s.markRunning(a2)
-	assert.False(t, s.coldStartAdmits(&syncdomain.TrackedAction{ID: 3, Action: a.Action}), "two in flight is the opening allowance")
-	assert.True(t, s.coldStartAdmits(b), "each target ramps on its own")
-	assert.True(t, s.coldStartAdmits(local), "an action that sends nothing to a drive is never gated")
-
-	assert.Equal(t, []string{a.Action.ThrottleTargetKey()}, s.handOverColdStart(syncdomain.SKThrottleDrive(driveA)))
-	assert.True(t, s.coldStartAdmits(&syncdomain.TrackedAction{ID: 3, Action: a.Action}), "the scope owns the drive's admission now")
-	assert.Empty(t, s.handOverColdStart(syncdomain.SKThrottleDrive(driveA)), "said once")
-	assert.Empty(t, s.handOverColdStart(syncdomain.SKQuotaOwn()), "a quota scope says nothing about request rate")
-	assert.Zero(t, s.noteColdStartSuccess(a), "a handed-over target no longer ramps")
-
-	assert.ElementsMatch(t, []string{b.Action.ThrottleTargetKey()}, s.handOverColdStart(syncdomain.SKService()))
-	c := &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "d.txt", DriveID: driveid.New("third-drive")}}
-	assert.True(t, s.coldStartRampFor(coldStartTarget(c)).handedOver, "a service scope takes every later target too")
-
-	s.resetColdStart(8)
-	assert.False(t, s.coldStartRampFor(coldStartTarget(a)).handedOver, "a fresh plan starts over")
-}
-
-// Validates: R-6.8.25
 //
 // A fresh plan with no active scope opened at full worker concurrency into
 // its backlog; on a personal OneDrive eight workers of small uploads made 19
@@ -535,12 +467,12 @@ func TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	eng.transferWorkers = 8
 	rt := testWatchRuntime(t, eng)
-	rt.sched.resetColdStart(eng.workerPoolSize())
+	rt.sched.ResetColdStart(eng.workerPoolSize())
 	ctx := t.Context()
 
 	uploads := make([]*syncdomain.TrackedAction, 0, 7)
 	for i := range 7 {
-		ta := rt.sched.graph.Add(&syncdomain.Action{
+		ta := rt.sched.AddForTest(&syncdomain.Action{
 			Type:    syncdomain.ActionUpload,
 			Path:    fmt.Sprintf("file-%d.txt", i),
 			DriveID: eng.driveID,
@@ -584,5 +516,5 @@ func TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance(t *testing.T) {
 	}
 	assert.Nil(t, dispatch(), "four in flight under an allowance of four")
 	assert.Len(t, rt.currentOutbox(), 1)
-	assert.Equal(t, 4, rt.sched.runningCount)
+	assert.Equal(t, 4, rt.sched.RunningCount())
 }

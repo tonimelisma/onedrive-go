@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -95,13 +96,13 @@ func TestWatchRuntime_ArmRetryTimer_KicksImmediatelyWhenRetryIsDue(t *testing.T)
 	eng := newSingleOwnerEngine(t)
 	rt := testWatchRuntime(t, eng)
 	now := eng.nowFunc()
-	rt.holdAction(&syncdomain.TrackedAction{
+	rt.sched.Hold(&syncdomain.TrackedAction{
 		Action: syncdomain.Action{
 			Path: "due.txt",
 			Type: syncdomain.ActionUpload,
 		},
 		ID: 1,
-	}, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
+	}, syncsched.HeldRetry, syncdomain.ScopeKey{}, now.Add(-time.Second))
 
 	rt.armRetryTimer()
 
@@ -122,13 +123,13 @@ func TestWatchRuntime_ArmRetryTimer_FiresAfterDelay(t *testing.T) {
 	rt := testWatchRuntime(t, eng)
 	now := clock.Now()
 
-	rt.holdAction(&syncdomain.TrackedAction{
+	rt.sched.Hold(&syncdomain.TrackedAction{
 		Action: syncdomain.Action{
 			Path: "later.txt",
 			Type: syncdomain.ActionUpload,
 		},
 		ID: 1,
-	}, heldReasonRetry, syncdomain.ScopeKey{}, now.Add(30*time.Second))
+	}, syncsched.HeldRetry, syncdomain.ScopeKey{}, now.Add(30*time.Second))
 
 	rt.armRetryTimer()
 

@@ -92,14 +92,14 @@ func TestEngineFlow_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *testi
 	scopeKey := syncdomain.SKQuotaOwn()
 	flow := testEngineFlow(t, eng)
 
-	root := rt.sched.graph.Add(&syncdomain.Action{
+	root := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionFolderCreate,
 		Path:    "dir",
 		DriveID: driveid.New("drive1"),
 	}, 1, nil)
 	require.NotNil(t, root)
 
-	child := rt.sched.graph.Add(&syncdomain.Action{
+	child := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "dir/file.txt",
 		DriveID: driveid.New("drive1"),
@@ -114,7 +114,7 @@ func TestEngineFlow_RecordBlockedRetryWork_PersistsOnlyExactBlockedRoot(t *testi
 	assert.Equal(t, "dir", retryRows[0].Path)
 	assert.Equal(t, scopeKey, retryRows[0].ScopeKey)
 	assert.True(t, retryRows[0].Blocked)
-	assert.Equal(t, 2, rt.sched.graph.InFlightCount(), "root and dependent both remain in the graph until the exact blocked root is released")
+	assert.Equal(t, 2, rt.sched.InFlight(), "root and dependent both remain in the graph until the exact blocked root is released")
 }
 
 // Validates: R-2.10.5
@@ -196,7 +196,7 @@ func persistBlockedRetryViaHeldScope(scopeKey syncdomain.ScopeKey) func(*testing
 	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
 		t.Helper()
 		seedBlockScopeRowForTest(t, eng, scopeKey)
-		current := rt.sched.graph.Add(&syncdomain.Action{
+		current := rt.sched.AddForTest(&syncdomain.Action{
 			Type:    syncdomain.ActionUpload,
 			Path:    "Shared/Docs/file.txt",
 			OldPath: "Shared/Docs/old.txt",
@@ -348,8 +348,8 @@ func TestEngineFlow_LoadActiveScopes_PopulatesRuntimeLifecycleWorkingSet(t *test
 
 	require.NoError(t, rt.loadActiveScopes(t.Context()))
 
-	assert.True(t, rt.scopes.hasActiveScope(scopeKey))
-	activeScopes := rt.scopes.snapshotActiveScopes()
+	assert.True(t, rt.sched.HasScope(scopeKey))
+	activeScopes := rt.sched.Scopes()
 	require.Len(t, activeScopes, 1)
 	assert.Equal(t, scopeKey, activeScopes[0].Key)
 }
@@ -423,7 +423,7 @@ func TestEngineFlow_AdmitReady_BlocksNormalActionUnderActiveScope(t *testing.T) 
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	})
 
-	ready := rt.sched.graph.Add(&syncdomain.Action{
+	ready := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "blocked.txt",
 		DriveID: eng.driveID,
@@ -434,7 +434,7 @@ func TestEngineFlow_AdmitReady_BlocksNormalActionUnderActiveScope(t *testing.T) 
 	require.NoError(t, err)
 
 	assert.Empty(t, dispatched)
-	assert.Equal(t, 1, rt.sched.graph.InFlightCount())
+	assert.Equal(t, 1, rt.sched.InFlight())
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -466,7 +466,7 @@ func TestEngineFlow_AdmitReady_RehomedWorkDoesNotStrandItsOldScope(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
 
-	ready := rt.sched.graph.Add(&syncdomain.Action{
+	ready := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "moved.txt",
 		DriveID: eng.driveID,
@@ -475,14 +475,14 @@ func TestEngineFlow_AdmitReady_RehomedWorkDoesNotStrandItsOldScope(t *testing.T)
 	require.NotNil(t, ready)
 	ready.IsTrial = true
 	ready.TrialScopeKey = syncdomain.SKService()
-	require.Equal(t, testThrottleScope(), rt.scopes.findBlockingScope(ready), "the throttle scope outranks the service scope")
+	require.Equal(t, testThrottleScope(), rt.sched.BlockingScope(ready), "the throttle scope outranks the service scope")
 
 	dispatched, err := flow.admitReady(t.Context(), []*syncdomain.TrackedAction{ready})
 	require.NoError(t, err)
 
 	assert.Empty(t, dispatched)
 	require.NoError(t, flow.assertPersistedInvariants(t.Context()))
-	assert.False(t, rt.scopes.hasActiveScope(syncdomain.SKService()), "the emptied service scope is discarded")
+	assert.False(t, rt.sched.HasScope(syncdomain.SKService()), "the emptied service scope is discarded")
 	for _, row := range listRetryWorkForTest(t, eng.baseline, t.Context()) {
 		assert.Equal(t, testThrottleScope(), row.ScopeKey, "%s", row.Path)
 		assert.True(t, row.Blocked, "%s", row.Path)
@@ -502,7 +502,7 @@ func TestEngineFlow_AdmitReady_TrialCandidateClearsStaleBlockedRetryWhenScopeNoL
 	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("trial.txt", "", syncdomain.ActionDownload), scopeKey, nil)
 	require.NoError(t, err)
 
-	ready := rt.sched.graph.Add(&syncdomain.Action{
+	ready := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "trial.txt",
 		DriveID: eng.driveID,
@@ -533,7 +533,7 @@ func TestEngineFlow_AdmitReady_TrialCandidateStillMatchingScopeDispatchesWithout
 	_, err := eng.baseline.RecordBlockedRetryWork(t.Context(), syncfixture.TestRetryWorkKey("trial.txt", "", syncdomain.ActionUpload), scopeKey, nil)
 	require.NoError(t, err)
 
-	ready := rt.sched.graph.Add(&syncdomain.Action{
+	ready := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "trial.txt",
 		DriveID: eng.driveID,
@@ -571,7 +571,7 @@ func TestEngineFlow_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFails(t
 		NextTrialAt:   eng.nowFunc().Add(time.Minute),
 	})
 
-	ready := rt.sched.graph.Add(&syncdomain.Action{
+	ready := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "blocked.txt",
 		DriveID: eng.driveID,
@@ -584,8 +584,8 @@ func TestEngineFlow_AdmitReady_FailsClosedWhenBlockedRetryWorkPersistenceFails(t
 	require.Error(t, err)
 	require.ErrorContains(t, err, "blocked retry_work")
 	assert.Empty(t, dispatched)
-	assert.Empty(t, rt.retries.heldByKey, "admission must not create in-memory held work when the blocked retry row was not durably recorded")
-	assert.Equal(t, 1, rt.sched.graph.InFlightCount())
+	assert.Zero(t, rt.sched.HeldCount(), "admission must not create in-memory held work when the blocked retry row was not durably recorded")
+	assert.Equal(t, 1, rt.sched.InFlight())
 }
 
 // A stored retry time at either end of the stored range is a time: the one
@@ -610,7 +610,7 @@ func TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange(t 
 			eng := newSingleOwnerEngine(t)
 			rt := testWatchRuntime(t, eng)
 			flow := testEngineFlow(t, eng)
-			held := rt.sched.graph.Add(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "retry.txt", DriveID: eng.driveID}, 1, nil)
+			held := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "retry.txt", DriveID: eng.driveID}, 1, nil)
 			require.NotNil(t, held)
 			work := syncdomain.RetryWorkKeyForAction(&held.Action)
 			flow.retryWork.rows[work] = syncdomain.RetryWorkRow{
@@ -622,39 +622,12 @@ func TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange(t 
 
 			require.NoError(t, flow.holdActionFromPersistedRetryState(held, work))
 
-			nextRetry, timed := flow.retries.earliestHeldRetryAt()
+			nextRetry, timed := flow.sched.EarliestHeldRetryAt()
 			require.True(t, timed, "the held retry has a time the retry timer arms for")
 			assert.Equal(t, time.Unix(0, tc.stored), nextRetry)
-			assert.Equal(t, tc.wantDue, flow.hasDueHeldWork(eng.nowFunc()))
+			assert.Equal(t, tc.wantDue, flow.sched.HasDueHeldWork(eng.nowFunc()))
 		})
 	}
-}
-
-// A delayed row whose time is before 1970 (negative) is still delayed work:
-// with a clock that also reads before 1970, admission holds it until then.
-//
-// Validates: R-2.10.33
-func TestRetryLedger_ADelayedRowTimedBefore1970IsHeldUntilItsTime(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(1969, 7, 20, 20, 17, 0, 0, time.UTC)
-	due := now.Add(time.Hour)
-	ledger := newRetryLedger()
-	held := &syncdomain.TrackedAction{Action: syncdomain.Action{Type: syncdomain.ActionUpload, Path: "moon.txt"}}
-	work := syncdomain.RetryWorkKeyForAction(&held.Action)
-	var rows retryWork
-	rows.install([]syncdomain.RetryWorkRow{{
-		Path:         work.Path,
-		ActionType:   work.ActionType,
-		AttemptCount: 1,
-		NextRetryAt:  syncdomain.StoredTimeNano(due),
-	}})
-	decision := admissionDecision{Action: held, RetryWorkKey: work}
-
-	ledger.applyPersistedRetryAdmission(now, held, &decision, &rows)
-
-	assert.Equal(t, admissionHoldRetry, decision.Kind, "held as delayed work, not dispatched at once")
-	assert.True(t, decision.NextRetryAt.Equal(due))
 }
 
 // Validates: R-2.10.33

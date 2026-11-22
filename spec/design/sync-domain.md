@@ -126,8 +126,9 @@ string only as a log attribute or in CLI output.
   runtime orchestration.
 - Source of Truth: none -- these are values, not state.
 - Allowed Side Effects: none. The one capability here, `SyncClock`, is an
-  interface; its production implementation reads the wall clock, and that is
-  the only effect any file in this family performs.
+  interface; its production implementation reads the wall clock and starts
+  goroutines (`Go`), and those are the only effects any file in this family
+  performs.
 - Mutable Runtime Owner: none.
 - Error Boundary: sentinel errors are declared here so callers across families
   can branch on one identity; no file here produces an error from I/O.

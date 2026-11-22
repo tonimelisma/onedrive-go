@@ -19,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
@@ -34,11 +35,11 @@ func newBootstrapWatchPipelineForTest(
 
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.scopes.state = syncexec.NewScopeState(eng.nowFunc, eng.logger)
-	bl, err := rt.runStartupStage(ctx)
+	rt.sched.ResetWindows()
+	bl, err := eng.runStartup(ctx, rt.engineFlow)
 	require.NoError(t, err)
 
-	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{Config: eng.execCfg, Dispatch: rt.sched.dispatchCh, Store: eng.baseline, Logger: eng.logger, CompletionBuffer: 1024})
+	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{Config: eng.execCfg, Dispatch: rt.dispatchCh, Store: eng.baseline, Logger: eng.logger, CompletionBuffer: 1024})
 	pool.Start(ctx, workers)
 	t.Cleanup(pool.Stop)
 
@@ -330,7 +331,7 @@ func TestWaitForQuiescence_ContextCancel(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 
-	rt.sched.graph.Add(&syncdomain.Action{
+	rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "stuck.txt",
 		DriveID: driveid.New(syncfixture.EngineTestDriveID),
@@ -397,7 +398,7 @@ func TestBootstrapSync_WithChanges(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(syncRoot, "newfile.txt"))
 	require.NoError(t, statErr, "newfile.txt should have been downloaded")
 
-	assert.Equal(t, 0, testWatchRuntime(t, eng).sched.graph.InFlightCount())
+	assert.Equal(t, 0, testWatchRuntime(t, eng).sched.InFlight())
 }
 
 // Validates: R-2.5.1
@@ -470,7 +471,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 		NextTrialAt:   eng.nowFunc().Add(30 * time.Millisecond),
 	})
 
-	ta := rt.sched.graph.Add(&syncdomain.Action{
+	ta := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    "trial.txt",
 		DriveID: driveid.New(syncfixture.EngineTestDriveID),
@@ -535,7 +536,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	})
 	_, err := eng.baseline.RecordBlockedRetryWork(ctx, syncfixture.TestRetryWorkKey(blockedPath, "", syncdomain.ActionDownload), testThrottleScope(), nil)
 	require.NoError(t, err)
-	blocked := rt.sched.graph.Add(&syncdomain.Action{
+	blocked := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionDownload,
 		Path:    blockedPath,
 		DriveID: driveID,
@@ -552,9 +553,9 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		},
 	}, 2, nil)
 	require.NotNil(t, blocked)
-	rt.holdAction(blocked, heldReasonScope, testThrottleScope(), time.Time{})
+	rt.sched.Hold(blocked, syncsched.HeldScope, testThrottleScope(), time.Time{})
 
-	ta := rt.sched.graph.Add(&syncdomain.Action{
+	ta := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "trial.txt",
 		DriveID: driveID,
@@ -576,7 +577,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 		return event.Type == syncdomain.EngineDebugEventScopeReleased && event.ScopeKey == testThrottleScope()
 	}, "trial success released blocked scope")
 
-	retried := readReadyAction(t, rt.sched.dispatchCh)
+	retried := readReadyAction(t, rt.dispatchCh)
 	require.Equal(t, blockedPath, retried.Action.Path,
 		"trial success should re-dispatch blocked retry work without external observation")
 	assert.Equal(t, syncdomain.ActionDownload, retried.Action.Type)
@@ -636,7 +637,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	parent := rt.sched.graph.Add(&syncdomain.Action{
+	parent := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "parent.txt",
 		DriveID: driveID,
@@ -644,7 +645,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}, 1, nil)
 	require.NotNil(t, parent)
 
-	child := rt.sched.graph.Add(&syncdomain.Action{
+	child := rt.sched.AddForTest(&syncdomain.Action{
 		Type:    syncdomain.ActionUpload,
 		Path:    "child.txt",
 		DriveID: driveID,
@@ -652,8 +653,8 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}, 2, []int64{1})
 	require.Nil(t, child)
 
-	rt.sched.dispatchCh <- parent
-	readReady(t, rt.sched.dispatchCh)
+	rt.dispatchCh <- parent
+	readReady(t, rt.dispatchCh)
 
 	results <- syncdomain.ActionCompletion{
 		ActionID:   1,
@@ -672,7 +673,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}, "block scope activated from action completion")
 
 	select {
-	case ta := <-rt.sched.dispatchCh:
+	case ta := <-rt.dispatchCh:
 		require.Failf(t, "dependent dispatched early", "unexpected path %s", ta.Action.Path)
 	default:
 	}

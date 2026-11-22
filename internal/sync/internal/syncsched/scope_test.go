@@ -1,4 +1,4 @@
-package syncexec
+package syncsched
 
 import (
 	"testing"

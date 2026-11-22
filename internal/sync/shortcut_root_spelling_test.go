@@ -70,7 +70,7 @@ func TestEngine_ShortcutAliasWithNFDNameOnDiskIsNotARename(t *testing.T) {
 	}
 	eng, aliasOnDisk := nfdShortcutAliasEngine(t, mock, syncshortcut.ShortcutRootStateActive)
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err)
 	assert.False(t, changed, "the alias is unchanged")
@@ -91,7 +91,7 @@ func TestEngine_RemovedShortcutReleaseRemovesTheNFDNamedAliasFolder(t *testing.T
 
 	eng, aliasOnDisk := nfdShortcutAliasEngine(t, &syncfixture.EngineMockClient{}, syncshortcut.ShortcutRootStateRemovedReleasePending)
 
-	_, err := eng.reconcileShortcutRootLocalState(t.Context())
+	_, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err)
 	assert.NoDirExists(t, aliasOnDisk, "the alias folder is removed at its spelling on disk")

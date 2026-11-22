@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	stdsync "sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -192,8 +193,12 @@ type modelRun struct {
 	eng      *testEngine
 	syncRoot string
 	harness  *syncHarness
-	writes   int
-	log      []string
+	// logMu guards writes and log: in watch mode the chaos layer's other
+	// client writes and logs from the engine's goroutines while the model
+	// does from its own.
+	logMu  stdsync.Mutex
+	writes int
+	log    []string
 
 	// caseSensitive gates the operations only a case-sensitive local
 	// filesystem can express.
@@ -220,6 +225,16 @@ type modelRun struct {
 	// produce the same transcript.
 	transcriptMu stdsync.Mutex
 	transcript   []string
+
+	// noWipe keeps applyBatchEdits from wiping a side: a watch cannot
+	// confirm the held deletes a wipe needs.
+	noWipe bool
+	// dispatched is signaled, without blocking, at every dispatch.
+	dispatched chan struct{}
+	// faults is the run's seeded fault plan in watch mode, and newFiles
+	// numbers the files its second waves create.
+	faults   watchFaultPlan
+	newFiles int
 }
 
 func runModelScenario(t *testing.T, seed uint64) *modelRun {
@@ -240,6 +255,10 @@ type modelOptions struct {
 	chaos bool
 	// batches overrides modelBatches; zero keeps it.
 	batches int
+	// watch syncs every batch in watch mode instead of one-shot passes
+	// (watchBatch): the edits arrive while the watch runs, and the batch
+	// ends when the watch alone has converged.
+	watch bool
 }
 
 // batchCount is how many batches a run under o makes.
@@ -275,6 +294,11 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 		caseSensitive: localFSIsCaseSensitive(t.TempDir()),
 		clock:         newModelClock(seed),
 		chaos:         chaos,
+		noWipe:        opts.watch,
+		dispatched:    make(chan struct{}, 1),
+	}
+	if opts.watch {
+		run.faults = newWatchFaultPlan(seed, opts.batchCount(), chaos != nil)
 	}
 	if chaos != nil {
 		chaos.concurrentWrite = run.concurrentRemoteWrite
@@ -292,15 +316,20 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 		label := fmt.Sprintf("batch %d", batch)
 		before := run.localTree()
 		h.beginRound(t)
-		edits := run.applyBatchEdits(label)
-		var capture *crashCapture
-		if crashes {
-			capture = run.armCrash(crashRng)
-		}
-		edits = append(edits, run.syncUntilQuiet(label)...)
-		if capture != nil && capture.captured {
-			h = run.recoverFrom(capture, label)
-			edits = append(edits, run.syncUntilQuiet(label+" after the crash")...)
+		var edits []syncfixture.ModelEdit
+		if opts.watch {
+			edits = run.watchBatch(label, run.faults.storm(batch))
+		} else {
+			edits = run.applyBatchEdits(label)
+			var capture *crashCapture
+			if crashes {
+				capture = run.armCrash(crashRng)
+			}
+			edits = append(edits, run.syncUntilQuiet(label)...)
+			if capture != nil && capture.captured {
+				h = run.recoverFrom(capture, label)
+				edits = append(edits, run.syncUntilQuiet(label+" after the crash")...)
+			}
 		}
 		converged := run.requireConverged(label)
 		run.requireWrittenContentSurvives(label, edits, converged)
@@ -324,10 +353,37 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 		order = dispatchOrderShuffle(r.seed)
 	}
 	eng.hooks.serializeWorkers = true
+	eng.hooks.shadowPlanned = r.checkShadowPlan
 	eng.hooks.dispatchOrder = func(frontier []*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
 		frontier = order(frontier)
 		r.recordDispatch(frontier)
+		select {
+		case r.dispatched <- struct{}{}:
+		default:
+		}
 		return frontier
+	}
+}
+
+// checkShadowPlan is every pass's comparison with the identity-keyed shadow
+// plan: each difference is logged with its reason, and one no known reason
+// covers fails the seed. It runs on the engine's goroutine, so it reports
+// through the goroutine-safe t.Logf and assert.Failf only.
+func (r *modelRun) checkShadowPlan(comparison shadowPlanComparison) {
+	if comparison.err != nil {
+		assert.Failf(r.t, "shadow planner failed", "seed %d: the identity-keyed shadow planner failed: %v", r.seed, comparison.err)
+		return
+	}
+	lines := make([]string, 0, len(comparison.differences))
+	for i := range comparison.differences {
+		lines = append(lines, comparison.differences[i].String())
+	}
+	if len(lines) > 0 {
+		r.t.Logf("seed %d shadow plan differences:\n  %s", r.seed, strings.Join(lines, "\n  "))
+	}
+	if comparison.unexplained > 0 {
+		assert.Failf(r.t, "unexplained shadow plan differences", "seed %d: %d shadow plan differences have no known reason:\n  %s",
+			r.seed, comparison.unexplained, strings.Join(lines, "\n  "))
 	}
 }
 
@@ -396,6 +452,8 @@ func (r *modelRun) recordDispatch(frontier []*syncdomain.TrackedAction) {
 }
 
 func (r *modelRun) logf(format string, args ...any) {
+	r.logMu.Lock()
+	defer r.logMu.Unlock()
 	r.log = append(r.log, fmt.Sprintf(format, args...))
 }
 
@@ -403,10 +461,14 @@ func (r *modelRun) logf(format string, args ...any) {
 // `seed-replay:` line a failing seed logs (logSeedReplayOnFailure) is the one
 // command that reruns it, so the context carries no second one.
 func (r *modelRun) failureContext() string {
+	r.logMu.Lock()
+	defer r.logMu.Unlock()
 	return fmt.Sprintf("seed %d; operations:\n  %s", r.seed, strings.Join(r.log, "\n  "))
 }
 
 func (r *modelRun) nextContent(side string) string {
+	r.logMu.Lock()
+	defer r.logMu.Unlock()
 	r.writes++
 	return fmt.Sprintf("seed %d %s write %d\n", r.seed, side, r.writes)
 }
@@ -544,6 +606,20 @@ type modelClock struct {
 	base   time.Time
 	offset time.Duration
 	jitter *rand.Rand
+	// compressed, while set, makes a wait between modelWatchCompressFrom and
+	// modelWatchCompressUpTo end after modelWatchCompressedWait of real
+	// time, the clock still moving to the instant it was due: a watch's
+	// retry backoff passes as it would over a long watch, in milliseconds.
+	compressed atomic.Bool
+}
+
+// realDelay is how long a wait of delay takes in real time.
+func (c *modelClock) realDelay(delay time.Duration) time.Duration {
+	if c.compressed.Load() && delay >= modelWatchCompressFrom && delay <= modelWatchCompressUpTo {
+		return modelWatchCompressedWait
+	}
+
+	return delay
 }
 
 func newModelClock(seed uint64) *modelClock {
@@ -576,7 +652,7 @@ func (c *modelClock) Jitter(maxDelay time.Duration) time.Duration {
 func (c *modelClock) AfterFunc(delay time.Duration, fn func()) syncdomain.SyncTimer {
 	due := c.Now().Add(delay)
 
-	return c.RealClock.AfterFunc(delay, func() {
+	return c.RealClock.AfterFunc(c.realDelay(delay), func() {
 		c.reach(due)
 		fn()
 	})
@@ -585,7 +661,7 @@ func (c *modelClock) AfterFunc(delay time.Duration, fn func()) syncdomain.SyncTi
 // Sleep waits delay and moves the clock to the instant it ended.
 func (c *modelClock) Sleep(ctx context.Context, delay time.Duration) error {
 	due := c.Now().Add(delay)
-	if err := c.RealClock.Sleep(ctx, delay); err != nil {
+	if err := c.RealClock.Sleep(ctx, c.realDelay(delay)); err != nil {
 		return err //nolint:wrapcheck // the real clock's own error
 	}
 	c.reach(due)
@@ -707,12 +783,21 @@ func (r *modelRun) requireUntouchedFilesUnchanged(
 // localTree is the sync root as path -> content, folders as "/", ignoring
 // the engine's own transfer artifacts.
 func (r *modelRun) localTree() map[string]string {
+	out, err := readModelLocalTree(r.syncRoot)
+	require.NoError(r.t, err)
+
+	return out
+}
+
+// readModelLocalTree reads the folder at syncRoot as path -> content,
+// folders as the model's folder sentinel.
+func readModelLocalTree(syncRoot string) (map[string]string, error) {
 	out := map[string]string{}
-	require.NoError(r.t, filepath.WalkDir(r.syncRoot, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	err := filepath.WalkDir(syncRoot, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		rel, relErr := filepath.Rel(r.syncRoot, p)
+		rel, relErr := filepath.Rel(syncRoot, p)
 		if relErr != nil {
 			return fmt.Errorf("relative path of %s: %w", p, relErr)
 		}
@@ -730,9 +815,12 @@ func (r *modelRun) localTree() map[string]string {
 		}
 		out[rel] = string(data)
 		return nil
-	}))
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read local tree %s: %w", syncRoot, err)
+	}
 
-	return out
+	return out, nil
 }
 
 func (r *modelRun) remoteTreeView() map[string]string { return r.remote.tree() }

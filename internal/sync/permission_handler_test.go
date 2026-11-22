@@ -135,6 +135,9 @@ func TestPermHandler_HandleLocalPermission_SyncRootInaccessible(t *testing.T) {
 
 func TestPermHandler_HandleLocalPermission_DirectoryLevel(t *testing.T) {
 	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a folder without read permission, so no boundary is denied")
+	}
 
 	ph, syncRoot := newTestPermHandler(t, nil)
 

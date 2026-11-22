@@ -1,7 +1,7 @@
 // Deterministic helpers that evaluate active scope blocks for watch-mode
 // execution and its tests.
 
-package syncexec
+package syncsched
 
 import (
 	"time"

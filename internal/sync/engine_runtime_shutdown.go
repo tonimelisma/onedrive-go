@@ -55,7 +55,7 @@ func isStoppingRun(ctx context.Context) bool {
 // stops the recording; the run calls it as it returns.
 func (flow *engineFlow) noteRunCancel(ctx context.Context) func() bool {
 	return context.AfterFunc(ctx, func() {
-		defer flow.engine.wallClock.RecoverTimerPanic()
+		defer flow.deps.wall.RecoverTimerPanic()
 		// The bound is a context deadline, enforced on wall time.
 		canceled := syncdomain.WallNow()
 		flow.canceledAt.CompareAndSwap(nil, &canceled)
@@ -157,7 +157,7 @@ func (flow *engineFlow) completeTrackedActionAsShutdown(ta *syncdomain.TrackedAc
 		return
 	}
 
-	flow.sched.markFinished(ta)
+	flow.sched.Finished(ta)
 	ready := flow.completeDepGraphAction(ta.ID, "completeTrackedActionAsShutdown")
 	flow.completeSubtree(ready)
 }

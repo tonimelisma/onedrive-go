@@ -661,6 +661,12 @@ func (c *ManualClock) Sleep(ctx context.Context, delay time.Duration) error {
 	}
 }
 
+// Go starts fn on a new goroutine, as the real clock does: a manual clock
+// controls time, not which goroutine runs.
+func (c *ManualClock) Go(fn func()) {
+	go fn()
+}
+
 func (c *ManualClock) Jitter(maxDelay time.Duration) time.Duration {
 	c.Mu.Lock()
 	defer c.Mu.Unlock()

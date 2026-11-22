@@ -19,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
@@ -74,7 +75,7 @@ func newWorkerTestSetup(t *testing.T) (
 // dispatchable actions to dispatchCh; drainAndComplete calls dg.Complete and
 // sends newly-dispatchable dependents to dispatchCh.
 type testDepGraphHelper struct {
-	dg         *DepGraph
+	dg         *syncsched.DepGraph
 	dispatchCh chan *syncdomain.TrackedAction
 	settledCh  chan struct{}
 	settleOnce sync.Once
@@ -83,7 +84,7 @@ type testDepGraphHelper struct {
 func newTestDepGraphHelper(t *testing.T) *testDepGraphHelper {
 	t.Helper()
 	return &testDepGraphHelper{
-		dg:         NewDepGraph(synctest.TestLogger(t)),
+		dg:         syncsched.NewDepGraph(synctest.TestLogger(t)),
 		dispatchCh: make(chan *syncdomain.TrackedAction, 64),
 		settledCh:  make(chan struct{}),
 	}

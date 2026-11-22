@@ -76,7 +76,7 @@ func TestEngine_ShortcutAliasRenameMutatesThroughParentAndUpdatesRootState(t *te
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	err := eng.applyShortcutAliasMutation(t.Context(), syncshortcut.ShortcutAliasMutation{
+	err := eng.shortcutRoots().applyShortcutAliasMutation(t.Context(), syncshortcut.ShortcutAliasMutation{
 		Kind:              syncshortcut.ShortcutAliasMutationRename,
 		BindingItemID:     "binding-1",
 		RelativeLocalPath: "Shared/Renamed",
@@ -124,7 +124,7 @@ func TestEngine_ShortcutAliasDeleteMarksParentRootFinalDrain(t *testing.T) {
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	err := eng.applyShortcutAliasMutation(t.Context(), syncshortcut.ShortcutAliasMutation{
+	err := eng.shortcutRoots().applyShortcutAliasMutation(t.Context(), syncshortcut.ShortcutAliasMutation{
 		Kind:          syncshortcut.ShortcutAliasMutationDelete,
 		BindingItemID: "binding-1",
 	})
@@ -216,7 +216,7 @@ func TestEngine_AcknowledgeChildFinalDrainSendsANonEmptyRootBackToTheFinalDrain(
 	assert.Equal(t, []string{"Shared/Docs"}, roots[0].ProtectedPaths)
 
 	// Nothing changed: the next local reconcile leaves the record alone.
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 	require.NoError(t, err)
 	assert.False(t, changed)
 	assert.FileExists(t, filepath.Join(aliasRoot, "sub", "arrived-late.txt"))
@@ -253,7 +253,7 @@ func TestEngine_ReconcileRemovedFinalDrainMissingLocalAliasReleasesWithoutRemote
 	}}))
 	require.NoError(t, os.RemoveAll(aliasRoot))
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -333,7 +333,7 @@ func TestEngine_ReconcileMissingLocalAliasDeleteReleasesParentShortcutRoot(t *te
 	}}))
 	require.NoError(t, os.RemoveAll(aliasRoot))
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -380,7 +380,7 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 	}}))
 	require.NoError(t, os.RemoveAll(aliasRoot))
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -430,7 +430,7 @@ func TestEngine_ReconcileMissingAliasIgnoresMissingHistoricalProtectedPathBefore
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
 	seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Renamed")
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -481,7 +481,7 @@ func TestEngine_ReconcileMissingAliasDetectsLiveRenameWithoutStaleLocalState(t *
 	}}))
 	require.NoError(t, os.Rename(aliasRoot, renamedRoot))
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -588,7 +588,7 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteRenamedProjection(t *t
 	}}))
 	seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Old")
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -627,7 +627,7 @@ func TestEngine_ReconcileShortcutRootLocalStateMovesRemoteMovedProjectionAcrossL
 	}}))
 	seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Old")
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -683,7 +683,7 @@ func TestEngine_ShortcutRootFoldersFollowTheUmask(t *testing.T) {
 			shortcutRoot("Shared/Docs", []string{"Shared/Docs"}, nil),
 		}))
 
-		_, err := eng.reconcileShortcutRootLocalState(t.Context())
+		_, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 		require.NoError(t, err)
 
 		assert.Equal(t, os.FileMode(0o775), folderMode(t, syncRoot, "Shared"), "0777 minus the umask")
@@ -702,7 +702,7 @@ func TestEngine_ShortcutRootFoldersFollowTheUmask(t *testing.T) {
 		}))
 		seedShortcutLocalStateIdentityForTest(t, eng.Engine, "Shared/Old")
 
-		_, err = eng.reconcileShortcutRootLocalState(t.Context())
+		_, err = eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 		require.NoError(t, err)
 
 		assert.Equal(t, os.FileMode(0o775), folderMode(t, syncRoot, "Archive"), "0777 minus the umask")
@@ -729,7 +729,7 @@ func TestEngine_ReconcileShortcutRootLocalStateRetriesRemovedReleasePending(t *t
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err)
 	assert.True(t, changed)
@@ -766,7 +766,7 @@ func TestEngine_ReconcileShortcutRootLocalStatePersistsCleanupBlockedWithoutErro
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err, "a blocked cleanup is durable state, not a pass failure")
 	assert.True(t, changed)
@@ -804,12 +804,12 @@ func TestEngine_ReconcileShortcutRootLocalStateRepeatedCleanupBlockedIsQuiet(t *
 		ProtectedPaths:    []string{"Shared/Docs"},
 	}}))
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 	require.NoError(t, err)
 	assert.True(t, changed, "the transition into the blocked state is persisted")
 
 	for range 3 {
-		changed, repeatErr := eng.reconcileShortcutRootLocalState(t.Context())
+		changed, repeatErr := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 		require.NoError(t, repeatErr, "the unchanged blocked state is already persisted and shown by status")
 		assert.False(t, changed)
 	}
@@ -848,7 +848,7 @@ func TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterRe
 		},
 	}}))
 
-	changed, err := eng.reconcileShortcutRootLocalState(t.Context())
+	changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
 
 	require.NoError(t, err)
 	assert.True(t, changed)

@@ -283,7 +283,8 @@ func TestGolangciConfig_EverySyncTreePackageHasItsImportRule(t *testing.T) {
 		"internal/sync/internal/syncplan":      {"syncdomain"},
 		"internal/sync/internal/syncobserve":   {"syncdomain", "syncshortcut"},
 		"internal/sync/internal/syncexec":      {"syncdomain"},
-		"internal/sync":                        {"syncdomain", "syncshortcut", "syncstore", "internal/syncplan", "internal/syncobserve", "internal/syncexec"},
+		"internal/sync/internal/syncsched":     {"syncdomain"},
+		"internal/sync":                        {"syncdomain", "syncshortcut", "syncstore", "internal/syncplan", "internal/syncobserve", "internal/syncexec", "internal/syncsched"},
 		"internal/sync/internal/syncfixture":   {"syncdomain"},
 		"internal/sync/internal/syncstoretest": {"syncdomain", "syncshortcut", "syncstore", "internal/syncfixture"},
 	}

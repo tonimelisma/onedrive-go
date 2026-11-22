@@ -53,5 +53,5 @@ func TestStartRuntimeStage_ReleasesDueHeldTrialImmediately(t *testing.T) {
 	assert.Equal(t, "held.txt", outbox[0].Action.Path)
 	assert.True(t, outbox[0].IsTrial)
 	assert.Equal(t, scopeKey, outbox[0].TrialScopeKey)
-	assert.Empty(t, flow.retries.heldByKey)
+	assert.Zero(t, flow.sched.HeldCount())
 }

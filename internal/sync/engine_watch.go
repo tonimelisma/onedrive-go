@@ -45,7 +45,7 @@ const quiescenceLogInterval = 30 * time.Second
 // steady-state replan path.
 // Blocks until the context is canceled, returning nil on clean shutdown.
 //
-// Flow: runStartupStage → initWatchInfra → bootstrapSync →
+// Flow: runStartup → initWatchInfra → bootstrapSync →
 // startObservers → runWatchLoop.
 // bootstrapSync dispatches through the same dependency graph, active scope
 // working set and worker pool that the steady-state watch loop uses.
@@ -64,13 +64,13 @@ func (e *Engine) RunWatch(ctx context.Context, mode syncdomain.SyncMode, opts Wa
 func (e *Engine) runWatch(ctx context.Context, rt *watchRuntime, mode syncdomain.SyncMode, opts WatchOptions) error {
 	e.logger.Info("watch mode starting",
 		slog.String("mode", mode.String()),
-		slog.Duration("poll_interval", e.resolvePollInterval(opts)),
-		slog.Duration("debounce", e.resolveDebounce(opts)),
+		slog.Duration("poll_interval", resolvePollInterval(opts)),
+		slog.Duration("debounce", resolveDebounce(opts)),
 	)
 
 	stopNoting := rt.noteRunCancel(ctx)
 	defer stopNoting()
-	bl, err := rt.runStartupStage(ctx)
+	bl, err := e.runStartup(ctx, rt.engineFlow)
 	if err != nil {
 		if isWatchShutdownError(ctx, err) {
 			return nil
@@ -106,7 +106,7 @@ func (e *Engine) runWatch(ctx context.Context, rt *watchRuntime, mode syncdomain
 	}
 
 	// Step 3: Start observers AFTER bootstrap — they see the post-bootstrap baseline.
-	if err := rt.engine.protectedRoots.refresh(ctx); err != nil {
+	if err := rt.roots.refresh(ctx); err != nil {
 		return fmt.Errorf("sync: refresh shortcut protected roots before watch observers: %w", err)
 	}
 	if err := rt.startObservers(ctx, pipe.bl, opts); err != nil {
@@ -194,37 +194,36 @@ func (rt *watchRuntime) initWatchInfra(
 	// The graph starts empty, and startRuntimeStage replaces it with each
 	// plan's. Active scope state is loaded from the persisted block_scopes
 	// table into watch-owned runtime state.
-	rt.sched.graph = syncexec.NewDepGraph(rt.deps.logger)
-	rt.sched.graph.SetOwnerCheck(rt.engine.runOwnerCheck)
+	rt.sched.ResetGraph()
 	if err := rt.loadActiveScopes(ctx); err != nil {
 		return nil, fmt.Errorf("sync: loading active scopes: %w", err)
 	}
 
-	rt.scopes.state = syncexec.NewScopeState(rt.engine.nowFunc, rt.deps.logger)
-	rt.sched.nextActionID = 0
+	rt.sched.ResetWindows()
 
 	// dispatchCh feeds admitted actions to workers. Watch mode keeps this
 	// unbuffered so not-yet-started work remains engine-owned until a worker is
 	// actually ready to receive it.
-	rt.sched.dispatchCh = make(chan *syncdomain.TrackedAction, watchDispatchBuf)
+	rt.dispatchCh = make(chan *syncdomain.TrackedAction, watchDispatchBuf)
 
 	pool := syncexec.NewWorkerPool(syncexec.WorkerPoolInputs{
-		Config:           rt.engine.execCfg,
-		Dispatch:         rt.sched.dispatchCh,
+		Config:           rt.exec,
+		Dispatch:         rt.dispatchCh,
 		Store:            executorStoreOf(rt.deps.store),
 		Logger:           rt.deps.logger,
 		CompletionBuffer: watchCompletionBuf,
 		Perf:             rt.deps.perf,
 		Serialize:        rt.hooks.serializeWorkers,
+		Clock:            rt.deps.clock,
 	})
 	pool.Start(ctx, rt.cfg.transferWorkers)
 
 	// DirtyBuffer is the watch scheduler boundary. Observation marks coarse
 	// dirty/full-refresh signals only; snapshot refresh and planning happen
 	// after debounce.
-	dirtyBuf := syncobserve.NewDirtyBuffer(rt.deps.logger)
+	dirtyBuf := syncobserve.NewDirtyBufferOn(rt.deps.logger, rt.deps.clock)
 	rt.resources.dirtyBuf = dirtyBuf
-	replanReady := dirtyBuf.FlushDebounced(ctx, rt.engine.resolveDebounce(opts))
+	replanReady := dirtyBuf.FlushDebounced(ctx, resolveDebounce(opts))
 
 	// Tickers/timers.
 	rt.resetRefreshTimer(nil)
@@ -285,7 +284,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode syncdomain.SyncM
 	if err != nil {
 		return err
 	}
-	if publishErr := rt.engine.publishShortcutChildWorkSnapshot(ctx, runtime.ChildPublication); publishErr != nil {
+	if publishErr := rt.shortcuts.publishShortcutChildWorkSnapshot(ctx, runtime.ChildPublication); publishErr != nil {
 		return publishErr
 	}
 	if len(runtime.Plan.Actions) == 0 {
@@ -339,7 +338,7 @@ func (rt *watchRuntime) finishBootstrapAfterActions(
 ) error {
 	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventBootstrapQuiesced})
 	rt.scheduleFollowUpIfSettled()
-	rt.engine.upkeep.afterSync(ctx)
+	rt.upkeep.afterSync(ctx)
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
 		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
 	}
@@ -398,16 +397,16 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 	localBatches chan<- syncobserve.LocalObservation,
 	protectedRootEvents chan<- syncshortcut.ProtectedRootEvent,
 ) (*syncobserve.LocalObserver, error) {
-	localObs := rt.engine.buildLocalObserver(bl, rt.deps.logger)
+	localObs := rt.local.observer(bl, rt.deps.logger)
 	hashCache, err := rt.deps.store.NewLocalHashCache(ctx)
 	if err != nil {
 		return nil, err
 	}
 	localObs.SetLocalHashCache(hashCache)
 	localObs.SetFilterConfig(rt.cfg.contentFilter)
-	localObs.SetProtectedRoots(rt.engine.protectedRoots.current())
+	localObs.SetProtectedRoots(rt.roots.current())
 	localObs.SetObservationRules(rt.cfg.localRules)
-	localObs.SetSyncRootIdentity(rt.engine.syncRootIdentity)
+	localObs.SetSyncRootIdentity(rt.local.identity)
 	mountFlags, err := rt.deps.store.ListMountBoundaries(ctx)
 	if err != nil {
 		return nil, err
@@ -442,7 +441,7 @@ func (rt *watchRuntime) startLocalObserver(
 ) {
 	// The goroutine holds the observation and its send-only outputs only.
 	obs := &rt.observation
-	rt.resources.goroutines.start(ctx, watchGoroutineLocalObserver, func(ctx context.Context) {
+	rt.resources.goroutines.start(ctx, rt.deps.clock, watchGoroutineLocalObserver, func(ctx context.Context) {
 		defer obs.deps.emit(syncdomain.EngineDebugEvent{
 			Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverLocal,
 		})
@@ -524,12 +523,12 @@ func (rt *watchRuntime) startRemoteObserver(
 	errs chan<- error,
 	opts WatchOptions,
 ) {
-	pollInterval := rt.engine.resolvePollInterval(opts)
+	pollInterval := resolvePollInterval(opts)
 	rt.startPrimaryRootWatch(ctx, bl, remoteBatches, errs, pollInterval)
 }
 
 func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan struct{} {
-	if !rt.cfg.enableWebsocket || rt.engine.socketIOFetcher == nil {
+	if !rt.cfg.enableWebsocket || rt.remote.socketIO == nil {
 		return nil
 	}
 
@@ -538,14 +537,14 @@ func (rt *watchRuntime) startSocketIOWakeSource(ctx context.Context) <-chan stru
 	)
 
 	wakeCh := make(chan struct{}, 1)
-	wakeSource := rt.engine.newSocketIOWakeSource(syncobserve.SocketIOWakeSourceOptions{
+	wakeSource := rt.remote.newWakeSource(syncobserve.SocketIOWakeSourceOptions{
 		Logger:        rt.deps.logger,
 		Clock:         rt.deps.clock,
 		LifecycleHook: rt.emitSocketIOLifecycleEvent,
 	})
 
 	obs := &rt.observation
-	rt.resources.goroutines.start(ctx, watchGoroutineWakeSource, func(ctx context.Context) {
+	rt.resources.goroutines.start(ctx, rt.deps.clock, watchGoroutineWakeSource, func(ctx context.Context) {
 		obs.runSocketIOWakeSource(ctx, wakeSource, wakeCh)
 	})
 
@@ -708,7 +707,7 @@ func (rt *observation) runFallbackScan(
 }
 
 // resolvePollInterval returns the configured poll interval or the default.
-func (e *Engine) resolvePollInterval(opts WatchOptions) time.Duration {
+func resolvePollInterval(opts WatchOptions) time.Duration {
 	if opts.PollInterval > 0 {
 		return opts.PollInterval
 	}
@@ -717,7 +716,7 @@ func (e *Engine) resolvePollInterval(opts WatchOptions) time.Duration {
 }
 
 // resolveDebounce returns the configured debounce or the default.
-func (e *Engine) resolveDebounce(opts WatchOptions) time.Duration {
+func resolveDebounce(opts WatchOptions) time.Duration {
 	if opts.Debounce > 0 {
 		return opts.Debounce
 	}
