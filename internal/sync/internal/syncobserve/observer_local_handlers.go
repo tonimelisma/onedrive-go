@@ -392,7 +392,7 @@ func (o *LocalObserver) handleCreate(
 	ev.LocalCtime = syncdomain.FileChangeTime(info)
 
 	if info.IsDir() {
-		o.handleDirectoryCreate(ctx, tree, fsPath, dbRelPath, name, info, &ev, watcher)
+		o.handleDirectoryCreate(ctx, tree, fsPath, dbRelPath, info, &ev, watcher)
 		return
 	}
 
@@ -411,7 +411,7 @@ func (o *LocalObserver) handleCreate(
 // what it already holds.
 func (o *LocalObserver) handleDirectoryCreate(
 	ctx context.Context, tree *synctree.Root,
-	fsPath, dbRelPath, name string, info os.FileInfo,
+	fsPath, dbRelPath string, info os.FileInfo,
 	ev *syncdomain.ChangeEvent, watcher FsWatcher,
 ) {
 	ev.ItemType = syncdomain.ItemTypeFolder

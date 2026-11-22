@@ -67,34 +67,6 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 	return obs
 }
 
-// requireDroppedWithoutEvent waits for the observer's debug report that it
-// dropped an input (match), failing at once on any local patch meanwhile.
-// The observer reports the drop on its watch goroutine after anything the
-// input sent, so once the report has arrived an empty batch channel shows
-// that the input sent nothing: no window decides the test. A report already
-// read by an earlier wait counts.
-func requireDroppedWithoutEvent(
-	t *testing.T, recorder *syncfixture.DebugEventRecorder, batches <-chan LocalObservation,
-	match func(syncdomain.EngineDebugEvent) bool, what string,
-) {
-	t.Helper()
-
-	timer := time.NewTimer(syncfixture.EventWait)
-	defer timer.Stop()
-	for !recorder.FindEvent(match) {
-		select {
-		case batch := <-batches:
-			if batch.Kind == LocalPatch {
-				require.FailNow(t, "unexpected local patch", "got %+v while waiting for %s", batch, what)
-			}
-		case <-recorder.Events:
-		case <-timer.C:
-			require.FailNow(t, "timed out waiting for "+what)
-		}
-	}
-	requireNoLocalPatch(t, batches, what)
-}
-
 // requireNoLocalPatch fails when batches holds a local patch. It never
 // waits: the caller has a signal that whatever could have been sent was sent
 // before it. Snapshots and suspect marks are not patches and are skipped.
@@ -179,26 +151,6 @@ func waitForLocalSnapshot(t *testing.T, batches <-chan LocalObservation, what st
 			return LocalObservation{}
 		}
 	}
-}
-
-// nextLocalPatch returns the next local patch on batches, skipping every
-// other observation.
-func nextLocalPatch(t *testing.T, batches <-chan LocalObservation, what string) LocalObservation {
-	t.Helper()
-
-	return waitForLocalPatch(t, batches, func(*LocalObservation) bool { return true }, what)
-}
-
-// nextLocalRow returns the one row of the next local patch on batches: the
-// patch an upsert of one path sends.
-func nextLocalRow(t *testing.T, batches <-chan LocalObservation, what string) syncdomain.LocalStateRow {
-	t.Helper()
-
-	patch := nextLocalPatch(t, batches, what)
-	require.Len(t, patch.Rows, 1, "%s: %+v", what, patch)
-	require.Empty(t, patch.DeletedPrefixes, "%s: %+v", what, patch)
-
-	return patch.Rows[0]
 }
 
 // waitForLocalRow waits for a local patch that writes a row for path and
@@ -287,27 +239,6 @@ func startMockWatch(
 	case <-time.After(syncfixture.EventWait):
 		require.FailNow(t, "timed out waiting for mock watch setup")
 	}
-
-	return cancel, done
-}
-
-// startMockWatchInLoop is startMockWatch that also waits until the watch has
-// finished its setup walk and reads events, so a directory the test creates
-// afterwards is new to it. One that existed during setup is registered by
-// the walk, and its Create event is then a duplicate whose contents are not
-// scanned.
-func startMockWatchInLoop(
-	t *testing.T,
-	obs *LocalObserver,
-	watcher *syncfixture.MockFsWatcher,
-	dir string,
-) (context.CancelFunc, <-chan error) {
-	t.Helper()
-
-	looping := make(chan struct{})
-	obs.hooks.BeforeWatchLoop = func() { close(looping) }
-	cancel, done := startMockWatch(t, obs, watcher, dir)
-	syncfixture.ReceiveWithin(t, looping, "the watch to finish its setup")
 
 	return cancel, done
 }

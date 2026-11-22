@@ -26,9 +26,15 @@ const (
 // goroutine. The loop writes it; any goroutine reads it.
 type loopHeartbeat struct {
 	now   func() time.Time
-	last  atomic.Int64 // UnixNano of the last beat
-	limit atomic.Int64 // nanoseconds the loop may stay silent after that beat
-	step  atomic.Pointer[string]
+	state atomic.Pointer[heartbeatState]
+}
+
+// heartbeatState is one beat, stored as a whole so a reader never pairs one
+// beat's limit with another beat's time.
+type heartbeatState struct {
+	last  time.Time     // when the loop beat
+	limit time.Duration // how long it may stay silent after that beat
+	step  string        // the long step it declared, empty when none
 }
 
 func newLoopHeartbeat(now func() time.Time) *loopHeartbeat {
@@ -52,9 +58,7 @@ func (h *loopHeartbeat) beatFor(step string, limit time.Duration) {
 	if limit < loopSilenceLimit {
 		limit = loopSilenceLimit
 	}
-	h.step.Store(&step)
-	h.limit.Store(int64(limit))
-	h.last.Store(h.now().UnixNano())
+	h.state.Store(&heartbeatState{last: h.now(), limit: limit, step: step})
 }
 
 // alive reports whether the loop beat within its current limit, the step it
@@ -63,12 +67,13 @@ func (h *loopHeartbeat) alive() (ok bool, step string, silent time.Duration) {
 	if h == nil {
 		return true, "", 0
 	}
-	silent = time.Duration(h.now().UnixNano() - h.last.Load())
-	if p := h.step.Load(); p != nil {
-		step = *p
+	state := h.state.Load()
+	if state == nil {
+		return true, "", 0
 	}
+	silent = h.now().Sub(state.last)
 
-	return silent <= time.Duration(h.limit.Load()), step, silent
+	return silent <= state.limit, state.step, silent
 }
 
 // LoopAlive reports whether the watch loop made progress recently, the long

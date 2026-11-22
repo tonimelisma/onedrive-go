@@ -425,7 +425,7 @@ func (o *LocalObserver) makeWalkFunc(
 			if !syncdomain.NewContentFilter(o.filterConfig).ShouldFollowSymlinks() {
 				o.rememberExcludedSymlink(dbRelPath)
 				o.recordSyncedPathReplaced(skipped, dbRelPath, "a symbolic link")
-				observed[dbRelPath] = true
+				o.observeSetAside(observed, dbRelPath, fsPath)
 				o.logger.Debug("skipping symlink", slog.String("path", dbRelPath))
 				return skipEntry(d)
 			}
@@ -607,6 +607,22 @@ func (o *LocalObserver) admitSyncedEntry(
 	}
 }
 
+// observeSetAside marks an entry the walk sets aside (an unfollowed symlink,
+// a special file, a protected root, a mount boundary) as present. When the
+// path holds a synced item, its spelling on disk also stays among the names
+// the collision phase compares against: OneDrive still holds that item under
+// that spelling, so a new case or normalization variant beside it is a
+// collision, not a fresh name whose upload would land in the synced item.
+func (o *LocalObserver) observeSetAside(observed map[string]bool, dbRelPath, fsPath string) {
+	observed[dbRelPath] = true
+	if o.scanNames == nil {
+		return
+	}
+	if _, synced := o.baseline.GetByPath(dbRelPath); synced {
+		o.scanNames.Add(dbRelPath, filepath.Base(fsPath))
+	}
+}
+
 // forgetScannedName takes an entry the walk set aside out of the names the
 // collision phase compares against: the twin finding above already reports
 // its path, and a set-aside entry is not one OneDrive will receive.
@@ -682,7 +698,7 @@ func (o *LocalObserver) processObservedInfo(
 			if currentIdentity, hasIdentity := synctree.IdentityFromFileInfo(info); hasIdentity {
 				identity = currentIdentity
 			}
-			observed[dbRelPath] = true
+			o.observeSetAside(observed, dbRelPath, fsPath)
 			currentRows[dbRelPath] = syncdomain.LocalStateRow{
 				Path:             dbRelPath,
 				ItemType:         syncdomain.ItemTypeFolder,
@@ -705,7 +721,7 @@ func (o *LocalObserver) processObservedInfo(
 	// observed keeps deletion detection from treating it as removed.
 	if isSpecialFile(info) {
 		o.recordSyncedPathReplaced(skipped, dbRelPath, "a FIFO, socket or device file")
-		observed[dbRelPath] = true
+		o.observeSetAside(observed, dbRelPath, fsPath)
 		o.logger.Debug("skipping special file",
 			slog.String("path", dbRelPath),
 			slog.String("mode", info.Mode().Type().String()))
@@ -729,13 +745,13 @@ func (o *LocalObserver) processObservedInfo(
 		identity, hasIdentity := synctree.IdentityFromFileInfo(info)
 		if o.isForeignMountPoint(o.scanAvailability, dbRelPath, identity, hasIdentity) {
 			*skipped = append(*skipped, MountBoundarySkippedItem(dbRelPath))
-			observed[dbRelPath] = true
+			o.observeSetAside(observed, dbRelPath, fsPath)
 			o.logger.Debug("not crossing into another filesystem", slog.String("path", dbRelPath))
 			return filepath.SkipDir
 		}
 		if o.flaggedMountIsGone(o.scanAvailability, dbRelPath) {
 			*skipped = append(*skipped, VanishedMountSkippedItem(dbRelPath))
-			observed[dbRelPath] = true
+			o.observeSetAside(observed, dbRelPath, fsPath)
 			o.logger.Debug("a crossed mount point is no longer mounted", slog.String("path", dbRelPath))
 			return filepath.SkipDir
 		}

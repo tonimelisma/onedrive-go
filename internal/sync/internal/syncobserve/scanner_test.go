@@ -231,6 +231,46 @@ func TestFullScan_CaseCollision_NoFalseDeletion(t *testing.T) {
 	assert.NotNil(t, findRow(result.Rows, "doc.pdf"), "collider should not become a false delete")
 }
 
+// Validates: R-2.12.1
+func TestFullScan_CaseCollision_SyncedItemReplacedBySymlinkStillHoldsItsName(t *testing.T) {
+	t.Parallel()
+
+	syncRoot := t.TempDir()
+
+	// The synced Foo.txt is now an unfollowed symbolic link, and a new
+	// foo.txt sits beside it. OneDrive still holds Foo.txt, so foo.txt must be
+	// held back as a collision rather than uploaded into it.
+	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "target"), []byte("t"), 0o600))
+	require.NoError(t, os.Symlink("target", filepath.Join(syncRoot, "Foo.txt")))
+	if err := os.WriteFile(filepath.Join(syncRoot, "foo.txt"), []byte("new"), 0o600); err != nil {
+		t.Skip("case-insensitive filesystem")
+	}
+	info1, err1 := os.Lstat(filepath.Join(syncRoot, "Foo.txt"))
+	info2, err2 := os.Lstat(filepath.Join(syncRoot, "foo.txt"))
+	if err1 != nil || err2 != nil || os.SameFile(info1, info2) {
+		t.Skip("case-insensitive filesystem")
+	}
+
+	baseline := syncfixture.BaselineWith(
+		&syncdomain.BaselineEntry{Path: "Foo.txt", DriveID: driveid.New("d"), ItemID: "id1", ItemType: syncdomain.ItemTypeFile},
+	)
+	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+
+	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
+	require.NoError(t, err)
+
+	collided := false
+	for _, si := range result.Skipped {
+		if si.Reason == syncdomain.IssueCaseCollision && si.Path == "foo.txt" {
+			collided = true
+		}
+	}
+	assert.True(t, collided, "foo.txt collides with the synced Foo.txt the symlink replaced")
+	for _, ev := range result.Events {
+		assert.NotEqual(t, "foo.txt", ev.Path, "the collider must not reach the plan")
+	}
+}
+
 // Validates: R-2.1.3
 func TestFullScan_StoresFilesystemIdentityForFilesAndDirectories(t *testing.T) {
 	t.Parallel()
