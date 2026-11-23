@@ -77,7 +77,7 @@ const (
 	modelWatchNewFilePrefix = "watch-"
 )
 
-// Validates: R-2.3.1, R-2.8.20, R-6.8.9
+// Validates: R-2.3.1, R-2.8.20
 //
 // The primary model test: watch mode converges on every seed, with the
 // model's checks and every invariant holding after each batch. The nightly

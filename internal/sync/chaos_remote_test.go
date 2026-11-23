@@ -786,7 +786,7 @@ func chaosRaceSeedFaults() []string {
 	return []string{chaosCreateResponseLost, chaosSessionTimedOut}
 }
 
-// Validates: R-2.3.1, R-6.8.9
+// Validates: R-2.3.1, R-6.8.15
 //
 // The model test through the chaos Graph layer: every batch's first passes
 // run in a storm of seeded transient faults, lost responses, interrupted
