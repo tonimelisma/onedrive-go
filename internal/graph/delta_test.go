@@ -520,7 +520,7 @@ func TestResolveDeltaToken(t *testing.T) {
 	t.Parallel()
 
 	const initialPath = "/drives/000000000000000d/items/folder-abc/delta"
-	initial := func() string { return initialPath }
+	initial := func() (string, error) { return initialPath, nil }
 	client := newTestClient(t, "http://localhost")
 
 	cases := []struct {

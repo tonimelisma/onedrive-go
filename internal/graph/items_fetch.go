@@ -113,7 +113,12 @@ func (c *Client) GetItem(ctx context.Context, driveID driveid.ID, itemID string)
 		slog.String("item_id", itemID),
 	)
 
-	return c.fetchItem(ctx, itemRoute(driveID, itemID, ""))
+	route, err := itemRoute(driveID, itemID, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return c.fetchItem(ctx, route)
 }
 
 // GetItemByPath retrieves the item at remotePath, relative to the drive root.
@@ -393,7 +398,11 @@ func (c *Client) GetChildByName(ctx context.Context, driveID driveid.ID, parentI
 		slog.String("name", name),
 	)
 
-	item, err := c.fetchItem(ctx, childPathRoute(driveID, parentID, encoded))
+	route, err := childPathRoute(driveID, parentID, encoded)
+	if err != nil {
+		return nil, err
+	}
+	item, err := c.fetchItem(ctx, route)
 	if err != nil {
 		return nil, err
 	}
@@ -421,13 +430,13 @@ func itemSitsIn(item *Item, driveID driveid.ID, parentID string) bool {
 
 // childPathRoute is the route of the item at encodedPath, a path of escaped
 // segments, below the item parentID.
-func childPathRoute(driveID driveid.ID, parentID, encodedPath string) string {
+func childPathRoute(driveID driveid.ID, parentID, encodedPath string) (string, error) {
 	return itemRoute(driveID, parentID, ":/"+encodedPath+":")
 }
 
 // childrenRoute is the route of the first page of the folder parentID's
 // children.
-func childrenRoute(driveID driveid.ID, parentID string) string {
+func childrenRoute(driveID driveid.ID, parentID string) (string, error) {
 	return itemRoute(driveID, parentID, fmt.Sprintf("/children?$top=%d", listChildrenPageSize))
 }
 
@@ -445,12 +454,20 @@ const maxPathAddressedLength = 240
 func (c *Client) fetchItemByPathChunks(ctx context.Context, driveID driveid.ID, remotePath string) (*Item, error) {
 	chunks := pathAddressChunks(remotePath, maxPathAddressedLength)
 
-	item, err := c.fetchItem(ctx, fmt.Sprintf("/drives/%s/root:/%s:", driveID, chunks[0]))
+	route, err := driveRoute(driveID, "/root:/"+chunks[0]+":")
+	if err != nil {
+		return nil, err
+	}
+	item, err := c.fetchItem(ctx, route)
 	if err != nil {
 		return nil, err
 	}
 	for _, chunk := range chunks[1:] {
-		item, err = c.fetchItem(ctx, childPathRoute(driveID, item.ID, chunk))
+		route, err = childPathRoute(driveID, item.ID, chunk)
+		if err != nil {
+			return nil, err
+		}
+		item, err = c.fetchItem(ctx, route)
 		if err != nil {
 			return nil, err
 		}
@@ -487,9 +504,14 @@ func pathAddressChunks(remotePath string, limit int) []string {
 // ends the listing without an error. A page that fails ends it with that
 // page's error after the pages before it were handed on.
 func (c *Client) ListChildrenPages(ctx context.Context, driveID driveid.ID, parentID string, visit ChildrenPageFunc) error {
+	route, err := childrenRoute(driveID, parentID)
+	if err != nil {
+		return err
+	}
+
 	return c.visitChildPages(
 		ctx,
-		childrenRoute(driveID, parentID),
+		route,
 		"listing children",
 		"listed children complete",
 		[]slog.Attr{
@@ -611,14 +633,23 @@ func (c *Client) ListChildrenByPathPages(ctx context.Context, driveID driveid.ID
 			return err
 		}
 
-		return c.visitChildPages(ctx, childrenRoute(driveID, folder.ID),
+		route, err := childrenRoute(driveID, folder.ID)
+		if err != nil {
+			return err
+		}
+
+		return c.visitChildPages(ctx, route,
 			"listing children by path", "listed children by path complete", logAttrs, visit)
+	}
+
+	route, err := driveRoute(driveID, fmt.Sprintf("/root:/%s:/children?$top=%d", encodedPath, listChildrenPageSize))
+	if err != nil {
+		return err
 	}
 
 	listed := listedPath{driveID: driveID, path: remotePath}
 	var misplaced error
-	err := c.visitChildPages(ctx,
-		fmt.Sprintf("/drives/%s/root:/%s:/children?$top=%d", driveID, encodedPath, listChildrenPageSize),
+	err = c.visitChildPages(ctx, route,
 		"listing children by path", "listed children by path complete", logAttrs,
 		func(page []Item) bool {
 			if misplaced = c.heldToListedPath(ctx, &listed, page); misplaced != nil {

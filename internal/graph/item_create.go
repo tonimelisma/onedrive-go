@@ -80,7 +80,10 @@ func (c *Client) CreateFile(ctx context.Context, driveID driveid.ID, parentID, n
 		return nil, fmt.Errorf("graph: marshaling create file request: %w", err)
 	}
 
-	path := itemRoute(driveID, parentID, "/children")
+	path, err := itemRoute(driveID, parentID, "/children")
+	if err != nil {
+		return nil, err
+	}
 
 	resp, err := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   QuirkFileCreateTransient404,

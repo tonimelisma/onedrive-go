@@ -24,18 +24,18 @@ const deltaHTTPPrefix = "http"
 
 // deltaPathBuilder constructs the initial API path for a delta request when
 // no token (or a non-HTTP token) is provided.
-type deltaPathBuilder func() string
+type deltaPathBuilder func() (string, error)
 
 // driveDeltaPath builds the initial path of a drive's delta.
 func driveDeltaPath(driveID driveid.ID) deltaPathBuilder {
-	return func() string {
-		return fmt.Sprintf("/drives/%s/root/delta", driveID)
+	return func() (string, error) {
+		return driveRoute(driveID, "/root/delta")
 	}
 }
 
 // folderDeltaPath builds the initial path of a folder-scoped delta.
 func folderDeltaPath(driveID driveid.ID, folderID string) deltaPathBuilder {
-	return func() string {
+	return func() (string, error) {
 		return itemRoute(driveID, folderID, "/delta")
 	}
 }
@@ -127,7 +127,7 @@ func (c *Client) fetchDeltaPath(
 // Full HTTP URL tokens are stripped to relative paths.
 func (c *Client) resolveDeltaToken(token string, buildPath deltaPathBuilder) (string, error) {
 	if token == "" || !strings.HasPrefix(token, deltaHTTPPrefix) {
-		return buildPath(), nil
+		return buildPath()
 	}
 
 	path, err := c.stripBaseURL(token)

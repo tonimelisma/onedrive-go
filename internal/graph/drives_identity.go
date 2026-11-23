@@ -217,7 +217,10 @@ func (c *Client) Drive(ctx context.Context, driveID driveid.ID) (*Drive, error) 
 		slog.String("drive_id", driveID.String()),
 	)
 
-	path := fmt.Sprintf("/drives/%s", driveID)
+	path, err := driveRoute(driveID, "")
+	if err != nil {
+		return nil, err
+	}
 
 	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {

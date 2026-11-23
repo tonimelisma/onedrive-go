@@ -42,7 +42,10 @@ func (c *Client) CopyItem(
 		slog.String("new_name", newName),
 	)
 
-	apiPath := itemRoute(driveID, itemID, "/copy")
+	apiPath, err := itemRoute(driveID, itemID, "/copy")
+	if err != nil {
+		return nil, err
+	}
 
 	req := copyItemRequest{
 		ParentReference: &moveParentRef{ID: destParentID},

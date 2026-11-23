@@ -29,7 +29,10 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 		slog.String("name", name),
 	)
 
-	path := itemRoute(driveID, parentID, "/children")
+	path, err := itemRoute(driveID, parentID, "/children")
+	if err != nil {
+		return nil, err
+	}
 
 	reqBody := createFolderRequest{
 		Name:             name,
@@ -185,7 +188,10 @@ func (c *Client) MoveItemIfMatch(
 		slog.Time("keep_modified", opts.KeepModified),
 	)
 
-	path := itemRoute(driveID, itemID, "")
+	path, err := itemRoute(driveID, itemID, "")
+	if err != nil {
+		return nil, err
+	}
 
 	req := moveItemRequest{}
 	if newParentID != "" {
@@ -250,7 +256,10 @@ func (c *Client) UpdateFileSystemInfo(
 		slog.Time("mtime", mtime),
 	)
 
-	path := itemRoute(driveID, itemID, "")
+	path, err := itemRoute(driveID, itemID, "")
+	if err != nil {
+		return nil, err
+	}
 
 	sent := c.sendableMtime(mtime)
 	info := c.newFileSystemInfo(sent)
@@ -367,8 +376,12 @@ func (c *Client) PermanentDeleteItem(ctx context.Context, driveID driveid.ID, it
 		slog.String("item_id", itemID),
 	)
 
-	return c.deleteAndDrain(ctx, http.MethodPost,
-		itemRoute(driveID, itemID, "/permanentDelete"))
+	route, err := itemRoute(driveID, itemID, "/permanentDelete")
+	if err != nil {
+		return err
+	}
+
+	return c.deleteAndDrain(ctx, http.MethodPost, route)
 }
 
 // DeleteItem deletes a drive item. Returns nil on success (HTTP 204).
@@ -385,8 +398,12 @@ func (c *Client) DeleteItemIfMatch(ctx context.Context, driveID driveid.ID, item
 		slog.String("item_id", itemID),
 	)
 
-	return c.deleteAndDrainWithHeaders(ctx, http.MethodDelete,
-		itemRoute(driveID, itemID, ""), ifMatchHeaders(ifMatch))
+	route, err := itemRoute(driveID, itemID, "")
+	if err != nil {
+		return err
+	}
+
+	return c.deleteAndDrainWithHeaders(ctx, http.MethodDelete, route, ifMatchHeaders(ifMatch))
 }
 
 // deleteAndDrain sends a request and drains the response body to reuse the connection.
