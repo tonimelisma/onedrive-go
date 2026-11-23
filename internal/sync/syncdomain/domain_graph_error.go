@@ -3,14 +3,12 @@ package syncdomain
 import (
 	"context"
 	"errors"
-	"io/fs"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // These decode a Graph transport error into the two facts the domain records
@@ -154,10 +152,10 @@ func classifyServerAnswer(status int, err error) ServerAnswer {
 }
 
 // unansweredServerAnswer is the meaning of a failure that carries no status:
-// a request that ran out of time waiting for OneDrive is the service's
+// a request that did not reach OneDrive or got no answer is the service's
 // silence, the outage a 5xx says out loud; any other carries no answer.
 func unansweredServerAnswer(err error) ServerAnswer {
-	if IsRequestTimeout(err) {
+	if IsServiceUnreached(err) {
 		return ServerAnswerServiceOutage
 	}
 
@@ -174,7 +172,7 @@ func unansweredServerAnswer(err error) ServerAnswer {
 // on an HTTP/2 connection closed for an unanswered ping
 // graph.ErrConnectionLost; a TLS handshake timeout and a read whose
 // connection's keepalive found the server gone carry none of these
-// (isNetworkTimeout). An outcome commit or created-item record that outlasted
+// (retry.IsNetworkTimeout). An outcome commit or created-item record that outlasted
 // its bound carries context.DeadlineExceeded too, but it is no request:
 // ErrStoreAccessTimedOut marks it. Whether the run had ended is not asked
 // here: classifyResult asks.
@@ -185,28 +183,26 @@ func IsRequestTimeout(err error) bool {
 
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, graph.ErrTransferStalled) ||
 		errors.Is(err, graph.ErrResponseStalled) || errors.Is(err, graph.ErrConnectionLost) ||
-		isNetworkTimeout(err)
+		retry.IsNetworkTimeout(err)
 }
 
-// isNetworkTimeout reports a failure the HTTP client or a connection says
-// timed out: net/http wraps every transport failure in *url.Error, and a read
-// on a connection fails as *net.OpError, and both answer Timeout() for what
-// they wrap. A chain that holds a local file error is never one: an upload's
-// body is read from the local file, and a reader that returned a timed-out
-// read of it unwrapped would make the request's *url.Error say it timed out.
-func isNetworkTimeout(err error) bool {
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) {
+// IsServiceUnreached reports a request that did not reach OneDrive, or got
+// no answer from it: every request timeout (IsRequestTimeout), and a name
+// that does not resolve, a connection refused, a host or network that cannot
+// be reached and a connection reset (retry.IsUnreached). It is the one
+// family the engine reads as the service's silence: each member is retry work
+// and evidence for the service scope while the run goes on, and none is an
+// issue that names a file, since nothing is wrong with the file. A failure
+// that is plainly local (no route, network unreachable) gets the same scope
+// and the same line: the user's remedy is the same, and the trial that ends
+// the scope finds the network back either way. A chain that holds a local
+// file error is never one; neither is a store access that outlasted its bound.
+func IsServiceUnreached(err error) bool {
+	if errors.Is(err, ErrStoreAccessTimedOut) {
 		return false
 	}
 
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) && urlErr.Timeout() {
-		return true
-	}
-	var opErr *net.OpError
-
-	return errors.As(err, &opErr) && opErr.Timeout()
+	return IsRequestTimeout(err) || retry.IsUnreached(err)
 }
 
 func classifyServerStatus(status int) ServerAnswer {

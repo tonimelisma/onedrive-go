@@ -1,6 +1,6 @@
 # Retry
 
-GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/notices.go, internal/retry/policy.go, internal/retry/retry_after.go, internal/retry/throttle_gate.go, internal/retry/transport.go
+GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/notices.go, internal/retry/policy.go, internal/retry/retry_after.go, internal/retry/throttle_gate.go, internal/retry/transport.go, internal/retry/unreached.go
 
 Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.6 [verified], R-6.8.7 [designed], R-6.8.8 [verified], R-6.8.19 [verified], R-6.8.10 [designed], R-6.8.11 [designed], R-6.6.8 [verified], R-2.10.3 [designed], R-2.10.5 [designed], R-2.10.6 [designed], R-2.10.7 [designed], R-2.10.8 [designed], R-2.10.14 [designed], R-6.8.16 [designed], R-6.10.6 [verified]
 
@@ -42,6 +42,7 @@ rely on transport-level retry loops for action execution.
 | An outage is announced once per process across concurrent requests and transports, and re-arms after OneDrive answers. | `TestRetryTransport_OutageIsAnnouncedOncePerProcessAcrossConcurrentRequests`, `TestRetryTransport_OutageNoticeRearmsAfterAResponse`, `TestSessionRuntime_RetryingClientsShareOneRetryNotices` |
 | Long rate-limit waits are announced once; short ones stay quiet; exhaustion is not logged above Debug. | `TestRetryTransport_LongRateLimitWaitIsAnnouncedOnce`, `TestRetryTransport_NetworkError_ExhaustionAnnouncesOnceAndDoesNotRepeatTheError`, `TestRetryTransport_HTTPError_ExhaustionDoesNotWarn` |
 | No wait starts that would end after the request's deadline: the transport returns the answer it has at once and announces nothing, a throttle wait answers unsent as `*ThrottledError`, and a context without a deadline waits as before. | `TestRetryTransport_AWaitPastTheDeadlineReturnsTheAnswerAtOnce`, `TestRetryTransport_AWaitPastTheDeadlineIsNotAnnounced`, `TestRetryTransport_NoDeadlineWaitsAsBefore`, `TestDo_AThrottleWaitPastTheDeadlineIsNotSent` |
+| `IsUnreached` names a request that did not reach the service or got no answer (a name not found, a connection refused, unroutable or reset, a network timeout), read off net/http's own types and never off a chain that holds a local file error; the sync classifier reads it as the service's silence. | `TestIsUnreached_Table` |
 | CLI/control-plane callers use retry without reinterpreting retryable versus fatal conditions themselves. | `internal/cli/control_client_additional_test.go`, `internal/multisync/orchestrator_test.go`, `internal/graph/client_test.go` |
 
 ## Named Policies
@@ -166,6 +167,22 @@ fallback it uses when the field is absent.
 
 `Notices` is caller-owned like `ThrottleGate`. A transport built without one
 uses private notices, which keeps the announcements correct per transport.
+
+## What Did Not Reach The Service (`unreached.go`)
+
+`IsUnreached` is the transport-level half of "the request did not reach
+OneDrive, or got no answer": a `*net.DNSError`, a `*net.OpError` holding
+`ECONNREFUSED`, `EHOSTUNREACH`, `ENETUNREACH` or `ECONNRESET`, and a
+`*url.Error` or `*net.OpError` that says it timed out (`IsNetworkTimeout`). A
+chain that holds an `*fs.PathError` is never one: an upload's body is the
+local file, and its failed read can surface as the request's error. It lives
+here because the transport is the boundary that knows net/http's error types,
+and sync's vocabulary (`syncdomain.IsServiceUnreached`) adds graph's own
+sentinels on top; `internal/retry` cannot import that vocabulary. The
+transport itself does not branch on it: it retries every transport failure of
+a replayable request, these and the rest (a TLS failure, a connection that
+dropped mid-exchange), and announces each sustained run as "can't reach
+OneDrive". Sync uses a raw transport and classifies the failure instead.
 
 ## Sync Retry Model
 
