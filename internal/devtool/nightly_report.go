@@ -468,7 +468,7 @@ func githubLabelExists(ctx context.Context, gh ghClient, repoRoot string, what s
 	if err == nil {
 		return true, nil
 	}
-	if m := githubStatusPattern.FindStringSubmatch(err.Error()); m != nil && m[1] == httpNotFound {
+	if githubHTTPStatus(err) == httpNotFound {
 		return false, nil
 	}
 
@@ -481,7 +481,7 @@ type githubOpenIssue struct {
 	Number      int             `json:"number"`
 	Title       string          `json:"title"`
 	Body        string          `json:"body"`
-	PullRequest json.RawMessage `json:"pull_request"` //nolint:tagliatelle // GitHub's REST key.
+	PullRequest json.RawMessage `json:"pull_request"`
 }
 
 // listOpenLabeledIssues lists the open issues carrying label, newest first,

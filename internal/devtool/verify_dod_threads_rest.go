@@ -42,7 +42,7 @@ type restReviewThread struct {
 	Outdated   bool    `json:"outdated"`
 	Path       string  `json:"path"`
 	Line       *int    `json:"line"`
-	CommentIDs []int64 `json:"comment_ids"` //nolint:tagliatelle // the route's key.
+	CommentIDs []int64 `json:"comment_ids"`
 }
 
 // restReviewComment is a pull request review comment as GitHub's REST
@@ -58,9 +58,19 @@ type restReviewComment struct {
 
 // isGitHubForbidden reports whether a gh request failed with HTTP 403.
 func isGitHubForbidden(err error) bool {
-	m := githubStatusPattern.FindStringSubmatch(err.Error())
+	return githubHTTPStatus(err) == httpForbidden
+}
 
-	return m != nil && m[1] == httpForbidden
+// githubHTTPStatus is the HTTP status a failed gh request names, or "" when
+// it names none.
+func githubHTTPStatus(err error) string {
+	const statusGroup = 1
+	m := githubStatusPattern.FindStringSubmatch(err.Error())
+	if len(m) <= statusGroup {
+		return ""
+	}
+
+	return m[statusGroup]
 }
 
 func restThreadID(prNumber int, commentID int64) string {

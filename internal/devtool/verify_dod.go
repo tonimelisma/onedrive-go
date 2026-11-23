@@ -104,8 +104,8 @@ type prCheckRun struct {
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
-	DetailsURL string `json:"details_url"` //nolint:tagliatelle // GitHub's REST key.
-	StartedAt  string `json:"started_at"`  //nolint:tagliatelle // GitHub's REST key.
+	DetailsURL string `json:"details_url"`
+	StartedAt  string `json:"started_at"`
 }
 
 // githubPullRequest is a pull request as REST `GET .../pulls/{n}` returns it.

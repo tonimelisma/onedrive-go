@@ -388,34 +388,48 @@ func (r *claimRemote) github(joined string, args []string) ([]byte, error) {
 			return nil, fmt.Errorf("encode pull request: %w", err)
 		}
 		return body, nil
+	}
+	if out, handled, err := r.issueRead(joined, args); handled {
+		return out, err
+	}
+	r.writes = append(r.writes, joined)
+	return r.githubWrite(joined, args)
+}
+
+// issueRead answers the REST reads of labels and issues; handled is false
+// for any other command.
+func (r *claimRemote) issueRead(joined string, args []string) ([]byte, bool, error) {
+	switch {
 	case strings.HasPrefix(joined, "gh api "+githubRepoPath+"/labels/"):
 		if len(r.labelListErrs) > 0 {
 			failure := r.labelListErrs[0]
 			r.labelListErrs = r.labelListErrs[1:]
-			return nil, failure
+			return nil, true, failure
 		}
 		label := strings.TrimPrefix(args[1], githubRepoPath+"/labels/")
 		if failure := popRemoteErr(r.labelSearchErrs, label); failure != nil {
-			return nil, failure
+			return nil, true, failure
 		}
 		if !r.labels[label] {
-			return nil, ghFailure("HTTP 404: Not Found (https://api.github.com/repos/o/r/labels/" + label + ")")
+			return nil, true, ghFailure("HTTP 404: Not Found (https://api.github.com/repos/o/r/labels/" + label + ")")
 		}
-		return []byte(`{"name":"` + label + `"}`), nil
+		return []byte(`{"name":"` + label + `"}`), true, nil
 	case strings.HasPrefix(joined, "gh api --paginate "+githubRepoPath+"/issues?"):
 		label := restIssueListLabel(args[2])
 		if failure := popRemoteErr(r.issueListErrs, label); failure != nil {
-			return nil, failure
+			return nil, true, failure
 		}
-		return r.openIssueList(label)
+		out, err := r.openIssueList(label)
+		return out, true, err
 	case strings.HasPrefix(joined, "gh api --paginate "+githubRepoPath+"/issues/"):
 		number, _, _ := strings.Cut(strings.TrimPrefix(args[2], githubRepoPath+"/issues/"), "/")
-		return r.issueComments(number)
+		out, err := r.issueComments(number)
+		return out, true, err
 	case strings.HasPrefix(joined, "gh api "+githubRepoPath+"/issues/"):
-		return r.issueBody(strings.TrimPrefix(args[1], githubRepoPath+"/issues/"))
+		out, err := r.issueBody(strings.TrimPrefix(args[1], githubRepoPath+"/issues/"))
+		return out, true, err
 	}
-	r.writes = append(r.writes, joined)
-	return r.githubWrite(joined, args)
+	return nil, false, nil
 }
 
 // popRemoteErr takes the next failure errs holds for key, nil for none.
