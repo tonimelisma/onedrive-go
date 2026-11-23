@@ -720,8 +720,8 @@ Two more stages of every plan were quadratic and are pinned by benchmarks
 beside the comparison queries. Both were found by profiling a first sync of
 a 140k-file tree and a watch replan over an 11k-row baseline on the same
 2-core Linux host (Ubuntu, Go 1.27, modernc SQLite, 2026-11-01). The host
-ran other workloads during these runs (load average 10
-to 15 on 2 cores), so wall times are upper bounds; the CPU seconds, from a
+ran other workloads during these runs (load average 10 to 15 on 2 cores),
+so wall times are upper bounds; the CPU seconds, from a
 CPU profile of the same runs divided by the iterations, are the comparable
 figures.
 

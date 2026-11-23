@@ -7,8 +7,8 @@ against [cli-output-guidelines.md](cli-output-guidelines.md).
   test account with 19 files (~300 MB), in an isolated
   `XDG_CONFIG_HOME`/`XDG_DATA_HOME` (paths below shortened to `~/odgo-test`).
   stdout and stderr were captured separately; watch mode ran on a pty.
-- **abraunegg/onedrive** (the D client): v2.5.11 on the
-  same host (`onedrive --monitor`, captured from its terminal), plus source
+- **abraunegg/onedrive** (the D client): v2.5.11 (`onedrive --monitor`,
+  captured from its terminal), plus source
   strings from `src/*.d` at master (2.5.12) and output users pasted into
   GitHub issues (#3300, #3344, #3463, #3609, #3718).
 
@@ -231,8 +231,8 @@ time=2026-10-23T22:48:12.623-07:00 level=WARN msg="checkpoint failed on close" e
 - The only output is two identical warnings in internal terms with no possible
   user action (breaks the project's own R-6.6.11), and a false-alarm WARN on a
   clean shutdown.
-- A long-running watch in a terminal showed exactly one line, the
-  launcher's own, for its whole run.
+- A long-running watch in a terminal showed no line of its own for its whole
+  run.
 
 **D client** `--monitor` startup:
 
