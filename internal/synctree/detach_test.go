@@ -829,6 +829,32 @@ func TestCopyVerified_DirectorySyncFailureLeavesNothingAtTheDestination(t *testi
 	assert.Empty(t, entries, "no temporary copy is left behind")
 }
 
+// A copy discarded after a failed directory sync is removed only while its
+// name still holds it: a file put at the name since stays where it is.
+//
+// Validates: R-6.4.9, R-6.5.4
+func TestCopyVerified_DiscardLeavesAFileThatReplacedTheCopy(t *testing.T) {
+	t.Parallel()
+
+	file, stamp := openVerifiedCopySource(t)
+	root, _ := openTestRoot(t)
+	out, dest := openTestDestination(t, root)
+	root.ops.syncDirFile = func(*os.File) error {
+		// Another file is renamed over the placed copy before the discard.
+		other := filepath.Join(filepath.Dir(dest), "other")
+		require.NoError(t, os.WriteFile(other, []byte("someone else's\n"), 0o600))
+		require.NoError(t, os.Rename(other, dest))
+		return fmt.Errorf("syncing directory: %w", unix.EIO)
+	}
+
+	err := root.copyVerified(file, stamp, out)
+	require.ErrorIs(t, err, ErrDestinationFailed)
+	require.ErrorContains(t, err, "no longer holds the copy")
+	data, readErr := os.ReadFile(dest) //nolint:gosec // the test reads the file it planted
+	require.NoError(t, readErr)
+	assert.Equal(t, "someone else's\n", string(data), "the file at the name is not the copy, so it stays")
+}
+
 // Validates: R-6.4.9, R-6.5.4
 func TestCopyVerified_ToleratesUnsupportedDirectorySync(t *testing.T) {
 	t.Parallel()

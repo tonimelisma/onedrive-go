@@ -217,9 +217,12 @@ const maxFoldersAboveAFolder = 1024
 // spelled a folder of the tree another way on a volume that folds case, is
 // still found inside.
 func (r *Root) refuseFolderWithinRoot(dir *os.File, name, refusal string) error {
+	// The walk's own failures are named as text: a missing sync folder or a
+	// missing ".." is this check failing, and must never read to the caller
+	// as the entry it was asked about already being absent.
 	rootInfo, err := r.Stat(".")
 	if err != nil {
-		return fmt.Errorf("checking whether %s is inside the sync folder: %w", name, err)
+		return fmt.Errorf("checking whether %s is inside the sync folder: %s", name, err.Error())
 	}
 	rootID, ok := IdentityFromFileInfo(rootInfo)
 	if !ok {
@@ -231,7 +234,7 @@ func (r *Root) refuseFolderWithinRoot(dir *os.File, name, refusal string) error 
 	for range maxFoldersAboveAFolder {
 		st, statErr := lstatEntryAt(dir, up)
 		if statErr != nil {
-			return fmt.Errorf("checking whether %s is inside the sync folder: %w", name, statErr)
+			return fmt.Errorf("checking whether %s is inside the sync folder: %s", name, statErr.Error())
 		}
 		folder := FileIdentity{Device: statFieldToUint64(st.Dev), Inode: statFieldToUint64(st.Ino)}
 		switch {

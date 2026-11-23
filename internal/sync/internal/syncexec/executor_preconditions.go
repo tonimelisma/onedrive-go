@@ -665,7 +665,10 @@ func (e *Executor) existingTargetVerifier(
 func (e *Executor) preserveReplacedDownloadTarget(action *syncdomain.Action, target string, verify synctree.VerifyFunc) error {
 	placement, err := e.trash.Reserve(e.syncTree.Path(), target, localtrash.ReasonReplaced)
 	if err != nil {
-		return fmt.Errorf("keeping the replaced version of %s: %w", action.Path, err)
+		// Named as text, as a local delete names it: a reservation whose
+		// entry folder went missing is the trash failing, never the target
+		// already gone.
+		return fmt.Errorf("keeping the replaced version of %s: reserving a trash entry: %s", action.Path, err.Error())
 	}
 	if err := e.syncTree.PreserveRegularFile(target, verify, placement.ItemPath); err != nil {
 		if abandonErr := placement.Abandon(); abandonErr != nil {

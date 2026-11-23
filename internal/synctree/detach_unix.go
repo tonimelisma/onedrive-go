@@ -580,15 +580,39 @@ func (r *Root) moveDetachedOut(parent *os.File, tempName string, file *os.File, 
 // destination's failure (ErrDestinationFailed); a discard that fails is named
 // as text, so the result matches the race only.
 func (r *Root) copyVerified(file *os.File, stamp fileStamp, out *destination) error {
-	if err := r.copyThroughDescriptor(file, out); err != nil {
+	copyID, err := r.copyThroughDescriptor(file, out)
+	if err != nil {
 		return destinationFailed(err)
 	}
 	if err := unchangedSince(file, stamp); err != nil {
-		if removeErr := r.ops.unlink(out.folder, out.name); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		if removeErr := r.discardOwnCopy(out, copyID); removeErr != nil {
 			return fmt.Errorf("%w; discarding the copy: %s", err, removeErr.Error())
 		}
 		return err
 	}
+	return nil
+}
+
+// discardOwnCopy removes the copy this detach placed at out's name, and only
+// while the name still holds it: something else put at the name since (a
+// same-user rename into the trash entry) is left where it is and reported.
+// A name already gone is nothing to discard.
+func (r *Root) discardOwnCopy(out *destination, copyID FileIdentity) error {
+	st, err := r.ops.lstatEntry(out.folder, out.name)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("checking the copy at %s before discarding it: %w", out.path, err)
+	}
+	held := FileIdentity{Device: statFieldToUint64(st.Dev), Inode: statFieldToUint64(st.Ino)}
+	if held != copyID {
+		return fmt.Errorf("%s no longer holds the copy, so it is left as it is", out.path)
+	}
+	if err := r.ops.unlink(out.folder, out.name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing the copy at %s: %w", out.path, err)
+	}
+
 	return nil
 }
 
@@ -599,18 +623,19 @@ func (r *Root) copyVerified(file *os.File, stamp fileStamp, out *destination) er
 // rename is a directory update that is not durable until the directory is. A
 // directory sync the filesystem does not support (FUSE, SMB) is tolerated;
 // any other failure removes the copy and is reported, so the caller never
-// unlinks the source over a copy that may not survive a crash.
-func (r *Root) copyThroughDescriptor(file *os.File, out *destination) (err error) {
+// unlinks the source over a copy that may not survive a crash. It returns the
+// copy's identity, so a later discard removes only the copy.
+func (r *Root) copyThroughDescriptor(file *os.File, out *destination) (copyID FileIdentity, err error) {
 	if _, err = file.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("rewinding file to copy it: %w", err)
+		return FileIdentity{}, fmt.Errorf("rewinding file to copy it: %w", err)
 	}
 	tmpName, err := randomName(detachCopyPrefix, "")
 	if err != nil {
-		return err
+		return FileIdentity{}, err
 	}
 	tmp, err := openatExclusive(out.folder, tmpName, detachCopyFilePerm)
 	if err != nil {
-		return fmt.Errorf("creating a copy beside %s: %w", out.path, err)
+		return FileIdentity{}, fmt.Errorf("creating a copy beside %s: %w", out.path, err)
 	}
 	defer func() {
 		if err != nil {
@@ -618,25 +643,34 @@ func (r *Root) copyThroughDescriptor(file *os.File, out *destination) (err error
 		}
 	}()
 	if _, err = io.Copy(tmp, file); err != nil {
-		return fmt.Errorf("copying file: %w", err)
+		return FileIdentity{}, fmt.Errorf("copying file: %w", err)
 	}
 	if err = tmp.Chmod(detachCopyFilePerm); err != nil {
-		return fmt.Errorf("setting copy permissions: %w", err)
+		return FileIdentity{}, fmt.Errorf("setting copy permissions: %w", err)
 	}
 	if err = tmp.Sync(); err != nil {
-		return fmt.Errorf("syncing copy: %w", err)
+		return FileIdentity{}, fmt.Errorf("syncing copy: %w", err)
+	}
+	info, err := tmp.Stat()
+	if err != nil {
+		return FileIdentity{}, fmt.Errorf("reading the copy's identity: %w", err)
+	}
+	copyID, ok := IdentityFromFileInfo(info)
+	if !ok {
+		return FileIdentity{}, fmt.Errorf("reading the copy's identity: no device and inode")
 	}
 	if err = tmp.Close(); err != nil {
-		return fmt.Errorf("closing copy: %w", err)
+		return FileIdentity{}, fmt.Errorf("closing copy: %w", err)
 	}
 	if err = r.renameExclusiveOrChecked(out.folder, tmpName, out.folder, out.name); err != nil {
-		return fmt.Errorf("placing the copy at %s: %w", out.path, err)
+		return FileIdentity{}, fmt.Errorf("placing the copy at %s: %w", out.path, err)
 	}
 	if err = r.ops.syncDirFile(out.folder); err != nil && !localpath.IsDirSyncUnsupported(err) {
-		if removeErr := r.ops.unlink(out.folder, out.name); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			return fmt.Errorf("making the copy durable: %w; discarding it: %w", err, removeErr)
+		syncErr := err
+		if removeErr := r.discardOwnCopy(out, copyID); removeErr != nil {
+			return FileIdentity{}, fmt.Errorf("making the copy durable: %w; discarding it: %w", syncErr, removeErr)
 		}
-		return fmt.Errorf("making the copy durable: %w", err)
+		return FileIdentity{}, fmt.Errorf("making the copy durable: %w", syncErr)
 	}
-	return nil
+	return copyID, nil
 }
