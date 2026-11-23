@@ -107,6 +107,9 @@ import (
 // succeeds). It is kept when an attempt that did not succeed was canceled,
 // and when its create ended without an answer (graph.ErrCreateOutcomeUnknown:
 // no response, a 5xx, a 408): the create may have landed, or may still land.
+// A later attempt that fails short of a 409 (a 429, a request that never
+// left) keeps such an earlier intent too: it created nothing itself, but it
+// cannot tell whether the earlier create did.
 //
 // A kept intent ends in one of these ways. Observation claims the empty file
 // at its path, or meets something else there and drops it. A retry of the

@@ -591,7 +591,10 @@ it here, and the delta that follows reports both, in either order; dropped on
 the folder's tombstone, the intent left the file's empty item to read as
 someone else's, a conflict copy of the user's file and the empty one
 downloaded in its place (`TestCommitObservation_AFolderDeletedAtThePathKeepsTheIntent`,
-chaos seed 63). An attempt known to have created nothing clears the intent. An attempt that was
+chaos seed 63). An attempt known to have created nothing clears the intent, unless an earlier
+attempt left a fresh intent without an item at the path before it: that
+attempt's outcome is still unknown, so a refusal short of a 409 keeps it
+(`TestUploadNewFile_RefusedRetryKeepsTheIntentOfAnEarlierLostCreate`). An attempt that was
 canceled, or whose create ended without an answer
 (`graph.ErrCreateOutcomeUnknown`), is not known to: its create may have
 landed or may still land, so the intent is kept. An attempt that succeeded

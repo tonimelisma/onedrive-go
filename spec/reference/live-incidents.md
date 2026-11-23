@@ -62,6 +62,7 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261123-02 | A refused retry dropped the intent of a lost create, and the user's new file became a conflict copy beside an empty one | fixed | product bug | 2026-11-23 | no |
 | LI-20261123-01 | A watch test still counted the pools' workers without their floor | fixed | test bug | 2026-11-23 | no |
 | LI-20261121-02 | The nightly report could not read a red job's log and did not say why | mitigated | test harness | 2026-11-21 | no |
 | LI-20261121-01 | The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline | fixed | test harness | 2026-11-21 | yes |
@@ -115,6 +116,56 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261123-02: A refused retry dropped the intent of a lost create, and the user's new file became a conflict copy beside an empty one
+
+First seen: 2026-11-23
+Last seen: 2026-11-23
+Area: `internal/sync/internal/syncexec` (`uploadNewFile`, pending-create
+intents, R-5.6.15)
+Suite / test: `internal/sync.TestModel_WatchModeConverges/seed=4`, a local run
+of the whole test (all seeds in parallel) on `bd5d6a0`; the seed alone passed
+Classification: product bug
+Status: fixed
+Recurring: no
+Summary: after batch 4 ("local create watch-4.txt while the watch runs"),
+`watch-4.txt` was empty on both sides and the user's 22 bytes sat in
+`watch-4.conflict-<time>.txt`. The model's invariant "no empty file without
+an allowance" failed.
+
+Evidence (DEBUG log of the run):
+- The watch planned one upload of `watch-4.txt` with its content (the local
+  scan hashed it). The first attempt's create landed and its answer was lost
+  (chaos "create after it took effect: connection reset"): an empty
+  `created-14` on OneDrive, `graph.ErrCreateOutcomeUnknown`, and the log
+  "kept the pending create intent of a create whose outcome is unknown".
+- The second attempt was refused with 429 `activityLimitReached` before it
+  created anything. `uploadNewFile` takes such a refusal as "known to have
+  created nothing" and cleared the path's intent, the one record of the
+  lost create.
+- From the third attempt on, every create got 409 "Name already exists" on
+  `created-14`. Without an intent from before the retry the 409 claims
+  nothing (`resolveCreateConflict`), so it was a stale precondition: 590
+  supersedes, parked with backoff from the third (the model compresses the
+  backoff into milliseconds), while the remote observer's watch loop, which
+  logged `interval=30s` at its start, did not poll again for 30 s.
+- The next delta showed `created-14`, empty, with no intent left to claim it:
+  "has current remote truth but was absent when planned", a create-create
+  conflict, the local file saved as a conflict copy and the empty item
+  downloaded at its own name.
+- The scenario's own write (`O_CREATE|O_EXCL`, then the content) did not
+  matter here: the empty file was the create's placeholder, not a scan of
+  the half-written local file. Load mattered only for the interleaving (the
+  429 landing between the lost create and the first 409, and the poll's
+  delay).
+
+Fix: a retry that fails short of a 409 (a 429, a request that never left)
+keeps a fresh intent an earlier attempt left without an item: it created
+nothing itself, but it cannot speak for the earlier create. The next retry's
+409 then claims the empty file and uploads into it by ID with If-Match, and
+observation claims it too if it sees it first
+(`TestUploadNewFile_RefusedRetryKeepsTheIntentOfAnEarlierLostCreate`, which
+failed before the fix; sync-execution.md, sync-store.md, R-5.6.15).
 
 ## LI-20261123-01: A watch test still counted the pools' workers without their floor
 

@@ -512,8 +512,10 @@ type PendingCreateStore interface {
 //
 // An attempt whose create ended without an answer (a dropped connection, a
 // 5xx, a timeout: graph.ErrCreateOutcomeUnknown) is not known to have created
-// nothing, and its intent stays. The empty file such a create left is then
-// this client's own: observation adopts it, and a retry that gets 409 on it
+// nothing, and its intent stays. So does the intent such an earlier attempt
+// left when a later one fails short of a 409 (a 429, a request that never
+// left): that attempt created nothing, but the earlier one may have. The
+// empty file such a create left is then this client's own: observation adopts it, and a retry that gets 409 on it
 // finishes the upload into it (resolveCreateConflict). When the user renames
 // or deletes the file instead, no retry comes, and the intent is dropped once
 // OneDrive has been observed after the attempt and the file found gone (the
@@ -559,8 +561,9 @@ func (e *Executor) uploadNewFile(
 	case !created && !keepIntent && !keepsEarlierIntent(priorIntent, err, conflictJudged):
 		// An attempt that made nothing clears the intent, unless an earlier
 		// attempt's create may have left its empty file there: a refusal of
-		// this attempt (a 429, a 5xx before OneDrive acted) says nothing of
-		// that file, which stays this client's to claim. Cleared, the next
+		// this attempt (a 429 or another refusal short of a 409, or a request
+		// that never left) says nothing of that file, which stays this
+		// client's to claim. Cleared, the next
 		// attempt's 409 read it as someone else's file: a conflict copy of the
 		// user's file and the empty one downloaded in its place. A 409 that
 		// resolveCreateConflict found held by another file does say, and
