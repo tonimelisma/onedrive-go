@@ -1,0 +1,6 @@
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"models another system and is for tests only\", Path: \"_test\\\\.go\", Linters: \"forbidigo\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Path: \"internal/(fsroot|synctree|localpath)/\", Linters: \"forbidigo\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"encode command output only through writeJSONDocument\", Path: \"(_test\\\\.go|internal/cli/json_output\\\\.go|internal/cli/control_request\\\\.go)$\", Linters: \"forbidigo\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"unnecessaryDefer:\", Linters: \"gocritic\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Source: \"defer \", Path: \"_test\\\\.go\", Linters: \"errcheck\"]"
+0 issues.

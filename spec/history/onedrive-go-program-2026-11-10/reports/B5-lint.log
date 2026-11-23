@@ -1,0 +1,8 @@
+==> golangci-lint
+0 issues.
+==> verify summary
+status: pass
+total: 1m21.122s
+lint: pass (1m21.122s)
+quirk events: 0
+classified reruns: none

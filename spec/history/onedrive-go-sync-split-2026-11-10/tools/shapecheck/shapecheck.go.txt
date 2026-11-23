@@ -1,0 +1,351 @@
+// shapecheck looks for the Go legality hazards of a package split that a
+// reference ledger cannot see, using the declaration-to-package assignment
+// endstate.go wrote (rawdecls.tsv):
+//
+//  1. struct conversions T(x) between two different named struct types. Two
+//     struct types are identical only if their unexported field names come
+//     from the same package, so such a conversion stops compiling when the two
+//     types end up in different packages and the struct keeps an unexported
+//     field.
+//  2. anonymous struct types with unexported fields that appear outside a
+//     function body (in a signature, a field or a package-level variable). A
+//     literal of the "same" anonymous type written in another package is a
+//     different type.
+//  3. declared identifiers that carry the name of a new package (they would
+//     shadow the import in their scope).
+//  4. names the design adds or capitalises that already exist in the package
+//     scope or on the named type (-names "Type.Method,Func,...").
+//
+//	go -C <repo> run /path/shapecheck.go -repo <repo> -decls out/rawdecls.tsv -names A,B.C
+//
+// Stdlib only.
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"go/ast"
+	"go/importer"
+	"go/parser"
+	"go/token"
+	"go/types"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+var (
+	repoFlag  = flag.String("repo", ".", "repo root")
+	declsFlag = flag.String("decls", "rawdecls.tsv", "declaration ledger written by endstate.go")
+	namesFlag = flag.String("names", "", "comma-separated names the design introduces: Name or Type.Name")
+)
+
+const (
+	syncRel = "internal/sync"
+	tags    = "e2e e2e_full integration"
+)
+
+var newPackages = map[string]bool{
+	"syncdomain": true, "syncshortcut": true, "syncstore": true, "syncplan": true,
+	"syncobserve": true, "syncexec": true, "syncfixture": true, "syncstoretest": true,
+}
+
+type goPkg struct {
+	Dir, ImportPath      string
+	GoFiles, TestGoFiles []string
+}
+
+func goCmd(args ...string) []byte {
+	cmd := exec.Command("nice", append([]string{"go"}, args...)...)
+	cmd.Dir = *repoFlag
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "go %s: %v\n%s\n", strings.Join(args, " "), err, stderr.String())
+		os.Exit(1)
+	}
+	return out
+}
+
+func recvBaseName(e ast.Expr) string {
+	for {
+		switch x := e.(type) {
+		case *ast.StarExpr:
+			e = x.X
+		case *ast.ParenExpr:
+			e = x.X
+		case *ast.IndexExpr:
+			e = x.X
+		case *ast.IndexListExpr:
+			e = x.X
+		case *ast.Ident:
+			return x.Name
+		default:
+			return ""
+		}
+	}
+}
+
+// namedStruct returns the named type behind t (through one pointer) when its
+// underlying type is a struct.
+func namedStruct(t types.Type) (*types.Named, *types.Struct) {
+	if p, ok := types.Unalias(t).(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	n, ok := types.Unalias(t).(*types.Named)
+	if !ok {
+		return nil, nil
+	}
+	s, ok := n.Underlying().(*types.Struct)
+	if !ok {
+		return nil, nil
+	}
+	return n, s
+}
+
+func unexportedFields(s *types.Struct) []string {
+	var out []string
+	for i := 0; i < s.NumFields(); i++ {
+		if !s.Field(i).Exported() {
+			out = append(out, s.Field(i).Name())
+		}
+	}
+	return out
+}
+
+func main() {
+	flag.Parse()
+	abs, _ := filepath.Abs(*repoFlag)
+	*repoFlag = abs
+
+	declPkg := map[string]string{}
+	df, err := os.Open(*declsFlag)
+	if err != nil {
+		panic(err)
+	}
+	sc := bufio.NewScanner(df)
+	sc.Buffer(make([]byte, 1<<20), 1<<24)
+	header := map[string]int{}
+	for sc.Scan() {
+		cols := strings.Split(sc.Text(), "\t")
+		if len(header) == 0 {
+			for i, c := range cols {
+				header[c] = i
+			}
+			continue
+		}
+		declPkg[cols[header["id"]]] = cols[header["pkg"]]
+	}
+	df.Close()
+
+	var syncPkg *goPkg
+	dec := json.NewDecoder(bytes.NewReader(goCmd("list", "-json", "-tags", tags, "./...")))
+	for {
+		var p goPkg
+		if err := dec.Decode(&p); err == io.EOF {
+			break
+		} else if err != nil {
+			panic(err)
+		}
+		if strings.HasSuffix(p.ImportPath, "/"+syncRel) {
+			q := p
+			syncPkg = &q
+		}
+	}
+	depSet := map[string]bool{}
+	for _, l := range strings.Split(string(goCmd("list", "-deps", "-test", "-tags", tags, "-f", "{{.ImportPath}}", "./...")), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.Contains(l, " ") || strings.HasSuffix(l, ".test") || l == "unsafe" || l == "C" {
+			continue
+		}
+		depSet[l] = true
+	}
+	var depList []string
+	for d := range depSet {
+		depList = append(depList, d)
+	}
+	sort.Strings(depList)
+	exports := map[string]string{}
+	for _, l := range strings.Split(string(goCmd(append([]string{"list", "-export", "-tags", tags, "-f", "{{.ImportPath}}\t{{.Export}}"}, depList...)...)), "\n") {
+		parts := strings.Split(l, "\t")
+		if len(parts) == 2 && parts[1] != "" {
+			exports[parts[0]] = parts[1]
+		}
+	}
+	fset := token.NewFileSet()
+	imp := importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
+		f, ok := exports[path]
+		if !ok {
+			return nil, fmt.Errorf("no export data for %s", path)
+		}
+		return os.Open(f)
+	})
+	var files []*ast.File
+	for _, n := range append(append([]string{}, syncPkg.GoFiles...), syncPkg.TestGoFiles...) {
+		f, err := parser.ParseFile(fset, filepath.Join(syncPkg.Dir, n), nil, parser.SkipObjectResolution)
+		if err != nil {
+			panic(err)
+		}
+		files = append(files, f)
+	}
+	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}, Types: map[ast.Expr]types.TypeAndValue{}}
+	nerr := 0
+	conf := types.Config{Importer: imp, Error: func(err error) { nerr++ }}
+	pkg, _ := conf.Check(syncPkg.ImportPath, fset, files, info)
+	scope := pkg.Scope()
+	fmt.Printf("typecheck errors %d\n", nerr)
+
+	where := func(p token.Pos) string {
+		ps := fset.Position(p)
+		return fmt.Sprintf("%s:%d", filepath.Base(ps.Filename), ps.Line)
+	}
+	pkgOfNamed := func(n *types.Named) string {
+		if n.Obj().Pkg() != pkg {
+			return "(outside internal/sync)"
+		}
+		return declPkg[n.Obj().Name()]
+	}
+
+	// ---- 1. struct conversions between different named struct types ----
+	convTotal, convCross, convBad := 0, 0, 0
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) != 1 {
+				return true
+			}
+			tv, ok := info.Types[call.Fun]
+			if !ok || !tv.IsType() {
+				return true
+			}
+			dstN, dstS := namedStruct(tv.Type)
+			srcN, _ := namedStruct(info.TypeOf(call.Args[0]))
+			if dstN == nil || srcN == nil || dstN.Origin() == srcN.Origin() {
+				return true
+			}
+			convTotal++
+			dp, sp := pkgOfNamed(dstN), pkgOfNamed(srcN)
+			un := unexportedFields(dstS)
+			verdict := "same package"
+			if dp != sp {
+				convCross++
+				verdict = "DIFFERENT PACKAGES"
+				if len(un) > 0 {
+					convBad++
+					verdict += fmt.Sprintf(", unexported fields %v", un)
+				}
+			}
+			fmt.Printf("  conversion %s  %s (%s) <- %s (%s): %s\n", where(call.Pos()), dstN.Obj().Name(), dp, srcN.Obj().Name(), sp, verdict)
+			return true
+		})
+	}
+	fmt.Printf("struct conversions between different named struct types: %d, across end-state packages: %d, of those with unexported fields: %d\n", convTotal, convCross, convBad)
+
+	// ---- 2. anonymous struct types outside function bodies ----
+	anonTotal, anonUnexported := 0, 0
+	var scanAnon func(n ast.Node, owner string)
+	scanAnon = func(n ast.Node, owner string) {
+		ast.Inspect(n, func(m ast.Node) bool {
+			switch x := m.(type) {
+			case *ast.BlockStmt, *ast.FuncLit:
+				return false // function-local types cannot be named from another package
+			case *ast.StructType:
+				anonTotal++
+				s, _ := info.TypeOf(x).(*types.Struct)
+				if s != nil {
+					if un := unexportedFields(s); len(un) > 0 {
+						anonUnexported++
+						fmt.Printf("  anonymous struct %s in %s (%s): unexported fields %v\n", where(x.Pos()), owner, declPkg[owner], un)
+					}
+				}
+			}
+			return true
+		})
+	}
+	for _, f := range files {
+		for _, d := range f.Decls {
+			switch x := d.(type) {
+			case *ast.FuncDecl:
+				id := x.Name.Name
+				if x.Recv != nil && len(x.Recv.List) > 0 {
+					id = recvBaseName(x.Recv.List[0].Type) + "." + x.Name.Name
+					scanAnon(x.Recv, id)
+				}
+				scanAnon(x.Type, id)
+			case *ast.GenDecl:
+				for _, sp := range x.Specs {
+					switch s := sp.(type) {
+					case *ast.ValueSpec:
+						if s.Type != nil && len(s.Names) > 0 {
+							scanAnon(s.Type, s.Names[0].Name)
+						}
+					case *ast.TypeSpec:
+						// the struct that IS the named type is not anonymous; look inside it
+						if st, ok := s.Type.(*ast.StructType); ok {
+							if st.Fields != nil {
+								scanAnon(st.Fields, s.Name.Name)
+							}
+						} else {
+							scanAnon(s.Type, s.Name.Name)
+						}
+					}
+				}
+			}
+		}
+	}
+	fmt.Printf("anonymous struct types outside function bodies: %d, of those with unexported fields: %d\n", anonTotal, anonUnexported)
+
+	// ---- 3. declared identifiers named like a new package ----
+	shadow := 0
+	for id, obj := range info.Defs {
+		if obj != nil && newPackages[id.Name] {
+			shadow++
+			fmt.Printf("  identifier %q declared at %s\n", id.Name, where(id.Pos()))
+		}
+	}
+	for _, f := range files {
+		for _, im := range f.Imports {
+			if im.Name != nil && newPackages[im.Name.Name] {
+				shadow++
+				fmt.Printf("  import renamed to %q at %s\n", im.Name.Name, where(im.Pos()))
+			}
+		}
+	}
+	fmt.Printf("declared identifiers or import names equal to a new package name: %d\n", shadow)
+
+	// ---- 4. names the design introduces ----
+	taken := 0
+	for _, name := range strings.Split(*namesFlag, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if owner, member, ok := strings.Cut(name, "."); ok {
+			tn, _ := scope.Lookup(owner).(*types.TypeName)
+			if tn == nil {
+				fmt.Printf("  %s: type %s NOT FOUND\n", name, owner)
+				taken++
+				continue
+			}
+			// addressable=true finds pointer-receiver methods too, and works for interfaces
+			obj, _, _ := types.LookupFieldOrMethod(tn.Type(), true, pkg, member)
+			if obj != nil {
+				taken++
+				fmt.Printf("  %s: ALREADY EXISTS (%s at %s)\n", name, obj, where(obj.Pos()))
+			}
+			continue
+		}
+		if obj := scope.Lookup(name); obj != nil {
+			taken++
+			fmt.Printf("  %s: ALREADY EXISTS (%s at %s, end-state package %s)\n", name, obj, where(obj.Pos()), declPkg[name])
+		}
+	}
+	fmt.Printf("introduced names that already exist: %d\n", taken)
+}

@@ -1,0 +1,87 @@
+==> golangci-lint
+internal/sync/sqlite_compare.go:783: 783-803 lines are duplicate of `internal/sync/sqlite_compare.go:878-898` (dupl)
+func queryComparisonRows(ctx context.Context, runner sqlTxRunner, query string) ([]sQLiteComparisonRow, error) {
+	rows, err := runner.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	var results []sQLiteComparisonRow
+	for rows.Next() {
+		row, scanErr := scanComparisonRow(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating comparison state rows: %w", err)
+	}
+
+	return results, nil
+}
+internal/sync/sqlite_compare.go:878: 878-898 lines are duplicate of `internal/sync/sqlite_compare.go:783-803` (dupl)
+func queryReconciliationRows(ctx context.Context, runner sqlTxRunner, query string) ([]sQLiteReconciliationRow, error) {
+	rows, err := runner.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("sync: querying reconciliation state: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
+
+	var results []sQLiteReconciliationRow
+	for rows.Next() {
+		row, scanErr := scanReconciliationRow(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sync: iterating reconciliation state rows: %w", err)
+	}
+
+	return results, nil
+}
+internal/sync/planner_kinds.go:76:10: string `unchanged` has 2 occurrences, make it a constant (goconst)
+		return "unchanged"
+		       ^
+internal/sync/engine_current_plan_test.go:554:2: require-error: for error assertions use require (testifylint)
+	assert.ErrorContains(t, err, " metadata_drift=0)")
+	^
+4 issues:
+* dupl: 2
+* goconst: 1
+* testifylint: 1
+==> verify summary
+status: fail
+total: 6m50.219s
+lint: fail (6m50.219s) [lint: golangci-lint [run --allow-parallel-runners]: exit status 1]
+quirk events: 0
+classified reruns: none
+Error: run verify: lint: golangci-lint [run --allow-parallel-runners]: exit status 1
+Usage:
+  devtool verify [default|public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|failed-test] [flags]
+
+Flags:
+      --branch string              increment branch name: owns nightly claims at DoD start, cleaned up at post-merge
+      --ci-max-reruns int          times one DoD CI wait reruns the canceled jobs of the commit it waits for; 0 turns reruns off (default 2)
+      --ci-timeout duration        hard cap on one DoD CI wait; default one stall window (longest job timeout in ci.yml plus 10m) per allowed attempt
+      --classify-live-quirks       rerun narrow known live-provider quirk failures once during verification
+      --comment-manifest string    DoD PR review-thread manifest path
+      --coverage-file string       coverage profile path
+      --coverage-threshold float   minimum total coverage percentage; negative reports coverage without gating (default 75.5)
+      --dod                        run Definition of Done automation instead of the selected verification profile
+      --e2e-log-dir string         directory for full E2E debug logs
+      --failed-log string          CI go-test log to parse for verify failed-test
+  -h, --help                       help for verify
+      --pr int                     GitHub pull request number for DoD PR stages
+      --recent-merged int          merged PR count for DoD review-thread audits (default 20)
+      --shard string               run one slice of the pr, quick or platform profile's short unit tier, as index/count (for example 1/2)
+      --stage string               DoD stage: start, pre-pr, pre-merge, or post-merge
+      --summary-json string        write verify summary JSON to this path
+      --unit-timeout duration      go test deadline of the full race tier; default 20m, longer on hosts with fewer cores than the CI runners
+      --worktree string            increment worktree path for DoD post-merge cleanup
+
+run verify: lint: golangci-lint [run --allow-parallel-runners]: exit status 1
+exit status 1

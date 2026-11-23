@@ -1,0 +1,9 @@
+internal/fsroot/fsroot_test.go:415:22: G304: Potential file inclusion via variable (gosec)
+		writer, openErr := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+		                   ^
+internal/fsroot/fsroot_test.go:418:4: require-error: for error assertions use require (testifylint)
+			assert.NoError(t, writer.Close())
+			^
+2 issues:
+* gosec: 1
+* testifylint: 1

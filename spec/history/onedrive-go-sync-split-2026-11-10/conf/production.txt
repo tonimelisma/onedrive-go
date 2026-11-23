@@ -1,0 +1,54 @@
+# iteration 3: conf2 plus field-reach resolutions that move declarations
+order syncdomain syncshortcut syncstore syncplan syncobserve syncexec sync
+
+pkg domain   syncdomain
+pkg shortcut syncshortcut
+pkg store    syncstore
+pkg plan     syncplan
+pkg observe  syncobserve
+pkg exec     syncexec
+pkg engine   sync
+
+allow syncdomain
+allow syncshortcut syncdomain
+allow syncstore    syncdomain syncshortcut
+allow syncplan     syncdomain
+allow syncobserve  syncdomain syncshortcut
+allow syncexec     syncdomain
+allow sync         syncdomain syncshortcut syncstore syncplan syncobserve syncexec
+
+# row shapes and their helpers are shared vocabulary
+file store_types.go  syncdomain
+file truth_status.go syncdomain
+decl syncdomain sQLiteComparisonRow sQLiteReconciliationRow
+decl syncdomain nfcNormalize fileChangeTime deletedItemType resolveItemType actionItemType
+
+# the sync-root identity is read by observe, exec and the engine
+decl syncdomain syncRootIdentity newSyncRootIdentity fixedSyncRootIdentity validateExpectedSyncRootIdentity withRefusalHint errSyncRootRebindHint resolvedSyncRoot
+
+decl sync      ApplyShortcutChildRunCommandToEngineMountConfig resolveExpectedSyncRoot
+decl syncstore ReadShortcutRootStatusSnapshot SyncedFileCount
+
+# shortcut-root persistence is SQL: it belongs to the store
+file shortcut_root_store.go syncstore
+
+# observe no longer imports the store: the hash cache is a contract in the vocabulary
+decl syncdomain localHashCache localHashCacheEntry
+decl syncdomain localTruthRecoveryDroppedEvents localTruthRecoveryWatcherError localTruthRecoveryFullScanFailed
+
+# exec no longer imports the store: row shapes in the vocabulary, the store behind exec's own interfaces
+decl syncdomain PendingCreate observationState mutationFromActionOutcome
+viaiface syncexec SyncStore
+
+# used by cli, multisync and e2e: must not sit in a package that becomes private
+file observation_local_rules.go syncdomain
+decl syncdomain CountSyncFolderFiles MinPollInterval ConflictStemExt
+
+# private to two Engine methods: they move with the methods instead of being exported
+decl sync shortcutRootCleanupBlockedReport shortcutRootLocalReconcileStep
+
+# local-watch timing belongs to the observer whose behaviour it sets; the observer's own tests use it
+decl syncobserve localWatchHealthySafetyScanInterval localWatchRetryInitialDelay localWatchRetryMaxDelay
+
+# the findings-batch constructors only name issue types: vocabulary, so the store's own tests can build a batch
+decl syncdomain localObservationManagedIssueTypes newLocalObservationFindingsBatch newRemoteObservationFindingsBatch
