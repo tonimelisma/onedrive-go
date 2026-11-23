@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,11 @@ func TestClassifyLocalError_Table(t *testing.T) {
 	wrapped := func(errno syscall.Errno) error {
 		return fmt.Errorf("sync: download: %w", &os.PathError{Op: "write", Path: "/sync/a", Err: errno})
 	}
+	// A read of a file on a network mount or a FUSE folder, as an upload's
+	// hash or body read returns it.
+	readFailed := func(errno syscall.Errno) error {
+		return fmt.Errorf("sync: upload: hashing: %w", &fs.PathError{Op: "read", Path: "/sync/a", Err: errno})
+	}
 	testCases := []struct {
 		name string
 		err  error
@@ -57,6 +63,8 @@ func TestClassifyLocalError_Table(t *testing.T) {
 		{name: "ebusy", err: wrapped(syscall.EBUSY), want: LocalErrorBusy},
 		{name: "etxtbsy", err: wrapped(syscall.ETXTBSY), want: LocalErrorBusy},
 		{name: "estale", err: wrapped(syscall.ESTALE), want: LocalErrorBusy},
+		{name: "etimedout of a read", err: readFailed(syscall.ETIMEDOUT), want: LocalErrorBusy},
+		{name: "eagain of a read", err: readFailed(syscall.EAGAIN), want: LocalErrorBusy},
 		{name: "exdev", err: wrapped(syscall.EXDEV), want: LocalErrorCrossDevice},
 		{name: "enametoolong", err: wrapped(syscall.ENAMETOOLONG), want: LocalErrorNameTooLong},
 		{name: "permission is not this table's", err: wrapped(syscall.EACCES), want: LocalErrorOther},

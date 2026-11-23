@@ -760,12 +760,24 @@ same thing whichever call (download, mkdir, rename, conflict copy) hit it
 | `LocalErrorNoSpace` | `ErrDiskFull`, `ENOSPC`, `EDQUOT` | one `disk:local` block scope (R-2.10.60) |
 | `LocalErrorReadOnly` | `EROFS` | one `local:read-only:<path>` scope at the read-only mount (R-2.10.61) |
 | `LocalErrorFileTooLarge` | `EFBIG` | per-item `local_file_too_large` (R-2.10.62) |
-| `LocalErrorBusy` | `EBUSY`, `ETXTBSY`, `ESTALE` | retryable `local_busy` (R-2.10.62) |
+| `LocalErrorBusy` | `EBUSY`, `ETXTBSY`, `ESTALE`, `ETIMEDOUT`, `EAGAIN` | retryable `local_busy` (R-2.10.62) |
 | `LocalErrorCrossDevice` | `EXDEV` | per-item `local_cross_device` (R-2.10.62) |
 | `LocalErrorNameTooLong` | `ENAMETOOLONG` | per-item `local_name_too_long` (R-2.11.8) |
 
 `EACCES`/`EPERM` are deliberately not in the table: `os.ErrPermission` already
 names them and the sync permission probe owns their boundary decision.
+
+`ETIMEDOUT` and `EAGAIN` are local only when a local file operation returned
+them: a read on a network mount or a FUSE folder that timed out, or was told
+to try again (a regular file on a local disk ignores the `O_NONBLOCK` that
+`localpath.OpenRegular` opens with, but a network or FUSE filesystem and a
+lock another process holds can still return `EAGAIN`). Both clear on their own
+like `ESTALE` from the same mount, so they are retried with the retry work's
+backoff rather than at once. A network timeout never reaches this table: the
+sync classifier reads a request timeout first, and a chain that holds an
+`*fs.PathError` is never one (`syncdomain.IsRequestTimeout`), so a timed-out
+local read is per-file retry work and never outage evidence
+(`TestClassifyResult_LocalErrnoTable`).
 
 ## Where a Local Path Enters an Error
 

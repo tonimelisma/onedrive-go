@@ -449,7 +449,7 @@ func describeLocalRuntimeStatusCondition(key syncdomain.ConditionKey) statusCond
 	case syncdomain.ConditionLocalBusy:
 		return newStatusConditionDescriptor(
 			"Local file busy",
-			"The local file is in use or its network handle went stale.",
+			"The local file is in use, its network handle went stale, or a read of it timed out.",
 			"Wait for the program using it to finish (automatic retry in progress).",
 		)
 	case syncdomain.ConditionUnsupportedOperation:
