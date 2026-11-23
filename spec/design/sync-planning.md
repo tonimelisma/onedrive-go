@@ -252,6 +252,17 @@ planner-visible scratch tables, so a fact cannot mean two things in two queries
 (the comparison query once classified `unchanged` by size and mtime where the
 reconciliation query used hashes).
 
+A comparison row (`SQLiteComparisonRow`) carries each side's type
+(`BaselineType`, `LocalType`, `RemoteType`, `SideAbsent` where the side holds
+nothing) and no presence flags or item type of its own: the planner reads a
+side's presence as `SideType.Present` and the path's item type as the first
+present side's (`SQLiteComparisonRow.ItemType`), which is what the query's
+`COALESCE` over the three tables gave. The two agree on every row the query
+can produce because every table it reads, the live ones and the
+planner-visible copies, refuses an `item_type` outside the enum: a joined
+side always has a type, and only an absent one reads as the empty string
+(`TestQueryComparisonState_SideTypesCarryPresenceAndItemType`).
+
 Remote content is compared by hash only when both the baseline and the current
 item carry one (R-2.2.7). OneDrive omits hashes for zero-byte files on Business
 and for some Office-for-web saves; a hash known on one side only falls back to

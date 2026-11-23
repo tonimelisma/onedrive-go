@@ -1823,7 +1823,7 @@ func moveCompositionInputs(
 	for i := range comparisons {
 		cmp := &comparisons[i]
 		view := views[cmp.Path]
-		if !cmp.BaselinePresent || view == nil || view.Baseline == nil || view.Baseline.ItemID == "" {
+		if !cmp.BaselineType.Present() || view == nil || view.Baseline == nil || view.Baseline.ItemID == "" {
 			continue
 		}
 		entry := view.Baseline
@@ -1835,7 +1835,7 @@ func moveCompositionInputs(
 		if moveNodeTouchesUnavailableTruth(&node, views) {
 			frozen[node.key] = true
 		}
-		if cmp.ComparisonKind == syncdomain.ComparisonLocalMoveSource && cmp.LocalPresent && cmp.LocalMoveTarget != "" {
+		if cmp.ComparisonKind == syncdomain.ComparisonLocalMoveSource && cmp.LocalType.Present() && cmp.LocalMoveTarget != "" {
 			recreated[node.key] = cmp.Path
 		}
 		nodes = append(nodes, node)

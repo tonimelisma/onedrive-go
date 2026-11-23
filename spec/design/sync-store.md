@@ -57,7 +57,10 @@ for the same reason every other table writer is: it issues the `INSERT` and
 is the only file outside this family that consumed the store's SQL encoding
 helpers (`boolInt`, `nullString`, `nullKnownInt64`, `nullOptionalInt64`,
 `SqlTxRunner`). Deciding *what* is visible remains planning policy through the
-compiled `contentFilter`; writing the rows is store work. The rows go in as
+compiled `contentFilter`; writing the rows is store work. The two tables
+refuse an `item_type` outside `file`, `folder` and `root`, as `local_state`
+and `remote_state` do, so the comparison query can read a side's presence
+from its type (sync-planning.md, Comparison Facts). The rows go in as
 200-row `INSERT ... VALUES` statements (`plannerVisibleInsertChunkRows`): one
 statement per row cost a compile per row, three times a prepared statement and
 ten times a chunk. The prune that removes the rows below folders the baseline

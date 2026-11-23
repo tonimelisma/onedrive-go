@@ -1,6 +1,7 @@
 package syncstore
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -704,4 +705,87 @@ func TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpda
 	reconciliationRows, err := store.QueryReconciliationState(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "baseline_update", syncfixture.ReconciliationKindsByPath(reconciliationRows)["a.txt"])
+}
+
+// Validates: R-6.2.16
+//
+// A comparison row carries no presence flags and no item type of its own: a
+// side is present exactly when its side type is not SideAbsent, and the
+// path's item type is the first present side's, as the query's COALESCE gave
+// it. That holds on every row the query can produce because every table it
+// reads refuses an item_type outside the enum, so a joined side always has a
+// type, and an absent one reads as the empty string. The test proves both
+// halves: each presence combination of the three sides reads back as its
+// side types, and each table refuses an empty or unknown item_type.
+func TestQueryComparisonState_SideTypesCarryPresenceAndItemType(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	db := store.RawDBForTest()
+
+	type sides struct{ baseline, local, remote syncdomain.SideType }
+	want := map[string]sides{}
+	types := []syncdomain.SideType{syncdomain.SideFile, syncdomain.SideFolder}
+	for mask := 1; mask < 1<<3; mask++ {
+		for _, kind := range types {
+			p := fmt.Sprintf("p%d-%s", mask, kind)
+			var got sides
+			if mask&1 != 0 {
+				got.baseline = kind
+				_, err := db.ExecContext(ctx,
+					`INSERT INTO baseline (item_id, path, item_type) VALUES (?, ?, ?)`, "item-"+p, p, kind.String())
+				require.NoError(t, err)
+			}
+			if mask&2 != 0 {
+				got.local = kind
+				_, err := db.ExecContext(ctx, `INSERT INTO local_state (path, item_type) VALUES (?, ?)`, p, kind.String())
+				require.NoError(t, err)
+			}
+			if mask&4 != 0 {
+				got.remote = kind
+				_, err := db.ExecContext(ctx,
+					`INSERT INTO remote_state (item_id, path, item_type) VALUES (?, ?, ?)`, "item-"+p, p, kind.String())
+				require.NoError(t, err)
+			}
+			want[p] = got
+		}
+	}
+
+	rows, err := store.QueryComparisonState(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, len(want))
+	for i := range rows {
+		row := &rows[i]
+		expected := want[row.Path]
+		assert.Equal(t, expected, sides{baseline: row.BaselineType, local: row.LocalType, remote: row.RemoteType}, row.Path)
+		first := expected.baseline
+		for _, side := range []syncdomain.SideType{expected.local, expected.remote} {
+			if !first.Present() {
+				first = side
+			}
+		}
+		assert.Equal(t, first, syncdomain.SideTypeOf(row.ItemType()), row.Path)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { assert.NoError(t, tx.Rollback()) }()
+	for _, create := range []string{sqlCreatePlannerVisibleLocalState, sqlCreatePlannerVisibleRemoteState} {
+		_, err = tx.ExecContext(ctx, create)
+		require.NoError(t, err)
+	}
+	inserts := map[string]string{
+		"baseline":                     `INSERT INTO baseline (item_id, path, item_type) VALUES ('bad', 'bad', ?)`,
+		"local_state":                  `INSERT INTO local_state (path, item_type) VALUES ('bad', ?)`,
+		"remote_state":                 `INSERT INTO remote_state (item_id, path, item_type) VALUES ('bad', 'bad', ?)`,
+		PlannerVisibleLocalStateTable:  `INSERT INTO planner_visible_local_state (path, item_type) VALUES ('bad', ?)`,
+		PlannerVisibleRemoteStateTable: `INSERT INTO planner_visible_remote_state (item_id, path, item_type) VALUES ('bad', 'bad', ?)`,
+	}
+	for table, insert := range inserts {
+		for _, itemType := range []string{"", "symlink"} {
+			_, err := tx.ExecContext(ctx, insert, itemType)
+			assert.Error(t, err, "%s accepts item_type %q", table, itemType)
+		}
+	}
 }

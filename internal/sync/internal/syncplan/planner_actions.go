@@ -438,21 +438,21 @@ func buildSQLitePathViews(
 			Path:        row.Path,
 			TruthStatus: truthStatus,
 		}
-		if row.BaselinePresent {
+		if row.BaselineType.Present() {
 			entry, ok := baseline.GetByPath(row.Path)
 			if !ok {
 				return nil, nil, fmt.Errorf("sync: missing baseline entry for comparison path %q", row.Path)
 			}
 			view.Baseline = &entry
 		}
-		if row.LocalPresent {
+		if row.LocalType.Present() {
 			localRow, ok := localByPath[row.Path]
 			if !ok {
 				return nil, nil, fmt.Errorf("sync: missing local_state row for comparison path %q", row.Path)
 			}
 			view.Local = LocalStateFromSnapshotRow(&localRow)
 		}
-		if row.RemotePresent {
+		if row.RemoteType.Present() {
 			remoteRow, ok := remoteByPath[row.Path]
 			if !ok {
 				return nil, nil, fmt.Errorf("sync: missing remote_state row for comparison path %q", row.Path)

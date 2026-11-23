@@ -22,8 +22,8 @@ func TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable(t *tes
 	plan := func(kind syncdomain.ReconciliationKind) (*syncdomain.ActionPlan, error) {
 		return NewPlanner(syncfixture.TestLogger(t)).PlanCurrentState(
 			[]syncdomain.SQLiteComparisonRow{
-				{Path: "docs/a.txt", LocalPresent: true, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate},
-				{Path: "docs/b.txt", LocalPresent: true, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate},
+				{Path: "docs/a.txt", LocalType: syncdomain.SideFile, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate},
+				{Path: "docs/b.txt", LocalType: syncdomain.SideFile, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate},
 			},
 			[]syncdomain.SQLiteReconciliationRow{
 				{Path: "docs/a.txt", ItemType: syncdomain.ItemTypeFile, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate, ReconciliationKind: kind},
@@ -68,7 +68,7 @@ func TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan(t *testing.T) {
 	t.Parallel()
 
 	_, err := NewPlanner(syncfixture.TestLogger(t)).PlanCurrentState(
-		[]syncdomain.SQLiteComparisonRow{{Path: "docs/a.txt", LocalPresent: true}},
+		[]syncdomain.SQLiteComparisonRow{{Path: "docs/a.txt", LocalType: syncdomain.SideFile}},
 		nil,
 		[]syncdomain.LocalStateRow{{Path: "docs/a.txt", ItemType: syncdomain.ItemTypeFile, Hash: "local-a"}},
 		nil,
@@ -90,7 +90,7 @@ func TestPlanCurrentState_FolderTransferFailsThePlan(t *testing.T) {
 	t.Parallel()
 
 	_, err := NewPlanner(syncfixture.TestLogger(t)).PlanCurrentState(
-		[]syncdomain.SQLiteComparisonRow{{Path: "local-dir", LocalPresent: true, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate}},
+		[]syncdomain.SQLiteComparisonRow{{Path: "local-dir", LocalType: syncdomain.SideFolder, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate}},
 		[]syncdomain.SQLiteReconciliationRow{{
 			Path:               "local-dir",
 			ItemType:           syncdomain.ItemTypeFolder,

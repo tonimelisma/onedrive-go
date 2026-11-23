@@ -15,7 +15,7 @@ const (
 
 	sqlCreatePlannerVisibleLocalState = `CREATE TEMP TABLE IF NOT EXISTS planner_visible_local_state (
 		path       TEXT    NOT NULL PRIMARY KEY,
-		item_type  TEXT    NOT NULL,
+		item_type  TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
 		hash       TEXT,
 		size       INTEGER,
 		mtime      INTEGER,
@@ -29,7 +29,7 @@ const (
 		drive_id      TEXT    NOT NULL DEFAULT '',
 		item_id       TEXT    NOT NULL PRIMARY KEY,
 		path          TEXT    NOT NULL UNIQUE,
-		item_type     TEXT    NOT NULL,
+		item_type     TEXT    NOT NULL CHECK(item_type IN ('file', 'folder', 'root')),
 		hash          TEXT,
 		size          INTEGER,
 		mtime         INTEGER,

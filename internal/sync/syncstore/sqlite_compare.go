@@ -274,11 +274,10 @@ comparison_flags AS (
 		p.path,
 		COALESCE(b.item_id, '') AS baseline_item_id,
 		COALESCE(r.item_id, '') AS remote_item_id,
-		COALESCE(b.item_type, l.item_type, r.item_type, '') AS item_type,
+		-- A side's presence and the path's item type are read from the three
+		-- side types: item_type is NOT NULL and one of the enum's names in
+		-- every table this query reads (SQLiteComparisonRow).
 		COALESCE(b.item_type, '') AS baseline_item_type,
-		CASE WHEN b.path IS NOT NULL THEN 1 ELSE 0 END AS baseline_present,
-		CASE WHEN l.path IS NOT NULL THEN 1 ELSE 0 END AS local_present,
-		CASE WHEN r.path IS NOT NULL THEN 1 ELSE 0 END AS remote_present,
 		-- Filesystem identity is a pairing hint, never a change signal
 		-- (D-057). A folder has no content, so a new inode at its path (rm -rf
 		-- and restore, a device renumbered after reboot) changes nothing; a
@@ -475,10 +474,6 @@ SELECT
 	path,
 	baseline_item_id,
 	remote_item_id,
-	item_type,
-	baseline_present,
-	local_present,
-	remote_present,
 	local_changed,
 	remote_changed,
 	current_equal,
@@ -561,7 +556,7 @@ func QueryPlannerRows(
 		row.ComparisonKind = decision.Comparison
 		reconciliations[i] = syncdomain.SQLiteReconciliationRow{
 			Path:               row.Path,
-			ItemType:           row.ItemType,
+			ItemType:           row.ItemType(),
 			ComparisonKind:     decision.Comparison,
 			ReconciliationKind: decision.Reconciliation,
 			LocalMoveTarget:    row.LocalMoveTarget,
@@ -604,21 +599,15 @@ func queryComparisonRows(ctx context.Context, runner SqlTxRunner, query string) 
 
 func scanComparisonRow(rows *sql.Rows) (syncdomain.SQLiteComparisonRow, error) {
 	var (
-		row                                        syncdomain.SQLiteComparisonRow
-		itemType                                   sql.NullString
-		baselinePresent, localPresent              int
-		remotePresent, localChanged, remoteChanged int
-		currentEqual                               int
-		sideTypes                                  [3]string
+		row                         syncdomain.SQLiteComparisonRow
+		localChanged, remoteChanged int
+		currentEqual                int
+		sideTypes                   [3]string
 	)
 	err := rows.Scan(
 		&row.Path,
 		&row.BaselineItemID,
 		&row.RemoteItemID,
-		&itemType,
-		&baselinePresent,
-		&localPresent,
-		&remotePresent,
 		&localChanged,
 		&remoteChanged,
 		&currentEqual,
@@ -650,15 +639,6 @@ func scanComparisonRow(rows *sql.Rows) (syncdomain.SQLiteComparisonRow, error) {
 			return syncdomain.SQLiteComparisonRow{}, fmt.Errorf("sync: reading the side types of %q: %w", row.Path, err)
 		}
 	}
-	if itemType.Valid {
-		row.ItemType, err = syncdomain.ParseItemType(itemType.String)
-		if err != nil {
-			return syncdomain.SQLiteComparisonRow{}, fmt.Errorf("sync: parsing comparison state item type %q: %w", itemType.String, err)
-		}
-	}
-	row.BaselinePresent = baselinePresent != 0
-	row.LocalPresent = localPresent != 0
-	row.RemotePresent = remotePresent != 0
 	row.LocalChanged = localChanged != 0
 	row.RemoteChanged = remoteChanged != 0
 	row.CurrentEqual = currentEqual != 0
