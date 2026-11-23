@@ -270,7 +270,7 @@ func snapshotLocalTree(t *testing.T, root string) map[string]string {
 			".": "missing",
 		}
 	}
-	require.NoError(t, err)
+	requireNoLocalError(t, err, "stat the local tree's root")
 
 	snapshot := map[string]string{}
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
@@ -309,7 +309,7 @@ func snapshotLocalTree(t *testing.T, root string) map[string]string {
 
 		return nil
 	})
-	require.NoError(t, err)
+	requireNoLocalError(t, err, "snapshot the local tree")
 
 	return snapshot
 }

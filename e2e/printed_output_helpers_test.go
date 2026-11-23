@@ -20,6 +20,18 @@ func printable(text string) string {
 	return printableWith(suiteDriveRoles, text)
 }
 
+// printableNames is names, each through printable: the names a listing
+// command printed, as an assertion that compares the list prints it. A name
+// of the suite's own making reads as itself; a fixture's is named by role.
+func printableNames(names []string) []string {
+	masked := make([]string, 0, len(names))
+	for _, name := range names {
+		masked = append(masked, printable(name))
+	}
+
+	return masked
+}
+
 // assertOutputContains is assert.Contains for a command's output: a failure
 // prints the output masked and bounded, never whole.
 func assertOutputContains(t *testing.T, output, want string, msgAndArgs ...any) {

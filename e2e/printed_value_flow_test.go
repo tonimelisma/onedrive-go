@@ -152,13 +152,29 @@ func (flow valueFlow) set(target ast.Expr, class string) {
 	}
 }
 
+// followFunctions classes the parameters and results of the suite functions
+// of live to a fixed point: each pass follows what callers pass
+// (followParameters) and what bodies return (followResults), and the classes
+// one gives the flows the other reads, until a pass adds none. Each class is
+// set once and never taken back, so the passes end.
+func (scan *printedValueScan) followFunctions(live []*ast.FuncDecl) {
+	scan.params = map[string]valueFlow{}
+	scan.results = map[string][]string{}
+	for {
+		addedParams := scan.followParameters(live)
+		if addedResults := scan.followResults(live); !addedParams && !addedResults {
+			return
+		}
+	}
+}
+
 // followParameters gives each parameter of a suite function the class of a
 // value one of live passes it, until a pass over live adds none: a helper
 // holds what its callers hand it whatever its parameters are named. A method
 // is not followed: the scan reads no types, so a call's receiver is not
-// known.
-func (scan *printedValueScan) followParameters(live []*ast.FuncDecl) {
-	scan.params = map[string]valueFlow{}
+// known. It reports whether it added a class.
+func (scan *printedValueScan) followParameters(live []*ast.FuncDecl) bool {
+	addedAny := false
 	for added := true; added; {
 		added = false
 		for _, fn := range live {
@@ -171,7 +187,133 @@ func (scan *printedValueScan) followParameters(live []*ast.FuncDecl) {
 				return true
 			})
 		}
+		addedAny = addedAny || added
 	}
+
+	return addedAny
+}
+
+// followResults gives each result of a suite function of live the class of
+// a value one of its return statements returns there, so a caller that
+// prints what a helper returns prints what the helper got: an identity a
+// helper reads and returns is the caller's identity, through any number of
+// calls. Only a result that is text is classed (textResults): a string, a
+// []string or an error. A count (an int, a bool, a duration) names no drive
+// or item, and the suite compares and prints such counts freely; a struct, a
+// map or a pointer a helper decodes holds counts and states beside names,
+// and without types the scan could not tell a count field from a name field,
+// so it would class every decoded count the suite compares. Methods are not
+// followed, as for parameters. It reports whether it added a class.
+func (scan *printedValueScan) followResults(live []*ast.FuncDecl) bool {
+	added := false
+	for _, fn := range live {
+		if fn.Recv != nil || fn.Type.Results == nil || slices.Contains(suiteCLIRunners(), fn.Name.Name) {
+			continue
+		}
+
+		texts := textResults(fn.Type)
+		classes := scan.results[fn.Name.Name]
+		if classes == nil {
+			classes = make([]string, len(texts))
+		}
+		flow := scan.flowOf(fn)
+		for _, returned := range returnedClasses(scan, flow, fn) {
+			for i, class := range returned {
+				if i < len(classes) && classes[i] == "" && texts[i] && class != "" {
+					classes[i] = class
+					added = true
+				}
+			}
+		}
+		scan.results[fn.Name.Name] = classes
+	}
+
+	return added
+}
+
+// returnedClasses lists, for each return statement of fn's own body (not of
+// a function literal in it), the class each result holds: the value
+// returned at its position, a named result's flow for a bare return, and a
+// suite function's results for a return of its call.
+func returnedClasses(scan *printedValueScan, flow valueFlow, fn *ast.FuncDecl) [][]string {
+	var named []string
+	for _, field := range fn.Type.Results.List {
+		if len(field.Names) == 0 {
+			named = append(named, "")
+		}
+		for _, name := range field.Names {
+			named = append(named, name.Name)
+		}
+	}
+
+	var returns [][]string
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		switch node := node.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			returns = append(returns, scan.returnClasses(flow, node, named))
+		}
+
+		return true
+	})
+
+	return returns
+}
+
+func (scan *printedValueScan) returnClasses(flow valueFlow, ret *ast.ReturnStmt, named []string) []string {
+	classes := make([]string, len(named))
+	switch {
+	case len(ret.Results) == 0:
+		for i, name := range named {
+			classes[i] = flow[name]
+		}
+	case len(ret.Results) == 1 && len(named) > 1:
+		if call, isCall := ast.Unparen(ret.Results[0]).(*ast.CallExpr); isCall {
+			copy(classes, scan.callResults(call))
+		}
+	default:
+		for i, result := range ret.Results {
+			if i < len(classes) {
+				classes[i] = scan.valueClass(flow, result)
+			}
+		}
+	}
+
+	return classes
+}
+
+// textResults reports, one per result of funcType, whether it is text a
+// caller can print: a string, a []string or an error (followResults).
+func textResults(funcType *ast.FuncType) []bool {
+	var texts []bool
+	for _, field := range funcType.Results.List {
+		isText := false
+		switch result := field.Type.(type) {
+		case *ast.Ident:
+			isText = result.Name == stringTypeName || result.Name == "error"
+		case *ast.ArrayType:
+			isText = result.Len == nil && isIdentNamed(result.Elt, stringTypeName)
+		}
+		for range max(1, len(field.Names)) {
+			texts = append(texts, isText)
+		}
+	}
+
+	return texts
+}
+
+// callResults is the result classes of call: a CLI runner's, or else a suite
+// function's as followResults found them, or nil.
+func (scan *printedValueScan) callResults(call *ast.CallExpr) []string {
+	if results := scan.runnerResults(call); results != nil {
+		return results
+	}
+	if fun, ok := call.Fun.(*ast.Ident); ok && slices.ContainsFunc(scan.results[fun.Name], isClassed) {
+		return scan.results[fun.Name]
+	}
+
+	return nil
 }
 
 // passClasses gives the parameters of the suite function call calls the
@@ -284,8 +426,8 @@ func (scan *printedValueScan) followAssign(flow valueFlow, targets, values []ast
 
 	call, isCall := ast.Unparen(values[0]).(*ast.CallExpr)
 	switch {
-	case isCall && scan.runnerResults(call) != nil:
-		for i, class := range scan.runnerResults(call) {
+	case isCall && scan.callResults(call) != nil:
+		for i, class := range scan.callResults(call) {
 			if i < len(targets) {
 				flow.set(targets[i], class)
 			}
@@ -375,12 +517,12 @@ func (scan *printedValueScan) valueClass(flow valueFlow, expr ast.Expr) string {
 	return ""
 }
 
-// leafClass is what a printed leaf holds: a runner's call its first result,
-// a name or field what its name says, and else what the variable it is
-// taken from holds.
+// leafClass is what a printed leaf holds: a runner's or a suite function's
+// call its first result, a name or field what its name says, and else what
+// the variable it is taken from holds.
 func (scan *printedValueScan) leafClass(flow valueFlow, leaf ast.Expr) string {
 	if call, ok := leaf.(*ast.CallExpr); ok {
-		if results := scan.runnerResults(call); len(results) > 0 {
+		if results := scan.callResults(call); len(results) > 0 {
 			return results[0]
 		}
 
@@ -529,6 +671,8 @@ func TestPrintedValueRuleFollowsValues(t *testing.T) {
 		{at: "planted_flow_test.go:58", call: "t.Run", value: "drive", class: printedClassIdentity},
 		{at: "planted_flow_test.go:62", call: "require.NoError", value: "err", class: printedClassIdentity},
 		{at: "planted_flow_test.go:63", call: "t.Logf", value: "err", class: printedClassIdentity},
+		{at: "planted_flow_test.go:74", call: "t.Logf", value: "plantedDriveOf(...)", class: printedClassIdentity},
+		{at: "planted_flow_test.go:76", call: "t.Logf", value: "selector", class: printedClassIdentity},
 	}, findings,
 		"a decoded listing, a value ranged and one indexed out of it, a runner's output under any name and a "+
 			"variable set from one, a fixture name through a path join, an os error quoting a path built from "+
@@ -536,7 +680,8 @@ func TestPrintedValueRuleFollowsValues(t *testing.T) {
 			"%d, an expected value that only looks like a format, a variable set from an element under %t, an "+
 			"address under %d, a ranged value under %t, a helper's parameter given a fixture path, a live value in a test that runs no "+
 			"CLI, a subtest named by a drive, an os error quoting a token path testutil builds from a drive, and that "+
-			"error's text; not the data os.WriteFile writes, a typed field under %d, a %T, the value of True, a subtest "+
+			"error's text, a helper's result that is a drive, and one passed on through a second helper; not "+
+			"a helper's count of one, the data os.WriteFile writes, a typed field under %d, a %T, the value of True, a subtest "+
 			"named by a role or a masked message")
 }
 
@@ -606,5 +751,19 @@ func TestPlantedSubtestAndTokenPath(t *testing.T) {
 	_, err := os.Stat(tokenPath)
 	require.NoError(t, err)
 	t.Logf("stat: %s", err.Error())
+}
+
+func plantedDriveOf(t *testing.T) string { return drive }
+
+func plantedSelectorOf(t *testing.T) (string, error) { return plantedDriveOf(t), nil }
+
+func plantedDriveCount(t *testing.T) int { return drive }
+
+func TestPlantedResults(t *testing.T) {
+	makeCmd()
+	t.Logf("one call: %s", plantedDriveOf(t))
+	selector, err := plantedSelectorOf(t)
+	t.Logf("two calls: %v, %v", selector, err)
+	t.Logf("a count: %v", plantedDriveCount(t))
 }
 `
