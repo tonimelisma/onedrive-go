@@ -451,6 +451,8 @@ func (e *Executor) DeleteOutcome(action *syncdomain.Action, actionType syncdomai
 		ItemID:          action.ItemID,
 		ItemType:        syncdomain.DeletedItemType(action),
 		DeleteConfirmed: action.DeleteConfirmed,
+		// An unsynced entry's delete records nothing (applySingleMutation).
+		DeletesUnsyncedEntry: action.DeletesUnsyncedEntry,
 	}
 }
 

@@ -801,12 +801,25 @@ func movePrecedes(move, a *syncdomain.Action) bool {
 // (namekey.OfPath): a new folder X takes the path x leaves there and on a volume
 // that folds case.
 func movesIntoVacatedPath(a, move *syncdomain.Action) bool {
-	if move.OldPath == "" || landsInTheFolderMoveCarries(a, move) {
+	if move.OldPath == "" || landsInTheFolderMoveCarries(a, move) || runsInTheLocalSnapshot(a) {
 		return false
 	}
 	vacated := namekey.OfPath(move.OldPath)
 
 	return belowPathKey(namekey.OfPath(a.Path), vacated) && !belowPathKey(namekey.OfPath(a.OldPath), vacated)
+}
+
+// runsInTheLocalSnapshot reports a local move composition planned at the
+// paths the folders here have now, before a move of a folder above it
+// (MovedRemotePath names where OneDrive holds the item): what it lands in
+// below a path another local move vacates is in what that move carries
+// away, never a new folder taking the path, and the folder's move waits for
+// it as work below its source. Read as landing in a new folder, it waited
+// for that move too, a cycle: here p moved into x and f out of it onto p,
+// while OneDrive moved x into p, so f goes back into p at x/p/f, then p to
+// its path and x into it.
+func runsInTheLocalSnapshot(a *syncdomain.Action) bool {
+	return a.Type == syncdomain.ActionLocalMove && a.MovedRemotePath != ""
 }
 
 // landsInTheFolderMoveCarries reports whether a, a move below the path a
@@ -875,7 +888,17 @@ func underMoveDestination(a, move *syncdomain.Action) bool {
 		return false
 	}
 
-	return isMoveAction(a) && strings.HasPrefix(a.OldPath, move.Path+"/")
+	// A file holds nothing, so a source below the path a file's move lands
+	// on lies in what holds the path now, which it leaves first: from the
+	// held start, here p moved into the new x and z onto p, while f, in p
+	// on OneDrive, leaves for the new x; waiting for z's move, f's closed
+	// a cycle through p's move, which waits for f to leave.
+	return isMoveAction(a) && strings.HasPrefix(a.OldPath, move.Path+"/") && !movesAFile(move)
+}
+
+// movesAFile reports a move of a synced file.
+func movesAFile(move *syncdomain.Action) bool {
+	return move.View != nil && move.View.Baseline != nil && move.View.Baseline.ItemType == syncdomain.ItemTypeFile
 }
 
 // underMoveSource reports whether a works strictly below move's source in

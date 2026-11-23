@@ -1,8 +1,0 @@
-synced L[mv p x/p] R[mv x p/x, mv p/f x] :: sides-differ left-held
-synced L[mv p x/p] R[mv z p/z, mv x z] :: sides-differ left-held
-synced L[mv x p/x] R[mv z x/z, mv p z] :: sides-differ left-held
-synced L[mv p x/p, mv x/p/f p] R[mv x p/x] :: sides-differ left-held
-synced L[mv p x/p, mv z p] R[mv x p/x] :: sides-differ left-held
-synced L[mv p x/p, mkdir p] R[mv x p/x] :: sides-differ left-held
-synced L[mv x p/x, mv p/f x] R[mv p x/p] :: sides-differ left-held
-synced L[mv x p/x, mv z x] R[mv p x/p] :: sides-differ left-held

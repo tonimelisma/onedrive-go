@@ -136,6 +136,12 @@ const (
 	// delete, whose own checks keep the folder when it holds anything not as
 	// synced, and the move then lands on the freed path.
 	moveDisplaceDeleteFirst
+	// moveDisplaceEmptyFolder: an empty folder made here, no synced item,
+	// at a synced folder's local move destination: it is deleted first, the
+	// executor's delete refusing it if it gained an entry since the scan, and
+	// the folder lands in its place, the one folder at the path
+	// (emptyNewFolderGivesWay).
+	moveDisplaceEmptyFolder
 )
 
 func (n *moveNode) present(coord moveCoord) bool { return n.paths[coord] != "" }
@@ -292,6 +298,11 @@ type moveComposer struct {
 	pathMemo  map[string]string
 	occupancy moveOccupancy
 	notices   []moveNotice
+	// collisionUndone holds items whose local relocation was undone because
+	// it claimed the path of another item (findTargetCollision): their move
+	// back never takes the place of a folder made here (mergesWithANewFolderHere,
+	// emptyNewFolderGivesWay), which would undo what the user did here twice.
+	collisionUndone map[string]bool
 	// unresolvable holds items whose target could not be made consistent
 	// (defensive: undoing local relocations always yields the remote tree).
 	// They keep their baseline path for composition and are deferred.
@@ -308,6 +319,8 @@ func composeMoves(nodes []moveNode, occupancy moveOccupancy, frozen map[string]b
 		origin:       make(map[string]moveTargetOrigin, len(nodes)),
 		occupancy:    occupancy,
 		unresolvable: make(map[string]bool, len(frozen)),
+
+		collisionUndone: map[string]bool{},
 	}
 	for key := range frozen {
 		c.unresolvable[key] = true
@@ -447,6 +460,9 @@ func (c *moveComposer) undoLocalRelocations(keys []string, kind moveNoticeKind) 
 		c.target[key] = c.location(n, moveCoordRemote)
 		c.origin[key] = moveTargetFromRemote
 		c.notices = append(c.notices, c.notice(kind, n))
+		if kind == moveNoticeCollision {
+			c.collisionUndone[key] = true
+		}
 		undone = true
 	}
 
@@ -1046,9 +1062,32 @@ func (e *moveEmitter) waitsOnlyForItsFolder(key string, side moveCoord) (string,
 		folder.itemType != syncdomain.ItemTypeFolder || !folder.present(side) {
 		return "", false
 	}
-	blocker, blocked := e.blockingPendingMove(folderKey, side)
+	if blocker, blocked := e.blockingPendingMove(folderKey, side); blocked && blocker == key {
+		return folderKey, true
+	}
 
-	return folderKey, blocked && blocker == key
+	return folderKey, e.holdsTheLandingOfAFolderAbove(key, folderKey, side)
+}
+
+// holdsTheLandingOfAFolderAbove reports whether key holds on side the
+// destination of a pending folder that folderKey's target hangs off: the
+// folder waits for that folder's decision, which waits for key to leave, so
+// key waits for its folder alone through it. Here x moved into p and f out
+// of p onto x, while OneDrive moved p into x: the cycle keeps OneDrive's
+// nesting, so x goes back to its path, which f holds, and p moves into x,
+// while f's own claim on x is undone; f moves first into p where p is here
+// now, then x out of p onto its path, then p into it.
+func (e *moveEmitter) holdsTheLandingOfAFolderAbove(key, folderKey string, side moveCoord) bool {
+	for _, other := range e.keys {
+		if other == folderKey || e.state[other] != moveEmitPending || !e.targetHangsOff(folderKey, other) {
+			continue
+		}
+		if blocker, blocked := e.blockingPendingMove(other, side); blocked && blocker == key {
+			return true
+		}
+	}
+
+	return false
 }
 
 // parkAwayFromItsOwnLanding decides key, whose move on side lands in a folder
@@ -1430,6 +1469,7 @@ func (e *moveEmitter) resolveMove(n *moveNode, side moveCoord, newPath string) b
 func (e *moveEmitter) mergesWithANewFolderHere(n *moveNode, side moveCoord, newPath string) bool {
 	source := n.paths[side]
 	if side != moveCoordLocal || n.itemType != syncdomain.ItemTypeFolder || !n.present(moveCoordRemote) ||
+		e.collisionUndone[n.key] ||
 		!sameLocation(e.location(n, moveCoordRemote), e.target[n.key]) || pathAtOrBelow(newPath, source) ||
 		pathAtOrBelow(source, newPath) || !e.occupancy.localFolders[newPath] {
 		return false
@@ -1548,7 +1588,7 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 	}
 	// The holder is looked up at the final newPath: a local move that runs
 	// inside a folder before the folder moves lands where that folder is now.
-	if e.waitsForAFolderHolder(n.key, side, newPath) {
+	if e.waitsForTheNextPass(n.key, side, oldPath, newPath) {
 		return composedMove{}, false
 	}
 	if oldPath == newPath {
@@ -1587,6 +1627,36 @@ func (e *moveEmitter) landsInTheMovingFolderFirst(
 	return before, "", lands
 }
 
+// waitsForTheNextPass reports whether key's move on side from oldPath to
+// newPath waits for the next pass: for the item holding the folder it lands
+// in (waitsForAFolderHolder), or for a folder above it to leave its
+// destination (landsWhereAFolderAboveItLeaves).
+func (e *moveEmitter) waitsForTheNextPass(key string, side moveCoord, oldPath, newPath string) bool {
+	return e.waitsForAFolderHolder(key, side, newPath) || e.landsWhereAFolderAboveItLeaves(side, oldPath, newPath)
+}
+
+// landsWhereAFolderAboveItLeaves reports whether a local move from oldPath
+// lands on the path an earlier local move of the plan vacates whose source
+// holds oldPath: that folder's move waits for the entry to leave it first
+// (children leave first) and the entry's for the folder to leave its
+// destination, a cycle dropped on every pass. The entry waits for the next
+// pass, which finds it where the folder's move carried it. Here p moved into
+// x while OneDrive moved x into p and p/f onto x: p leaves x, x moves into p,
+// and f, carried to p/f, moves onto x the next pass.
+func (e *moveEmitter) landsWhereAFolderAboveItLeaves(side moveCoord, oldPath, newPath string) bool {
+	if side != moveCoordLocal {
+		return false
+	}
+	for i := range e.result.moves {
+		earlier := &e.result.moves[i]
+		if earlier.side == side && earlier.oldPath == newPath && strings.HasPrefix(oldPath, earlier.oldPath+"/") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // landsInsideBeforeItMoves reports where n's local move lands when its
 // target lies below the destination of an earlier local folder move of the
 // plan and its source outside that folder: inside the folder at the path the
@@ -1598,7 +1668,10 @@ func (e *moveEmitter) landsInTheMovingFolderFirst(
 // OneDrive, moving to c.md, c.md moving into d's destination, and d moving.
 func (e *moveEmitter) landsInsideBeforeItMoves(n *moveNode, side moveCoord, oldPath, newPath string, earlier *composedMove) (string, bool) {
 	if side != moveCoordLocal || earlier.side != moveCoordLocal || e.nodes[earlier.key].itemType != syncdomain.ItemTypeFolder ||
-		!strings.HasPrefix(newPath, earlier.newPath+"/") || pathAtOrBelow(oldPath, earlier.oldPath) {
+		!strings.HasPrefix(newPath, earlier.newPath+"/") || pathAtOrBelow(oldPath, earlier.oldPath) ||
+		pathAtOrBelow(earlier.oldPath, oldPath) {
+		// Inside n itself, the folder's path here now is no place n can
+		// move to: n waits for that folder to leave it first.
 		return "", false
 	}
 	if !e.childLeavesForPath(earlier.oldPath, oldPath) {
@@ -2045,9 +2118,24 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 		if e.newFolderMeetsAFile(n, isNode, snapshotPath) {
 			return true, moveDisplaceConflictCopy
 		}
+		if e.emptyNewFolderGivesWay(n, isNode, snapshotPath) {
+			return true, moveDisplaceEmptyFolder
+		}
 	}
 
 	return false, moveDisplaceNever
+}
+
+// emptyNewFolderGivesWay reports a synced folder n moving onto p here, where
+// the entry is an empty folder that is no synced item: two folders at one
+// path are one folder by path (R-2.17.13), and with nothing in the new one,
+// n takes the path whole. From the synced tree, p moved into x and a new p
+// made here while OneDrive moved x into p: OneDrive's nesting wins, p goes
+// back to its path, where the new p is, and the move waited for good for it
+// to leave. A new folder that holds anything is not given way so.
+func (e *moveEmitter) emptyNewFolderGivesWay(n *moveNode, isNode bool, p string) bool {
+	return n.itemType == syncdomain.ItemTypeFolder && !isNode && !e.collisionUndone[n.key] && e.occupancy.localFolders[p] &&
+		!e.holdsAnythingHere(p)
 }
 
 // localDisplacementAt is how the local entry at p gives way to a move onto
@@ -2252,7 +2340,14 @@ func movedOntoAnotherItemsPath(
 	cmp *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry,
 	localRows []syncdomain.LocalStateRow, cmpByPath map[string]*syncdomain.SQLiteComparisonRow,
 ) (string, bool) {
-	if entry.ItemType != syncdomain.ItemTypeFile || cmp.LocalType.Present() || cmp.RemoteType.Present() {
+	if entry.ItemType != syncdomain.ItemTypeFile || cmp.LocalType.Present() {
+		return "", false
+	}
+	// OneDrive still holding the file where it was synced, the file pairs
+	// only onto the path of a synced item this computer moved away
+	// (pathOfAnItemMovedAwayHere).
+	keptOnOneDrive := cmp.RemoteType.Present()
+	if keptOnOneDrive && cmp.RemoteItemID != entry.ItemID {
 		return "", false
 	}
 	want, known := entry.FileIdentity()
@@ -2274,13 +2369,33 @@ func movedOntoAnotherItemsPath(
 			// overwritten by it.
 			return "", false
 		}
-		if at := cmpByPath[row.Path]; at != nil && at.BaselineType.Present() && at.BaselineItemID != entry.ItemID {
-			return row.Path, true
-		}
-		return "", false
+		return row.Path, takesAnotherItemsPath(cmpByPath[row.Path], entry, keptOnOneDrive)
 	}
 
 	return "", false
+}
+
+// takesAnotherItemsPath reports whether at, the comparison row of the path
+// where this computer holds the synced file of entry, is another synced
+// item's path the file may pair onto: any while OneDrive no longer holds the
+// file where it was synced, otherwise only one whose item this computer
+// moved away (pathOfAnItemMovedAwayHere).
+func takesAnotherItemsPath(at *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry, keptOnOneDrive bool) bool {
+	return at != nil && at.BaselineType.Present() && at.BaselineItemID != entry.ItemID &&
+		(!keptOnOneDrive || pathOfAnItemMovedAwayHere(at))
+}
+
+// pathOfAnItemMovedAwayHere reports whether at, the comparison row of the
+// path a synced file was moved onto here, is that of another synced item
+// this computer moved away, which OneDrive keeps there: here p moved into x
+// and z onto p, while OneDrive moved x into p. The file pairs as a move onto
+// p, so its claim on p meets p's, whose move here a cycle undoes, and the
+// collision undoes the file's move; read as new content at p, the file was
+// uploaded beside OneDrive's z while p waited for good to come back to its
+// path.
+func pathOfAnItemMovedAwayHere(at *syncdomain.SQLiteComparisonRow) bool {
+	return at.ComparisonKind == syncdomain.ComparisonLocalMoveSource && at.LocalItemReplaced &&
+		at.RemoteItemID == at.BaselineItemID
 }
 
 // folderMovedOntoAPathItsItemLeft finds where this computer moved a synced
@@ -2735,6 +2850,18 @@ func composedLocalMoveActions(
 	case moveDisplaceConflictCopy:
 		copyView := *viewAt(move.newPath)
 		return []syncdomain.Action{makeConflictCopyAction(&copyView), action}
+	case moveDisplaceEmptyFolder:
+		// The delete names no synced item, so its commit records nothing;
+		// the move, which waits for it (moveOrderDependency), records the
+		// item where it lands. Its view keeps what OneDrive holds at the
+		// path, which the worker's freshness check reads.
+		at := viewAt(move.newPath)
+		emptied := makeAction(syncdomain.ActionLocalDelete, &syncdomain.PathView{
+			Path: move.newPath, Local: at.Local, Remote: at.Remote, TruthStatus: at.TruthStatus,
+		})
+		emptied.ItemID = ""
+		emptied.DeletesUnsyncedEntry = true
+		return []syncdomain.Action{emptied, action}
 	case moveDisplaceNever:
 	}
 
@@ -3979,12 +4106,22 @@ func replacedByAComposedMove(
 		// SQLite read as gone (folderMovedOntoAPathItsItemLeft): its moves
 		// carry it, and the delete would take it from OneDrive.
 		return action.ItemID != "" && identifiedKey(identified, action.ItemID) && movedOrHeld(action.ItemID)
-	case syncdomain.ActionLocalDelete, syncdomain.ActionLocalMove,
-		syncdomain.ActionRemoteMove, syncdomain.ActionFolderCreate:
+	case syncdomain.ActionFolderCreate:
+		return makesHereAFolderTheMoveBrings(action, moved)
+	case syncdomain.ActionLocalDelete, syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove:
 		return false
 	default:
 		panic(syncdomain.OutsideTheEnum(action.Type))
 	}
+}
+
+// makesHereAFolderTheMoveBrings reports OneDrive's folder made here at a
+// path SQLite reconciled as a type change (OneDrive deleted the synced file
+// there and moved the folder onto it, while this computer moved it
+// elsewhere): the plan moves the folder's copy here there instead, so the
+// folder is made only once.
+func makesHereAFolderTheMoveBrings(action *syncdomain.Action, moved map[moveCoord]map[string]bool) bool {
+	return action.CreateSide == syncdomain.CreateLocal && action.ItemID != "" && moved[moveCoordLocal][action.ItemID]
 }
 
 // identifiedKey reports whether key is the item of a path identified gives.

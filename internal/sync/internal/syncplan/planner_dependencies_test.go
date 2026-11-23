@@ -814,3 +814,42 @@ func TestBuildDependencies_OracleDetectsAMissingEdge(t *testing.T) {
 	require.Equal(t, [][]int{{1}, nil}, want)
 	assert.Equal(t, want, buildDependencies(actions))
 }
+
+// Validates: R-2.17.6
+//
+// Two move orders that read as landing in what a destination will hold, but
+// do not:
+//   - a file holds nothing, so a remote move whose source lies below the
+//     path a file's move lands on (f in p, while z moves onto p after p
+//     leaves) does not wait for the file's move, which waits for the
+//     folder's;
+//   - a local move composition planned at the paths folders have here now
+//     (f into x/p/f, inside p before p leaves x, with MovedRemotePath set)
+//     lands in what x carries, never in a new folder taking x's path, so it
+//     does not wait for x's move, which waits for it as work below its
+//     source.
+func TestBuildDependencies_AMoveLandingInNothingADestinationHoldsRunsFirst(t *testing.T) {
+	t.Parallel()
+
+	fileView := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemID: "z", ItemType: syncdomain.ItemTypeFile}}
+	remote := []syncdomain.Action{
+		{Type: syncdomain.ActionRemoteMove, OldPath: "p/f", Path: "x/f", ItemID: "f"},
+		{Type: syncdomain.ActionRemoteMove, OldPath: "p", Path: "x/p", ItemID: "p"},
+		{Type: syncdomain.ActionRemoteMove, OldPath: "z", Path: "p", ItemID: "z", View: fileView},
+	}
+	deps := buildDependencies(remote)
+	assert.Empty(t, deps[0], "f leaves p, whatever lands on p")
+	assert.Equal(t, []int{1}, deps[2], "z lands on p once p has left")
+	assert.Equal(t, oracleBuildDependencies(remote), deps)
+
+	local := []syncdomain.Action{
+		{Type: syncdomain.ActionLocalMove, OldPath: "p", Path: "x/p/f", MovedRemotePath: "p/f", ItemID: "f"},
+		{Type: syncdomain.ActionLocalMove, OldPath: "x/p", Path: "p", ItemID: "p"},
+		{Type: syncdomain.ActionLocalMove, OldPath: "x", Path: "p/x", ItemID: "x"},
+	}
+	deps = buildDependencies(local)
+	assert.Empty(t, deps[0], "f moves into p inside x first")
+	assert.Equal(t, []int{0}, deps[1], "p leaves x once f has left its path and landed in it")
+	assert.ElementsMatch(t, []int{0, 1}, deps[2], "x moves into p after p left it")
+	assert.Equal(t, oracleBuildDependencies(local), deps)
+}

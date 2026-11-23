@@ -606,6 +606,14 @@ same transaction, so the planner does not read the folder as new local content
 and re-create it, empty, online: the deletion on OneDrive stands (R-2.17.2).
 Once the folder holds something sync sees it is ordinary local content again,
 and it is created online with that content.
+A local delete the planner marks `DeletesUnsyncedEntry` removes an empty
+folder made here that no synced item is, so a synced folder's move can land
+in its place (R-2.17.13, `moveDisplaceEmptyFolder` in sync-planning.md). It
+runs as any folder delete, refusing a folder that holds anything, and its
+outcome carries the mark: the store commits nothing for it, since the
+baseline row at its path, if any, is the item that lands there, and the
+delete ledger does not count it
+(`TestCommitMutation_DeleteOfAnUnsyncedEntryRecordsNothing`).
 Mount-root engines do not use raw `GetItem` parent-reference paths as
 staleness proof because Graph reports those paths relative to the drive root
 while the executor's actions are relative to the mounted item. A transient `GetItem`
