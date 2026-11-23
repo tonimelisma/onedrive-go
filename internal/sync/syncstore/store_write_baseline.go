@@ -342,13 +342,16 @@ func PublicationMutationFromAction(action *syncdomain.Action, defaultDriveID dri
 	}
 
 	mutation := &syncdomain.BaselineMutation{
-		Action:   action.Type,
-		Success:  true,
-		Path:     action.Path,
-		OldPath:  action.OldPath,
-		DriveID:  publicationDriveIDForAction(action, defaultDriveID),
-		ItemID:   action.ItemID,
-		ItemType: syncdomain.ActionItemType(action),
+		Action:  action.Type,
+		Success: true,
+		Path:    action.Path,
+		OldPath: action.OldPath,
+		DriveID: publicationDriveIDForAction(action, defaultDriveID),
+		ItemID:  action.ItemID,
+		// The observed type stands where the baseline recorded another: a
+		// folder both sides replaced with the same file is that file, and
+		// keeping the folder's type plans this update on every pass.
+		ItemType: syncdomain.ResolveItemType(action.View),
 	}
 
 	if action.View != nil {
@@ -359,10 +362,6 @@ func PublicationMutationFromAction(action *syncdomain.Action, defaultDriveID dri
 			mutation.RemoteSizeKnown = true
 			mutation.RemoteMtime = action.View.Remote.Mtime
 			mutation.ETag = action.View.Remote.ETag
-			// The observed type stands where the baseline recorded another:
-			// a folder both sides replaced with the same file is that file,
-			// and keeping the folder's type plans this update on every pass.
-			mutation.ItemType = action.View.Remote.ItemType
 			if !action.View.Remote.DriveID.IsZero() {
 				mutation.DriveID = action.View.Remote.DriveID
 			}

@@ -820,11 +820,11 @@ func createsAtVacatedSource(a, move *syncdomain.Action) bool {
 }
 
 // movedItemIsFolder reports whether a move carries a folder, by the synced
-// item it moves.
+// item it moves, or, for a move with no baseline, by its observed side.
 func movedItemIsFolder(move *syncdomain.Action) bool {
 	if move.View != nil && move.View.Baseline != nil {
 		return move.View.Baseline.ItemType == syncdomain.ItemTypeFolder
 	}
 
-	return syncdomain.ActionItemType(move) == syncdomain.ItemTypeFolder
+	return syncdomain.ResolveItemType(move.View) == syncdomain.ItemTypeFolder
 }
