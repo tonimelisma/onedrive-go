@@ -608,7 +608,7 @@ func TestVerifySummaryCollectorFinalizeReadsQuirkSummary(t *testing.T) {
 	assert.Equal(t, 2, summary.QuirkEventCount)
 }
 
-// Validates: R-6.10.26
+// Validates: R-6.10.26, R-6.10.36
 func TestRunVerifyWritesSummaryJSONOnFailure(t *testing.T) {
 	t.Parallel()
 
@@ -644,6 +644,23 @@ func TestRunVerifyWritesSummaryJSONOnFailure(t *testing.T) {
 	assertVerifyBucketSummary(t, summary, fullE2ESerialWatchSharedBucketName, verifySummaryStatusPass)
 	assert.Contains(t, stdout.String(), "verify summary")
 	assert.Contains(t, stdout.String(), fullE2ESerialSyncBucketName)
+
+	// The failed bucket kept its output and the summary names the file; the
+	// buckets that passed left none (R-6.10.36).
+	bucketLog := filepath.Join(repoRoot, defaultVerifyLogDirName,
+		string(VerifyE2EFull)+"-"+string(fullE2ESerialSyncBucketName)+".log")
+	for i := range summary.E2EFullBuckets {
+		bucket := summary.E2EFullBuckets[i]
+		if bucket.Name == string(fullE2ESerialSyncBucketName) {
+			assert.Equal(t, bucketLog, bucket.LogPath)
+			continue
+		}
+		assert.Empty(t, bucket.LogPath, bucket.Name)
+	}
+	logs, err := os.ReadDir(filepath.Join(repoRoot, defaultVerifyLogDirName))
+	require.NoError(t, err)
+	require.Len(t, logs, 1)
+	assert.Equal(t, filepath.Base(bucketLog), logs[0].Name())
 }
 
 // Validates: R-6.10.22

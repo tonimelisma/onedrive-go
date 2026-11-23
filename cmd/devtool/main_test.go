@@ -81,6 +81,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 		"--lint-pass", "darwin-race",
 		"--e2e-log-dir", "/tmp/e2e",
 		"--summary-json", "/tmp/verify-summary.json",
+		"--verify-log-dir", "/tmp/verify-logs",
 		"--classify-live-quirks",
 		"--dod",
 		"--stage", "pre-merge",
@@ -106,6 +107,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, "darwin-race", got.LintPass)
 	assert.Equal(t, "/tmp/e2e", got.E2ELogDir)
 	assert.Equal(t, "/tmp/verify-summary.json", got.SummaryJSONPath)
+	assert.Equal(t, "/tmp/verify-logs", got.VerifyLogDir)
 	assert.True(t, got.ClassifyLiveQuirks)
 	assert.True(t, got.DOD)
 	assert.Equal(t, devtool.DODStagePreMerge, got.DODStage)
