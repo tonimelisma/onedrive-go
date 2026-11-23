@@ -139,8 +139,6 @@ func (r *Root) RootIdentity() (RootIdentity, error) {
 	}, nil
 }
 
-// rootMarkMaxBytes bounds the attribute read; tokens are far shorter.
-const rootMarkMaxBytes = 256
 
 const rootMarkRandomBytes = 16
 

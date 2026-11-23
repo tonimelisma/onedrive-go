@@ -209,9 +209,9 @@ func nightlyJobReports(jobs []githubJob, ignore string) []nightlyJobReport {
 // nightlyFailedJobs are the reports whose jobs made the night red.
 func nightlyFailedJobs(reports []nightlyJobReport) []nightlyJobReport {
 	failed := []nightlyJobReport{}
-	for _, report := range reports {
-		if report.result.failsTheNight() {
-			failed = append(failed, report)
+	for i := range reports {
+		if reports[i].result.failsTheNight() {
+			failed = append(failed, reports[i])
 		}
 	}
 
@@ -225,8 +225,8 @@ func nightlyAggregateRepeats(reports []nightlyJobReport, i int) bool {
 		return false
 	}
 	needs := nightlyAggregateNeeds()
-	for _, other := range reports {
-		if other.result.failsTheNight() && slices.Contains(needs, other.workflowJob()) {
+	for j := range reports {
+		if other := &reports[j]; other.result.failsTheNight() && slices.Contains(needs, other.workflowJob()) {
 			return true
 		}
 	}

@@ -35,3 +35,6 @@ func setRootMarkXattr(dir *os.File, token string) error {
 		return unix.Fsetxattr(fd, RootMarkAttribute, []byte(token), 0)
 	})
 }
+
+// rootMarkMaxBytes bounds the attribute read; tokens are far shorter.
+const rootMarkMaxBytes = 256

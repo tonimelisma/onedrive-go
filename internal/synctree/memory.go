@@ -2,10 +2,6 @@ package synctree
 
 import (
 	"errors"
-
-	"golang.org/x/text/cases"
-
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // Capabilities says how an in-memory volume compares names. The zero value
@@ -25,22 +21,3 @@ type Capabilities struct {
 // outside an in-memory sync tree (a trash folder, the source of a file moved
 // in). An in-memory tree has no real folder around it.
 var ErrOutsideMemoryVolume = errors.New("an in-memory sync folder has nothing outside it")
-
-// fold maps a name onto the key the volume compares, so two names are one
-// entry exactly when their keys are equal.
-func (c Capabilities) fold(name string) string {
-	// The stored (NFC) form equates exactly the canonically equivalent
-	// spellings, as the NFD form APFS keeps does.
-	if c.FoldNormalization {
-		name = namekey.Stored(name)
-	}
-	if c.FoldCase {
-		name = cases.Fold().String(name)
-	}
-
-	return name
-}
-
-func (c Capabilities) folds() bool {
-	return c.FoldCase || c.FoldNormalization
-}

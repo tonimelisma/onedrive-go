@@ -210,7 +210,8 @@ type failingSeed struct {
 func (r nightlyRunReport) failingSeeds() []failingSeed {
 	seeds := []failingSeed{}
 	index := map[string]int{}
-	for _, job := range r.jobs {
+	for j := range r.jobs {
+		job := &r.jobs[j]
 		for _, seed := range job.seeds {
 			i, seen := index[seed.key()]
 			if !seen {
