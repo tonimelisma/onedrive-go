@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -406,4 +407,50 @@ func TestProcStatStartTicks(t *testing.T) {
 
 	assert.Equal(t, "4242", procStatStartTicks(stat))
 	assert.Empty(t, procStatStartTicks("77 (short) S 1"))
+}
+
+// mergeTreeCountingRunner runs git for real and counts its merge-tree calls.
+type mergeTreeCountingRunner struct {
+	ExecRunner
+	mergeTrees *atomic.Int64
+}
+
+func (r mergeTreeCountingRunner) Output(
+	ctx context.Context, cwd string, env []string, name string, args ...string,
+) ([]byte, error) {
+	if name == nightlyTestGit && len(args) > 0 && args[0] == "merge-tree" {
+		r.mergeTrees.Add(1)
+	}
+
+	return r.ExecRunner.Output(ctx, cwd, env, name, args...)
+}
+
+// Validates: R-6.10.37
+func TestPruneMergedWorktrees_TriesOnlyMainCommitsThatTouchTheBranchPaths(t *testing.T) {
+	t.Parallel()
+
+	repo := newPruneTestRepo(t)
+	unmerged := repo.addBuilder("agent-unmerged")
+	repo.commitFile(unmerged, "feature.txt", "builder work\n", "builder work")
+
+	// Main moves on in files the builder never touched: no commit of main,
+	// its tip included, can hold the builder's work, so none is worth a merge.
+	const unrelatedMainCommits = 20
+	for i := range unrelatedMainCommits {
+		repo.commitFile(repo.mainRoot, "other.txt", strings.Repeat("x", i+1)+"\n", "unrelated main work")
+	}
+	pruneGit(t, repo.mainRoot, "push", "origin", "main")
+
+	var mergeTrees atomic.Int64
+	var stdout bytes.Buffer
+	err := PruneMergedWorktrees(t.Context(), mergeTreeCountingRunner{mergeTrees: &mergeTrees}, WorktreePruneOptions{
+		RepoRoot:       repo.mainRoot,
+		DryRun:         true,
+		Stdout:         &stdout,
+		ProcessRunning: neverRunning,
+	})
+	require.NoError(t, err, stdout.String())
+
+	assert.Contains(t, stdout.String(), "kept "+unmerged+" (branch worktree-agent-unmerged): has changes origin/main does not contain")
+	assert.Zero(t, mergeTrees.Load(), "no commit of main changed the builder's file, so none can hold its work")
 }
