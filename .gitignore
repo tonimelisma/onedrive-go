@@ -33,6 +33,9 @@ onedrive-go
 .e2e-logs/
 e2e/.e2e-logs/
 
+# Full output of failed `devtool verify` go test steps
+.verify-logs/
+
 # Local benchmark result/output scratch space
 .artifacts/
 

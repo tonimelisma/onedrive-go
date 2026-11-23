@@ -180,6 +180,7 @@ type verifyFlags struct {
 	lintPass           string
 	e2eLogDir          string
 	summaryJSONPath    string
+	verifyLogDir       string
 	classifyLiveQuirks bool
 	dod                bool
 	dodStage           string
@@ -242,6 +243,7 @@ func (f *verifyFlags) options(cmd *cobra.Command, repoRoot string, profile devto
 		RaceTimeout:        f.raceTimeout,
 		E2ELogDir:          f.e2eLogDir,
 		SummaryJSONPath:    f.summaryJSONPath,
+		VerifyLogDir:       f.verifyLogDir,
 		ClassifyLiveQuirks: f.classifyLiveQuirks,
 		DOD:                f.dod,
 		DODStage:           devtool.DODStage(f.dodStage),
@@ -303,6 +305,12 @@ func (f *verifyFlags) registerProfileFlags(cmd *cobra.Command) {
 	)
 	cmd.Flags().StringVar(&f.e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
 	cmd.Flags().StringVar(&f.summaryJSONPath, "summary-json", "", "write verify summary JSON to this path")
+	cmd.Flags().StringVar(
+		&f.verifyLogDir,
+		"verify-log-dir",
+		"",
+		"directory where a failed go test step keeps its full output; default .verify-logs under the repository root",
+	)
 	cmd.Flags().StringVar(&f.failedTestLog, "failed-log", "", "CI go-test log to parse for verify failed-test")
 	cmd.Flags().Uint64Var(
 		&f.seedStart,

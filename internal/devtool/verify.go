@@ -123,9 +123,12 @@ type VerifyOptions struct {
 	// lane's race runs of the sync tree. Zero or less is the cores this
 	// process may use; a test sets it to derive a CI runner's go test
 	// deadlines on any host.
-	Cores              int
-	E2ELogDir          string
-	SummaryJSONPath    string
+	Cores           int
+	E2ELogDir       string
+	SummaryJSONPath string
+	// VerifyLogDir is where a failed go test step keeps its full output
+	// (--verify-log-dir). Empty is .verify-logs under RepoRoot.
+	VerifyLogDir       string
 	ClassifyLiveQuirks bool
 	DOD                bool
 	DODStage           DODStage
@@ -171,6 +174,8 @@ type VerifyStepSummary struct {
 	SlowTests  []StressSlowTestSummary `json:"slow_tests,omitempty"`
 	// FailedTests names the top-level tests of a failed step.
 	FailedTests []string `json:"failed_tests,omitempty"`
+	// LogPath is the file that kept the full output of a failed go test step.
+	LogPath string `json:"log_path,omitempty"`
 }
 
 type ClassifiedRerunSummary struct {
@@ -194,6 +199,8 @@ type E2EBucketSummary struct {
 	Error string `json:"error,omitempty"`
 	// FailedTests names the top-level tests of a failed bucket.
 	FailedTests []string `json:"failed_tests,omitempty"`
+	// LogPath is the file that kept the full output of a failed bucket.
+	LogPath string `json:"log_path,omitempty"`
 }
 
 type StressSlowTestSummary struct {
@@ -212,6 +219,8 @@ type verifySummaryCollector struct {
 	summaryJSONPath string
 	e2eLogDir       string
 	startedAt       time.Time
+	// stepLogs keeps the output of every go test step; nil keeps none.
+	stepLogs *stepLogs
 }
 
 type fullE2EBucketKind string
@@ -311,6 +320,9 @@ func runVerifyProfileWithEnv(
 	stdout, stderr := resolveVerifyWriters(opts)
 	effectiveE2ELogDir := resolvedE2ELogDir(opts.E2ELogDir, plan)
 	collector := newVerifySummaryCollector(profile, stdout, stderr, opts.SummaryJSONPath, effectiveE2ELogDir)
+	stdout, stderr = collector.keepStepLogs(
+		newStepLogs(resolveVerifyLogDir(opts.VerifyLogDir, opts.RepoRoot), profile, shard), stdout, stderr,
+	)
 	defer func() {
 		if finalizeErr := collector.finalize(runErr); finalizeErr != nil {
 			if runErr == nil {

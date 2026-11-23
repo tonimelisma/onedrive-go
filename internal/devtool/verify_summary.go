@@ -138,6 +138,16 @@ func newVerifySummaryCollector(
 	}
 }
 
+// keepStepLogs makes the collector keep the output of every go test step in
+// logs, and returns the writers the profile hands its steps in place of
+// stdout and stderr. The collector's own lines, the marker lines and the
+// summary, go to the unteed writers it was built with.
+func (c *verifySummaryCollector) keepStepLogs(logs *stepLogs, stdout, stderr io.Writer) (io.Writer, io.Writer) {
+	c.stepLogs = logs
+
+	return logs.tee(stdout), logs.tee(stderr)
+}
+
 // stepOutcome is what a step reports beside its error.
 type stepOutcome struct {
 	slowTests []StressSlowTestSummary
@@ -146,16 +156,20 @@ type stepOutcome struct {
 	failedTests []string
 	// skipped means the step's tests skipped, so it verified nothing.
 	skipped bool
+	// logPath is the file that kept the output of a failed go test step.
+	logPath string
 }
 
 // run is the one runner of every step a profile runs, a bucket of the full
 // live suite included: it runs fn and times it, and when fn fails it prints
 // the step's marker line on stderr, after everything the step printed. A step
-// that passes or skips prints none. runStepWithOutcome and runBucket record
-// what it returns in the summary.
+// that passes or skips prints none. A step that runs go test also writes what
+// it prints to its log file (stepLogs), which a failed step keeps and names
+// on the line after its marker. runStepWithOutcome and runBucket record what
+// it returns in the summary.
 func (c *verifySummaryCollector) run(name verifyStepName, fn func() (stepOutcome, error)) (stepOutcome, int64, error) {
 	startedAt := time.Now()
-	outcome, err := fn()
+	outcome, logPath, err := c.runLogged(name, fn)
 	elapsedMS := durationMS(time.Since(startedAt))
 	if err == nil {
 		return outcome, elapsedMS, nil
@@ -163,8 +177,38 @@ func (c *verifySummaryCollector) run(name verifyStepName, fn func() (stepOutcome
 	if writeErr := writeStatus(c.stderr, failedStepMarker(c.summary.Profile, name)); writeErr != nil {
 		err = errors.Join(err, fmt.Errorf("write failed step marker: %w", writeErr))
 	}
+	if logPath != "" {
+		outcome.logPath = logPath
+		if writeErr := writeStatus(c.stderr, stepLogLine(logPath)); writeErr != nil {
+			err = errors.Join(err, fmt.Errorf("write step log line: %w", writeErr))
+		}
+	}
 
 	return outcome, elapsedMS, err
+}
+
+// runLogged runs fn with the step's log open when the step runs go test and
+// the collector keeps step logs. It returns the path of a log it kept.
+func (c *verifySummaryCollector) runLogged(
+	name verifyStepName, fn func() (stepOutcome, error),
+) (stepOutcome, string, error) {
+	if c.stepLogs == nil || !name.runsGoTest() {
+		outcome, err := fn()
+		return outcome, "", err
+	}
+
+	logPath, err := c.stepLogs.open(name)
+	if err != nil {
+		return stepOutcome{}, "", err
+	}
+	outcome, err := fn()
+	kept, logErr := c.stepLogs.finish(logPath, err)
+	err = errors.Join(err, logErr)
+	if !kept {
+		logPath = ""
+	}
+
+	return outcome, logPath, err
 }
 
 func (c *verifySummaryCollector) runStep(name verifyStepName, fn func() error) error {
@@ -189,6 +233,7 @@ func (c *verifySummaryCollector) runStepWithOutcome(name verifyStepName, fn func
 		step.Status = verifySummaryStatusFail
 		step.Error = err.Error()
 		step.FailedTests = outcome.failedTests
+		step.LogPath = outcome.logPath
 	case outcome.skipped:
 		step.Status = verifySummaryStatusSkipped
 	}
@@ -222,6 +267,7 @@ func (c *verifySummaryCollector) runBucket(bucket fullE2EBucketSpec, fn func() (
 		summary.Status = verifySummaryStatusFail
 		summary.Error = err.Error()
 		summary.FailedTests = outcome.failedTests
+		summary.LogPath = outcome.logPath
 	}
 
 	c.summary.E2EFullBuckets = append(c.summary.E2EFullBuckets, summary)
@@ -319,6 +365,7 @@ func (c *verifySummaryCollector) renderText() string {
 		builder.WriteString(renderSummaryLine(step.Name, step.Status, step.DurationMS, step.Error))
 		builder.WriteString(renderSlowTestLines(step.SlowTests))
 		builder.WriteString(renderFailedTestLines(step.FailedTests))
+		builder.WriteString(renderStepLogLine(step.LogPath))
 	}
 	for i := range c.summary.E2EFullBuckets {
 		bucket := &c.summary.E2EFullBuckets[i]
@@ -332,6 +379,7 @@ func (c *verifySummaryCollector) renderText() string {
 		}
 		builder.WriteString(renderSummaryLine(bucket.Name, bucket.Status, bucket.DurationMS, errorText))
 		builder.WriteString(renderFailedTestLines(bucket.FailedTests))
+		builder.WriteString(renderStepLogLine(bucket.LogPath))
 	}
 	fmt.Fprintf(&builder, "quirk events: %d\n", c.summary.QuirkEventCount)
 
@@ -392,6 +440,16 @@ func renderFailedTestLines(failedTests []string) string {
 	}
 
 	return builder.String()
+}
+
+// renderStepLogLine is the summary's line naming a failed step's kept log,
+// none for a step that kept no log.
+func renderStepLogLine(logPath string) string {
+	if logPath == "" {
+		return ""
+	}
+
+	return "  log: " + logPath + "\n"
 }
 
 func durationMS(d time.Duration) int64 {
