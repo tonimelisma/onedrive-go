@@ -9,6 +9,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
@@ -193,7 +194,7 @@ func TestEngineMountConfigForMount_UsesMountOwnedFields(t *testing.T) {
 	assert.Equal(t, int64(3*1024*1024), cfg.MinFreeSpace)
 }
 
-// Validates: R-2.8.1
+// Validates: R-2.8.1, R-6.4.12
 func TestBuildRuntimeWork_AddsChildProjectionAfterParent(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:owner@example.com", "Parent")
@@ -229,8 +230,12 @@ func TestBuildRuntimeWork_AddsChildProjectionAfterParent(t *testing.T) {
 	assert.Equal(t, 8, childMount.checkWorkers())
 	assert.Equal(t, int64(5*1024*1024), childMount.minFreeSpace())
 
-	engineCfg, err := engineMountConfigForMount(childMount, t.TempDir())
+	engineDataDir := t.TempDir()
+	engineCfg, err := engineMountConfigForMount(childMount, engineDataDir)
 	require.NoError(t, err)
+	parentTrash := localtrash.DirForStatePath(config.DriveStatePathForDataDir(engineDataDir, parent.CanonicalID))
+	assert.Equal(t, localtrash.ChildDir(parentTrash, config.MountStatePathForDataDir(engineDataDir, childMount.id().String())),
+		engineCfg.TrashDir, "a shortcut child's trash is its parent drive's child trash")
 	assert.Equal(t, driveid.New("remote-drive"), engineCfg.DriveID)
 	assert.Equal(t, "remote-root", engineCfg.RemoteRootItemID)
 	assert.Equal(t, driveid.MustCanonicalID("personal:owner@example.com"), engineCfg.AccountCanonicalID,

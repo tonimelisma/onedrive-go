@@ -21,6 +21,12 @@
 // "orphan", listed with the location of its file. Purge expires only
 // committed entries and never removes a file that is not committed: what it
 // removes on its own is only reservations whose file never arrived.
+//
+// A shortcut child mount's trash belongs to its parent drive. It lives beside
+// the parent's own trash, under the parent's name (ChildDir), so the parent's
+// trash commands and housekeeping reach it (Children) whether or not the
+// child mount still runs, and when the child's state is removed its entries
+// move into the parent's trash as they are (HandOverTo).
 package localtrash
 
 import (
@@ -53,7 +59,12 @@ const (
 	idTimeLayout  = "20060102T150405.000000000Z"
 	stateDBSuffix = ".db"
 	trashDirName  = "trash"
-	entryTempGlob = ".entry-*"
+	// childrenDirName is the folder, beside the drives' trash folders, that
+	// holds the trash folders of shortcut child mounts, one folder per parent
+	// trash (ChildDir). A drive's trash folder is named after its state DB,
+	// whose name starts with "state_", so this name is never a drive's.
+	childrenDirName = "children"
+	entryTempGlob   = ".entry-*"
 	// restoreArtifactPrefix starts the name of a cross-filesystem restore
 	// copy beside its target. IsRestoreArtifactName recognizes it so sync
 	// never observes or uploads one left behind by a crash.
@@ -101,6 +112,10 @@ const (
 	ReasonDeleted Reason = "deleted"
 	// ReasonReplaced: a download replaced this version of the file.
 	ReasonReplaced Reason = "replaced"
+	// ReasonReleased: the shared folder the file was in was removed from
+	// this account, so sync released its synced copy here. The file was not
+	// deleted on OneDrive: the sharer's copy still exists.
+	ReasonReleased Reason = "released"
 )
 
 // State is where an entry is in its lifecycle.
@@ -165,6 +180,9 @@ type Trash struct {
 	// writeRecord writes an entry's record atomically; a seam so tests in
 	// other packages can make a reservation fail (WithRecordWriteFailing).
 	writeRecord func(path string, data []byte) error
+	// renameEntry moves one entry directory to another trash (HandOverTo);
+	// a seam so tests can stop a hand-over part way.
+	renameEntry func(src, dst string) error
 }
 
 // writeRecordAtomically writes the record at path through a synced temporary
@@ -193,8 +211,8 @@ func IsRestoreArtifactName(name string) bool {
 
 // DirForStatePath returns the trash directory of the drive whose sync state
 // lives at statePath: a sibling "trash" directory named after the state DB,
-// so every mount (including shortcut children, which have their own state)
-// has its own trash under the data directory.
+// so every configured drive has its own trash under the data directory. A
+// shortcut child mount's trash is its parent's ChildDir instead.
 func DirForStatePath(statePath string) string {
 	if statePath == "" {
 		return ""
@@ -217,7 +235,143 @@ func Open(dir string, now func() time.Time) *Trash {
 		syncDir:     (*synctree.Root).SyncDir,
 		openTree:    synctree.Open,
 		writeRecord: writeRecordAtomically,
+		renameEntry: localpath.Rename,
 	}
+}
+
+// ChildDir returns the trash directory of the shortcut child mount whose sync
+// state lives at childStatePath, a child of the drive whose trash directory is
+// parentDir. It is outside the parent's own entries, under the parent's name,
+// so the parent's Children finds it.
+func ChildDir(parentDir, childStatePath string) string {
+	if parentDir == "" || childStatePath == "" {
+		return ""
+	}
+	return filepath.Join(childrenContainer(parentDir), strings.TrimSuffix(filepath.Base(childStatePath), stateDBSuffix))
+}
+
+// childrenContainer is the folder that holds the trash directories of the
+// child mounts of the drive whose trash directory is parentDir.
+func childrenContainer(parentDir string) string {
+	return filepath.Join(filepath.Dir(parentDir), childrenDirName, filepath.Base(parentDir))
+}
+
+// Children opens the trash of every shortcut child mount of this drive that
+// has a trash directory (ChildDir), in the order of their directory names,
+// on this trash's clock. A drive with no child trash has none.
+func (t *Trash) Children() ([]*Trash, error) {
+	if t == nil || t.dir == "" {
+		return nil, nil
+	}
+	container := childrenContainer(t.dir)
+	dirEntries, err := localpath.ReadDir(container)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading the trash of shortcut children: %w", err)
+	}
+	children := make([]*Trash, 0, len(dirEntries))
+	for _, dirEntry := range dirEntries {
+		if dirEntry.IsDir() {
+			children = append(children, Open(filepath.Join(container, dirEntry.Name()), t.now))
+		}
+	}
+	return children, nil
+}
+
+// HandOverTo moves every entry of this trash into dst, then removes this
+// trash's directory. It is for a shortcut child mount whose state is being
+// removed: its entries become its parent drive's, which the parent's
+// housekeeping expires after Retention like its own. It returns how many
+// entries it moved.
+//
+// Each entry moves whole, as one rename of its directory inside the data
+// directory, so it keeps its ID, record, state and file, and at every moment
+// it is in exactly one of the two trashes, whatever it holds: a committed
+// entry, a pending one, an orphan, a reservation whose file never arrived. A
+// crash leaves the entries not yet moved where they were, and HandOverTo run
+// again moves them. The renames are flushed in both directories before this
+// trash's directory goes, so a power cut cannot lose a moved entry's new name
+// after the caller has removed what pointed at the old one.
+//
+// It never removes an entry. One it cannot move, or whose ID dst already
+// holds, stays here and is reported, and so does this trash's directory while
+// anything is left in it: the caller keeps what points at this trash and
+// tries again. Entry IDs are a nanosecond time and random bytes, so a taken
+// ID is not another entry being reserved at that moment.
+func (t *Trash) HandOverTo(dst *Trash) (int, error) {
+	if t == nil || t.dir == "" {
+		return 0, nil
+	}
+	if dst == nil || dst.dir == "" {
+		return 0, fmt.Errorf("handing over trash %s: the receiving trash directory is not configured", t.dir)
+	}
+	dirEntries, err := localpath.ReadDir(t.dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("reading trash: %w", err)
+	}
+	if len(dirEntries) > 0 {
+		if err := localpath.MkdirAll(dst.dir, entryDirPerm); err != nil {
+			return 0, fmt.Errorf("creating the receiving trash: %w", err)
+		}
+	}
+
+	moved := 0
+	var errs error
+	for _, dirEntry := range dirEntries {
+		if err := t.handOverEntry(dst, dirEntry); err != nil {
+			errs = localpath.JoinOnOneLine(errs, err)
+			continue
+		}
+		moved++
+	}
+	if moved > 0 {
+		errs = localpath.JoinOnOneLine(errs, syncHandOverDir(dst.dir))
+		errs = localpath.JoinOnOneLine(errs, syncHandOverDir(t.dir))
+	}
+	if errs != nil {
+		return moved, errs
+	}
+	if err := localpath.Remove(t.dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return moved, fmt.Errorf("removing the handed-over trash folder: %w", err)
+	}
+
+	return moved, nil
+}
+
+// handOverEntry moves the entry directory dirEntry of t into dst under the
+// same name, refusing a name dst already holds and anything that is not an
+// entry directory.
+func (t *Trash) handOverEntry(dst *Trash, dirEntry os.DirEntry) error {
+	src := filepath.Join(t.dir, dirEntry.Name())
+	if !dirEntry.IsDir() {
+		return fmt.Errorf("not handing over %s: it is not a trash entry", src)
+	}
+	target := filepath.Join(dst.dir, dirEntry.Name())
+	_, err := localpath.Lstat(target)
+	switch {
+	case err == nil:
+		return fmt.Errorf("not handing over trash entry %s: %s already holds an entry with that ID", dirEntry.Name(), dst.dir)
+	case !errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("checking %s: %w", target, err)
+	}
+	if err := t.renameEntry(src, target); err != nil {
+		return fmt.Errorf("handing over trash entry %s: %w", dirEntry.Name(), err)
+	}
+	return nil
+}
+
+// syncHandOverDir flushes a trash directory a hand-over renamed an entry into
+// or out of; a filesystem that cannot sync a directory is tolerated.
+func syncHandOverDir(dir string) error {
+	if err := localpath.SyncDir(dir); err != nil && !localpath.IsDirSyncUnsupported(err) {
+		return fmt.Errorf("flushing trash folder %s: %w", dir, err)
+	}
+	return nil
 }
 
 // Dir returns the trash directory.

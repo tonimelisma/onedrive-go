@@ -10,8 +10,10 @@ import (
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
@@ -357,9 +359,63 @@ func (o *Orchestrator) acknowledgeShortcutChildArtifactCleanups(
 	return errors.Join(errs...)
 }
 
+// shortcutChildTrash names the two trash directories of a shortcut child
+// mount: its own and its parent drive's.
+type shortcutChildTrash struct {
+	child  string
+	parent string
+}
+
+// shortcutChildTrashDirs returns the trash directories of the shortcut child
+// mount childMountID in the data directory dataDir. The child's is the child
+// trash (localtrash.ChildDir) of its parent drive's trash, so the parent's
+// trash commands and housekeeping reach it, and the child's engine and its
+// artifact purge agree on it. The parent is the configured drive the child
+// mount ID names (config.ChildMountParentID), whose state lives at
+// config.DriveStatePathForDataDir.
+func shortcutChildTrashDirs(dataDir, childMountID string) (shortcutChildTrash, error) {
+	parent, err := driveid.NewCanonicalID(config.ChildMountParentID(childMountID))
+	if err != nil {
+		return shortcutChildTrash{}, fmt.Errorf("find the drive whose trash child mount %s uses: %w", childMountID, err)
+	}
+	parentDir := localtrash.DirForStatePath(config.DriveStatePathForDataDir(dataDir, parent))
+	childDir := localtrash.ChildDir(parentDir, config.MountStatePathForDataDir(dataDir, childMountID))
+	if childDir == "" {
+		return shortcutChildTrash{}, fmt.Errorf("find the trash folder of child mount %s: no data directory", childMountID)
+	}
+
+	return shortcutChildTrash{child: childDir, parent: parentDir}, nil
+}
+
+// handOverShortcutChildTrash moves the entries of the child's trash into its
+// parent drive's trash (localtrash.Trash.HandOverTo), so they stay listed and
+// restorable by the parent's trash commands and expire with the parent's own
+// once nothing of the child is left to reach them.
+func (e shortcutChildArtifactCleanupExecutor) handOverShortcutChildTrash(childMountID string) error {
+	trash, err := shortcutChildTrashDirs(e.dataDir, childMountID)
+	if err != nil {
+		return err
+	}
+	moved, err := localtrash.Open(trash.child, nil).HandOverTo(localtrash.Open(trash.parent, nil))
+	if err != nil {
+		return fmt.Errorf("hand its trash over to the drive's trash: %w", err)
+	}
+	if moved > 0 && e.logger != nil {
+		e.logger.Info("handed a shortcut child's trash over to its drive's trash",
+			slog.String("mount_id", childMountID), slog.Int("entries", moved))
+	}
+
+	return nil
+}
+
 // purge deletes a retired shortcut child's state DB family and unfinished
-// uploads. A child mount has no catalog record: the catalog holds only
-// canonical drive IDs, which a child mount ID is not.
+// uploads, after it has handed the child's trash over to the parent drive's
+// trash (handOverShortcutChildTrash). A hand-over that fails stops the purge
+// before anything else of the child is removed and fails it as a remaining
+// state artifact, so the parent publishes the cleanup again: the purge never
+// deletes a trash entry and never leaves a trash that no command reaches. A
+// child mount has no catalog record: the catalog holds only canonical drive
+// IDs, which a child mount ID is not.
 //
 // purge holds the child's store lock for the whole cleanup
 // (syncengine.LockDriveForOfflineChange): a store another engine still has
@@ -409,6 +465,14 @@ func (e shortcutChildArtifactCleanupExecutor) purge(
 			))
 		}
 	}()
+
+	if handOverErr := e.handOverShortcutChildTrash(childMountID); handOverErr != nil {
+		return classifiedShortcutChildCleanupError(
+			shortcutChildArtifactCleanupStateArtifactFailure,
+			"keep its trash",
+			handOverErr,
+		)
+	}
 
 	var errs []error
 	for _, path := range config.StateDBFamily(statePath) {

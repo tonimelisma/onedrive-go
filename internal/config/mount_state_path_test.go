@@ -68,6 +68,14 @@ func TestChildMountID_UsesParentAndBinding(t *testing.T) {
 	assert.Empty(t, ChildMountID("parent", ""))
 }
 
+// Validates: R-6.4.12
+func TestChildMountParentID_IsTheParentAChildMountIDWasBuiltFrom(t *testing.T) {
+	assert.Equal(t, "personal:user@example.com",
+		ChildMountParentID(ChildMountID("personal:user@example.com", "shortcut-item")))
+	assert.Empty(t, ChildMountParentID("personal:user@example.com"), "a configured drive's mount ID has no parent")
+	assert.Empty(t, ChildMountParentID(""))
+}
+
 // Validates: R-2.2, R-4.1
 //
 // The mount-ref digest names a child mount's state database on disk. Changing

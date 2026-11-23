@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
@@ -184,8 +185,11 @@ func (h *housekeeper) cleanTransferArtifacts() {
 // trash for expired entries.
 const trashPurgeInterval = time.Hour
 
-// purgeExpiredTrash removes trash entries older than the retention period.
-// It is best effort: a failure leaves entries for the next attempt. A purge
+// purgeExpiredTrash removes trash entries older than the retention period,
+// from the engine's own trash and from the trash of every shortcut child of
+// its drive (localtrash.Trash.Children), which a child that no longer runs
+// leaves to its parent. It is best effort: a failure leaves entries for the
+// next attempt. A purge
 // that keeps failing is reported once per streak at Warn, naming the trash
 // directory, because the trash then grows without bound and nothing else
 // says so; repeats are Debug and recovery ends the streak (R-6.6.30).
@@ -199,7 +203,7 @@ func (h *housekeeper) purgeExpiredTrash(force bool) {
 	}
 	h.trashPurgedAt = now.Round(0)
 
-	removed, err := h.trash.Purge()
+	removed, err := purgeTrashAndChildren(h.trash)
 	reportStreakOutcome(h.logger, streakReport{
 		failing:   &h.trashPurgeFailing,
 		warn:      "Could not remove expired files from the sync trash; it will keep growing until this is fixed",
@@ -210,6 +214,22 @@ func (h *housekeeper) purgeExpiredTrash(force bool) {
 		h.logger.Info("removed expired files from the sync trash",
 			slog.Int("removed", removed), slog.String("trash", h.trash.Dir()))
 	}
+}
+
+// purgeTrashAndChildren purges trash and the trash of each of its drive's
+// shortcut children, going on past a failure, and returns how many entries
+// it removed in all with every failure.
+func purgeTrashAndChildren(trash *localtrash.Trash) (int, error) {
+	removed, err := trash.Purge()
+	children, childrenErr := trash.Children()
+	err = localpath.JoinOnOneLine(err, childrenErr)
+	for _, child := range children {
+		childRemoved, childErr := child.Purge()
+		removed += childRemoved
+		err = localpath.JoinOnOneLine(err, childErr)
+	}
+
+	return removed, err
 }
 
 func transferArtifactCleanupSkipDirs(filter syncdomain.ContentFilterConfig, protectedRoots []syncshortcut.ProtectedRoot) []string {

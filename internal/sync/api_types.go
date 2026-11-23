@@ -127,8 +127,11 @@ type (
 
 // engineInputs is everything newEngine needs to build one mount's engine.
 type engineInputs struct {
-	MountID                  string
-	DBPath                   string
+	MountID string
+	DBPath  string
+	// TrashDir is the mount's trash directory; empty means the drive's own,
+	// next to DBPath (EngineMountConfig.TrashDir).
+	TrashDir                 string
 	SyncRoot                 string
 	DataDir                  string
 	DriveID                  driveid.ID

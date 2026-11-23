@@ -15,8 +15,13 @@ import (
 // EngineMountConfig carries the non-client runtime facts needed to construct an
 // engine for one mounted content root.
 type EngineMountConfig struct {
-	MountID                  string
-	DBPath                   string
+	MountID string
+	DBPath  string
+	// TrashDir is the mount's trash directory: a configured drive's own
+	// (localtrash.DirForStatePath of DBPath, the default when empty), or, for
+	// a shortcut child, the child trash under its parent drive's
+	// (localtrash.ChildDir), which the parent's trash commands reach.
+	TrashDir                 string
 	SyncRoot                 string
 	DataDir                  string
 	DriveID                  driveid.ID
@@ -73,6 +78,7 @@ func NewMountEngine(
 	cfg := &engineInputs{
 		MountID:                  mountCfg.MountID,
 		DBPath:                   mountCfg.DBPath,
+		TrashDir:                 mountCfg.TrashDir,
 		SyncRoot:                 mountCfg.SyncRoot,
 		DataDir:                  mountCfg.DataDir,
 		DriveID:                  mountCfg.DriveID,

@@ -559,3 +559,42 @@ func TestPurgeExpiredTrash_WarnsOncePerFailureStreak(t *testing.T) {
 	h.purgeExpiredTrash(true)
 	assert.Equal(t, 2, countLogLines(logBuf.String(), warnLine), "a new streak is reported once more")
 }
+
+// A shortcut child that no longer runs leaves its trash to its parent drive:
+// the parent's purge expires the child trash's committed entries after the
+// retention like its own, and keeps the child's fresh ones.
+//
+// Validates: R-6.4.9, R-6.4.12
+func TestPurgeExpiredTrash_ExpiresTheEntriesOfTheDrivesShortcutChildren(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	parentDir := localtrash.DirForStatePath(filepath.Join(dataDir, "state_personal_user@example.com.db"))
+	childDir := localtrash.ChildDir(parentDir, filepath.Join(dataDir, "state_mount_child.db"))
+	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	syncRoot := t.TempDir()
+	putTrashed := func(trash *localtrash.Trash, rel string) localtrash.Entry {
+		placement, err := trash.Reserve(syncRoot, rel, localtrash.ReasonReleased)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(placement.ItemPath, []byte(rel), 0o600))
+		entry, err := placement.Commit()
+		require.NoError(t, err)
+		return entry
+	}
+	expiredAt := func() time.Time { return now.Add(-localtrash.Retention - time.Hour) }
+	putTrashed(localtrash.Open(childDir, expiredAt), "expired.txt")
+	fresh := putTrashed(localtrash.Open(childDir, func() time.Time { return now }), "fresh.txt")
+
+	_, logger := syncfixture.NewDebugLogBuffer()
+	h := &housekeeper{
+		trash:  localtrash.Open(parentDir, func() time.Time { return now }),
+		logger: logger,
+		now:    func() time.Time { return now },
+	}
+	h.purgeExpiredTrash(true)
+
+	entries, err := localtrash.Open(childDir, nil).List()
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "only the expired entry of the child's trash is removed")
+	assert.Equal(t, fresh.ID, entries[0].ID)
+}

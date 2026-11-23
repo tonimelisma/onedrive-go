@@ -305,7 +305,12 @@ later parent refresh. When release cleanup
 succeeds, the old binding stays in the parent store as
 `removed_child_cleanup_pending`: the alias path is no longer protected and no
 child runner is published, but the parent explicitly publishes a child artifact
-cleanup request. Multisync purges the child-owned DB, SQLite sidecars and
+cleanup request. Multisync first hands the child's local trash over to the
+parent drive's trash (`handOverShortcutChildTrash`, R-6.4.12,
+`spec/design/sync-execution.md`): a hand-over that fails keeps the child's
+trash and everything else of the child and fails the cleanup as
+`state_artifact`, so it is published again and no trash entry is ever
+deleted or left unreachable. It then purges the child-owned DB, SQLite sidecars and
 upload sessions, then acknowledges artifact cleanup to the same
 live parent engine. The parent deletes the cleanup-pending row only after that
 acknowledgement, so cleanup retry is durable and parent-owned. Cleanup

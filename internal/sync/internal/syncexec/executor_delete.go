@@ -212,7 +212,7 @@ func (e *Executor) DeleteLocalFile(ctx context.Context, action *syncdomain.Actio
 		return e.verifyLocalDeleteContent(ctx, action, f, info)
 	}
 
-	if err := e.removeVerifiedLocalFile(local, verify); err != nil {
+	if err := e.removeVerifiedLocalFile(local, verify, localDeleteTrashReason(action)); err != nil {
 		if errors.Is(err, syncdomain.ErrActionPreconditionChanged) || errors.Is(err, synctree.ErrDetachRaced) {
 			// Debug: the returned precondition error supersedes the action
 			// and the engine replans; nothing is asked of the user.
@@ -308,10 +308,20 @@ func (e *LocalContentChangedError) Error() string {
 func (e *LocalContentChangedError) Unwrap() error { return syncdomain.ErrActionPreconditionChanged }
 
 // removeVerifiedLocalFile takes the verified file at rel out of the sync
-// folder for a local delete: into the trash when the drive has one,
-// otherwise removed.
-func (e *Executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFunc) error {
-	return e.takeOutVerifiedLocalFile(rel, verify, localtrash.ReasonDeleted, syncdomain.CrashPointLocalDeleteTrashed)
+// folder for a local delete: into the trash, recorded for reason, when the
+// drive has one, otherwise removed.
+func (e *Executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFunc, reason localtrash.Reason) error {
+	return e.takeOutVerifiedLocalFile(rel, verify, reason, syncdomain.CrashPointLocalDeleteTrashed)
+}
+
+// localDeleteTrashReason is why the trash says a local delete's file left the
+// sync folder: released for the release of a removed shared folder, whose
+// files still exist on OneDrive, deleted for every other local delete.
+func localDeleteTrashReason(action *syncdomain.Action) localtrash.Reason {
+	if action.ReleasesSharedFolder {
+		return localtrash.ReasonReleased
+	}
+	return localtrash.ReasonDeleted
 }
 
 // takeOutVerifiedLocalFile takes the verified file at rel out of the sync

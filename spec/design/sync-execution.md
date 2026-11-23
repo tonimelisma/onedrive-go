@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/internal/syncexec/action_freshness.go, internal/sync/internal/syncexec/executor.go, internal/sync/internal/syncexec/executor_conflict.go, internal/sync/internal/syncexec/executor_delete.go, internal/sync/internal/syncexec/executor_parent_checks.go, internal/sync/internal/syncexec/executor_preconditions.go, internal/sync/internal/syncexec/executor_transfer.go, internal/sync/internal/syncexec/worker.go, internal/sync/internal/syncexec/executor_test_seams.go, internal/sync/internal/syncexec/doc.go, internal/sync/internal/syncsched/*.go
 
-Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.10.30 [verified]
+Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.4.12 [verified], R-6.4.13 [verified], R-6.10.30 [verified]
 
 ## Overview
 
@@ -801,8 +801,8 @@ a writer that keeps both, such as `rsync --inplace -t` or a write through an
 mmap that does not update mtime, can still slip a change past it.
 
 The file does not vanish: it moves into the drive's local trash
-(`internal/localtrash`, P-4), a per-mount directory under the data directory
-named after the state DB. Each entry is recorded as pending before anything is
+(`internal/localtrash`, P-4), a directory under the data directory named after
+the drive's state DB (`DirForStatePath`). Each entry is recorded as pending before anything is
 moved and as committed after, so a crash in between leaves a pending entry
 that `trash list` shows and `trash restore` puts back; an entry holding a file
 but no readable record is listed as an orphan with the file's location. An
@@ -873,6 +873,44 @@ housekeeping and
 the watch maintenance tick (at most hourly) purge, and `onedrive-go trash
 list/restore/empty` exposes the trash. Without a trash (executor-only tests)
 the verified inode is removed with `RemoveVerifiedRegularFile` instead.
+
+An entry says why its file left the sync folder (`Reason`): `deleted` for a
+local delete of an item deleted on OneDrive, `replaced` for the version a
+download replaced, and `released` for a synced file the release of a removed
+shared folder took out (`Action.ReleasesSharedFolder`, set by
+`engine_shortcut_release.go`'s `releaseAction`; `localDeleteTrashReason`
+picks the reason): that file was not deleted on OneDrive, the sharer's copy
+still exists
+(`TestDeleteLocalFile_ReleaseOfASharedFolderTrashesTheFileAsReleased`,
+`TestRunOnce_FinalDrainReleasesASyncedTreeToTheTrash`).
+
+A shortcut child mount's trash belongs to its parent drive (R-6.4.12). Its
+engine writes to the parent's child trash (`ChildDir`:
+`<data>/trash/children/<parent trash name>/<child state name>`, outside the
+parent's own entries; `EngineMountConfig.TrashDir`, which multisync's
+`shortcutChildTrashDirs` derives from the child mount ID, whose parent is the
+configured drive it names), so the parent's `Trash.Children` finds every child
+trash whether or not the child still runs: the parent's `trash list`,
+`restore` and `empty` cover them (each entry names its own sync folder), and
+the parent engine's housekeeping purges them with its own
+(`purgeTrashAndChildren`,
+`TestPurgeExpiredTrash_ExpiresTheEntriesOfTheDrivesShortcutChildren`). When
+the child's state is removed, its artifact purge first hands its trash over
+(`Trash.HandOverTo`): each entry directory, committed, pending, orphan or a
+reservation without a file, moves into the parent's trash by one rename inside
+the data directory, keeping its ID, record and state, so it is in exactly one
+trash at every moment; both directories are flushed, then the child's trash
+directory is removed. An entry it cannot move, or whose ID the parent already
+holds, stays where it was, and so does the child's directory; the purge then
+removes nothing of the child and fails as a remaining state artifact, which the
+parent publishes again (`TestHandOverTo_MovesEveryEntryAsItIs`,
+`TestHandOverTo_StoppedPartWayAndRunAgainHoldsEachEntryOnce`,
+`TestHandOverTo_KeepsAnEntryWhoseIDIsTaken`,
+`TestShortcutChildArtifactCleanupExecutor_HandsTheChildsTrashToItsDrive`,
+`TestShortcutChildArtifactCleanupExecutor_KeepsTheChildWhenItsTrashCannotBeHandedOver`).
+A restore of an entry whose sync folder is gone, such as a released shared
+folder's, does not make the folder again and names where the file is in the
+trash (`TestTrashRestore_IntoASyncFolderThatIsGoneNamesWhereTheFileIs`).
 
 Both download-target checks hash the existing file and compare it with
 `expectedDownloadTargetHash`: the hash of the version the plan observed, or,

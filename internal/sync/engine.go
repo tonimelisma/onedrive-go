@@ -155,7 +155,11 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 
 	rootIdentity := syncdomain.NewSyncRootIdentity(syncRootBinding, syncRootRefusalHint(cfg))
-	trash := localtrash.Open(localtrash.DirForStatePath(cfg.DBPath), nil)
+	trashDir := cfg.TrashDir
+	if trashDir == "" {
+		trashDir = localtrash.DirForStatePath(cfg.DBPath)
+	}
+	trash := localtrash.Open(trashDir, nil)
 
 	// Construct sessionStore and TransferManager together so the TM is
 	// immutable after creation (no post-hoc field mutation). Disk space

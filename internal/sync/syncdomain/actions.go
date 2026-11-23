@@ -109,6 +109,11 @@ type Action struct {
 	// `sync --confirm-deletes`. The store leaves it out of the delete ledger
 	// the proportional hold counts, since the confirmation reviewed it.
 	DeleteConfirmed bool
+	// ReleasesSharedFolder marks a local delete that releases a synced
+	// entry of a shared folder removed from this account
+	// (engine_shortcut_release.go): nothing was deleted on OneDrive, so the
+	// trash records the file as released, not deleted.
+	ReleasesSharedFolder bool
 }
 
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked
