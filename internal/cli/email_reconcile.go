@@ -278,8 +278,11 @@ func (cc *CLIContext) applyEmailReconcileResult(result *config.EmailReconcileRes
 
 	for i := range result.AccountRenames {
 		rename := result.AccountRenames[i]
-		if cc.Flags.Account == rename.From.Email() {
+		switch cc.Flags.Account {
+		case rename.From.Email():
 			cc.Flags.Account = rename.To.Email()
+		case rename.From.String():
+			cc.Flags.Account = rename.To.String()
 		}
 
 		if cc.SharedTarget != nil && cc.SharedTarget.Ref.AccountEmail == rename.From.Email() {
@@ -299,6 +302,14 @@ func (cc *CLIContext) applyEmailReconcileResult(result *config.EmailReconcileRes
 			)
 			cc.reconcileNotices[noticeKey] = struct{}{}
 		}
+	}
+
+	// A shared folder's store the change could not assign stays under the
+	// old email; the user is told once which file, not the log.
+	for _, path := range result.KeptStateDBs {
+		cc.Statusf("Kept %s under the account's old email: two accounts had that email, and nothing records "+
+			"which of them the shared folder belongs to. Remove it if neither account syncs that folder any more.\n",
+			path)
 	}
 
 	// The drive selector from ONEDRIVE_GO_DRIVE resolves exactly as --drive

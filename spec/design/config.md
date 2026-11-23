@@ -417,16 +417,40 @@ email, it:
   recorded
 - records the whole change in a journal, then runs four steps in this order:
   1. moves owned state DBs (`state_*`), through the `StateDBMover` its caller
-     passes in
+     passes in. A personal store follows a renamed personal account, a work
+     or SharePoint store a renamed work or school account, and a shared
+     folder's store the owner its catalog record names. A shared folder's
+     store with no catalog record moves when one account had the old email
+     (its name is the evidence); when a personal and a work or school account
+     both had it, the store stays under the old email and the result names it
+     (`EmailReconcileResult.KeptStateDBs`), which the CLI tells the user in
+     one line, never a log Warn
+     (`TestReconcileAccountEmail_MovesASharedStoreWithNoCatalogRecordWhenOneAccountHadTheEmail`,
+     `TestReconcileAccountEmail_ReportsASharedStoreItCannotAssign`)
   2. renames owned token files (`token_*`)
-  3. rewrites config section headers in place through `RenameDriveSections()`
+  3. rewrites config section headers in place through `RenameDriveSections()`;
+     in the same locked write a renamed section's `display_name` that is
+     exactly the default derived from the old ID (`drive add` stores it when
+     it cannot resolve a shared folder's name) becomes the new ID's default,
+     by the same rule as the catalog step (`followedDisplayName`); a name the
+     user typed stays, even one that contains the old address
+     (`TestReconcileAccountEmail_AConfigSectionsDefaultNameFollowsTheAddress`,
+     `TestReconcileAccountEmail_AConfigSectionsOwnNameStays`)
   4. rewrites catalog account IDs and the drives those accounts own, in one
      catalog write; a drive of any other account keeps its ID, even one under
      the same old address with another account type
      (`TestReconcileAccountEmail_LeavesAnotherAccountsCatalogDrivesAlone`).
      A re-keyed drive's stored name follows the address only when it is the
      default derived from the old ID; a name Graph or the user supplied stays
-     (`TestReconcileAccountEmail_CatalogDefaultDriveNameFollowsTheAddress`)
+     (`TestReconcileAccountEmail_CatalogDefaultDriveNameFollowsTheAddress`).
+     A drive record whose key does not parse stops the step with an error:
+     the catalog decoder and encoder refuse one, so it cannot be on disk
+
+Not covered yet (planned): a shortcut child's store (`state_mount_<digest of
+the mount ID>.db`, whose mount ID holds the parent's ID and so the email)
+does not move with its parent; a running `sync --watch` is not told at once
+about a change another command made; and a second config file sharing the
+data directory keeps sections under the old email. [planned]
 
 Commands learn of a change from the CLI's account identity check, which is
 a freshness step and never a precondition (R-6.8.31). The catalog account

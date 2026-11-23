@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -334,7 +335,10 @@ func (e *driveSectionCollisionError) Error() string {
 // exists (*driveSectionCollisionError), because the config would otherwise
 // end up with two owners for the same canonical ID; the file is then left as
 // it is. A source section that does not exist is skipped, so a rename that
-// already happened is done.
+// already happened is done. A renamed section's display_name that is exactly
+// the default derived from the old ID becomes the new ID's default
+// (followedDisplayName); this also runs on a section a resumed change renamed
+// earlier, so it is idempotent too.
 func RenameDriveSections(ctx context.Context, path string, renames map[driveid.CanonicalID]driveid.CanonicalID) error {
 	if len(renames) == 0 {
 		return nil
@@ -388,11 +392,39 @@ func renameDriveSectionsSnapshot(path string, renames map[driveid.CanonicalID]dr
 			renamed = true
 		}
 	}
+	for from, to := range renames {
+		if toIdx, found := headerIndex[to.String()]; found && followSectionDisplayName(lines, toIdx, from, to) {
+			renamed = true
+		}
+	}
 	if !renamed {
 		return nil
 	}
 
 	return atomicWriteFile(path, []byte(renderLines(lines)))
+}
+
+// followSectionDisplayName rewrites the display_name of the section at
+// headerIdx when it is exactly the default derived from from, to that of to,
+// keeping the line's inline comment. It reports whether it changed a line.
+func followSectionDisplayName(lines []parsedLine, headerIdx int, from, to driveid.CanonicalID) bool {
+	contentStart, contentEnd := sectionContentRange(lines, headerIdx)
+	idx, found := findKeyInRange(lines, contentStart, contentEnd, displayNameKey)
+	if !found {
+		return false
+	}
+	stored, err := strconv.Unquote(lines[idx].value)
+	if err != nil {
+		// Not a basic string onedrive-go wrote: the user's own spelling.
+		return false
+	}
+	followed := followedDisplayName(stored, from, to)
+	if followed == stored {
+		return false
+	}
+	lines[idx].raw = renderKeyValueLine(displayNameKey, tomlString(followed), lines[idx].inlineComment)
+
+	return true
 }
 
 // DefaultSyncDir computes a default sync directory for a drive. Uses a two-level
