@@ -154,9 +154,16 @@ func (p *Planner) planBuiltActions(
 // and returns the dependencies of what it keeps and how many actions the
 // cycles and the deletes removed; every one of them is admitted, so the mode
 // runs it.
+//
+// A folder delete that closes a cycle through the move of a folder above it
+// is held for the next pass first (withholdDeletesInsideFolderMoveCycles), so
+// the rest of that cycle runs.
 func (p *Planner) admitWithoutCycles(
 	admitted, held []syncdomain.Action, inputs *moveInputs, composition *moveComposition, mode syncdomain.SyncMode,
 ) (kept []syncdomain.Action, deps [][]int, inCycles, withheld int) {
+	admitted, heldDeletes := withholdDeletesInsideFolderMoveCycles(p.logger, admitted, mode)
+	withheld = len(heldDeletes)
+	held = slices.Concat(held, heldDeletes)
 	kept, deps, cycled := isolateDependencyCycles(admitted, p.logger)
 	inCycles = len(cycled)
 	for len(cycled) > 0 {

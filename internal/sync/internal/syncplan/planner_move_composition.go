@@ -1416,9 +1416,10 @@ func (e *moveEmitter) holdsALocalLanding(key string) bool {
 // nearer folder moves out of the moving one: its own move then waits for n
 // to leave it first, a cycle through the folder made there. When the plan
 // deletes the one-sided folder instead, that delete waits for the move and
-// the folder move for the delete, and when n lands on the vacated path itself
-// or in a folder moved onto it, n's move and the folder move wait for each
-// other: cycles the planner drops on every pass (sync-planning.md, Move
+// the folder move for the delete, a cycle the delete waits a pass to break
+// (withholdDeletesInsideFolderMoveCycles). When n lands on the vacated path
+// itself or in a folder moved onto it, n's move and the folder move wait for
+// each other: a cycle the planner drops on every pass (sync-planning.md, Move
 // Composition).
 func (e *moveEmitter) vacatingFolder(n *moveNode, side moveCoord, newPath string) (string, bool) {
 	for dir := path.Dir(n.paths[side]); dir != "." && dir != "/"; dir = path.Dir(dir) {
@@ -2228,6 +2229,102 @@ func withholdDeletesOfHeldWork(
 	}
 
 	return kept, withheld, withheldInMode
+}
+
+// withholdDeletesInsideFolderMoveCycles holds for the next pass each folder
+// delete of a plan with a dependency cycle that closes the cycle through the
+// move of a folder above it on its side (deletesInsideFolderMoveCycles), with
+// what waits for it apart from such a move (withoutWorkTheMoveCarries). The
+// shape: here docs moved to archive, a new docs made, archive/sub/inner.txt
+// moved into it and archive/sub removed (or the same on OneDrive). SQLite
+// deletes the one-sided sub at its baseline path docs/sub; the delete waits
+// for inner.txt to leave it, docs's move waits for the delete below its
+// source, and inner.txt's move waits for the new docs, which waits for docs's
+// move. Dropped as a cycle, nothing ran on any pass. Held, docs's move
+// carries sub with inner.txt in it, the new docs is made, inner.txt's move,
+// whose source docs's move took away, is superseded, and the next pass moves
+// inner.txt and then deletes the folder at its new path. Holding a delete
+// never removes anything. It logs each delete it holds at Debug and returns
+// the actions it keeps and those it holds.
+func withholdDeletesInsideFolderMoveCycles(
+	logger *slog.Logger, actions []syncdomain.Action, mode syncdomain.SyncMode,
+) (kept, withheld []syncdomain.Action) {
+	deps := buildDependencies(actions)
+	onCycle := dependencyCycleMembers(deps)
+	if len(onCycle) == 0 {
+		return actions, nil
+	}
+	roots := deletesInsideFolderMoveCycles(actions, deps, onCycle, mode)
+	if len(roots) == 0 {
+		return actions, nil
+	}
+	for i := range roots {
+		if logger != nil {
+			logger.Debug("folder delete waits for the move of the folder above it",
+				slog.String("action", actions[i].Type.String()),
+				slog.String("path", actions[i].Path))
+		}
+	}
+	dropped := withDependents(roots, withoutWorkTheMoveCarries(actions, deps))
+	kept = make([]syncdomain.Action, 0, len(actions)-len(dropped))
+	for i := range actions {
+		if dropped[i] {
+			withheld = append(withheld, actions[i])
+			continue
+		}
+		kept = append(kept, actions[i])
+	}
+
+	return kept, withheld
+}
+
+// deletesInsideFolderMoveCycles lists the folder deletes on a cycle (onCycle)
+// that a move of a folder above them on their side waits for, while they
+// wait for a same-side move out of the deleted folder that waits, directly or
+// through others, for that folder's move. deps are sorted per action, as
+// buildDependencies leaves them.
+func deletesInsideFolderMoveCycles(
+	actions []syncdomain.Action, deps [][]int, onCycle map[int]bool, mode syncdomain.SyncMode,
+) map[int]bool {
+	roots := map[int]bool{}
+	for d := range onCycle {
+		deleted := &actions[d]
+		if !isSubtreeDelete(deleted) || !actionAllowedInMode(deleted, mode) {
+			continue
+		}
+		side, _ := deleteSide(deleted)
+		if closesAFolderMoveCycle(actions, deps, onCycle, d, side) {
+			roots[d] = true
+		}
+	}
+
+	return roots
+}
+
+// closesAFolderMoveCycle reports whether the folder delete d on side is waited
+// for by the move of a folder above it on side that a move out of d's folder,
+// which d waits for, waits for in turn.
+func closesAFolderMoveCycle(actions []syncdomain.Action, deps [][]int, onCycle map[int]bool, d int, side moveCoord) bool {
+	deleted := &actions[d]
+	for a := range onCycle {
+		folderMove := &actions[a]
+		if !isMoveAction(folderMove) || moveSide(folderMove.Type) != side ||
+			!strings.HasPrefix(deleted.Path, folderMove.OldPath+"/") {
+			continue
+		}
+		if _, waits := slices.BinarySearch(deps[a], d); !waits {
+			continue
+		}
+		for _, m := range deps[d] {
+			out := &actions[m]
+			if isMoveAction(out) && moveSide(out.Type) == side && strings.HasPrefix(out.OldPath, deleted.Path+"/") &&
+				waitsFor(deps, m, a) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // deletesOfHeldWork lists the deletes of actions that wait for held work

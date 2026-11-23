@@ -47,6 +47,59 @@ type recreatedFolderMoveCase struct {
 	onOneDrive bool
 }
 
+// Validates: R-2.17.2, R-2.17.6
+//
+// docs is moved to archive, a new docs made, archive/sub/inner.txt moved into
+// it and the emptied archive/sub removed, all before one sync, here or on
+// OneDrive. Made here, SQLite deletes sub online at docs/sub: the delete
+// waits for inner.txt to leave it, docs's move for the delete below its
+// source, inner.txt's move for the new docs and the new docs for docs's move,
+// a cycle the planner dropped on every pass, so nothing moved on OneDrive and
+// every sync left work. The delete now waits a pass: docs's move carries sub
+// with inner.txt in it, and the next pass moves inner.txt and then deletes
+// sub. One sync finishes it on either side: both hold the tree made, inner.txt
+// is still the item it was, nothing is uploaded again, and no content is lost
+// to OneDrive's recycle bin or this computer's trash.
+func TestRunOnce_FileMovedOutOfASubfolderIntoTheRemadeFolderWithTheSubfolderRemovedConverges(t *testing.T) {
+	t.Parallel()
+
+	for _, onOneDrive := range []bool{false, true} {
+		t.Run(fmt.Sprintf("on OneDrive: %v", onOneDrive), func(t *testing.T) {
+			t.Parallel()
+
+			remote := newSubfolderScenarioRemote(t)
+			eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+			if onOneDrive {
+				remote.moveAt(t, "docs", "archive")
+				remote.mkdirAt(t, "docs")
+				remote.moveAt(t, "archive/sub/inner.txt", "docs/inner.txt")
+				remote.deleteAt(t, "archive/sub")
+			} else {
+				local := scenarioLocalPath(syncRoot)
+				require.NoError(t, os.Rename(local("docs"), local("archive")))
+				require.NoError(t, os.Mkdir(local("docs"), 0o750))
+				require.NoError(t, os.Rename(local("archive/sub/inner.txt"), local("docs/inner.txt")))
+				require.NoError(t, os.Remove(local("archive/sub")))
+			}
+
+			runs, _ := runScenarioUntilDone(t, eng)
+			assert.Equal(t, 1, runs, "one sync finishes it")
+			want := map[string]string{
+				"archive": "/", "archive/kept.txt": "kept\n", "docs": "/", "docs/inner.txt": "inner\n",
+				"photos": "/", "photos/photo.jpg": "photo\n",
+			}
+			assert.Equal(t, want, remote.tree(), "OneDrive")
+			assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+			assert.Equal(t, "docs/inner.txt", remote.pathOf("item-inner"), "inner.txt is still the item it was")
+			assert.Zero(t, remote.uploads, "nothing is uploaded again")
+			assert.NotContains(t, remote.retainedContents(), "inner\n", "inner.txt is not in OneDrive's recycle bin")
+			assert.NotContains(t, harnessTrashContents(t, eng), "inner\n", "inner.txt is not in the trash here")
+			assert.NotContains(t, logs.String(), "dependency cycle")
+			requireScenarioQuietPlan(t, eng)
+		})
+	}
+}
+
 // Validates: R-2.17.6, R-2.17.1
 //
 // docs is moved into photos as photos/photos and a new docs is made, then a

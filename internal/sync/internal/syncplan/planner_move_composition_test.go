@@ -549,7 +549,9 @@ func composedMoveActions(c *moveComposition, nodes []moveNode) []syncdomain.Acti
 // delete waits for inner.txt to leave it; named from archive/sub, where docs's
 // move puts it, the move would not hold the delete back, and the delete would
 // remove docs/sub online with inner.txt still inside. Kept so, the plan is a
-// cycle the planner drops, so nothing is deleted. When OneDrive added a file
+// cycle, which the delete breaks by waiting a pass
+// (TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle).
+// When OneDrive added a file
 // to docs/sub, SQLite makes archive/sub here again instead, and the plan has
 // no delete: every action of it has an order
 // (TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges).
@@ -596,6 +598,50 @@ func TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource(t *testing.T)
 			assert.Len(t, kept, tc.wantKept)
 		})
 	}
+}
+
+// Validates: R-2.17.2, R-2.17.6
+//
+// The plan of the row "deleted online" above, a cycle of docs's move, the
+// delete of docs/sub, inner.txt's move and the new docs, holds the delete for
+// the next pass, and with it nothing else: docs's move carries sub with
+// inner.txt along, and every action left has an order. A plan whose delete
+// closes no such cycle (inner.txt moved out of a sub that no moving folder
+// holds) keeps it.
+func TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle(t *testing.T) {
+	t.Parallel()
+
+	folder := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFolder}}
+	nodes := []moveNode{
+		composeNode("docs", syncdomain.ItemTypeFolder, "docs", "archive", "docs"),
+		composeNode("kept", syncdomain.ItemTypeFile, "docs/kept.txt", "archive/kept.txt", "docs/kept.txt"),
+		composeNode("sub", syncdomain.ItemTypeFolder, "docs/sub", "", "docs/sub"),
+		composeNode("inner", syncdomain.ItemTypeFile, "docs/sub/inner.txt", "docs/inner.txt", "docs/sub/inner.txt"),
+	}
+	occupancy := composeOccupancy(nodes)
+	occupancy.local["docs"] = true
+	c := composeMoves(nodes, occupancy, nil)
+	actions := append(composedMoveActions(&c, nodes),
+		syncdomain.Action{Type: syncdomain.ActionFolderCreate, Path: "docs", CreateSide: syncdomain.CreateRemote},
+		syncdomain.Action{Type: syncdomain.ActionRemoteDelete, Path: "docs/sub", View: folder})
+
+	kept, withheld := withholdDeletesInsideFolderMoveCycles(nil, actions, syncdomain.SyncBidirectional)
+
+	require.Len(t, withheld, 1)
+	assert.Equal(t, syncdomain.ActionRemoteDelete, withheld[0].Type)
+	assert.Equal(t, "docs/sub", withheld[0].Path)
+	assert.Len(t, kept, len(actions)-1, "docs's move, inner.txt's move and the new docs stay")
+	_, _, cycled := isolateDependencyCycles(kept, nil)
+	assert.Empty(t, cycled, "every action left has an order")
+
+	unmoved := []syncdomain.Action{
+		{Type: syncdomain.ActionRemoteMove, Path: "inner.txt", OldPath: "sub/inner.txt", ItemID: "inner",
+			View: &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFile}}},
+		{Type: syncdomain.ActionRemoteDelete, Path: "sub", View: folder},
+	}
+	kept, withheld = withholdDeletesInsideFolderMoveCycles(nil, unmoved, syncdomain.SyncBidirectional)
+	assert.Empty(t, withheld)
+	assert.Len(t, kept, len(unmoved))
 }
 
 // Validates: R-2.17.6, R-2.17.1
