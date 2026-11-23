@@ -1291,4 +1291,13 @@ difference with its reason in the seed's failure context
 (`TestPlannerModel_RandomTriplesConverge`); the engine model does the same for
 every pass through the `shadowPlanned` engine hook
 (`TestRunOnce_RandomizedBidirectionalEditsConverge`). The shadow plan is never
-executed and never recorded.
+executed and never recorded. A watch replan compares the two only for a pass the shadow planner models:
+bidirectional, with no content filter path rules and no shortcut roots; a
+download-only or upload-only watch, a filter that hides paths and a drive with
+shared-folder mounts are not compared, since every difference there would be
+only what the shadow planner leaves out
+(`TestRunSteadyStateReplan_ComparesNoShadowPlanInAModeItDoesNotModel`,
+`TestShadowPlanModels_OnlyBidirectionalUnfilteredPassesWithoutShortcutRoots`).
+`BenchmarkPlanIdentityKeyed` times the shadow planner over a synced tree of 1k
+and 10k files with edits on both sides, the number to read against the
+replan's own planning time.
