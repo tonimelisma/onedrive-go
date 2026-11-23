@@ -923,9 +923,10 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 105 runs of `pairs.golden` (81 from the synced tree, 24 from the held
+The 53 runs of `pairs.golden` (39 from the synced tree, 14 from the held
 one; a run names its start, the two histories, the refused create if any,
-and the invariants it breaks) fall into eleven shapes. Each is an open
+and the invariants it breaks) fall into the eleven shapes below, of which
+5, 6, 8 and 9 are no longer listed. Each is an open
 behaviour of the planner unless it says it is right as it is; a fix removes
 its lines from the file. The refused-create variants of a run break what
 the run itself breaks, so they belong to its shape. 58 runs of shapes 4, 7
@@ -962,7 +963,7 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    in the new `x`, not in the held folder, so there is no move into the
    folder to make first; and `mv x p/x, mv p x`, where `p` lands on the
    new `x` made here, shape 7's collision of two entries at one name.
-2. A rotation through nesting split across the two sides (8 runs: 7
+2. A rotation through nesting split across the two sides (10 runs: 9
    synced, 1 held): `p` moved into `x` here while OneDrive moved `x` into
    `p`, with a third move onto a path they vacate or a folder made again at
    the old path. Composition keeps OneDrive's nesting and undoes this
@@ -993,8 +994,8 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    which composition already takes them for; the create should adopt
    OneDrive's folder, after the moved folder's baseline row has left the
    path.
-3. A folder moved onto the path of a folder deleted on the same side (29
-   runs: 26 synced, 3 held): `rm p, mv x p` or `rm x, mv p x` on OneDrive.
+3. A folder moved onto the path of a folder deleted on the same side (27
+   runs: 24 synced, 3 held): `rm p, mv x p` or `rm x, mv p x` on OneDrive.
    A replacing move onto a folder's path waits while the folder is there
    (see the replacing move above), and nothing removes the deleted folder's
    copy here, so the move waits for good; with the other side writing into
