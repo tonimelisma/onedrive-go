@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,7 +137,7 @@ func exitOnTestEnvError(err error) {
 	if err == nil {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "FATAL: load test environment: %v\n", err)
+	fmt.Fprintf(os.Stderr, "FATAL: load test environment: %s\n", pathlessError(err))
 	os.Exit(1)
 }
 
@@ -361,7 +362,8 @@ func CheckDriveAllowed(driveVar string, driveID string) error {
 // is not set or if the drive driveEnvVar names is not in the allowlist.
 func ValidateAllowlist(driveEnvVar string) {
 	if err := CheckDriveAllowed(driveEnvVar, os.Getenv(driveEnvVar)); err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
+		// CheckDriveAllowed's errors name variables, never a value.
+		fmt.Fprintf(os.Stderr, "FATAL: %s\n", pathlessError(err))
 		os.Exit(1)
 	}
 }
@@ -394,7 +396,7 @@ func FindTestCredentialDir(moduleRoot string) string {
 	dir := filepath.Join(moduleRoot, ".testdata")
 
 	if _, err := localpath.Stat(dir); err != nil {
-		fmt.Fprintln(os.Stderr, "FATAL: .testdata/ directory not found at "+dir)
+		fmt.Fprintln(os.Stderr, "FATAL: .testdata/ directory not found under the module root")
 		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
 		os.Exit(1)
 	}
@@ -407,11 +409,11 @@ func FindTestCredentialDir(moduleRoot string) string {
 func TokenFileName(driveID string) string {
 	parts := strings.SplitN(driveID, ":", 2)
 	if len(parts) < 2 {
-		fmt.Fprintf(os.Stderr, "FATAL: cannot parse drive %q for token filename\n", driveID)
+		fmt.Fprintln(os.Stderr, "FATAL: cannot name a token file for a drive without a type prefix")
 		os.Exit(1)
 	}
 
-	return "token_" + parts[0] + "_" + parts[1] + ".json"
+	return tokenFilePrefix + parts[0] + "_" + parts[1] + ".json"
 }
 
 // metadataFilePerms is owner-only read/write for managed test credential files.
@@ -438,16 +440,17 @@ func EnsureTestCredentialBundle(dir string, driveIDs []string) {
 	}
 	for _, path := range required {
 		if _, err := localpath.Stat(path); err != nil {
-			fmt.Fprintf(os.Stderr, "FATAL: required test credential file not found: %s\n", path)
+			fmt.Fprintf(os.Stderr, "FATAL: required test credential file not found: %s\n", credentialFileRole(path))
 			fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
 			os.Exit(1)
 		}
 	}
 
+	roles := NewDriveRoles(driveIDs...)
 	for _, driveID := range driveIDs {
 		tokenPath := filepath.Join(dir, TokenFileName(driveID))
 		if _, err := localpath.Stat(tokenPath); err != nil {
-			fmt.Fprintf(os.Stderr, "FATAL: required token file not found: %s\n", tokenPath)
+			fmt.Fprintf(os.Stderr, "FATAL: required token file of %s not found\n", roles.Role(driveID))
 			fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
 			os.Exit(1)
 		}
@@ -473,34 +476,77 @@ func CopyTestCredentialBundle(srcDir, dstConfigDir, dstDataDir string, driveIDs 
 func CopyFile(src, dst string, perm os.FileMode) {
 	data, err := localpath.ReadFile(src)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: cannot read %s: %v\n", src, err)
+		fmt.Fprintf(os.Stderr, "FATAL: cannot read %s: %s\n", credentialFileRole(src), pathlessError(err))
 		fmt.Fprintln(os.Stderr, "Run scripts/bootstrap-test-credentials.sh to create test credentials.")
 		os.Exit(1)
 	}
 
 	if mkdirErr := localpath.MkdirAll(filepath.Dir(dst), metadataDirPerms); mkdirErr != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: creating destination directory for %s: %v\n", dst, mkdirErr)
+		fmt.Fprintf(os.Stderr, "FATAL: creating destination directory for %s: %s\n", credentialFileRole(dst), pathlessError(mkdirErr))
 		os.Exit(1)
 	}
 
 	file, err := localpath.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: opening destination file for %s: %v\n", dst, err)
+		fmt.Fprintf(os.Stderr, "FATAL: opening destination file for %s: %s\n", credentialFileRole(dst), pathlessError(err))
 		os.Exit(1)
 	}
 
 	if _, writeErr := file.Write(data); writeErr != nil {
 		if closeErr := file.Close(); closeErr != nil {
-			fmt.Fprintf(os.Stderr, "FATAL: writing %s: %v (close: %v)\n", dst, writeErr, closeErr)
+			fmt.Fprintf(os.Stderr, "FATAL: writing %s: %s (close: %s)\n",
+				credentialFileRole(dst), pathlessError(writeErr), pathlessError(closeErr))
 			os.Exit(1)
 		}
 
-		fmt.Fprintf(os.Stderr, "FATAL: writing %s: %v\n", dst, writeErr)
+		fmt.Fprintf(os.Stderr, "FATAL: writing %s: %s\n", credentialFileRole(dst), pathlessError(writeErr))
 		os.Exit(1)
 	}
 
 	if closeErr := file.Close(); closeErr != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: closing %s: %v\n", dst, closeErr)
+		fmt.Fprintf(os.Stderr, "FATAL: closing %s: %s\n", credentialFileRole(dst), pathlessError(closeErr))
 		os.Exit(1)
 	}
+}
+
+// The prints of this file go to a live job's stderr, which is public CI
+// output, from TestMain, before the suite's masks exist. A credential path
+// holds an account's address in its file name (TokenFileName), so a print
+// names a file by its role (credentialFileRole), a drive by its role
+// (DriveRoles.Role) and an error by its text without its path
+// (pathlessError); a source test holds every print of the file to that.
+
+// tokenFilePrefix starts every token file's name (TokenFileName).
+const tokenFilePrefix = "token_"
+
+// credentialFileRole names a file of the credential bundle without its path:
+// the bundle's config and catalog by their fixed names, a token file as one,
+// and any other file as a test credential file.
+func credentialFileRole(path string) string {
+	switch name := filepath.Base(path); {
+	case name == testBundleConfigFile, name == testBundleCatalogFile:
+		return name
+	case strings.HasPrefix(name, tokenFilePrefix):
+		return "a token file"
+	default:
+		return "a test credential file"
+	}
+}
+
+// pathlessError is err's text without the path a filesystem error carries:
+// a *fs.PathError or *os.LinkError prints as its operation and cause.
+func pathlessError(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Op + ": " + pathErr.Err.Error()
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return linkErr.Op + ": " + linkErr.Err.Error()
+	}
+
+	return err.Error()
 }
