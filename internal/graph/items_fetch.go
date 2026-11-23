@@ -352,20 +352,42 @@ func placedByFolderAnswer(driveID driveid.ID, remotePath, folderPath string, ite
 const driveRootAlias = "root"
 
 // ErrNameNotPathAddressable reports a name a path-addressed request cannot
-// carry: one holding ':', which ends the path in a path route and which
-// url.PathEscape leaves as it is (measured on a Personal drive: Graph answers
-// 400 "Resource not found for the segment" for the path cut at the colon), or,
-// for a read of one name, one whose escaped form is longer than
-// maxPathAddressedLength. A caller that must still find such a name lists its
-// folder.
+// carry (NameIsPathAddressable), or, for a read of one name, one whose
+// escaped form is longer than maxPathAddressedLength. A caller that must
+// still find such a name lists its folder.
 var ErrNameNotPathAddressable = errors.New("graph: name cannot be carried in a path-addressed request")
 
+// Names the path route is known not to resolve, measured on a Personal drive
+// on 2026-11-15 (graph-api-quirks.md): a name that starts with the lowercase
+// "v1.0" (v1.0, v1.0x, v1.0.zip, v1.0.3; V1.0 and v2.0 resolve) answers 404
+// at its own path and at every path through it, and the name "$value" exactly
+// answers 400. Both are listed by their folder.
+const (
+	unresolvedNamePrefix = "v1.0"
+	unresolvedName       = "$value"
+)
+
+// NameIsPathAddressable reports whether the path route can resolve the name:
+// not one holding ':', which ends the path in a path route and which
+// url.PathEscape leaves as it is (measured on a Personal drive: Graph answers
+// 400 "Resource not found for the segment" for the path cut at the colon),
+// not one starting with "v1.0", and not "$value". A caller that walks a path
+// by name lists the folder of a name this refuses instead of reading it.
+func NameIsPathAddressable(name string) bool {
+	return !strings.Contains(name, ":") &&
+		!strings.HasPrefix(name, unresolvedNamePrefix) &&
+		name != unresolvedName
+}
+
 // refuseUnaddressableNames is ErrNameNotPathAddressable for a path, or one
-// name, holding ':' in any of its names, and nil otherwise. Every read by
-// path or by name calls it before its first request.
+// name, any of whose names the path route cannot resolve
+// (NameIsPathAddressable), and nil otherwise. Every read by path or by name
+// calls it before its first request.
 func refuseUnaddressableNames(remotePath string) error {
-	if strings.Contains(remotePath, ":") {
-		return fmt.Errorf("graph: reading %q: %w", remotePath, ErrNameNotPathAddressable)
+	for _, name := range strings.Split(remotePath, "/") {
+		if !NameIsPathAddressable(name) {
+			return fmt.Errorf("graph: reading %q: %w", remotePath, ErrNameNotPathAddressable)
+		}
 	}
 
 	return nil

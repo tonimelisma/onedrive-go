@@ -221,6 +221,43 @@ func TestPathReads_RefuseAColonInAnyNameBeforeAnyRequest(t *testing.T) {
 	}
 }
 
+// A name the path route is known not to resolve (measured on a Personal
+// drive: a name starting with the lowercase v1.0 answers 404, the name $value
+// answers 400) is refused before any request by every read by path or by
+// name, so a caller lists its folder instead; a name that only resembles them
+// is read.
+//
+// Validates: R-6.7.38
+func TestPathReads_RefuseANameTheRouteDoesNotResolveBeforeAnyRequest(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Fail(t, "no request may be sent", r.RequestURI)
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	t.Cleanup(srv.Close)
+	client := newTestClient(t, srv.URL)
+
+	for _, path := range []string{"v1.0", "v1.0x", "Docs/v1.0.zip", "Docs/v1.0.3/a.txt", "$value", "a/$value/b.txt"} {
+		t.Run(path, func(t *testing.T) {
+			_, err := client.GetItemByPath(t.Context(), driveid.New("d"), path)
+			require.ErrorIs(t, err, ErrNameNotPathAddressable)
+
+			err = client.ListChildrenByPathPages(t.Context(), driveid.New("d"), path, func([]Item) bool { return true })
+			require.ErrorIs(t, err, ErrNameNotPathAddressable)
+
+			if name := path[strings.LastIndex(path, "/")+1:]; !NameIsPathAddressable(name) {
+				_, err = client.GetChildByName(t.Context(), driveid.New("d"), "parent", name)
+				require.ErrorIs(t, err, ErrNameNotPathAddressable)
+			}
+		})
+	}
+
+	for _, name := range []string{"V1.0", "v2.0", "$value.txt", "$count", "it's", "50% off"} {
+		assert.True(t, NameIsPathAddressable(name), name)
+	}
+}
+
 // fallbackDriveRoot is the drive root's own ID on the fake of the fallback
 // test: the parent an answer for a top-level name carries.
 const fallbackDriveRoot = "real-root"
@@ -531,10 +568,10 @@ func TestGetItemByPath_AgreeingAnswersFromAnotherSubtreeAreNotCaught(t *testing.
 // listedFolderRoute is the folder
 // TestListChildrenByPath_HandsOnOnlyChildrenItsAnswersPlaceAtThePath lists,
 // read by its path.
-const listedFolderRoute = "/drives/000000000000000d/root:/Docs/v1.0:"
+const listedFolderRoute = "/drives/000000000000000d/root:/Docs/v3.0:"
 
 // listedFolder is the folder at listedFolderRoute as a read by path answers it.
-const listedFolder = `{"id":"v1-id","name":"v1.0","folder":{},"parentReference":{"id":"docs-id","path":"/drive/root:/Docs"}}`
+const listedFolder = `{"id":"v1-id","name":"v3.0","folder":{},"parentReference":{"id":"docs-id","path":"/drive/root:/Docs"}}`
 
 // listedFolderParentRoute is the folder Docs that holds the folder
 // listedFolderRoute, read by its path; listedFolderServer answers it without a
@@ -606,7 +643,7 @@ func TestListChildrenByPath_HandsOnOnlyChildrenItsAnswersPlaceAtThePath(t *testi
 		secondPage = listedFolderRoute + "/children?page=2"
 		// heldByItsName is the folder at listedFolderRoute without a parent
 		// path, placed by the folder Docs, which carries none either.
-		heldByItsName = `{"id":"v1-id","name":"v1.0","folder":{},"parentReference":{"id":"docs-id"}}`
+		heldByItsName = `{"id":"v1-id","name":"v3.0","folder":{},"parentReference":{"id":"docs-id"}}`
 	)
 
 	for _, tc := range []struct {
@@ -619,7 +656,7 @@ func TestListChildrenByPath_HandsOnOnlyChildrenItsAnswersPlaceAtThePath(t *testi
 		wantURIs    []string
 	}{
 		{
-			label: "children of the folder by its path", parent: `{"id":"v1-id","path":"/drive/root:/docs/V1.0"}`,
+			label: "children of the folder by its path", parent: `{"id":"v1-id","path":"/drive/root:/docs/V3.0"}`,
 			wantNames: []string{"a.txt", "b.txt"}, wantURIs: []string{firstPage, secondPage},
 		},
 		{
@@ -663,7 +700,7 @@ func TestListChildrenByPath_HandsOnOnlyChildrenItsAnswersPlaceAtThePath(t *testi
 		},
 		{
 			label: "a folder read without its ID", parent: `{"id":"v1-id"}`,
-			folder:      `{"name":"v1.0","folder":{},"parentReference":{"id":"docs-id","path":"/drive/root:/Docs"}}`,
+			folder:      `{"name":"v3.0","folder":{},"parentReference":{"id":"docs-id","path":"/drive/root:/Docs"}}`,
 			wantErrText: "answered without an item ID", wantURIs: []string{firstPage, listedFolderRoute},
 		},
 	} {
@@ -677,7 +714,7 @@ func TestListChildrenByPath_HandsOnOnlyChildrenItsAnswersPlaceAtThePath(t *testi
 			srv, uris := listedFolderServer(t, tc.parent, folder)
 
 			var names []string
-			err := newTestClient(t, srv.URL).ListChildrenByPathPages(t.Context(), driveid.New("d"), "Docs/v1.0", func(page []Item) bool {
+			err := newTestClient(t, srv.URL).ListChildrenByPathPages(t.Context(), driveid.New("d"), "Docs/v3.0", func(page []Item) bool {
 				for i := range page {
 					names = append(names, page[i].Name)
 				}
