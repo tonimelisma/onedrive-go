@@ -84,6 +84,7 @@ This keeps domain-specific logic close to its tests without reopening the public
 
 | Behavior | Evidence |
 | --- | --- |
+| A transfer stall says on which side it fell, and a stall of the local side is retried as a busy file and is no outage evidence (R-6.8.20). | `TestUploadChunk_AStallInTheLocalReadSaysTheLocalSideStalled`, `TestDownload_AStallInTheLocalWriteSaysTheLocalSideStalled`, `TestUploadChunk_AStallOnTheNetworkSideIsNotALocalStall`, `TestDownload_AStallOnTheNetworkSideIsNotALocalStall`, `TestClassifyResult_AStallOfTheLocalSideIsRetriedAsBusyAndIsNoServiceEvidence` |
 | Auth flows, token persistence, and browser/device login remain Graph-boundary responsibilities. | `internal/graph/auth_test.go` (`TestDoLogin_Success`, `TestDoLogin_DeviceAuthError`, `TestSaveLoadToken_RoundTrip`), `internal/graph/auth_browser_callback_test.go` (`TestHandleOAuthCallback_RepeatedCallbackDoesNotBlock`), `internal/graph/client_auth_refresh_test.go` (`TestDeviceLoginError_AADOutcomesArePlain`) |
 | Graph request normalization and error translation stay inside the Graph boundary. | `internal/graph/client_test.go` (`TestDo_ErrorClassification`, `TestDo_ParsesStructuredGraphErrors`), `internal/graph/errors_classification_test.go` (`TestIsQuotaExhaustedAndIsNotSupported`), `internal/graph/normalize_test.go` |
 | Drive, shared-item, and upload-session quirks are handled at the Graph edge rather than in CLI or sync. | `internal/graph/drives_test.go`, `internal/graph/shares_test.go` (`TestResolveShareURL_PreservesRemoteItemIdentity`), `internal/graph/items_test.go` (`TestToItem_SharedOwner_FallbackChain`), `internal/graph/quirks_test.go` (`TestQueryUploadSession_ReturnsNextExpectedRanges`), `internal/graph/upload_test.go` |
@@ -416,7 +417,25 @@ had stopped it, and a `Retry-After` longer than the stall timeout failed the
 fragment as stalled
 (`TestStallWatchdog_AWaitThatStartsDuringAReadLeavesTheTimerStopped`,
 `TestStallWatchdog_AnAbandonedAttemptsReadCannotDisarmTheNextAttempt`,
-`TestStallWatchdog_NothingArmsItOnceTheTransferHasEnded`). A stall is
+`TestStallWatchdog_NothingArmsItOnceTheTransferHasEnded`). The watchdog
+also records on which side a stall fell. An upload's request body reads the
+local file (`localBody`) and a download's response body reads the network
+(`networkBody`), and the watchdog knows whether the current attempt's body
+is inside a read: a stall inside a read of a local body, or between two
+reads of a network body, where the caller writes the local file, is the
+local side's. Such a stall carries `ErrLocalSideStalled` beside
+`ErrTransferStalled`, so a local disk that hangs (a network mount, a FUSE
+folder) is told apart from a silent service; sync keeps it out of the
+service window and retries the one file as busy
+(`TestUploadChunk_AStallInTheLocalReadSaysTheLocalSideStalled`,
+`TestDownload_AStallInTheLocalWriteSaysTheLocalSideStalled`,
+`TestUploadChunk_AStallOnTheNetworkSideIsNotALocalStall`,
+`TestDownload_AStallOnTheNetworkSideIsNotALocalStall`,
+`TestClassifyResult_AStallOfTheLocalSideIsRetriedAsBusyAndIsNoServiceEvidence`,
+`TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence`). Go cannot
+interrupt a blocked read or write of a file, so a transfer whose local side
+hangs returns only once that call returns, the stall already recorded: the
+watchdog names the side, it does not free the worker. A stall is
 reported as `ErrTransferStalled` alone, never with `context.Canceled` in the
 chain (`doPreAuth` and `RetryTransport` return `context.Cause`), because sync
 reads a cancellation as a shutdown and would drop the action; sync
@@ -429,7 +448,7 @@ for headers, so a connection that delivered headers and went quiet held a
 worker forever (D-045, `TestDownload_StalledBodyIsAbandoned`,
 `TestUploadChunk_StalledBodyIsAbandoned`). A download's response body comes
 back bounded like every response body (Error Handling below); handed to the
-watchdog's `reader`, it starts no timer of its own, so the watchdog alone
+watchdog's `networkBody`, it starts no timer of its own, so the watchdog alone
 bounds it: the windows are the same, and a download failed as a stalled
 response instead of a stalled transfer would lose its partial
 (`TestStallWatchdog_ABodyItReadsStartsNoTimerOfItsOwn`). The transfer and metadata

@@ -21,6 +21,15 @@ import (
 // upload from its session.
 var ErrTransferStalled = errors.New("graph: transfer stalled")
 
+// ErrLocalSideStalled marks a stall whose silence was on the local side of
+// the transfer: an upload's read of the local file, or a download's write of
+// the local file between two body reads, made no progress for the stall
+// timeout. It always comes with ErrTransferStalled. A local disk that hangs
+// (a network mount, a FUSE folder) is not the service's silence, so the
+// sync classifier keeps such a stall out of the service window and retries
+// the one file instead (R-6.8.20).
+var ErrLocalSideStalled = errors.New("graph: the local file stopped moving")
+
 // defaultStallTimeout is how long a body may make no progress before it is
 // abandoned: a transfer body under the stall watchdog, and every other
 // response body (responseBody). One window for both: a metadata answer is
@@ -57,6 +66,14 @@ type stallWatchdog struct {
 	// Retry-After longer than the stall timeout failed the fragment as stalled.
 	mu    sync.Mutex
 	timer *time.Timer
+	// bodyIsLocal says which side the current attempt's body reads from: the
+	// local file (an upload's request body) or the network (a download's
+	// response body). inRead is set while the transport or the caller is
+	// inside a read of that body. Together they say on which side a stall
+	// fell: inside a read of a local body, or between two reads of a network
+	// body, where the caller writes the local file, it is the local side.
+	bodyIsLocal bool
+	inRead      bool
 	// attempt counts retry waits, and the end of the transfer. A body reader
 	// belongs to one attempt: the transport can still be reading an abandoned
 	// attempt's body during a retry wait, during the next attempt and after
@@ -89,7 +106,20 @@ func (w *stallWatchdog) stalled() {
 			w.cancel(panicguard.Recovered(w.logger, "in the transfer stall watchdog", r))
 		}
 	}()
-	w.cancel(ErrTransferStalled)
+	w.cancel(w.stallCause())
+}
+
+// stallCause is the cause a stall cancels the transfer with: ErrTransferStalled,
+// with ErrLocalSideStalled when the silence was on the local side.
+func (w *stallWatchdog) stallCause() error {
+	w.mu.Lock()
+	localSide := w.inRead == w.bodyIsLocal
+	w.mu.Unlock()
+	if localSide {
+		return fmt.Errorf("%w: %w", ErrTransferStalled, ErrLocalSideStalled)
+	}
+
+	return ErrTransferStalled
 }
 
 // waitStarts runs before every retry or throttle wait: it disarms the
@@ -115,14 +145,27 @@ func (w *stallWatchdog) retireAttempt() {
 	w.timer.Stop()
 }
 
-// arm (re)starts the stall timer when attempt is still the current one: body
-// bytes are expected now.
+// arm (re)starts the stall timer when attempt is still the current one, as a
+// read of its body begins: body bytes are expected now.
 func (w *stallWatchdog) arm(attempt int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	if attempt == w.attempt {
+		w.inRead = true
 		w.timer.Reset(w.timeout)
+	}
+}
+
+// readReturned records that a read of attempt's body returned; the timer
+// keeps running until the next read re-arms it, so the time the other side
+// takes between two reads counts too.
+func (w *stallWatchdog) readReturned(attempt int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if attempt == w.attempt {
+		w.inRead = false
 	}
 }
 
@@ -133,23 +176,37 @@ func (w *stallWatchdog) disarm(attempt int64) {
 	defer w.mu.Unlock()
 
 	if attempt == w.attempt {
+		w.inRead = false
 		w.timer.Stop()
 	}
 }
 
+// localBody wraps an upload's request body, which reads the local file.
+func (w *stallWatchdog) localBody(r io.Reader) io.Reader {
+	return w.reader(r, true)
+}
+
+// networkBody wraps a download's response body, which reads the network;
+// the caller writes the local file between two reads.
+func (w *stallWatchdog) networkBody(r io.Reader) io.Reader {
+	return w.reader(r, false)
+}
+
 // reader wraps a body so that reading it arms the watchdog, every read that
 // moves bytes re-arms it, and the end of the body disarms it. The reader
-// belongs to the attempt that is current when it is made. A response body
-// (responseBody) is left to this watchdog alone: its own timer has the same
-// window and would race it, and a download that failed as a stalled response
-// rather than a stalled transfer would lose its partial.
-func (w *stallWatchdog) reader(r io.Reader) io.Reader {
+// belongs to the attempt that is current when it is made; isLocal says which
+// side the body reads from. A response body (responseBody) is left to this
+// watchdog alone: its own timer has the same window and would race it, and a
+// download that failed as a stalled response rather than a stalled transfer
+// would lose its partial.
+func (w *stallWatchdog) reader(r io.Reader, isLocal bool) io.Reader {
 	if body, ok := r.(*responseBody); ok {
 		body.leaveBoundToTransfer()
 	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.bodyIsLocal = isLocal
 
 	return &progressReader{inner: r, watchdog: w, attempt: w.attempt}
 }
@@ -196,6 +253,8 @@ func (p *progressReader) Read(b []byte) (int, error) {
 	if err != nil {
 		// Drained or failed: no more body bytes are expected from here.
 		p.watchdog.disarm(p.attempt)
+	} else {
+		p.watchdog.readReturned(p.attempt)
 	}
 
 	return n, err //nolint:wrapcheck // io.EOF must reach io.Copy unwrapped; callers wrap real failures

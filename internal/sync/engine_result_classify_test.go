@@ -589,6 +589,30 @@ func TestClassifyResult_LocalErrnoTable(t *testing.T) {
 	}
 }
 
+// Validates: R-6.8.20, R-2.10.62
+//
+// A transfer the stall watchdog abandoned while its local side hung (an
+// upload's read or a download's write of the local file) is the local disk's
+// trouble, not OneDrive's silence: it is retried as a busy file and is no
+// evidence for the service scope. A stall on the network side stays a
+// request timeout that is.
+func TestClassifyResult_AStallOfTheLocalSideIsRetriedAsBusyAndIsNoServiceEvidence(t *testing.T) {
+	t.Parallel()
+
+	localStall := fmt.Errorf("upload report.pdf: %w: %w: no data moved for 2m0s (context canceled)",
+		graph.ErrTransferStalled, graph.ErrLocalSideStalled)
+	local := classifyResult(&syncdomain.ActionCompletion{Err: localStall, ActionType: syncdomain.ActionUpload, Path: "docs/report.pdf"})
+	assert.Equal(t, resultRequeue, local.Class)
+	assert.Equal(t, syncdomain.IssueLocalBusy, local.ConditionType)
+	assert.True(t, local.ScopeEvidence.IsZero(), "a hung local disk is no evidence of a service outage")
+	assert.True(t, local.ScopeKey.IsZero())
+
+	networkStall := fmt.Errorf("upload report.pdf: %w: no data moved for 2m0s (context canceled)", graph.ErrTransferStalled)
+	network := classifyResult(&syncdomain.ActionCompletion{Err: networkStall, ActionType: syncdomain.ActionUpload, Path: "docs/report.pdf"})
+	assert.Equal(t, syncdomain.IssueRequestTimeout, network.ConditionType)
+	assert.False(t, network.ScopeEvidence.IsZero(), "a silent service is evidence for the service scope")
+}
+
 // Validates: R-2.10.61
 func TestShouldHandleLocalPermission_IncludesReadOnlyFilesystem(t *testing.T) {
 	t.Parallel()

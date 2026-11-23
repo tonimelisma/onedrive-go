@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -65,6 +66,12 @@ func TestClassifyLocalError_Table(t *testing.T) {
 		{name: "estale", err: wrapped(syscall.ESTALE), want: LocalErrorBusy},
 		{name: "etimedout of a read", err: readFailed(syscall.ETIMEDOUT), want: LocalErrorBusy},
 		{name: "eagain of a read", err: readFailed(syscall.EAGAIN), want: LocalErrorBusy},
+		{
+			name: "a transfer whose local side stalled",
+			err:  fmt.Errorf("sync: upload: %w: %w", graph.ErrTransferStalled, graph.ErrLocalSideStalled),
+			want: LocalErrorBusy,
+		},
+		{name: "a transfer whose network side stalled is not this table's", err: fmt.Errorf("sync: upload: %w", graph.ErrTransferStalled), want: LocalErrorOther},
 		{name: "exdev", err: wrapped(syscall.EXDEV), want: LocalErrorCrossDevice},
 		{name: "enametoolong", err: wrapped(syscall.ENAMETOOLONG), want: LocalErrorNameTooLong},
 		{name: "permission is not this table's", err: wrapped(syscall.EACCES), want: LocalErrorOther},

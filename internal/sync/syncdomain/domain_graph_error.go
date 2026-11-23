@@ -174,10 +174,14 @@ func unansweredServerAnswer(err error) ServerAnswer {
 // connection's keepalive found the server gone carry none of these
 // (retry.IsNetworkTimeout). An outcome commit or created-item record that outlasted
 // its bound carries context.DeadlineExceeded too, but it is no request:
-// ErrStoreAccessTimedOut marks it. Whether the run had ended is not asked
-// here: classifyResult asks.
+// ErrStoreAccessTimedOut marks it. A transfer the watchdog abandoned because
+// its local side stopped moving (graph.ErrLocalSideStalled: an upload's read
+// or a download's write of the local file hung) waited on the local disk,
+// not on OneDrive: it is no request timeout, and the local classifier
+// retries the one file as busy. Whether the run had ended is not asked here:
+// classifyResult asks.
 func IsRequestTimeout(err error) bool {
-	if errors.Is(err, ErrStoreAccessTimedOut) {
+	if errors.Is(err, ErrStoreAccessTimedOut) || errors.Is(err, graph.ErrLocalSideStalled) {
 		return false
 	}
 
