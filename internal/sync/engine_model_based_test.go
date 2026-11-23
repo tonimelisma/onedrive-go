@@ -724,10 +724,25 @@ func (c *modelClock) advance(d time.Duration) {
 // in all), and the check moves to the next pass, until one holds the rest or
 // nothing of the wipe is left to delete. A pass that resynced after a 410
 // uploads what OneDrive no longer has instead of deleting it here (R-2.15.3),
-// which loses nothing either.
+// which loses nothing either. A local wipe is seen whole, but the pass that
+// held it can fail in the storm, so the hold is not confirmed, and a later
+// pass finds the local side no longer empty once a download brought back a
+// file OneDrive edited (an edit beats a delete): it may run the few OneDrive
+// deletes left, as the proportional rule lets through (chaos seed 75).
 func (r *modelRun) requireWipeHeld(label string, report *Report) bool {
 	switch r.expectHoldOf {
 	case syncfixture.ModelLocalSide:
+		if r.chaos != nil && report.HeldRemoteDeletes == 0 {
+			r.wipeDeletesUnheld += report.RemoteDeletes
+			require.Less(r.t, r.wipeDeletesUnheld, syncplan.DeleteSafetyMinItems,
+				"%s: a wiped local side ran more OneDrive deletes without a hold than the proportional rule lets through; %s", label, r.failureContext())
+			if report.Downloads == 0 && len(r.localTree()) == 0 && len(r.remote.tree()) > 0 {
+				// The pass that held the wipe failed in the storm and the
+				// hold was not confirmed: the next pass holds it again.
+				return false
+			}
+			break
+		}
 		require.Positive(r.t, report.HeldRemoteDeletes, "%s: a wiped local side must hold the OneDrive deletes; %s", label, r.failureContext())
 	case syncfixture.ModelRemoteSide:
 		if r.chaos != nil && report.HeldLocalDeletes == 0 {
