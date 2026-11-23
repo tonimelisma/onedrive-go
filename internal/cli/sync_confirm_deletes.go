@@ -102,8 +102,8 @@ func confirmDeletesToRunningWatch(
 		return confirmDeletesAnswerError(err)
 	}
 
-	return writef(cc.Output(), "The running 'sync --watch' applies the %d confirmed deletes of %s in its next pass.\n",
-		named.Count, target.drive.CanonicalID)
+	return writef(cc.Output(), "The running 'sync --watch' applies the %s of %s in its next pass.\n",
+		countOf(named.Count, "confirmed delete"), target.drive.CanonicalID)
 }
 
 // heldSetNamed is the drive whose held set confirmation names.
@@ -121,7 +121,7 @@ func heldSetNamed(sets []drivesHeldSet, confirmation syncdomain.HeldDeleteConfir
 func writeHeldSets(cc *CLIContext, sets []drivesHeldSet) error {
 	for i := range sets {
 		set := &sets[i]
-		if err := writef(cc.Output(), "%s holds %d deletes for confirmation:\n", set.drive.CanonicalID, len(set.held)); err != nil {
+		if err := writef(cc.Output(), "%s holds %s for confirmation:\n", set.drive.CanonicalID, countOf(len(set.held), "delete")); err != nil {
 			return err
 		}
 		for j := range set.held {
