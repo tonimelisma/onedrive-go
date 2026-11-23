@@ -33,6 +33,25 @@ func (flow *engineFlow) compareShadowPlan(inputs *currentInputs, plan *syncdomai
 	return shadowPlanComparison{differences: diffs, unexplained: unexplained, err: err}
 }
 
+// shadowPlanModels reports whether the identity-keyed shadow planner models a
+// pass of this run: it plans every change in both directions, with no content
+// filter's path rules and no shortcut roots. A download-only or upload-only
+// watch, a filter that hides paths and a drive with shared-folder mounts
+// would each make it report differences that are only what it leaves out.
+func (flow *engineFlow) shadowPlanModels(mode syncdomain.SyncMode) bool {
+	filter := flow.cfg.contentFilter
+	switch {
+	case mode != syncdomain.SyncBidirectional:
+		return false
+	case len(filter.IgnoredDirs) > 0 || len(filter.IncludedDirs) > 0 || len(filter.IgnoredPaths) > 0:
+		return false
+	case flow.roots != nil && len(flow.roots.current()) > 0:
+		return false
+	default:
+		return true
+	}
+}
+
 // shadowPlanNoteLimit bounds the differences one debug event spells out; its
 // Count still says how many there are.
 const shadowPlanNoteLimit = 20
@@ -40,8 +59,13 @@ const shadowPlanNoteLimit = 20
 // reportShadowPlan compares a watch replan's plan with the identity-keyed
 // shadow plan and, when they differ or the shadow planner fails, reports it
 // as a debug event. It changes nothing: the shadow plan is neither executed
-// nor recorded.
-func (rt *watchRuntime) reportShadowPlan(inputs *currentInputs, plan *syncdomain.ActionPlan) {
+// nor recorded. A pass whose inputs the shadow planner does not model is not
+// compared (shadowPlanModels), so every difference it reports is one the
+// shadow planner could have avoided.
+func (rt *watchRuntime) reportShadowPlan(mode syncdomain.SyncMode, inputs *currentInputs, plan *syncdomain.ActionPlan) {
+	if !rt.shadowPlanModels(mode) {
+		return
+	}
 	comparison := rt.compareShadowPlan(inputs, plan)
 	if comparison.err == nil && len(comparison.differences) == 0 {
 		return

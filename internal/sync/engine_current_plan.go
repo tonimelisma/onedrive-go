@@ -106,7 +106,7 @@ func (rt *watchRuntime) runSteadyStateCurrentPlan(
 	if err != nil {
 		return nil, err
 	}
-	rt.reportShadowPlan(&observation.inputs, build.Plan)
+	rt.reportShadowPlan(mode, &observation.inputs, build.Plan)
 
 	return rt.reconcileRuntimeStateStage(ctx, build, syncstore.PassRefreshedLocalOnly)
 }
