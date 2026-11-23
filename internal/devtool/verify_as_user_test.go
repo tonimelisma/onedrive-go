@@ -155,6 +155,31 @@ func TestWithTestUser_AddsTheCheckoutTrustAfterTheCallersGitConfig(t *testing.T)
 }
 
 // Validates: R-6.10.38
+//
+// In a worktree nested in another checkout, as a builder's under
+// .claude/worktrees, git also checks who owns the checkout that holds the
+// repository, so the test user trusts that one too.
+func TestWithTestUser_TrustsTheCheckoutBehindAWorktree(t *testing.T) {
+	t.Parallel()
+
+	const worktree = "/repo/.claude/worktrees/agent-1"
+	host := &fakeTestUserHost{euid: rootUID, tools: []string{"runuser"}}
+	inner := goEnvRunner()
+	inner.outputs["git -C "+worktree+" rev-parse --path-format=absolute --git-common-dir"] = []byte("/repo/.git\n")
+	runner, err := withTestUser(inner, asUserTestName, host.host(), &bytes.Buffer{})
+	require.NoError(t, err)
+
+	require.NoError(t, runner.Run(t.Context(), worktree, []string{"HOME=/root"}, &bytes.Buffer{}, &bytes.Buffer{}, "go", "test", "./..."))
+
+	test := inner.runCommands[len(inner.runCommands)-1]
+	assert.Equal(t, []string{"2"}, envValuesOf(test.env, "GIT_CONFIG_COUNT"))
+	assert.Equal(t, []string{"safe.directory"}, envValuesOf(test.env, "GIT_CONFIG_KEY_0"))
+	assert.Equal(t, []string{worktree}, envValuesOf(test.env, "GIT_CONFIG_VALUE_0"))
+	assert.Equal(t, []string{"safe.directory"}, envValuesOf(test.env, "GIT_CONFIG_KEY_1"))
+	assert.Equal(t, []string{"/repo"}, envValuesOf(test.env, "GIT_CONFIG_VALUE_1"))
+}
+
+// Validates: R-6.10.38
 func TestWithTestUser_FallsBackToSetprivThenSu(t *testing.T) {
 	t.Parallel()
 

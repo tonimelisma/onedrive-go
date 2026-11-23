@@ -157,6 +157,9 @@ type testUserGoEnv struct {
 	goRoot     string
 	goBinary   string
 	cacheOwned string
+	// trusted are the checkouts git, as the user, must trust: the one go
+	// test runs in and, for a worktree nested in another checkout, that one.
+	trusted []string
 }
 
 func isGoTest(name string, args []string) bool {
@@ -231,7 +234,7 @@ func (r *testUserRunner) switched(
 		envSetting{key: "GOMODCACHE", value: r.goEnv.modCache},
 		envSetting{key: "GOCACHE", value: r.goEnv.cacheOwned},
 	)
-	userEnv, err := trustCheckoutForGit(userEnv, cwd)
+	userEnv, err := trustCheckoutForGit(userEnv, r.goEnv.trusted...)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -286,6 +289,7 @@ func (r *testUserRunner) announce(ctx context.Context, cwd string, env []string)
 		goRoot:     strings.TrimSpace(lines[2]),
 		goBinary:   goBinary,
 		cacheOwned: filepath.Join(r.target.home, ".cache", "go-build"),
+		trusted:    checkoutsToTrust(ctx, r.inner, cwd, env),
 	}
 
 	note := fmt.Sprintf("devtool verify: running go test as %s (uid %d, via %s). %s must be able to read "+
@@ -309,7 +313,7 @@ func (r *testUserRunner) announce(ctx context.Context, cwd string, env []string)
 // one git honors for safe.directory, and it reaches only this go test's
 // processes: nothing is written to the user's git configuration, and no other
 // repository is trusted.
-func trustCheckoutForGit(env []string, checkout string) ([]string, error) {
+func trustCheckoutForGit(env []string, checkouts ...string) ([]string, error) {
 	count := 0
 	if existing := envValue(env, "GIT_CONFIG_COUNT"); existing != "" {
 		parsed, err := strconv.Atoi(existing)
@@ -318,13 +322,38 @@ func trustCheckoutForGit(env []string, checkout string) ([]string, error) {
 		}
 		count = parsed
 	}
-	index := strconv.Itoa(count)
+	settings := make([]envSetting, 0, 2*len(checkouts)+1)
+	for _, checkout := range checkouts {
+		index := strconv.Itoa(count)
+		settings = append(settings,
+			envSetting{key: "GIT_CONFIG_KEY_" + index, value: "safe.directory"},
+			envSetting{key: "GIT_CONFIG_VALUE_" + index, value: checkout})
+		count++
+	}
+	settings = append(settings, envSetting{key: "GIT_CONFIG_COUNT", value: strconv.Itoa(count)})
 
-	return withEnvValues(env,
-		envSetting{key: "GIT_CONFIG_COUNT", value: strconv.Itoa(count + 1)},
-		envSetting{key: "GIT_CONFIG_KEY_" + index, value: "safe.directory"},
-		envSetting{key: "GIT_CONFIG_VALUE_" + index, value: checkout},
-	), nil
+	return withEnvValues(env, settings...), nil
+}
+
+// checkoutsToTrust lists the checkouts git must trust for go test in cwd:
+// cwd, and, when cwd is a worktree whose repository another checkout holds,
+// that checkout, since git checks the owner of both. Root asks git, before
+// the switch; a directory git does not know as a repository has only itself.
+func checkoutsToTrust(ctx context.Context, runner commandRunner, cwd string, env []string) []string {
+	trusted := []string{cwd}
+	out, err := runner.Output(ctx, cwd, env, "git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return trusted
+	}
+	commonDir := strings.TrimSpace(string(out))
+	if filepath.Base(commonDir) != ".git" {
+		return trusted
+	}
+	if holder := filepath.Dir(commonDir); holder != filepath.Clean(cwd) {
+		trusted = append(trusted, holder)
+	}
+
+	return trusted
 }
 
 // handCoverProfileOver gives the test user the coverage profile verify
