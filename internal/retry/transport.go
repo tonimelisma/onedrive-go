@@ -34,6 +34,11 @@ type RetryTransport struct {
 	// Policy controls the retry loop: MaxAttempts, backoff base/max/multiplier.
 	Policy Policy
 
+	// Jitter is the source the policy's jitter is drawn from (Policy.Delay):
+	// one per process, seeded at its start, so the waits of the transports
+	// of one process spread; nil draws none.
+	Jitter JitterSource
+
 	// Logger for retry warnings. Must not be nil.
 	Logger *slog.Logger
 
@@ -242,7 +247,7 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 		return false, err
 	}
 
-	backoff := rt.Policy.Delay(attempt)
+	backoff := rt.Policy.Delay(attempt, rt.Jitter)
 	if !rt.waitFits(req, backoff, "network error backoff") {
 		return false, err
 	}
@@ -456,7 +461,7 @@ func (rt *RetryTransport) retryBackoff(resp *http.Response, attempt int) time.Du
 		return ra
 	}
 
-	return rt.Policy.Delay(attempt)
+	return rt.Policy.Delay(attempt, rt.Jitter)
 }
 
 func requestLogTarget(req *http.Request) string {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"math/rand/v2"
 	"time"
 )
 
@@ -31,18 +30,20 @@ type Policy struct {
 	Jitter float64
 }
 
-// Delay returns the backoff duration for the given attempt (0-indexed).
-// The result includes jitter if configured.
-func (p Policy) Delay(attempt int) time.Duration {
+// Delay returns the backoff duration for the given attempt (0-indexed). A
+// policy with Jitter draws its spread from jitter, the source the caller
+// passes: ±Jitter of the backoff, so 0.25 gives backoff * [0.75, 1.25). A
+// nil source draws nothing and the delay is the curve itself, as for a
+// policy without Jitter.
+func (p Policy) Delay(attempt int, jitter JitterSource) time.Duration {
 	backoff := float64(p.Base) * math.Pow(p.Multiplier, float64(attempt))
 	if backoff > float64(p.Max) {
 		backoff = float64(p.Max)
 	}
 
-	if p.Jitter > 0 {
-		// ±jitter: e.g., 0.25 jitter means backoff * 0.25 * [-1, 1)
-		jitter := backoff * p.Jitter * (rand.Float64()*2 - 1) //nolint:gosec // jitter does not need crypto rand
-		backoff += jitter
+	if p.Jitter > 0 && jitter != nil {
+		spread := backoff * p.Jitter
+		backoff += float64(jitter.Jitter(time.Duration(2*spread))) - spread
 	}
 
 	return time.Duration(backoff)

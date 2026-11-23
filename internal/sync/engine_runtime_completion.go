@@ -725,7 +725,7 @@ func (flow *engineFlow) applyResultPersistence(
 	case syncdomain.PersistNone:
 		return nil, false, nil
 	case syncdomain.PersistRetryWork:
-		row, err := flow.recordRetryWork(ctx, decision, r, retryDelayForDecision(decision), activation)
+		row, err := flow.recordRetryWork(ctx, decision, r, retryDelayForDecision(decision, flow.deps.clock), activation)
 		if err != nil {
 			return nil, false, err
 		}
@@ -747,15 +747,16 @@ const durableRecheckDelay = 30 * time.Second
 // so it waits on the durable curve whatever the condition; before, only the
 // two conditions named below did, and a folder OneDrive refused as too long
 // was retried every few seconds (soak of 2026-11-02).
-func retryDelayForDecision(decision *syncdomain.ResultDecision) func(int) time.Duration {
+// The reconcile curve's jitter is drawn from jitter, the run's clock.
+func retryDelayForDecision(decision *syncdomain.ResultDecision, jitter retry.JitterSource) func(int) time.Duration {
 	if decision == nil {
-		return retry.ReconcilePolicy().Delay
+		return reconcileRetryDelay(jitter)
 	}
 	if decision.Class == errclass.ClassActionable {
 		return durableRecheckRetryDelay
 	}
 
-	return retryDelayForCondition(decision.ConditionType)
+	return retryDelayForCondition(decision.ConditionType, jitter)
 }
 
 // retryDelayForCondition is the backoff curve for retry work of a condition,
@@ -785,7 +786,7 @@ func retryDelayForDecision(decision *syncdomain.ResultDecision) func(int) time.D
 // outside the enum is not known to clear by itself, so it waits on the
 // durable curve: a hot retry loop is the failure this curve exists to
 // prevent.
-func retryDelayForCondition(condition syncdomain.IssueType) func(int) time.Duration {
+func retryDelayForCondition(condition syncdomain.IssueType, jitter retry.JitterSource) func(int) time.Duration {
 	switch condition {
 	case syncdomain.IssueCaseCollision, syncdomain.IssueRemoteFolderUnverifiable:
 		return durableRecheckRetryDelay
@@ -827,10 +828,18 @@ func retryDelayForCondition(condition syncdomain.IssueType) func(int) time.Durat
 		syncdomain.IssueResourceLocked,
 		syncdomain.IssueTransferURLRejected,
 		"":
-		return retry.ReconcilePolicy().Delay
+		return reconcileRetryDelay(jitter)
 	default:
 		return durableRecheckRetryDelay
 	}
+}
+
+// reconcileRetryDelay is the reconcile curve with its jitter drawn from
+// jitter.
+func reconcileRetryDelay(jitter retry.JitterSource) func(int) time.Duration {
+	policy := retry.ReconcilePolicy()
+
+	return func(attempt int) time.Duration { return policy.Delay(attempt, jitter) }
 }
 
 func durableRecheckRetryDelay(attempt int) time.Duration {

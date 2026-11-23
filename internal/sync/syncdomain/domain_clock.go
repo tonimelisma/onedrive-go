@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	stdsync "sync"
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
+	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // SyncClock is the engine's single time and scheduling capability. Every
@@ -40,12 +40,17 @@ type SyncClock interface {
 type RealClock struct {
 	logger *slog.Logger
 	panics *TimerPanics
+	// jitter is the source Jitter draws from: seeded once when the engine
+	// builds its clock (NewRealClock). A clock built without one, as an
+	// observer a test builds by hand has, draws no jitter.
+	jitter *retry.Jitter
 }
 
 // NewRealClock is the wall clock whose timer callbacks log their panics to
-// logger and hand them to panics.
+// logger and hand them to panics, and whose jitter comes from a source seeded
+// once, now.
 func NewRealClock(logger *slog.Logger, panics *TimerPanics) RealClock {
-	return RealClock{logger: logger, panics: panics}
+	return RealClock{logger: logger, panics: panics, jitter: retry.NewEntropyJitter()}
 }
 
 // Panics is the timer panics the clock's callbacks report to; nil for a
@@ -153,8 +158,14 @@ func (RealClock) Sleep(ctx context.Context, delay time.Duration) error {
 	return realSleep(ctx, delay)
 }
 
-func (RealClock) Jitter(maxDelay time.Duration) time.Duration {
-	return realJitter(maxDelay)
+// Jitter draws a duration in [0, maxDelay) from the clock's own source; a
+// clock without one draws none.
+func (c RealClock) Jitter(maxDelay time.Duration) time.Duration {
+	if c.jitter == nil {
+		return 0
+	}
+
+	return c.jitter.Jitter(maxDelay)
 }
 
 // Go starts fn on a new goroutine.
@@ -230,14 +241,6 @@ func realSleep(ctx context.Context, delay time.Duration) error {
 	case <-ctx.Done():
 		return fmt.Errorf("sleep interrupted: %w", ctx.Err())
 	}
-}
-
-func realJitter(maxDelay time.Duration) time.Duration {
-	if maxDelay <= 0 {
-		return 0
-	}
-
-	return rand.N(maxDelay) //nolint:gosec // non-cryptographic jitter for I/O scheduling
 }
 
 func TickerChan(ticker SyncTicker) <-chan time.Time {

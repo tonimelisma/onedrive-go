@@ -30,6 +30,7 @@ const (
 	stdStreamLintMessage   = "write through the CLI-owned output and status writers"
 	logPrintLintMessage    = "use the CLI-owned logger"
 	fixedWaitLintMessage   = "prove an absence by waiting for the signal that the input was handled, never by a fixed wait"
+	globalRandLintMessage  = "draw from a random source the caller passes (retry.JitterSource), not the global math/rand source"
 )
 
 // Validates: R-6.10.17
@@ -124,6 +125,40 @@ func TestGolangciConfig_ForbidigoRefusesFixedWaitAbsenceAssertions(t *testing.T)
 
 	assert.Empty(t, lintExclusionsAdmitting(t, config, "forbidigo", forbidigoIssueText("assert.Never", fixedWaitLintMessage)),
 		"no exclusion exempts any file from the fixed-wait rule")
+}
+
+// Validates: R-6.10.35
+//
+// No product code draws from the global math/rand source, which nothing can
+// seed: forbidigo refuses every package-level function of math/rand and
+// math/rand/v2 outside test files, while a method of a *rand.Rand a caller
+// seeded, which matches as rand.Rand.<method>, stays allowed.
+func TestGolangciConfig_ForbidigoRefusesTheGlobalRandomSource(t *testing.T) {
+	t.Parallel()
+
+	config := golangciConfig(t)
+	assertLintReadsEveryFile(t, config, "forbidigo")
+	assert.Equal(t, "true", yamlValue(t, config, "linters", "settings", "forbidigo", "analyze-types"))
+
+	rule := forbidigoRule(t, config, globalRandLintMessage)
+	pattern := regexp.MustCompile(rule["pattern"])
+	for _, call := range []string{"rand.N", "rand.IntN", "rand.Intn", "rand.Float64", "rand.Int64N", "rand.Shuffle", "rand.Perm", "rand.Uint64", "rand.Seed"} {
+		assert.True(t, pattern.MatchString(call), call)
+	}
+	for _, call := range []string{"rand.New", "rand.NewPCG", "rand.Rand.IntN", "rand.Rand.Float64", "rand.PCG.Uint64"} {
+		assert.False(t, pattern.MatchString(call), call)
+	}
+	pkg := regexp.MustCompile(rule["pkg"])
+	assert.True(t, pkg.MatchString("math/rand"))
+	assert.True(t, pkg.MatchString("math/rand/v2"))
+	assert.False(t, pkg.MatchString("crypto/rand"))
+
+	assert.False(t, forbidigoIssueExempt(t, config, "internal/retry/policy.go", "rand.Float64", globalRandLintMessage),
+		"product code is held to the rule")
+	assert.False(t, forbidigoIssueExempt(t, config, "internal/sync/syncdomain/domain_clock.go", "rand.N", globalRandLintMessage),
+		"the engine clock is held to the rule")
+	assert.True(t, forbidigoIssueExempt(t, config, "internal/sync/engine_model_based_test.go", "rand.N", globalRandLintMessage),
+		"a test draws from its own generators")
 }
 
 // Validates: R-6.10.17

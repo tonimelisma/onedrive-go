@@ -2,13 +2,14 @@
 
 GOVERNS: internal/synctree/*.go, internal/localtrash/*.go, internal/fsroot/*.go, internal/localpath/*.go, internal/perf/*.go, internal/devtool/*.go, internal/errclass/*.go, internal/sharedref/*.go, internal/authstate/*.go, internal/synctest/*.go, internal/namekey/*.go, internal/panicguard/*.go, internal/filelock/*.go, internal/humanunit/*.go, internal/sync/internal/syncfixture/*.go, internal/sync/internal/syncstoretest/*.go
 
-Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.32 [verified], R-6.10.33 [verified], R-6.10.2 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified], R-6.10.22 [verified], R-6.10.23 [verified], R-6.10.24 [verified], R-6.10.25 [verified], R-6.10.26 [verified], R-6.10.27 [verified], R-6.10.28 [verified], R-6.10.29 [verified], R-6.3.10 [verified], R-6.6.38 [verified]
+Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.32 [verified], R-6.10.33 [verified], R-6.10.34 [verified], R-6.10.2 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified], R-6.10.22 [verified], R-6.10.23 [verified], R-6.10.24 [verified], R-6.10.25 [verified], R-6.10.26 [verified], R-6.10.27 [verified], R-6.10.28 [verified], R-6.10.29 [verified], R-6.3.10 [verified], R-6.6.38 [verified]
 
 ## Verified By
 
 | Behavior | Evidence |
 | --- | --- |
 | A one-shot model seed runs in virtual time and reports its fault summary, a saved fault log and its replay line when it fails, deadlocks or nears go test's deadline (R-6.10.33). | `TestModel_ChaosRunWaitsInVirtualTime`, `TestModel_ChaosGraphConverges` |
+| A chaos seed replays its run: twenty runs of each chaos seed meet the same faults in every stream, dispatch the same actions and wait the same virtual time (R-6.10.34). | `TestModel_ChaosSameSeedReplaysIdentically` |
 | Package boundaries and privileged-call discipline remain documented in the owning design docs and exercised by package-level behavior tests. | `cmd/devtool/main_test.go`, `spec/design/sync-control-plane.md`, `spec/design/sync-engine.md`, `spec/design/graph-client.md`, `spec/design/drive-transfers.md` |
 | The product continues to split multi-mount control, single mounted content-root sync, Graph I/O, and rooted filesystem access into explicit authority boundaries. | `spec/design/sync-control-plane.md`, `spec/design/sync-engine.md`, `spec/design/graph-client.md`, `spec/design/drive-transfers.md` |
 | The full live suite runs every bucket after one fails, lists every bucket (`not-run` after a preflight failure) and names the failed tests; `public` and `stress` run every step; every go test deadline a CI job's profile can start fits inside the job's timeout (R-6.10.26). | `TestRunVerifyE2EFullRunsEveryBucketAfterOneFails`, `TestRunVerifyE2EFullReportsEveryFailingBucket`, `TestRunVerifyE2EFullRecordsBucketsNotRunAfterPreflightFailure`, `TestRunVerifyE2EFullDoesNotMaskUnknownFastSuiteFailure`, `TestRunVerifyWritesSummaryJSONOnFailure`, `TestRunVerifyPublicRunsUnitTestsAfterLintFails`, `TestRunVerifyPublicSkipsOnlyTheCoverageGateAfterUnitTestsFail`, `TestRunVerifyStressRunsEveryStepAfterOneFails`, `TestCIJobTimeoutsCoverEveryGoTestDeadline` |
@@ -507,11 +508,17 @@ Static verification is a first-class architectural constraint, not a best-effort
   what they name, `nextID` and `openSessionLocked`, not counted in the order
   requests arrive); two calls of one stream in flight together take their
   numbers in the order they reach the layer; and the client releases retry
-  work by elapsed time, on the bubble's virtual clock. Two runs of one seed
-  can therefore still send different requests and meet different faults
-  where a random draw outside the seed decides. A failing
+  work by elapsed time, on the bubble's virtual clock. None of these is a
+  random draw, and the run they follow is deterministic, so a seed replays
+  the whole run, which is measured: twenty runs of each chaos seed the tests use (1, 2 and 79)
+  meet the same faults in every stream, dispatch the same actions in the
+  same order and wait the same virtual time to the nanosecond
+  (`TestModel_ChaosSameSeedReplaysIdentically`, R-6.10.34); the divergence a
+  run on the wall clock showed between two runs of one seed is gone with the
+  bubble, and every jitter of the run comes from a seeded source (retry.md,
+  Jitter sources). A failing
   chaos run logs its `seed-replay:` line like the other seeded families, and
-  that command reruns its seed, not its run
+  that command reruns its run
   (`TestLogSeedReplayOnFailure_LogsTheCommandThatRerunsTheSeed`); no seeded
   family's failure message carries a second rerun hint
   (`TestModelRun_FailureContextCarriesNoSecondRerunHint`).

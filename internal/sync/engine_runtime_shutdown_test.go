@@ -262,7 +262,7 @@ func TestWatchRuntime_EveryRecordOfAStopSharesItsOneBound(t *testing.T) {
 	completions := make([]syncdomain.ActionCompletion, 0, len(succeeded))
 	for i, path := range succeeded {
 		_, err := eng.baseline.RecordRetryWorkFailure(t.Context(), syncfixture.TestRetryWorkFailure(path, "", syncdomain.ActionUpload),
-			retryDelayForDecision(nil))
+			retryDelayForDecision(nil, nil))
 		require.NoError(t, err)
 		id := int64(i + 1)
 		rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: path, View: &syncdomain.PathView{Path: path}}, id, nil)

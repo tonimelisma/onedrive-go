@@ -20,14 +20,15 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 )
 
-// What a chaos seed fixes, and the line that reruns one. A seed fixes the
-// values a call draws, for a given stream, call number and storm state,
-// however the calls of different streams interleave. What the calls meet in
-// the fake, which stream a request on a name the fake handed out falls in,
-// and which calls a client makes in a step are not the seed's, so the seed
-// does not fix the faults a whole run meets (the header of
-// chaos_remote_test.go lists each). A failing chaos run logs the
-// `seed-replay:` line that reruns its seed (logSeedReplayOnFailure).
+// What a chaos seed fixes, and the line that reruns one. By construction a
+// seed fixes the values a call draws, for a given stream, call number and
+// storm state, however the calls of different streams interleave. What the
+// calls meet in the fake and which calls a client makes in a step follow the
+// run (the header of chaos_remote_test.go lists each), and the run is
+// deterministic: it waits in virtual time and draws every jitter from a
+// seeded source, so a seed replays the whole run
+// (TestModel_ChaosSameSeedReplaysIdentically). A failing chaos run logs the
+// `seed-replay:` line that reruns it (logSeedReplayOnFailure).
 
 const (
 	// chaosOrderSeed is the interleaving test's seed. Its storm step splits
@@ -314,6 +315,63 @@ func firstStreamDifference(first, second map[string][]string) string {
 	}
 
 	return ""
+}
+
+// chaosReplayRuns is how many times the replay test runs each chaos seed.
+const chaosReplayRuns = 20
+
+// Validates: R-6.10.34, R-2.3.1
+//
+// A chaos seed replays its run, not only its draws: twenty runs of each seed
+// the chaos tests use meet the same faults in every stream and dispatch the
+// same actions in the same order, and wait the same virtual time to the
+// nanosecond. It holds because a one-shot run waits in
+// virtual time and every random draw of the run, the retry jitter included,
+// comes from a source the seed fixes. The first entry two runs differ in
+// names what is left when it fails.
+func TestModel_ChaosSameSeedReplaysIdentically(t *testing.T) {
+	syncfixture.SkipInShort(t)
+	t.Parallel()
+
+	seeds := []uint64{1, 2, chaosRaceSeed}
+	opts := chaosRunOptions()
+	if syncfixture.RaceDetectorEnabled {
+		// The race run is for data races, which one seed exercises; see
+		// modelRaceSeeds.
+		seeds = []uint64{chaosRaceSeed}
+	}
+	for _, seed := range seeds {
+		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
+			t.Parallel()
+
+			var streams [chaosReplayRuns]map[string][]string
+			var transcripts [chaosReplayRuns][]string
+			var waited [chaosReplayRuns]time.Duration
+			// The group's Run returns once every parallel run in it ended.
+			t.Run("runs", func(t *testing.T) {
+				for i := range chaosReplayRuns {
+					t.Run("run="+strconv.Itoa(i+1), func(t *testing.T) {
+						t.Parallel()
+						run := runModelScenarioWith(t, seed, opts)
+						streams[i] = chaosStreams(run.chaos.drawLog())
+						transcripts[i] = run.transcript
+						waited[i] = run.waited
+					})
+				}
+			})
+
+			require.NotEmpty(t, streams[0])
+			for i := 1; i < chaosReplayRuns; i++ {
+				assert.Empty(t, firstStreamDifference(streams[0], streams[i]), "seed %d: run %d met other faults than run 1", seed, i+1)
+				// Every wait of the run is drawn the same, so the run waits
+				// the same virtual time to the nanosecond.
+				assert.Equal(t, waited[0], waited[i], "seed %d: run %d waited another time than run 1", seed, i+1)
+				if !assert.Equal(t, transcripts[0], transcripts[i], "seed %d: run %d dispatched other actions than run 1", seed, i+1) {
+					return
+				}
+			}
+		})
+	}
 }
 
 // chaosEntryAt is entry i of a stream, or "(none)" past its end.

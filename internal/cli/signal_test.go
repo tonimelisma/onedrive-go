@@ -420,7 +420,7 @@ func TestShutdownContext_HandlerPanicStopsTheRequestInFlight(t *testing.T) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, http.NoBody)
 	require.NoError(t, err)
-	client := graphtransport.InteractiveMetadataClient(slog.New(slog.DiscardHandler), nil, nil)
+	client := graphtransport.InteractiveMetadataClient(slog.New(slog.DiscardHandler), nil, nil, nil)
 	resp, err := client.Do(req)
 	if resp != nil {
 		require.NoError(t, resp.Body.Close())

@@ -351,7 +351,7 @@ func (o *RemoteObserver) Watch(
 		slog.Bool("has_token", savedToken != ""),
 	)
 
-	bo := retry.NewBackoff(retry.WatchRemotePolicy())
+	bo := retry.NewBackoff(retry.WatchRemotePolicy(), o.clock)
 	bo.SetMaxOverride(interval)
 	var outage PollOutageLog
 	var stuck cursorServerErrorTracker
@@ -1015,7 +1015,7 @@ func (o *RemoteObserver) fetchDeltaPageWithRetry(ctx context.Context, token stri
 		if err == nil {
 			return dp, nil
 		}
-		wait, retryable := deltaPageRetryDelay(err, policy, attempt)
+		wait, retryable := deltaPageRetryDelay(err, policy, attempt, o.clock)
 		if !retryable || syncdomain.RunEnded(ctx, err) {
 			return nil, fmt.Errorf("delta page %d: %w", page, err)
 		}
@@ -1038,7 +1038,7 @@ func (o *RemoteObserver) fetchDeltaPageWithRetry(ctx context.Context, token stri
 // backoff. A 4xx other than 429 and an expired cursor are not retried. A
 // request that timed out is a transport failure like any other: whether the
 // run is ending is the caller's question (RunEnded), never the error's.
-func deltaPageRetryDelay(err error, policy retry.Policy, attempt int) (time.Duration, bool) {
+func deltaPageRetryDelay(err error, policy retry.Policy, attempt int, jitter retry.JitterSource) (time.Duration, bool) {
 	if attempt+1 >= policy.MaxAttempts {
 		return 0, false
 	}
@@ -1053,16 +1053,16 @@ func deltaPageRetryDelay(err error, policy retry.Policy, attempt int) (time.Dura
 				return graphErr.RetryAfter, true
 			}
 
-			return policy.Delay(attempt), true
+			return policy.Delay(attempt, jitter), true
 		case errors.Is(err, graph.ErrServerError):
-			return policy.Delay(attempt), true
+			return policy.Delay(attempt, jitter), true
 		default:
 			return 0, false
 		}
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
-		return policy.Delay(attempt), true
+		return policy.Delay(attempt, jitter), true
 	}
 
 	return 0, false

@@ -92,9 +92,13 @@ import (
 //     its bubble's virtual clock (engine_model_virtual_time_test.go), so the
 //     host's speed no longer moves it.
 //
-// So two runs of one seed can still send different requests and meet
-// different faults where a random draw outside the seed decides. The `seed-replay:` line a failing chaos run logs
-// (logSeedReplayOnFailure) reruns the seed, not the run.
+// None of these is a random draw: every jitter of the run comes from a
+// seeded source (the model clock, retry.JitterSource), and a one-shot run's
+// goroutines run in an order its virtual clock decides. So a seed replays its
+// run, not only its draws, which TestModel_ChaosSameSeedReplaysIdentically
+// holds over twenty runs of each seed; the first entry two runs differ in
+// names what is left when it fails. The `seed-replay:` line a failing chaos
+// run logs (logSeedReplayOnFailure) reruns the run.
 
 const (
 	chaosFaultOdds         = 4 // one call in chaosFaultOdds fails while a storm is on

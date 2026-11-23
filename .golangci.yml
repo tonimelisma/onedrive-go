@@ -375,6 +375,15 @@ linters:
           msg: use fsroot, synctree, or localpath filesystem boundaries instead of raw os.* calls
         - pattern: ^time\.Sleep$
           msg: use explicit test synchronization instead of wall-clock sleep
+        # Every random choice of product code comes from a source its caller
+        # passes (retry.JitterSource; the sync engine's clock), so a test that
+        # seeds the source replays the run. A package-level function of
+        # math/rand draws from the global source, which nothing can seed; a
+        # method of a *rand.Rand matches as rand.Rand.<method> and is allowed.
+        # Tests draw from their own seeded generators and are excluded below.
+        - pattern: ^rand\.(ExpFloat64|Float32|Float64|Int|Int31|Int31n|Int32|Int32N|Int63|Int63n|Int64|Int64N|IntN|Intn|N|NormFloat64|Perm|Read|Seed|Shuffle|Uint|Uint32|Uint32N|Uint64|Uint64N|UintN)$
+          pkg: ^math/rand(/v2)?$
+          msg: draw from a random source the caller passes (retry.JitterSource), not the global math/rand source
         # testify's Never and Consistently prove an absence by a fixed wait,
         # which a loaded host passes whether the product is right or wrong
         # (spec/design/system.md, the wait rules). A method of Assertions
@@ -581,6 +590,10 @@ linters:
         linters:
           - forbidigo
         text: use explicit test synchronization instead of wall-clock sleep
+      - path: _test\.go
+        linters:
+          - forbidigo
+        text: not the global math/rand source
       - path: _test\.go
         linters:
           - forbidigo

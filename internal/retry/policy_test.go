@@ -2,6 +2,7 @@ package retry
 
 import (
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func TestPolicy_Delay_NoJitter(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := p.Delay(tt.attempt)
+		got := p.Delay(tt.attempt, nil)
 		assert.Equal(t, tt.expected, got, "attempt %d", tt.attempt)
 	}
 }
@@ -54,6 +55,7 @@ func TestPolicy_Delay_WithJitter(t *testing.T) {
 	}
 
 	// Run many iterations to verify jitter bounds.
+	jitter := NewJitter(1)
 	for attempt := range 6 {
 		baseDelay := math.Min(float64(p.Base)*math.Pow(p.Multiplier, float64(attempt)), float64(p.Max))
 		maxJitter := baseDelay * p.Jitter
@@ -61,7 +63,7 @@ func TestPolicy_Delay_WithJitter(t *testing.T) {
 		hi := time.Duration(baseDelay + maxJitter)
 
 		for range 100 {
-			got := p.Delay(attempt)
+			got := p.Delay(attempt, jitter)
 			require.GreaterOrEqual(t, got, lo, "attempt %d: delay %v below lower bound %v", attempt, got, lo)
 			require.LessOrEqual(t, got, hi, "attempt %d: delay %v above upper bound %v", attempt, got, hi)
 		}
@@ -81,8 +83,8 @@ func TestPolicy_Delay_MaxCap(t *testing.T) {
 	}
 
 	// 5s * 2^3 = 40s → capped at 30s
-	assert.Equal(t, 30*time.Second, p.Delay(3))
-	assert.Equal(t, 30*time.Second, p.Delay(10))
+	assert.Equal(t, 30*time.Second, p.Delay(3, nil))
+	assert.Equal(t, 30*time.Second, p.Delay(10, nil))
 }
 
 func assertPolicyShape(t *testing.T, got Policy, maxAttempts int, base, maxDelay time.Duration, jitter float64) {
@@ -151,7 +153,7 @@ func TestTransportDelay_MatchesCalcBackoff(t *testing.T) {
 	}
 
 	for i, exp := range expected {
-		assert.Equal(t, exp, noJitter.Delay(i), "attempt %d", i)
+		assert.Equal(t, exp, noJitter.Delay(i, nil), "attempt %d", i)
 	}
 }
 
@@ -171,7 +173,7 @@ func TestWatchLocalDelay_MatchesOriginal(t *testing.T) {
 	}
 
 	for i, exp := range expected {
-		assert.Equal(t, exp, WatchLocalPolicy().Delay(i), "attempt %d", i)
+		assert.Equal(t, exp, WatchLocalPolicy().Delay(i, nil), "attempt %d", i)
 	}
 }
 
@@ -189,6 +191,61 @@ func TestWatchRemoteDelay_MatchesOriginal(t *testing.T) {
 	}
 
 	for i, exp := range expected {
-		assert.Equal(t, exp, WatchRemotePolicy().Delay(i), "attempt %d", i)
+		assert.Equal(t, exp, WatchRemotePolicy().Delay(i, nil), "attempt %d", i)
 	}
+}
+
+// Validates: R-6.10.35
+//
+// A policy's jitter comes from the source its caller passes: two sources of
+// one seed give two policies the same delays, attempt by attempt, another
+// seed gives other delays, and no source gives the curve itself.
+func TestPolicy_Delay_DrawsItsJitterFromTheSourceTheCallerPasses(t *testing.T) {
+	t.Parallel()
+
+	const attempts = 50
+	policy := TransportPolicy()
+	first, second, other := NewJitter(7), NewJitter(7), NewJitter(8)
+	differs := false
+	for attempt := range attempts {
+		want := policy.Delay(attempt, first)
+		assert.Equal(t, want, policy.Delay(attempt, second), "attempt %d", attempt)
+		if policy.Delay(attempt, other) != want {
+			differs = true
+		}
+	}
+	assert.True(t, differs, "another seed draws other delays")
+
+	curve := policy
+	curve.Jitter = 0
+	for attempt := range attempts {
+		assert.Equal(t, curve.Delay(attempt, nil), policy.Delay(attempt, nil), "attempt %d: no source draws no jitter", attempt)
+	}
+}
+
+// Validates: R-6.10.35
+//
+// A seeded Jitter is safe for concurrent use and draws within [0, max): the
+// retry transport of a process draws from one on every request's goroutine.
+func TestJitter_ConcurrentDrawsStayInRange(t *testing.T) {
+	t.Parallel()
+
+	const (
+		goroutines = 8
+		draws      = 200
+		maxDelay   = time.Second
+	)
+	jitter := NewEntropyJitter()
+	var all sync.WaitGroup
+	for range goroutines {
+		all.Go(func() {
+			for range draws {
+				got := jitter.Jitter(maxDelay)
+				assert.GreaterOrEqual(t, got, time.Duration(0))
+				assert.Less(t, got, maxDelay)
+			}
+		})
+	}
+	all.Wait()
+	assert.Zero(t, jitter.Jitter(0), "no range draws nothing")
 }

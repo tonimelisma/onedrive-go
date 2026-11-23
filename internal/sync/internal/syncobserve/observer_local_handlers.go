@@ -56,7 +56,7 @@ func (o *LocalObserver) watchLoop(
 	defer syncdomain.StopTicker(ticker)
 	tickCh := syncdomain.TickerChan(ticker)
 
-	errBackoff := retry.NewBackoff(retry.WatchLocalPolicy())
+	errBackoff := retry.NewBackoff(retry.WatchLocalPolicy(), o.clock)
 
 	for {
 		select {

@@ -59,7 +59,7 @@ func doDocumentedGraphQuirkRetry[T any](ctx context.Context, c *Client, spec doc
 			return zero, c.quirkRetryExhausted(spec.name, attempts, err)
 		}
 
-		backoff := spec.policy.Delay(attempt)
+		backoff := spec.policy.Delay(attempt, c.retryJitter)
 		attrs := []any{
 			slog.String("quirk", spec.name),
 			slog.Int("attempt", attempt+1),
