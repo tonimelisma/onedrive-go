@@ -3,8 +3,10 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -18,12 +20,15 @@ type deltaResponse struct {
 	DeltaLink string              `json:"@odata.deltaLink"`
 }
 
-// deltaHTTPPrefix is the scheme prefix used to detect full URL tokens
-// returned by the Graph API delta endpoint.
-const deltaHTTPPrefix = "http"
+// ErrDeltaTokenNotALink is a delta token that is neither empty nor a link: a
+// token this client saved is always the delta link Graph answered, so one
+// that is not is corrupt, and starting over from the initial path would read
+// a full enumeration as the changes since the token. A caller recovers as
+// from a token it cannot continue.
+var ErrDeltaTokenNotALink = errors.New("graph: delta token is not a link")
 
 // deltaPathBuilder constructs the initial API path for a delta request when
-// no token (or a non-HTTP token) is provided.
+// no token is provided.
 type deltaPathBuilder func() (string, error)
 
 // driveDeltaPath builds the initial path of a drive's delta.
@@ -115,19 +120,32 @@ func (c *Client) fetchDeltaPath(
 		slog.Bool("has_delta_link", dr.DeltaLink != ""),
 	)
 
-	return &DeltaPage{
+	page := &DeltaPage{
 		Items:     items,
 		NextLink:  dr.NextLink,
 		DeltaLink: dr.DeltaLink,
-	}, nil
+		Path:      path,
+	}
+	if dr.NextLink != "" {
+		// A next link that does not resolve leaves NextPath empty; the
+		// request for it is refused when it is asked for.
+		if nextPath, linkErr := c.stripBaseURL(dr.NextLink); linkErr == nil {
+			page.NextPath = nextPath
+		}
+	}
+
+	return page, nil
 }
 
-// resolveDeltaToken converts a delta token into an API path.
-// Empty or non-HTTP tokens use the provided path builder for the initial path.
-// Full HTTP URL tokens are stripped to relative paths.
+// resolveDeltaToken converts a delta token into the API path it asks for:
+// the initial path for an empty token, the link's path (stripBaseURL) for a
+// link, and ErrDeltaTokenNotALink for anything else, never the initial path.
 func (c *Client) resolveDeltaToken(token string, buildPath deltaPathBuilder) (string, error) {
-	if token == "" || !strings.HasPrefix(token, deltaHTTPPrefix) {
+	if token == "" {
 		return buildPath()
+	}
+	if !isLink(token) {
+		return "", fmt.Errorf("graph: reading delta token: %w", ErrDeltaTokenNotALink)
 	}
 
 	path, err := c.stripBaseURL(token)
@@ -136,6 +154,21 @@ func (c *Client) resolveDeltaToken(token string, buildPath deltaPathBuilder) (st
 	}
 
 	return path, nil
+}
+
+// isLink reports whether token has the form of a link: an absolute http or
+// https URL, the scheme in any letter case, or a relative reference with a
+// path ("drives/...", "/v1.0/drives/...").
+func isLink(token string) bool {
+	ref, err := url.Parse(token)
+	if err != nil {
+		return false
+	}
+	if ref.IsAbs() {
+		return ref.Scheme == httpScheme || ref.Scheme == httpsScheme
+	}
+
+	return strings.Contains(ref.Path, "/")
 }
 
 // DeltaAll fetches all pages of delta changes and returns the combined items

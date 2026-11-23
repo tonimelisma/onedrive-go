@@ -665,7 +665,7 @@ func TestDeltaAll_HTTP410_ReturnsGone(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 
-	_, _, err := client.DeltaAll(t.Context(), driveid.New("drive1"), "old-token")
+	_, _, err := client.DeltaAll(t.Context(), driveid.New("drive1"), srv.URL+"/drives/drive1/root/delta?token=old")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGone)
 }

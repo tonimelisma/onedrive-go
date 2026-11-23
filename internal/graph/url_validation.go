@@ -8,7 +8,10 @@ import (
 	"strings"
 )
 
-const httpsScheme = "https"
+const (
+	httpScheme  = "http"
+	httpsScheme = "https"
+)
 
 func validateGraphBaseURL(raw string) error {
 	parsed, err := url.Parse(raw)
@@ -29,7 +32,7 @@ func validateGraphBaseURL(raw string) error {
 	}
 
 	if isLoopbackHostname(parsed.Hostname()) {
-		if parsed.Scheme != deltaHTTPPrefix && parsed.Scheme != httpsScheme {
+		if parsed.Scheme != httpScheme && parsed.Scheme != httpsScheme {
 			return errors.New("graph: loopback base URL must use http or https")
 		}
 
@@ -177,7 +180,7 @@ func matchesAllowedHost(host string, allowed ...string) bool {
 func loopbackTolerant(validate func(*url.URL) error) func(*url.URL) error {
 	return func(parsed *url.URL) error {
 		if parsed != nil && isLoopbackHostname(parsed.Hostname()) &&
-			(parsed.Scheme == deltaHTTPPrefix || parsed.Scheme == httpsScheme) {
+			(parsed.Scheme == httpScheme || parsed.Scheme == httpsScheme) {
 			return nil
 		}
 

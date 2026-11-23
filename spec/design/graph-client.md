@@ -549,9 +549,29 @@ completes, and a page past it is never asked for
 `TestDeltaListings_AListingOfExactlyThePageCapCompletes`, `TestDeltaAll_MaxPages`,
 `TestDeltaFolderAll_MaxPages`).
 
-Every continuation goes through `stripBaseURL`, which refuses a link off the
-client's base URL, so a hostile `@odata.nextLink` cannot redirect the bearer
-elsewhere (`TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`). A delta
+Every continuation goes through `stripBaseURL`, a delta link and a saved
+delta token included, which refuses a link off the client's base URL, so a
+hostile `@odata.nextLink` cannot redirect the bearer elsewhere
+(`TestListItemPermissions_NextLinkOutsideBaseURLIsRefused`). It gives a page
+one key however its link is spelled: the scheme and host compare without
+letter case, a relative link is resolved against the base URL taken as a
+folder, and a host or path that only starts like the base is refused
+(`TestResolveDeltaToken`). A link back that would be the first page past the
+cap reports the cap, which is checked first
+(`TestPagedListings_ARepeatAtThePageCapReportsTheCap`). A delta token is the
+initial path only when it is empty: a token that is not a link (an absolute
+http or https URL, or a relative reference with a path) is
+`ErrDeltaTokenNotALink`, never read as the initial path, which would hand a
+full enumeration to a caller that takes it for the changes since the token.
+Sync recovers it as a cursor it cannot continue, on the drive root and on a
+shared folder. Each `DeltaPage` carries the path it was asked at (`Path`)
+and the path its next link resolves to (`NextPath`), so the sync observer,
+which follows pages itself, keys its loop guard by them
+(`TestDelta_APageCarriesItsPathAndItsNextPath`). A loop and the cap still
+wrap no sentinel (`TestDeltaListings_ALoopBackFailsAsThePageCapDoes`): the
+decision that neither does stands, so a shared folder's change list that
+loops is not recovered within the pass and fails it until the periodic full
+refresh. A delta
 enumeration refuses such a link before it counts or asks for the page, so its
 caller is told of the bad link even when the page cap is spent
 (`TestDeltaListings_ANextLinkOffTheBaseURLIsRefusedBeforeItIsAsked`).

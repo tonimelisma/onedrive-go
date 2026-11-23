@@ -927,15 +927,63 @@ func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([
 	return result.items, result.nextPath, nil
 }
 
-// stripBaseURL removes the client's base URL prefix from a full URL,
-// returning the path + query string for use with do().
-// Returns an error if the URL doesn't start with the expected base.
-func (c *Client) stripBaseURL(fullURL string) (string, error) {
-	if !strings.HasPrefix(fullURL, c.baseURL) {
-		return "", fmt.Errorf("graph: nextLink URL %q does not match base URL %q", fullURL, c.baseURL)
+// stripBaseURL makes a continuation link (an @odata.nextLink, a delta link
+// or a saved delta token) the path and query do() asks with: the link below
+// the client's base URL, with the base removed. Every paged listing makes
+// its links paths here, so a page has one key however it was spelled: the
+// scheme and host compare without letter case (RFC 3986 section 6.2.2.1), and
+// a relative link is resolved against the base URL as a folder, so
+// "drives/d/root/delta?token=x" and "/v1.0/drives/..." name the page they
+// name below "https://graph.microsoft.com/v1.0". A link that does not lead
+// below the base URL, another host or another version included, is refused:
+// a continuation off the Graph host would carry the bearer there.
+func (c *Client) stripBaseURL(link string) (string, error) {
+	resolved, err := c.resolveLink(link)
+	if err != nil {
+		return "", err
+	}
+	base := lowerSchemeAndHost(c.baseURL)
+	rest, below := strings.CutPrefix(resolved, base)
+	if !below || (rest != "" && rest[0] != '/' && rest[0] != '?') {
+		return "", fmt.Errorf("graph: nextLink URL %q does not match base URL %q", link, c.baseURL)
 	}
 
-	return fullURL[len(c.baseURL):], nil
+	return rest, nil
+}
+
+// resolveLink is link as an absolute URL with its scheme and host in lower
+// case: a relative link resolved against the base URL taken as a folder.
+func (c *Client) resolveLink(link string) (string, error) {
+	ref, err := url.Parse(link)
+	if err != nil {
+		return "", fmt.Errorf("graph: reading continuation link %q: %w", link, err)
+	}
+	if ref.IsAbs() {
+		return lowerSchemeAndHost(link), nil
+	}
+
+	base, err := url.Parse(c.baseURL + "/")
+	if err != nil {
+		return "", fmt.Errorf("graph: reading base URL %q: %w", c.baseURL, err)
+	}
+
+	return lowerSchemeAndHost(base.ResolveReference(ref).String()), nil
+}
+
+// lowerSchemeAndHost is rawURL with the scheme and the authority before its
+// path in lower case, the path and query as they are; a string without
+// "://" is returned unchanged.
+func lowerSchemeAndHost(rawURL string) string {
+	scheme, rest, found := strings.Cut(rawURL, "://")
+	if !found {
+		return rawURL
+	}
+	authorityEnd := strings.IndexAny(rest, "/?#")
+	if authorityEnd < 0 {
+		authorityEnd = len(rest)
+	}
+
+	return strings.ToLower(scheme) + "://" + strings.ToLower(rest[:authorityEnd]) + rest[authorityEnd:]
 }
 
 // askedPages counts the pages one paged listing asks for, delta enumeration

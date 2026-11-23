@@ -323,6 +323,33 @@ func TestPagedListings_ALinkBackToAPageAlreadyAskedForFailsTheListing(t *testing
 	}
 }
 
+// A link back that would be the first page past the cap reports the cap, not
+// the loop: the cap is checked first, so every paged listing, delta
+// enumeration included, stops at the cap's last page however that page
+// links, and asks for no page past it.
+//
+// Validates: R-6.7.32
+func TestPagedListings_ARepeatAtThePageCapReportsTheCap(t *testing.T) {
+	t.Parallel()
+
+	for listingName, call := range everyPagedListingCall() {
+		t.Run(listingName, func(t *testing.T) {
+			t.Parallel()
+
+			listing := newLoopingListing(t, testListPages, 1)
+			client := newTestClient(t, listing.srv.URL)
+			client.maxListPages = testListPages
+			client.maxDeltaPages = testListPages
+
+			result, err := call(t.Context(), client)
+
+			assert.Equal(t, []int{1, 2, 3}, listing.asks(), "no page past the cap is asked for")
+			assert.Empty(t, result)
+			require.ErrorContains(t, err, fmt.Sprintf("exceeded %d pages", testListPages))
+		})
+	}
+}
+
 // $top is a page size to Graph, not a result cap: a search that matches more
 // sites than one page holds continues with @odata.nextLink, and the site on
 // the second page is returned after the first.
