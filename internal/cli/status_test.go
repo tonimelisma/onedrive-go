@@ -615,60 +615,6 @@ func TestBuildChildStatusDrive_FinalDrainGuidesAccessRestore(t *testing.T) {
 	assert.True(t, *mount.AutoRetry)
 }
 
-func TestGroupDrivesByAccount(t *testing.T) {
-	cfg := &config.Config{
-		Drives: map[driveid.CanonicalID]config.Drive{
-			driveid.MustCanonicalID("personal:alice@example.com"):   {},
-			driveid.MustCanonicalID("business:alice@example.com"):   {},
-			driveid.MustCanonicalID("personal:bob@example.com"):     {},
-			driveid.MustCanonicalID("business:charlie@example.com"): {},
-		},
-	}
-
-	grouped, order := groupDrivesByAccount(cfg)
-
-	// Order should be sorted alphabetically.
-	assert.Len(t, order, 3)
-	assert.Equal(t, "alice@example.com", order[0])
-	assert.Equal(t, "bob@example.com", order[1])
-	assert.Equal(t, "charlie@example.com", order[2])
-
-	// alice has 2 drives.
-	assert.Len(t, grouped["alice@example.com"], 2)
-	assert.Len(t, grouped["bob@example.com"], 1)
-	assert.Len(t, grouped["charlie@example.com"], 1)
-}
-
-func TestGroupDrivesByAccount_WithSharePoint(t *testing.T) {
-	// With typed CanonicalID keys, SharePoint drives are grouped
-	// under the same account as personal/business drives via .Email().
-	cfg := &config.Config{
-		Drives: map[driveid.CanonicalID]config.Drive{
-			driveid.MustCanonicalID("business:alice@contoso.com"):                    {},
-			driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Docs"):   {},
-			driveid.MustCanonicalID("sharepoint:alice@contoso.com:engineering:Wiki"): {},
-		},
-	}
-
-	grouped, order := groupDrivesByAccount(cfg)
-
-	// All three drives belong to alice@contoso.com.
-	assert.Len(t, order, 1)
-	assert.Equal(t, "alice@contoso.com", order[0])
-	assert.Len(t, grouped["alice@contoso.com"], 3)
-}
-
-func TestGroupDrivesByAccount_Empty(t *testing.T) {
-	cfg := &config.Config{
-		Drives: map[driveid.CanonicalID]config.Drive{},
-	}
-
-	grouped, order := groupDrivesByAccount(cfg)
-
-	assert.Empty(t, order)
-	assert.Empty(t, grouped)
-}
-
 // Validates: R-6.6.25
 func TestBuildStatusAccountsFromViews_NeverSyncedDriveIsNotUpToDate(t *testing.T) {
 	setTestDriveHome(t)

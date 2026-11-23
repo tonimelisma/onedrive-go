@@ -107,7 +107,7 @@ The system shall support all four drive types:
 ## R-3.5 Drive Selection [verified]
 
 - R-3.5.1: When `--drive` is passed, the system shall match by canonical ID, display name, or substring. [verified]
-- R-3.5.2: When `--account` is passed on auth commands, the system shall select by email. [verified]
+- R-3.5.2: When `--account` is passed on auth commands, the system shall select by email, or by an account's ID (`personal:<email>`, `business:<email>`). A personal and a work or school account can share an email; each shall then have its own `status` row and its own `drive list` sign-in entry, and `logout` shall refuse the shared email with a message that names the two account IDs to use instead, deleting nothing. `logout --account <account ID>` shall delete only that account's saved login, drive sections and (with `--purge`) state databases and catalog records. [verified]
 - R-3.5.3: `--drive` shall be repeatable for sync/status to select multiple drives. [verified]
 
 ## R-3.6 Shared Drive Discovery [verified]

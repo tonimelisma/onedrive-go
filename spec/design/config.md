@@ -39,15 +39,26 @@ a login its own account
 `TestLogout_EndsTheSignInRequirementOfTheAccountWhoseTokenItDeleted`,
 `TestExecutePlainLogout_ClearsPersistedAuthRequirement`).
 
-CLI account views are one per address, however. With two accounts at one
-address, the view (and so the `status` row, `drive list`'s
-`accounts_requiring_auth` and logout's account choice) speaks for the first of
-them by canonical ID, the account whose saved login it checks and signs in
-with: its names, its drive type and its requirement
-(`TestBuildAccountViews_TwoAccountsAtOneAddressShowTheFirstOnesRequirement`).
-The second account's requirement is written and cleared on its own record,
-but no account surface shows it, and `--account` cannot choose between the
-two, since it takes an email (R-3.5.2).
+CLI account views are one per catalog account, named by canonical ID
+(`buildAccountViews`). With two accounts at one address, each has its own
+view, and so its own `status` row, `drive list` `accounts_requiring_auth`
+entry (merged per address and drive type) and logout choice: its names,
+saved login, requirement, configured drives (grouped by the owner their
+catalog record names) and state databases (a personal store is the personal
+account's, a work or SharePoint store the work or school account's, a store
+whose record names an owner that owner's; a shared folder's store with no
+owner on record is neither's)
+(`TestBuildAccountViews_TwoAccountsAtOneAddressHaveAViewEach`,
+`TestStatus_TwoAccountsAtOneAddressAreTwoRowsAndTwoAuthEntries`). The live
+`status` overlay asks each view's drives with that view's own token, so a
+drive never shows the other account's quota. `--account` takes an email or
+an account's canonical ID; logout refuses an email two accounts share and
+names the canonical IDs, and with a canonical ID removes that account's token,
+drive sections, purged stores and catalog records alone
+(`TestLogout_RefusesAnEmailTwoAccountsShare`,
+`TestLogout_ACanonicalIDSelectorRemovesOnlyThatAccount`,
+`TestApplyPurgeLogout_LeavesTheOtherAccountAtTheSameAddress`; R-3.5.2).
+`ApplyPurgeLogout` takes the account's canonical ID, never an email.
 
 ## Overview
 

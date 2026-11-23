@@ -49,8 +49,14 @@ const (
 	statusDriveNameSharedFolder     = "Shared folder"
 )
 
-// statusAccount groups configured drives under a single account email.
+// statusAccount is one account's row: its configured drives, under its
+// address. A personal and a work or school account at one address are two
+// rows.
 type statusAccount struct {
+	// AccountKey names the account the row is for (accountViewKey). JSON
+	// must not show it (R-3.1.6: it is the canonical ID); the live overlay
+	// finds the row's answer by it.
+	AccountKey     string                `json:"-"`
 	Email          string                `json:"email"`
 	DisplayName    string                `json:"display_name,omitempty"`
 	OrgName        string                `json:"org_name,omitempty"`
@@ -414,6 +420,7 @@ func buildStatusAccountsFromViews(
 		driveIDs := append([]driveid.CanonicalID(nil), view.ConfiguredDriveIDs...)
 		sort.Slice(driveIDs, func(i, j int) bool { return driveIDs[i].String() < driveIDs[j].String() })
 		acct := statusAccount{
+			AccountKey:  accountViewKey(&view),
 			Email:       view.Email,
 			DriveType:   view.DriveType,
 			AuthState:   view.AuthHealth.State,
@@ -445,26 +452,6 @@ func buildStatusAccountsFromViews(
 	}
 
 	return accounts
-}
-
-// groupDrivesByAccount collects drive IDs keyed by account email and returns
-// a stable ordering of unique emails.
-func groupDrivesByAccount(cfg *config.Config) (map[string][]driveid.CanonicalID, []string) {
-	grouped := make(map[string][]driveid.CanonicalID)
-	var order []string
-
-	for id := range cfg.Drives {
-		email := id.Email()
-		if _, seen := grouped[email]; !seen {
-			order = append(order, email)
-		}
-
-		grouped[email] = append(grouped[email], id)
-	}
-
-	sort.Strings(order)
-
-	return grouped, order
 }
 
 // readAccountMeta reads display name and org name from catalog account fields.

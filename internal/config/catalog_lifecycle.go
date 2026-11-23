@@ -155,18 +155,18 @@ func (c *Catalog) registerSharedDrive(cid, ownerCID driveid.CanonicalID, display
 	c.UpsertDrive(&drive)
 }
 
-// ApplyPurgeLogout removes the catalog account and every owned drive record.
-func ApplyPurgeLogout(ctx context.Context, dataDir, email string) error {
-	if email == "" {
+// ApplyPurgeLogout removes the catalog account, named by its canonical ID,
+// and every drive record it owns. The account is never named by email: a
+// personal and a work or school account can share one, and a purge of one
+// must leave the other. A zero account, or one the catalog does not hold,
+// changes nothing.
+func ApplyPurgeLogout(ctx context.Context, dataDir string, accountCID driveid.CanonicalID) error {
+	if accountCID.IsZero() {
 		return nil
 	}
 
 	return UpdateCatalogForDataDir(ctx, dataDir, func(catalog *Catalog) error {
-		accountCID, err := AccountCanonicalIDByEmail(catalog, email)
-		if err != nil {
-			return err
-		}
-		if accountCID.IsZero() {
+		if _, found := catalog.AccountByCanonicalID(accountCID); !found {
 			return nil
 		}
 

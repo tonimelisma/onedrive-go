@@ -24,7 +24,7 @@ them on later passes, and `sync --watch` keeps trying in the background.
 
 | Shown as | What it means | What to do |
 | --- | --- | --- |
-| Sign-in required | The saved login is missing, unreadable, expired or was revoked, or OneDrive rejected the last sync. | Run `onedrive-go login` (with `--account` if you have several). |
+| Sign-in required | The saved login is missing, unreadable, expired or was revoked, or OneDrive rejected the last sync. | Run `onedrive-go login` (with `--account` if you have several). A personal and a work or school account at the same email are named `personal:<email>` and `business:<email>`, for example `onedrive-go logout --account business:user@example.com`. |
 | Storage full | The OneDrive storage quota for this drive (or the owner's, for a shared folder) is full. | Free up space on OneDrive, or ask the shared folder's owner to. |
 | Service outage | OneDrive is temporarily unavailable. | Nothing; onedrive-go retries automatically. |
 | Rate limited | OneDrive asked onedrive-go to slow down. | Nothing; it waits for the time OneDrive asked for, then retries. |

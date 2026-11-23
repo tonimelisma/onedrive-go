@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,14 +152,12 @@ func TestBuildAccountViews_PersistedAuthScopeWinsOnlyWhenSavedLoginIsOtherwiseUs
 	assert.Equal(t, authstate.ReasonMissingLogin, missing.AuthHealth.Reason)
 }
 
-// A personal and a work or school account at one address share one view. It
-// speaks for the first of them by canonical ID, the account whose saved login
-// it checks and signs in with: its name, its drive type and its sign-in
-// requirement, whichever of the two needs a sign-in. The other account adds
-// its saved login and nothing else.
+// A personal and a work or school account at one address have a view each:
+// each speaks for its own account, with its own name, saved login, sign-in
+// requirement and state databases, whichever of the two needs a sign-in.
 //
-// Validates: R-2.10.45, R-2.10.47
-func TestBuildAccountViews_TwoAccountsAtOneAddressShowTheFirstOnesRequirement(t *testing.T) {
+// Validates: R-2.10.45, R-2.10.47, R-3.5.2
+func TestBuildAccountViews_TwoAccountsAtOneAddressHaveAViewEach(t *testing.T) {
 	business := driveid.MustCanonicalID("business:twin@example.com")
 	personal := driveid.MustCanonicalID("personal:twin@example.com")
 
@@ -169,29 +170,77 @@ func TestBuildAccountViews_TwoAccountsAtOneAddressShowTheFirstOnesRequirement(t 
 					record.DisplayName = account.DriveType() + " user"
 				})
 			}
+			require.NoError(t, touchStateDBForAccount(t, personal))
 			require.NoError(t, config.MarkAccountAuthRequired(t.Context(), config.DefaultDataDir(), marked, authstate.ReasonSyncAuthRejected))
 			stored, err := config.LoadCatalog()
 			require.NoError(t, err)
 
 			views, err := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
 			require.NoError(t, err)
-			require.Len(t, views, 1)
-			entry := views[0]
+			require.Len(t, views, 2, "one view per account")
 
-			assert.Equal(t, business, entry.AccountCanonicalID)
-			assert.Equal(t, business, entry.RepresentativeTokenID, "the view signs in as the account it speaks for")
-			assert.Equal(t, driveid.DriveTypeBusiness, entry.DriveType)
-			assert.Equal(t, "business user", entry.DisplayName)
-			assert.Equal(t, []driveid.CanonicalID{business, personal}, entry.TokenDriveIDs)
-			if marked == business {
-				assert.Equal(t, authstate.ReasonSyncAuthRejected, entry.AuthRequirementReason)
-				assert.Equal(t, authstate.StateAuthenticationRequired, entry.AuthHealth.State)
-			} else {
-				assert.Empty(t, entry.AuthRequirementReason, "the personal account's requirement is not the work account's")
-				assert.Equal(t, authstate.StateReady, entry.AuthHealth.State)
+			for i := range views {
+				entry := views[i]
+				account := []driveid.CanonicalID{business, personal}[i]
+				assert.Equal(t, account, entry.AccountCanonicalID, "views sort by address, then canonical ID")
+				assert.Equal(t, account, entry.RepresentativeTokenID, "each view signs in as its own account")
+				assert.Equal(t, []driveid.CanonicalID{account}, entry.TokenDriveIDs)
+				assert.Equal(t, account.DriveType(), entry.DriveType)
+				assert.Equal(t, account.DriveType()+" user", entry.DisplayName)
+				if account == marked {
+					assert.Equal(t, authstate.ReasonSyncAuthRejected, entry.AuthRequirementReason)
+					assert.Equal(t, authstate.StateAuthenticationRequired, entry.AuthHealth.State)
+				} else {
+					assert.Empty(t, entry.AuthRequirementReason, "the other account's requirement is not this one's")
+					assert.Equal(t, authstate.StateReady, entry.AuthHealth.State)
+				}
 			}
+			assert.Zero(t, views[0].StateDBCount, "the personal store is not the work account's")
+			assert.Equal(t, 1, views[1].StateDBCount, "the personal store is the personal account's")
 		})
 	}
+}
+
+// Two accounts at one address that both need a sign-in are two status rows,
+// in text and JSON, and two entries of drive list's accounts_requiring_auth.
+//
+// Validates: R-3.5.2, R-2.10.47, R-3.1.6
+func TestStatus_TwoAccountsAtOneAddressAreTwoRowsAndTwoAuthEntries(t *testing.T) {
+	setTestDriveHome(t)
+	business := driveid.MustCanonicalID("business:twin-rows@example.com")
+	personal := driveid.MustCanonicalID("personal:twin-rows@example.com")
+	for _, account := range []driveid.CanonicalID{business, personal} {
+		writeTestTokenFile(t, config.DefaultDataDir(), "token_"+account.DriveType()+"_"+account.Email()+".json")
+		seedCatalogAccount(t, account, nil)
+		require.NoError(t, config.MarkAccountAuthRequired(t.Context(), config.DefaultDataDir(), account,
+			authstate.ReasonSyncAuthRejected))
+	}
+	stored, err := config.LoadCatalog()
+	require.NoError(t, err)
+	views, err := buildAccountViews(t.Context(), config.DefaultConfig(), stored, testDriveLogger(t))
+	require.NoError(t, err)
+
+	accounts := buildStatusAccountsFromViews(t.Context(), config.DefaultConfig(), nil, views, &mockSyncStateQuerier{})
+	var jsonOut bytes.Buffer
+	require.NoError(t, printStatusJSON(&jsonOut, accounts))
+	var document statusOutput
+	require.NoError(t, json.Unmarshal(jsonOut.Bytes(), &document))
+	require.Len(t, document.Accounts, 2, "one row per account")
+	for i := range document.Accounts {
+		assert.Equal(t, business.Email(), document.Accounts[i].Email)
+		assert.NotNil(t, document.Accounts[i].SignInRequired, "each row shows its own sign-in requirement")
+	}
+	assert.Equal(t, 2, document.Summary.AccountsRequiringAuth)
+
+	var textOut bytes.Buffer
+	require.NoError(t, printStatusText(&textOut, accounts))
+	assert.Equal(t, 2, strings.Count(textOut.String(), "Account: "), "two account rows")
+	assert.Equal(t, 2, strings.Count(textOut.String(), "Sign-in required:"))
+
+	requirements := mergeAuthRequirements(accountViewAuthRequirements(views, func(accountView) bool { return true }))
+	require.Len(t, requirements, 2, "one auth entry per account")
+	assert.Equal(t, driveid.DriveTypeBusiness, requirements[0].DriveType)
+	assert.Equal(t, driveid.DriveTypePersonal, requirements[1].DriveType)
 }
 
 func touchStateDBForAccount(t *testing.T, cid driveid.CanonicalID) error {

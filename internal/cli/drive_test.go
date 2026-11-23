@@ -2347,8 +2347,8 @@ func TestAnnotateConfiguredDriveAuth_AndPrintSections(t *testing.T) {
 		{CanonicalID: readyCID.String(), parsedCID: readyCID, State: "available", Source: "available"},
 	}
 
-	annotateConfiguredDriveAuth(configured, map[string]accountAuthHealth{
-		"blocked@example.com": {
+	annotateConfiguredDriveAuth(configured, map[driveid.CanonicalID]accountAuthHealth{
+		blockedCID: {
 			State:  authStateAuthenticationNeeded,
 			Reason: authReasonMissingLogin,
 		},

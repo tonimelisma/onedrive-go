@@ -240,6 +240,9 @@ func authRequirement(
 	}
 }
 
+// mergeAuthRequirements merges the reports of one account from several
+// sources into one entry. An account is its address and its drive type: a
+// personal and a work or school account at one address are two entries.
 func mergeAuthRequirements(groups ...[]accountAuthRequirement) []accountAuthRequirement {
 	merged := make(map[string]accountAuthRequirement)
 
@@ -249,7 +252,8 @@ func mergeAuthRequirements(groups ...[]accountAuthRequirement) []accountAuthRequ
 				continue
 			}
 
-			if existing, ok := merged[group[i].Email]; ok {
+			key := authRequirementKey(&group[i])
+			if existing, ok := merged[key]; ok {
 				if existing.DisplayName == "" {
 					existing.DisplayName = group[i].DisplayName
 				}
@@ -265,11 +269,11 @@ func mergeAuthRequirements(groups ...[]accountAuthRequirement) []accountAuthRequ
 				if existing.Action == "" {
 					existing.Action = group[i].Action
 				}
-				merged[group[i].Email] = existing
+				merged[key] = existing
 				continue
 			}
 
-			merged[group[i].Email] = group[i]
+			merged[key] = group[i]
 		}
 	}
 
@@ -283,9 +287,24 @@ func mergeAuthRequirements(groups ...[]accountAuthRequirement) []accountAuthRequ
 	return result
 }
 
+// authRequirementKey names the account an auth requirement is for. A work
+// or school account's SharePoint report is the work or school account's.
+func authRequirementKey(item *accountAuthRequirement) string {
+	driveType := item.DriveType
+	if driveType == driveid.DriveTypeSharePoint {
+		driveType = driveid.DriveTypeBusiness
+	}
+
+	return item.Email + "|" + driveType
+}
+
 func sortAccountAuthRequirements(items []accountAuthRequirement) {
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].Email < items[j].Email
+		if items[i].Email != items[j].Email {
+			return items[i].Email < items[j].Email
+		}
+
+		return items[i].DriveType < items[j].DriveType
 	})
 }
 

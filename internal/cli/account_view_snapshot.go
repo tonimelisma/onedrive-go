@@ -125,7 +125,7 @@ func loadDriveListSnapshot(
 		logger:        logger,
 		examplesLimit: defaultVisiblePaths,
 	}, logger)
-	configuredAuth := accountViewAuthByEmail(viewSnapshot.Accounts)
+	configuredAuth := accountViewAuthByDrive(viewSnapshot.Accounts)
 	annotateConfiguredDriveAuth(configured, configuredAuth)
 
 	siteLimit := sharePointSiteLimit

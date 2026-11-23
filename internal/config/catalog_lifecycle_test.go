@@ -42,6 +42,29 @@ func TestClearAccountAuthRequirement_ClearsAuthRequirementAndPreservesInventory(
 	assert.True(t, drive.PrimaryForAccount)
 }
 
+// Validates: R-3.1.5, R-3.5.2
+func TestApplyPurgeLogout_LeavesTheOtherAccountAtTheSameAddress(t *testing.T) {
+	setConfigTestHome(t)
+
+	personal := driveid.MustCanonicalID("personal:shared-address@example.com")
+	business := driveid.MustCanonicalID("business:shared-address@example.com")
+	seedCatalogAccount(t, personal, nil)
+	seedCatalogAccount(t, business, nil)
+	seedCatalogDrive(t, personal, func(drive *CatalogDrive) { drive.PrimaryForAccount = true })
+	seedCatalogDrive(t, business, func(drive *CatalogDrive) { drive.PrimaryForAccount = true })
+
+	require.NoError(t, ApplyPurgeLogout(t.Context(), DefaultDataDir(), business))
+
+	_, found := loadCatalogAccount(t, business)
+	assert.False(t, found)
+	_, found = loadCatalogDrive(t, business)
+	assert.False(t, found)
+	_, found = loadCatalogAccount(t, personal)
+	assert.True(t, found, "the personal account at the same address stays")
+	_, found = loadCatalogDrive(t, personal)
+	assert.True(t, found, "the personal account's drive stays")
+}
+
 // Validates: R-3.1.5
 func TestApplyPurgeLogout_RemovesAccountAndOwnedDrives(t *testing.T) {
 	setConfigTestHome(t)
@@ -63,7 +86,7 @@ func TestApplyPurgeLogout_RemovesAccountAndOwnedDrives(t *testing.T) {
 		drive.OwnerAccountCanonical = otherCID.String()
 	})
 
-	require.NoError(t, ApplyPurgeLogout(t.Context(), DefaultDataDir(), accountCID.Email()))
+	require.NoError(t, ApplyPurgeLogout(t.Context(), DefaultDataDir(), accountCID))
 
 	_, found := loadCatalogAccount(t, accountCID)
 	assert.False(t, found)

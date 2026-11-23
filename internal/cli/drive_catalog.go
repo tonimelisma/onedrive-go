@@ -100,10 +100,9 @@ func buildConfiguredDriveEntries(
 	return entries
 }
 
-func annotateConfiguredDriveAuth(entries []driveListEntry, authByEmail map[string]accountAuthHealth) {
+func annotateConfiguredDriveAuth(entries []driveListEntry, authByDrive map[driveid.CanonicalID]accountAuthHealth) {
 	for i := range entries {
-		email := entries[i].parsedCID.Email()
-		health, ok := authByEmail[email]
+		health, ok := authByDrive[entries[i].parsedCID]
 		if !ok {
 			continue
 		}
@@ -267,7 +266,7 @@ func tokenDriveCatalogDegradedNotice(
 	tokenCID driveid.CanonicalID,
 	logger *slog.Logger,
 ) accountDegradedNotice {
-	entry, found := accountViewByEmail(accounts, tokenCID.Email())
+	entry, found := accountViewByCanonicalID(accounts, tokenCID)
 	if found {
 		return driveCatalogDegradedNotice(entry.Email, entry.DisplayName, entry.DriveType)
 	}

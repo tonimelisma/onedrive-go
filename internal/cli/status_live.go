@@ -145,7 +145,7 @@ func loadStatusLiveOverlay(
 	overlays := make(map[string]statusAccountLiveOverlay, len(snapshot.Accounts))
 	for i := range snapshot.Accounts {
 		if hasOverlay[i] {
-			overlays[snapshot.Accounts[i].Email] = results[i]
+			overlays[accountViewKey(&snapshot.Accounts[i])] = results[i]
 		}
 	}
 
@@ -198,7 +198,7 @@ func logStatusLiveFailure(ctx context.Context, logger *slog.Logger, email, reaso
 // did not all arrive, in the order status lists the accounts.
 func printStatusLiveNotes(cc *CLIContext, accounts []statusAccount, overlays map[string]statusAccountLiveOverlay) {
 	for i := range accounts {
-		if overlay, found := overlays[accounts[i].Email]; found && overlay.Unanswered != "" {
+		if overlay, found := overlays[accounts[i].AccountKey]; found && overlay.Unanswered != "" {
 			cc.Statusf(statusLiveNoteFormat, accounts[i].Email, overlay.Unanswered)
 		}
 	}
@@ -334,7 +334,7 @@ func statusStorageFromGraphDrive(drive graph.Drive) statusStorage {
 
 func applyStatusLiveOverlay(accounts []statusAccount, overlays map[string]statusAccountLiveOverlay) {
 	for i := range accounts {
-		overlay, found := overlays[accounts[i].Email]
+		overlay, found := overlays[accounts[i].AccountKey]
 		if !found {
 			continue
 		}
