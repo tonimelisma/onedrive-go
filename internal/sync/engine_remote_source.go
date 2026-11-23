@@ -47,16 +47,17 @@ type remoteSource struct {
 	deltaFallbackReported *atomic.Bool
 }
 
-// remoteSource is the engine's remote side as it is now. A run takes it once
-// (flowInputs); the engine's methods that observe take it per call.
-func (e *Engine) remoteSource() *remoteSource {
+// remoteSource is the engine's remote side as it is now, with the wake-source
+// seam of hooks. A run takes it once (flowInputs), with its own copy of the
+// hooks.
+func (e *Engine) remoteSource(hooks *engineHooks) *remoteSource {
 	return &remoteSource{
 		fetcher:               e.fetcher,
 		items:                 e.itemsClient,
 		folderDelta:           e.folderDelta,
 		recursiveLister:       e.recursiveLister,
 		socketIO:              e.socketIOFetcher,
-		wakeSourceFactory:     e.hooks.socketIOWakeSourceFactory,
+		wakeSourceFactory:     hooks.socketIOWakeSourceFactory,
 		store:                 e.baseline,
 		driveID:               e.driveID,
 		remoteRootItemID:      e.remoteRootItemID,

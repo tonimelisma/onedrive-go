@@ -433,10 +433,10 @@ func installManualClockForTestEngine(eng *testEngine, clock *syncfixture.ManualC
 	}
 
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
-		rt.deps = newRuntimeDeps(eng.Engine)
+		rt.deps = newRuntimeDeps(eng.Engine, &eng.hooks)
 	}
 	if flow, ok := lookupTestEngineFlow(eng); ok {
-		flow.deps = newRuntimeDeps(eng.Engine)
+		flow.deps = newRuntimeDeps(eng.Engine, &eng.hooks)
 	}
 }
 

@@ -485,6 +485,7 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 	required bool,
 	proof driveIdentityProof,
 	proofErr error,
+	clearRequirement func(ctx context.Context, dataDir string, account driveid.CanonicalID) error,
 ) error {
 	if !required {
 		return nil
@@ -498,7 +499,7 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 	if proofErr != nil {
 		return proofErr
 	}
-	clearRequirement := e.hooks.clearAccountAuthRequirement
+	// clearRequirement is the run's hook (flow.hooks), nil in production.
 	if clearRequirement == nil {
 		clearRequirement = config.ClearAccountAuthRequirement
 	}

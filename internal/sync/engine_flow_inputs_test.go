@@ -38,7 +38,7 @@ func TestEngine_FlowInputsCopyTheConfigurationAndHooks(t *testing.T) {
 
 	assert.Equal(t, eng.driveID, in.cfg.driveID)
 	assert.Equal(t, syncRoot, in.cfg.syncRoot)
-	assert.Equal(t, eng.workerPoolSize(), in.cfg.poolSize)
+	assert.Equal(t, eng.hooks.workerPoolSize(eng.transferWorkers), in.cfg.poolSize)
 	assert.Same(t, eng.syncTree, in.cfg.syncTree)
 	assert.True(t, in.hooks.assertInvariants, "the test engine's invariant checks are on")
 	assert.Same(t, eng.baseline, in.deps.store)

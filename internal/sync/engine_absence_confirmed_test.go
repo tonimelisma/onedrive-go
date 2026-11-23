@@ -124,7 +124,7 @@ func TestConfirmMountRootOrphans_ListingThatSkippedALiveItemDeletesNothing(t *te
 		{ObservedItem: syncdomain.ObservedItem{ItemID: "unresolvable", Path: "g.txt", IsDeleted: true}},
 	}
 
-	confirmed, _ := eng.remoteSource().confirmMountRootOrphans(t.Context(), listed, orphans)
+	confirmed, _ := eng.remoteSource(&eng.hooks).confirmMountRootOrphans(t.Context(), listed, orphans)
 
 	var ids []string
 	for i := range confirmed {

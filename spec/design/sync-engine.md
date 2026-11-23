@@ -376,6 +376,15 @@ filter, local rules, shortcut namespace, websocket switch) arrives as
 taken in one place, `Engine.flowInputs`, which also takes the run's ID
 (`TestEngine_EachRunGetsADistinctRunID`), and `newEngineFlow` builds the flow
 from that `flowInputs` value (`TestEngine_FlowInputsCopyTheConfigurationAndHooks`).
+`flowInputs` copies the hooks once and builds everything else of the run from
+that copy (the pool size, the run clock in `runtimeDeps`, the remote source's
+wake-source factory, the local source's observer seams), and the run reads its
+pause wait, pass bound and the startup proof's catalog clear from `flow.hooks`,
+so a hook a test sets on the engine after a flow exists reaches the next run
+and never one already running
+(`TestEngineHooks_SetAfterAFlowExistsDoNotReachThatFlow`). Only reads before a
+run has a flow read `Engine.hooks`: the owner-check factory in `beginRun` and
+the engine's own clock (`Engine.runClock`) between runs.
 
 They were reached through a back-pointer to the whole `Engine`, and the flow
 no longer holds one (`TestRuntimeArchitecture_NoRunStateHoldsTheEngine`).

@@ -67,7 +67,7 @@ func TestLoadValidatedState_TheMissingDriveRefusalNamesTheConfigGiven(t *testing
 
 	cfgPath := filepath.Join(t.TempDir(), "work.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 
 	_, _, err := LoadValidatedState(cfgPath, testConfigLogger())
 

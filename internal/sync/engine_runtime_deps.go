@@ -32,11 +32,13 @@ type runtimeDeps struct {
 	activityListens func(*syncdomain.ResultDecision, *syncdomain.ActionCompletion, bool) bool
 }
 
-func newRuntimeDeps(engine *Engine) runtimeDeps {
+// newRuntimeDeps is a run's dependencies on engine, with the clock the run's
+// hooks give it.
+func newRuntimeDeps(engine *Engine, hooks *engineHooks) runtimeDeps {
 	return runtimeDeps{
 		logger:          engine.logger,
 		store:           engine.baseline,
-		clock:           engine.runClock(),
+		clock:           hooks.runClock(engine.wallClock),
 		events:          engine.emitDebugEvent,
 		perf:            engine.collector(),
 		wall:            engine.wallClock,

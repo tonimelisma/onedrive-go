@@ -467,7 +467,7 @@ func TestWatchRuntime_DispatchIsGatedByTheColdStartAllowance(t *testing.T) {
 	eng := newSingleOwnerEngine(t)
 	eng.transferWorkers = 8
 	rt := testWatchRuntime(t, eng)
-	rt.sched.ResetColdStart(eng.workerPoolSize())
+	rt.sched.ResetColdStart(eng.hooks.workerPoolSize(eng.transferWorkers))
 	ctx := t.Context()
 
 	uploads := make([]*syncdomain.TrackedAction, 0, 7)

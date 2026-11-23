@@ -236,7 +236,8 @@ func TestReport_WithPassAddsWorkAndKeepsTheLastHeldState(t *testing.T) {
 func TestOneShotFollowUp_StopsWithoutProgressOnFailureAndAtTheBound(t *testing.T) {
 	t.Parallel()
 
-	eng := &Engine{logger: syncfixture.TestLogger(t)}
+	// The zero hooks keep the full pass bound.
+	runner := &oneShotRunner{engineFlow: &engineFlow{observation: observation{deps: runtimeDeps{logger: syncfixture.TestLogger(t)}}}}
 	leaves := syncdomain.PlanFollowUp{Renames: 1}
 	ok := &Report{Succeeded: 1}
 	tests := []struct {
@@ -259,7 +260,7 @@ func TestOneShotFollowUp_StopsWithoutProgressOnFailureAndAtTheBound(t *testing.T
 		if tt.canceled {
 			cancel()
 		}
-		reason, again := eng.oneShotFollowUp(ctx, tt.pass, tt.result)
+		reason, again := runner.oneShotFollowUp(ctx, tt.pass, tt.result)
 		assert.Equal(t, tt.want, again, tt.name)
 		assert.Equal(t, tt.want, reason != "", tt.name)
 		cancel()

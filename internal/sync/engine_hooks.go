@@ -16,8 +16,12 @@ import (
 // make differ from production" has one answer. The zero value is production
 // behavior: every nil function, false flag, zero limit and empty name below
 // means "do what production does", and production code never sets a field.
-// The engine reads them through e.hooks; a test sets them on engineInputs
-// before newEngine, or on the engine before it runs.
+// A run reads them from the copy its flow took when it started
+// (flowInputs, flow.hooks), never from the live e.hooks, so a hook a test sets
+// on the engine reaches the next run and not one already running. Only reads
+// that happen before a run has a flow (the owner-check factory in beginRun,
+// the engine's own clock between runs) read e.hooks. A test sets them on
+// engineInputs before newEngine, or on the engine before it runs.
 type engineHooks struct {
 	// assertInvariants runs the runtime invariant checks after every
 	// completion and admission, so a lifecycle or scope regression fails the
@@ -116,11 +120,35 @@ func (h *engineHooks) recordFrontierStep(step frontierStep, ta *syncdomain.Track
 }
 
 // runClock is the clock a run reads: the engine's real clock unless a test
-// replaced it.
+// replaced it. It reads the engine's live hooks, so it serves the engine
+// between runs; a run reads its flow's clock (runtimeDeps.clock).
 func (e *Engine) runClock() syncdomain.SyncClock {
-	if e.hooks.clock != nil {
-		return e.hooks.clock
+	return e.hooks.runClock(e.wallClock)
+}
+
+// runClock is the clock these hooks give a run: wall unless a test replaced
+// it.
+func (h *engineHooks) runClock(wall syncdomain.RealClock) syncdomain.SyncClock {
+	if h.clock != nil {
+		return h.clock
 	}
 
-	return e.wallClock
+	return wall
+}
+
+// workerPoolSize is how many workers a run's pools run with these hooks: the
+// configured transfer workers with the pool's floor, or one when serialized
+// (D-090). It is the ceiling a fresh plan's slow start doubles toward
+// (R-6.8.25).
+func (h *engineHooks) workerPoolSize(transferWorkers int) int {
+	return syncexec.PoolWorkerCount(transferWorkers, h.serializeWorkers)
+}
+
+// oneShotPasses is the most passes one RunOnce makes with these hooks.
+func (h *engineHooks) oneShotPasses() int {
+	if h.oneShotPassLimit > 0 {
+		return min(h.oneShotPassLimit, oneShotMaxPasses)
+	}
+
+	return oneShotMaxPasses
 }
