@@ -177,7 +177,7 @@ func TestRunStatusCommand_PerfProbesTheSocketOnce(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:probe-once@example.com")
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = "Probe Once User"
 	})

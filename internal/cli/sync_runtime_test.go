@@ -596,7 +596,7 @@ func TestRunSync_ProbeAndEngineShareOneSessionRuntime(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:one-runtime@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 
 	cc := &CLIContext{
 		Logger:       slog.New(slog.DiscardHandler),
