@@ -1,8 +1,8 @@
 # Sync Planning
 
-GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_composition.go, internal/sync/internal/syncplan/planner_content_holds.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go, internal/sync/internal/syncplan/planner_identity.go, internal/sync/internal/syncplan/planner_identity_diff.go
+GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_composition.go, internal/sync/internal/syncplan/planner_content_holds.go, internal/sync/internal/syncplan/planner_set_aside.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go, internal/sync/internal/syncplan/planner_identity.go, internal/sync/internal/syncplan/planner_identity_diff.go
 
-Implements: R-2.1.3 [verified], R-2.17.11 [verified], R-2.1.7 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.2.16 [verified], R-6.4.2 [verified]
+Implements: R-2.1.3 [verified], R-2.17.11 [verified], R-2.17.12 [verified], R-2.1.7 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.2.16 [verified], R-6.4.2 [verified]
 
 ## Overview
 
@@ -90,6 +90,7 @@ intent; multisync receives only that child work intent.
 | A dependency cycle drops only its members and their dependents; the rest of the plan runs (R-2.17.6), and a one-shot run that ends on such a plan counts the dropped actions as work left for the next sync, so it exits 1 (R-6.6.28). A folder delete that closes a cycle through the move of a folder above it waits for the next pass instead, so the rest of that cycle runs and the next pass deletes the folder at its new path (R-2.17.2). | `TestIsolateDependencyCycles_KeepsUnrelatedWork`, `TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync`, `TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle`, `TestRunOnce_FileMovedOutOfASubfolderIntoTheRemadeFolderWithTheSubfolderRemovedConverges` |
 | A delete waits for the create on its side that writes the deleted file's content at another path, so a failed create, or a failure of what it waits for, skips the delete and the content stays on that side; an edge that would close a cycle, given the edges kept before it, is left out (R-2.17.2). | `TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent`, `TestBuildDependencies_ADeleteDoesNotWaitForACreateThatWaitsForIt`, `TestBuildDependencies_OfTwoContentEdgesThatCloseACycleOnlyTogetherTheFirstIsKept`, `TestBuildDependencies_AReusedInodeWithOtherContentCarriesNothing`, `TestRunOnce_AFileRenamedHereOntoAPathAWaitingMoveLeavesStaysOnOneDriveWhileACreateBeforeItsUploadFails` |
 | A removal of synced content (a delete of the file, or a download of another item over it here) waits while the other side holds the file at another path and no create of the plan writes its content on the removal's side, and a download over a synced file waits for the download of that file's item where OneDrive moved it, so a pass never leaves a side without content the user did not remove (R-2.17.11). | `TestPlanBuiltActions_ARemovalOfContentTheOtherSideMovedWaitsForItsCreate`, `TestBuildDependencies_ADownloadOverASyncedFileWaitsForTheDownloadOfItsItem`, `TestPlannerPairs_AFileRenamedIntoAFolderInAHeldFoldersPlaceKeepsItsOneDriveCopy`, `TestPlannerPairs_AFileOverwrittenHereWaitsForTheDownloadOfItsMovedContent` |
+| A delete on OneDrive of a synced file whose content the upload of the file here writes at another path, where that upload needs the path the delete frees, is a move of the item to a free temporary name above every folder the plan deletes; the next pass deletes it once the upload holds the content, or moves it back where the file is here (R-2.17.12). | `TestPlannerPairs_AFileUploadedOntoThePathItsDeleteFreesIsSetAsideOnOneDrive`, `TestAsidePath_ParksAboveTheDeletedFoldersUnderAFreeName`, `TestRunOnce_AFileMovedUpOntoItsDeletedFoldersPathStaysOnOneDriveUntilItsUploadRuns` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/internal/syncplan/planner_actions_test.go`, `internal/sync/internal/syncplan/planner_move_composition_test.go` (`TestBuildDependencies_NestedMoveEdges`, `TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove`), `internal/sync/internal/syncplan/planner_delete_safety_test.go` (`TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`) |
 | Every single-path combination of baseline, local and remote state (absent, file A/B/C, folder), and the move combinations of one synced file, has its plan checked in as `testdata/reconcile/matrix.golden` (refresh with `-update`); with `ONEDRIVE_GO_RECONCILE_CONVERGE=1` each cell is also run to convergence on a pure model and must end at the reference planner's content set. A planner-level model test applies random edits to both sides of a pure model, plans it through the real comparison SQL and planner, applies the plan without an executor (items addressed by ID, a create onto a taken name failing as a 409), and must converge with every written content kept (D-093). | `TestReconcileMatrix_Golden`, `TestPlannerModel_RandomTriplesConverge` |
 | The decision table is Go and its kinds are typed enums; a side type the enum lacks fails the row scan naming the path. Every valid state a side holds is classified, except a drive root only one side holds (all 8,388,608 normalized states); a row outside the table, or a folder planned as a content transfer, fails the plan before the unavailable-truth suppression can plan it as nothing, naming the path; so does a built action whose type or folder create side is outside its enum, before any rule reads it, and every decision on the action type panics on such a value instead of answering it (R-6.2.16). Content proven equal on both sides never transfers, whichever side changed: a local edit equal to OneDrive's unchanged content is a baseline update that records the new local facts beside the remote ones, and the next plan is empty (R-2.2.3). | `TestPlannerKinds_ParseRoundTripsEveryMemberAndRefusesOthers`, `TestQueryPlannerRows_UnknownSideTypeFailsTheScanNamingThePath`, `TestQueryPlannerRows_GoDecidesEveryRowOfOneQuery`, `TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable`, `TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan`, `TestPlanCurrentState_FolderTransferFailsThePlan`, `TestPlanCurrentState_UnlistedActionTypeFailsThePlan`, `TestActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpdate`, `TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing`, `TestRunOnce_UnclassifiedRowFailsThePassNamingThePath`, `TestDecide_EveryValidStateHasTheTableProperties`, `TestDecide_ARootOnlyOneSideHoldsIsUnclassified`, `TestDecisionState_ValidNamesTheBrokenRule` |
@@ -943,6 +944,34 @@ such removal is logged at Debug with the path where the content is
 `TestBuildDependencies_ADownloadOverASyncedFileWaitsForTheDownloadOfItsItem`,
 `TestPlannerPairs_AFileRenamedIntoAFolderInAHeldFoldersPlaceKeepsItsOneDriveCopy`,
 `TestPlannerPairs_AFileOverwrittenHereWaitsForTheDownloadOfItsMovedContent`).
+Where the create that writes the content needs the path the removal frees,
+no order keeps the content: the upload of a file moved up onto its deleted
+folder's path waits for the folder's delete, which waits for the delete of
+the file's synced copy below it, and the upload of a file moved onto another
+file's path while a folder made here takes that file's name waits for the
+folder's create, which waits for the delete at its path. The content edge
+would close a cycle and is left out (addContentCarrierDeps), and with the
+upload, or what it waits for, refused, OneDrive was without the content until
+a later pass uploaded it again. Such a delete on OneDrive is planned as a move
+of the item to a free temporary name, named as a parked move's
+(`MoveSwapInfix`), in the nearest folder above it that no folder delete of
+the plan removes (R-2.17.12, `setAsideRemovedContent`,
+`planner_set_aside.go`): the move frees the path as the delete did, and what
+waited for the delete waits for the move (a folder delete for the moves out
+of it, a create at a path for the move that vacates it). Its local truth is
+the file the upload reads (`MovedLocal` at `MovedLocalPath`), which the
+worker's freshness check reads where the file is, as for any move of an item
+whose local copy sits elsewhere in the snapshot, so the executor needs no
+change. The move counts as a rename, so the one-shot sync runs the next pass,
+which deletes the parked item once the upload holds the content, or, with
+the upload refused, pairs the file here with the parked item, whose
+baseline row the move re-paths with the file's local identity, and moves it
+back: still the item it was
+(`TestPlannerPairs_AFileUploadedOntoThePathItsDeleteFreesIsSetAsideOnOneDrive`,
+`TestAsidePath_ParksAboveTheDeletedFoldersUnderAFreeName`,
+`TestRunOnce_AFileMovedUpOntoItsDeletedFoldersPathStaysOnOneDriveUntilItsUploadRuns`).
+Only deletes on OneDrive are set aside; the same shape here (a download over
+a path a local delete frees) has no run in the exhaustive check.
 The rule is checked over every pair of short histories on a small tree
 (`TestPlannerExhaustive_ShortHistoriesOnBothSidesKeepContentAndConverge`), and
 again, for every pair whose passes delete something, with each create of each
@@ -960,10 +989,10 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 41 runs of `pairs.golden` (17 from the synced tree, 24 from the held
+The 37 runs of `pairs.golden` (16 from the synced tree, 21 from the held
 one; a run names its start, the two histories, the refused create if any,
 and the invariants it breaks) fall into the twelve shapes below, of which
-4, 5, 6, 7, 8 and 9 are no longer listed: 21 runs break a rule of content or
+4, 5, 6, 7, 8, 9 and 11 are no longer listed: 17 runs break a rule of
 convergence, and 20 (7 pairs and their refusal variants) only the
 `duplicated` rule of shape 12. Each is an open behaviour of the planner
 unless it says it is right as it is; a fix removes its lines from the file. The refused-create variants of a run break what
@@ -1135,24 +1164,21 @@ and the executor. The check also counts a duplicate now (shape 12).
    need. The two runs where `p` moves elsewhere (`mv p q, mv x2 q/x2`,
    `mv x2 p/f, mv p q`) are fixed: `f`, leaving `p` for the new `x`, now
    moves after `p`'s move, which no longer waits for it.
-11. Content removed from a side in a pass (4 runs: 1 synced, 3 held), the
-   rule that matters most: a removal whose content's create needs the path
-   the removal frees, with that create, or what it waits for, refused once.
-   A file moved up onto the path of its folder, deleted or renamed here
+11. Content removed from a side in a pass (no runs left), the rule that
+   matters most: a removal whose content's create needs the path the
+   removal frees, with that create, or what it waits for, refused once. A
+   file moved up onto the path of its folder, deleted or renamed here
    (`rm p, mv x/f p` from the held start; `mv p q, mv q/f p` here while
    OneDrive renamed `x` to `q`), or a file moved onto another file's path
    while a folder takes that file's name (`mv z p/f, mv x z` from the held
-   start). The upload waits for the delete of what holds its path on
-   OneDrive, so the delete cannot wait for the upload (the content edge
-   would close a cycle and is left out), and with the upload refused
-   OneDrive is without the content until the next pass uploads it from
-   here, where it stays throughout. Keeping it on OneDrive needs a
-   temporary name (move the old entry aside, create, then delete it), the
-   device the rotations of shape 1 also need; the remote move's freshness
-   reads local truth at the move's destination, which a temporary name does
-   not have, so that is an executor change too. The removals a pass ran
-   although the other side held the moved file elsewhere and nothing carried
-   it (R-2.17.11) are fixed and no longer listed.
+   start). The upload waited for the delete of what holds its path on
+   OneDrive, so the delete could not wait for the upload, and with the
+   upload refused OneDrive was without the content until the next pass
+   uploaded it. Fixed: the delete is a move of the item to a temporary name
+   above the folders the plan deletes, and the next pass deletes it or, the
+   upload refused, moves it back (`setAsideRemovedContent`, above). The
+   removals a pass ran although the other side held the moved file
+   elsewhere and nothing carried it (R-2.17.11) are fixed too.
 12. One synced or written content at two plain paths of a side at the end
    (`duplicated`, 7 pairs left: 2 synced, 5 held; a conflict copy keeps
    both on purpose, under a name that tells the user, and is not counted).
@@ -1640,7 +1666,12 @@ either plan makes, at an identity two rows of one tree share (two local rows
 of one local identity, or two baseline rows of one local identity or item
 ID: the join pairs at most one, `TestExplainPlanDifferences_SharedIdentityAtTwoPaths`),
 or where both plans hold baseline updates alone, which is bookkeeping
-(`TestExplainPlanDifferences_BaselineUpdatesAloneAreBookkeeping`); then, from
+(`TestExplainPlanDifferences_BaselineUpdatesAloneAreBookkeeping`), or at
+either end of a move that sets aside a synced file the shadow deletes on
+OneDrive (R-2.17.12; a local case-only rename, whose upload waits for the
+delete of the old spelling, is one,
+`TestExplainPlanDifferences_ADeleteSetAsideExplainsBothEnds`, chaos crash
+seed 2); then, from
 the differences those explain, the source of a move one of them makes (the
 other planner plans the item in place there) and a folder the identity
 planner only deletes above such a source or above a delete one of them

@@ -2276,6 +2276,79 @@ func TestRunOnce_AFileMovedUpOntoItsRenamedFoldersPathStaysOnOneDriveUntilItsUpl
 	}
 }
 
+// Validates: R-2.17.12, R-2.17.2
+//
+// Here the file f is moved up out of its folder P, P deleted and f moved onto
+// P's path. SQLite plans the delete of P/f, the delete of P, and the upload of
+// f at P, which waits for P's delete, which waits for P/f's: the delete of
+// P/f cannot also wait for the upload. Run first, it left OneDrive without f's
+// content for as long as the upload failed. The planner moves P/f aside on
+// OneDrive instead, to a free temporary name above the deleted folder, and
+// the next pass deletes it once the upload holds the content, or, with the
+// upload refused once, moves it back to P, still the item it was. No delete
+// the sync sends leaves OneDrive without f's content, and the syncs finish
+// with both sides holding f at P.
+func TestRunOnce_AFileMovedUpOntoItsDeletedFoldersPathStaysOnOneDriveUntilItsUploadRuns(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		refuse  bool
+		deletes []string
+	}{
+		{refuse: false, deletes: []string{"item-P", "item-f"}},
+		{refuse: true, deletes: []string{"item-P"}},
+	} {
+		refuse := tc.refuse
+		t.Run(fmt.Sprintf("upload refused once: %v", refuse), func(t *testing.T) {
+			t.Parallel()
+
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+			remote.addFolder("item-P", "root", "P")
+			remote.addFile(t, "item-f", "item-P", "f", "f\n")
+			logs := &syncfixture.SyncLockedBuffer{}
+			logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
+			eng, syncRoot := newTestEngineWithLogger(t, remote.client(t), logger)
+			clock := syncfixture.NewManualClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
+			installManualClockForTestEngine(eng, clock)
+			runScenarioPass(t, eng)
+			local := scenarioLocalPath(syncRoot)
+			require.NoError(t, os.Rename(local("P/f"), local("g")))
+			require.NoError(t, os.Remove(local("P")))
+			require.NoError(t, os.Rename(local("g"), local("P")))
+			dropping := countDeletesDropping(remote, "f\n")
+			var uploads atomic.Int32
+			remote.mu.Lock()
+			remote.refuseCreate = func(_, name string) error {
+				if !refuse || name != "P" || uploads.Add(1) > 1 {
+					return nil
+				}
+				return &graph.GraphError{StatusCode: http.StatusBadRequest, Code: "invalidRequest", Err: graph.ErrBadRequest}
+			}
+			remote.mu.Unlock()
+
+			report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
+			require.NoError(t, err)
+			assertOneDriveHolds(t, remote, "f\n", "after the first sync")
+			for run := 1; report.LeftWork().Any(); run++ {
+				require.LessOrEqual(t, run, scenarioRunLimit, "the syncs never finish: %+v", report.LeftWork())
+				clock.Advance(time.Hour)
+				report = runScenarioPass(t, eng)
+				assertOneDriveHolds(t, remote, "f\n", "after sync %d", run)
+			}
+			assert.Zero(t, dropping(), "no delete leaves OneDrive without f's content")
+			want := map[string]string{"P": "f\n"}
+			assert.Equal(t, want, remote.tree(), "OneDrive")
+			assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+			assert.ElementsMatch(t, tc.deletes, remote.deletes)
+			if refuse {
+				assert.Equal(t, "P", remote.pathOf("item-f"), "f is moved back, still the item it was")
+			}
+			assert.NotContains(t, logs.String(), "dependency cycle")
+			requireScenarioQuietPlan(t, eng)
+		})
+	}
+}
+
 // Validates: R-2.17.2, R-2.17.6
 //
 // Here the folder P is renamed Q, its subfolder S is renamed Q/T or moved out

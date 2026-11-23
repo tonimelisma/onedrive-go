@@ -4,7 +4,6 @@ synced L[mv p q] R[mv x q, mv p/f x] refuse upload q/f #1 :: duplicated
 synced L[mv p x/p] R[mv x p/x, mv p/f x] :: sides-differ left-held
 synced L[mv p x/p] R[mv z p/z, mv x z] :: sides-differ left-held
 synced L[mv x p/x] R[mv z x/z, mv p z] :: sides-differ left-held
-synced L[mv p q, mv q/f p] R[mv x q] refuse upload p #1 :: removed-in-a-pass
 synced L[mv p x/p, mv x/p/f p] R[mv x p/x] :: sides-differ left-held
 synced L[mv p x/p, mv z p] R[mv x p/x] :: sides-differ left-held
 synced L[mv p x/p, mkdir p] R[mv x p/x] :: sides-differ left-held
@@ -35,7 +34,4 @@ held L[mv x2 p/x2] R[mv p x/p] :: sides-differ left-held
 held L[mv z p/f] R[mv z X2/z] :: duplicated
 held L[mv z p/f] R[mv z x/z] :: duplicated
 held L[mv p x/p, mv x2 x/p/x2] R[] :: sides-differ left-held
-held L[rm p, mv x/f p] R[] refuse upload p #1 :: removed-in-a-pass
 held L[mv x2 p/f, mv p x/p] R[] :: sides-differ left-held
-held L[mv z p/f, mv x z] R[] refuse folder_create z (remote) #1 :: removed-in-a-pass
-held L[mv z p/f, mv x z] R[] refuse upload p/f #1 :: removed-in-a-pass

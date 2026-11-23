@@ -131,6 +131,7 @@ func (p *Planner) planBuiltActions(
 	held := slices.Concat(waiting, trimmedActions, droppedCreateActions)
 	normalizedActions, withheld, withheldInMode := withholdDeletesOfHeldWork(
 		p.logger, normalizedActions, held, inputs, composition, mode)
+	normalizedActions = setAsideRemovedContent(p.logger, normalizedActions, inputs, mode)
 	if mount.ReleasesLocalTree {
 		normalizedActions = p.leaveOutNewLocalItems(normalizedActions, mode)
 	}
