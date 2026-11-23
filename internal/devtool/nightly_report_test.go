@@ -272,7 +272,7 @@ func TestNightlyReportIssueTextHoldsOnlyJobsTestsAndTheRunURL(t *testing.T) {
 		"- <job>: did not run\n"+
 		"- <job>: timed out\n"+
 		"- <job>: failed\n"+
-		"- <job>: failed; its log could not be read\n\n"+
+		"- <job>: failed; its log could not be read (GitHub answered HTTP 404)\n\n"+
 		"Each failure is claimed and fixed by an increment through `go run ./cmd/devtool nightly check`. "+
 		"Only a scheduled run of main writes this issue, and it closes on the next one that passes; "+
 		"a manual run posts its commit status only.\n", shape)
@@ -297,6 +297,29 @@ func TestNightlyReportIssueNamesTheFailedStepsOfAJobWithoutAFailedTest(t *testin
 	assert.Contains(t, body, "- `stress`: failed; failed steps: "+
 		"`step-stress-multisync-race-repeated`, `step-stress-sync-concurrency-race-repeated`\n")
 	assert.NotContains(t, body, "upload stalled")
+}
+
+// Validates: R-6.10.24
+//
+// A go test deadline keys only the test its panic shows hung, and the issue
+// says which of the failed tests hung; a stress member over its budget of
+// one run is named as such beside the job's failed tests.
+func TestNightlyReportIssueSaysWhichTestHungAndWhichMemberRanOverItsBudget(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, "")
+	remote.jobs = nightlyRunView(t, map[string]string{"stress": "timed_out"}, nightlyReportJobEntry())
+	remote.jobLogs["13"] = overBudgetMarker("./internal/multisync", "TestOrchestrator_Drains") +
+		"panic: test timed out after 40m0s\n\trunning tests:\n" +
+		"\t\tTestAlpha_Parallel (12s)\n\t\tTestWatchSoak (39m59s)\n\n" +
+		"FAIL\t" + repoModulePath + "/internal/multisync\t2400.100s\n"
+
+	runNightlyReport(t, remote, false)
+	require.Len(t, remote.issues, 1)
+	assert.Contains(t, remote.issues[0].body, "- `stress`: timed out; failed tests: `internal/multisync.TestWatchSoak`; "+
+		"hung at the go test deadline: `internal/multisync.TestWatchSoak`; "+
+		"over the stress budget of one run: `internal/multisync.TestOrchestrator_Drains`\n")
+	assert.NotContains(t, remote.issues[0].body, "TestAlpha_Parallel")
 }
 
 // Validates: R-6.10.24

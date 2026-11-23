@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -48,6 +49,78 @@ func readFailedStepMarker(line string) (verifyStepName, bool) {
 	}
 
 	return verifyStepName(step), true
+}
+
+// overBudgetMarkerPrefix starts the one line a stress step prints on stderr
+// for each member whose slowest run was over the budget of one run: the
+// prefix, the member's package relative to the module (`./internal/sync`),
+// one space and its top-level test, as in `verify member over budget:
+// ./internal/multisync TestWatchSoak`. The nightly reader keys the member by
+// it whatever else failed (nightlyOverBudgetKeys), and the public issue
+// carries the key, so the line holds nothing else. The printer and the reader
+// share the prefix and the form (overBudgetMarker, readOverBudgetMarker).
+const overBudgetMarkerPrefix = "verify member over budget: "
+
+// overBudgetMarker is the line a stress step prints for a member of pkg, as
+// normalizeFailedGoTestPackage gives it, whose top-level test is test.
+func overBudgetMarker(pkg string, test string) string {
+	return overBudgetMarkerPrefix + pkg + " " + test + "\n"
+}
+
+// readOverBudgetMarker reads one line of text as a budget line and returns
+// the member it names: the prefix at the start of the line, a package of the
+// module (`.` or `./` and a path of letters, digits, `_`, `-`, `.` and `/`),
+// one space and a top-level test name (Test and letters, digits and `_`),
+// and nothing else. Any other line is none, an indented one or a test's
+// output that quotes a budget line among them.
+func readOverBudgetMarker(line string) (goTestFailure, bool) {
+	rest, isMarker := strings.CutPrefix(line, overBudgetMarkerPrefix)
+	if !isMarker {
+		return goTestFailure{}, false
+	}
+	pkg, test, hasTest := strings.Cut(rest, " ")
+	if !hasTest || !isModulePackageName(pkg) || !isTopLevelTestName(test) {
+		return goTestFailure{}, false
+	}
+
+	return goTestFailure{pkg: pkg, test: test}, true
+}
+
+// isModulePackageName reports whether pkg is a package of the module as
+// normalizeFailedGoTestPackage writes it: `.`, or `./` and a clean path.
+func isModulePackageName(pkg string) bool {
+	if pkg == "." {
+		return true
+	}
+	rel, isRelative := strings.CutPrefix(pkg, "./")
+	if !isRelative || rel == "" || path.Clean(rel) != rel || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	for _, r := range rel {
+		if !isNameRune(r) && r != '-' && r != '.' && r != '/' {
+			return false
+		}
+	}
+
+	return true
+}
+
+// isTopLevelTestName reports whether name is a Test function's name.
+func isTopLevelTestName(name string) bool {
+	if !strings.HasPrefix(name, "Test") {
+		return false
+	}
+	for _, r := range name {
+		if !isNameRune(r) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func isNameRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_'
 }
 
 func newVerifySummaryCollector(

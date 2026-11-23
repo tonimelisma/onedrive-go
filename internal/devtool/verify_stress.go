@@ -372,7 +372,15 @@ func runStressCommand(
 	outcome := stepOutcome{failedTests: parseGoTestLog(output).failedTopLevelTests()}
 	timings := summarizeStressSlowTests(output, 0)
 	if command.memberRunBudget > 0 {
-		stepErr = errors.Join(stepErr, stressMembersOverRunBudget(command.stepName, timings, command.memberRunBudget))
+		over, budgetErr := stressMembersOverRunBudget(command.stepName, timings, command.memberRunBudget)
+		stepErr = errors.Join(stepErr, budgetErr)
+		// One budget line per member over its budget, so the nightly keys
+		// each such member even when its job also names a failed test.
+		for _, member := range over {
+			if writeErr := writeStatus(stderr, overBudgetMarker(normalizeFailedGoTestPackage(member.pkg), member.test)); writeErr != nil {
+				stepErr = errors.Join(stepErr, fmt.Errorf("write %s budget line: %w", command.stepName, writeErr))
+			}
+		}
 	}
 
 	outcome.slowTests = timings[:min(len(timings), stressSlowTestLimit)]
@@ -386,11 +394,14 @@ func runStressCommand(
 // stressMembersOverRunBudget is one error for each member of a repeated step
 // whose slowest run, of the member itself or of one of its subtests, took
 // longer than budget, naming the member, the subtest when that run was one,
-// the run's time and the budget; nil when every run fit. timings are each
+// the run's time and the budget; nil when every run fit. It returns those
+// members too, by package and top-level test in name order. timings are each
 // test's runs, subtests included. A subtest's run counts for its member: a
 // parallel subtest runs after its parent's own time is taken, so a parent's
 // time does not hold its subtests'.
-func stressMembersOverRunBudget(step verifyStepName, timings []StressSlowTestSummary, budget time.Duration) error {
+func stressMembersOverRunBudget(
+	step verifyStepName, timings []StressSlowTestSummary, budget time.Duration,
+) ([]stressTestKey, error) {
 	slowest := map[stressTestKey]StressSlowTestSummary{}
 	for _, timing := range timings {
 		member, _, _ := strings.Cut(timing.Test, "/")
@@ -424,7 +435,7 @@ func stressMembersOverRunBudget(step verifyStepName, timings []StressSlowTestSum
 			step, member.name(), formatDurationMS(timing.MaxElapsedMS), run, budget))
 	}
 
-	return errors.Join(errs...)
+	return over, errors.Join(errs...)
 }
 
 // wrapStressError names a failed stress step's error as a stress failure.

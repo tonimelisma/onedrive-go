@@ -1090,7 +1090,8 @@ func TestNightlyCheckKeysAJobWhoseLogCannotBeRead(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, githubAttempts, remote.jobLogCalls[nightlyTestE2ELog], "the log is still read with the client's retries")
-	assert.Contains(t, out, "  e2e: failed; its log could not be read\n")
+	assert.Contains(t, out, fmt.Sprintf("  e2e: failed; its log could not be read (GitHub answered HTTP 502 on all %d attempts)\n", githubAttempts),
+		"the line says why the log could not be read, never with gh's text")
 	assert.Equal(t, []string{"internal/multisync.TestWatchSoak", "job-e2e"}, remote.claimKeys())
 }
 
@@ -1328,6 +1329,97 @@ func TestNightlyCheckCountsTimedOutAndCanceledJobsAsFailures(t *testing.T) {
 	assert.Contains(t, out, "stress: timed out")
 	assert.Contains(t, out, "verify-full (macos-latest): canceled")
 	assert.Equal(t, []string{"internal/multisync.TestWatchSoak", "job-verify-full--macos-latest"}, remote.claimKeys())
+}
+
+// Validates: R-6.10.23
+//
+// A go test deadline's panic lists every test still running, sorted by name.
+// Only the top-level test that ran longest hung; the tests running beside it
+// were cut short by the same alarm and are no failure of their own, so the
+// night keys the hung test alone, its subtest folded into it.
+func TestNightlyCheckKeysOnlyTheTestATimeoutPanicShowsHung(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, checkConclusionFailure)
+	remote.jobs = nightlyRunView(t, map[string]string{"stress": "timed_out"})
+	remote.jobLogs["13"] = "panic: test timed out after 40m0s\n\trunning tests:\n" +
+		"\t\tTestAlpha_Parallel (12s)\n" +
+		"\t\tTestWatchSoak (39m59s)\n" +
+		"\t\tTestWatchSoak/burst (39m58s)\n" +
+		"\t\tTestZeta_Parallel/sub (3s)\n\n" +
+		"goroutine 7 [running]:\ntesting.(*M).startAlarm.func1()\n" +
+		"FAIL\t" + repoModulePath + "/internal/multisync\t2400.100s\n"
+
+	_, err := runNightlyCheck(t, remote)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"internal/multisync.TestWatchSoak"}, remote.claimKeys())
+}
+
+// Validates: R-6.10.23
+//
+// A stress member over its budget of one run prints its budget line, and the
+// night keys it as the member's test whatever else failed: with a failed test
+// in the same job's log, both are keyed.
+func TestNightlyCheckKeysAStressMemberOverItsBudgetBesideAFailedTest(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, checkConclusionFailure)
+	remote.jobs = nightlyRunView(t, map[string]string{"stress": checkConclusionFailure})
+	remote.jobLogs["13"] = "--- FAIL: TestWatchSoak (1.00s)\nFAIL\t" + repoModulePath + "/internal/multisync\t2.000s\n" +
+		"2026-11-16T10:00:00.1234567Z " + overBudgetMarker("./internal/multisync", "TestOrchestrator_Drains") +
+		verifyStepFailedPrefix + "stress multisync-race-repeated\n"
+
+	_, err := runNightlyCheck(t, remote)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"internal/multisync.TestOrchestrator_Drains", "internal/multisync.TestWatchSoak"}, remote.claimKeys())
+}
+
+// Validates: R-6.10.23
+//
+// Only a budget line of the printer's form keys a member: an indented one,
+// one quoted inside a test's output, one whose test is not a top-level test
+// name, and one a -json event carries are none.
+func TestReadOverBudgetMarkerReadsOnlyThePrintersForm(t *testing.T) {
+	t.Parallel()
+
+	member, ok := readOverBudgetMarker(strings.TrimSuffix(overBudgetMarker("./internal/sync", "TestWatch_Loop"), "\n"))
+	require.True(t, ok)
+	assert.Equal(t, goTestFailure{pkg: "./internal/sync", test: "TestWatch_Loop"}, member)
+
+	for _, line := range []string{
+		"  " + overBudgetMarkerPrefix + "./internal/sync TestWatch_Loop",
+		"    sync_test.go:40: " + overBudgetMarkerPrefix + "./internal/sync TestWatch_Loop",
+		overBudgetMarkerPrefix + "./internal/sync TestWatch_Loop/sub",
+		overBudgetMarkerPrefix + "./internal/sync TestWatch_Loop extra",
+		overBudgetMarkerPrefix + "./internal/sync helperNotATest",
+		overBudgetMarkerPrefix + "/fixture-folder TestWatch_Loop",
+		overBudgetMarkerPrefix + "./internal/sync",
+	} {
+		_, ok := readOverBudgetMarker(line)
+		assert.False(t, ok, line)
+	}
+	event := `{"Action":"output","Package":"x","Output":"` + overBudgetMarkerPrefix + `./internal/sync TestWatch_Loop\n"}` + "\n"
+	assert.Empty(t, nightlyOverBudgetKeys(event))
+}
+
+// Validates: R-6.10.23
+//
+// A job log that cannot be read is named with why, in the report's own
+// words: the HTTP status GitHub answered, how GitHub failed on every attempt,
+// or that the request failed without a status. None of gh's text, which
+// quotes the request, reaches the line.
+func TestNightlyLogReadFailureNamesTheStatusAndNoText(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "GitHub answered HTTP 403",
+		nightlyLogReadFailure(ghFailure("Resource not accessible by integration (HTTP 403)")))
+	assert.Equal(t, "GitHub answered HTTP 404", nightlyLogReadFailure(ghFailure("HTTP 404: Not Found (https://x/fixture-7f3a)")))
+	assert.Equal(t, fmt.Sprintf("GitHub answered HTTP 502 on all %d attempts", githubAttempts),
+		nightlyLogReadFailure(&githubUnavailableError{call: "c", cause: "answered HTTP 502", err: githubBadGateway()}))
+	assert.Equal(t, "the gh request failed without an HTTP status",
+		nightlyLogReadFailure(errors.New("exec: \"gh\": executable file not found in $PATH /fixture-7f3a")))
 }
 
 // Validates: R-6.10.23

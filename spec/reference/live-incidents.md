@@ -62,6 +62,7 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261121-02 | The nightly report could not read a red job's log and did not say why | mitigated | test harness | 2026-11-21 | no |
 | LI-20261121-01 | The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline | fixed | test harness | 2026-11-21 | yes |
 | LI-20261115-01 | Graph answered an ordinary folder move with 400 `Invalid request` | mitigated | graph quirk | 2026-11-15 | yes |
 | LI-20261115-02 | The stress lane's race runs of the sync tree ran past a fixed 40-minute deadline | fixed | test harness | 2026-11-15 | yes |
@@ -113,6 +114,42 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261121-02: The nightly report could not read a red job's log and did not say why
+
+First seen: 2026-11-21
+Last seen: 2026-11-21
+Area: `internal/devtool/nightly_verdict.go` (`attributeNightlyFailures`)
+Suite / test: the `nightly-report` job of the scheduled run, for the red
+`verify-full (ubuntu-latest)` job
+Classification: test harness
+Status: mitigated (the cause of the refusal is not yet known)
+Recurring: no
+Summary: the `nightly-failure` issue said of the red job "failed; its log
+could not be read". The reader kept only that the read failed and dropped
+why, so neither the issue nor the job's output named the cause.
+
+Evidence:
+- The report printed the issue text about two seconds after it posted the
+  commit status, so the job-log read failed on its first attempt: the
+  client repeats a 5xx, a dropped connection and an unreachable host with
+  backoff for 35 seconds, so the failure was none of those.
+- The job had finished an hour before the report ran, and the same
+  `GET repos/{owner}/{repo}/actions/jobs/<id>/logs` request, made with a
+  maintainer's token on 2026-11-23, returned the whole 90 kB log, so the log
+  existed and was not too large. What remains is how GitHub answered the
+  report's own `GITHUB_TOKEN` (`contents: read`, `actions: read`), which the
+  report did not keep.
+
+Fix: the reader keeps, per job, why its log could not be read, in the
+report's own words, and the check's job line and the issue print it: the
+HTTP status GitHub answered, how GitHub failed on every attempt, or that the
+request failed without a status; gh's text, which quotes the request, never
+reaches the public issue (`nightlyLogReadFailure`,
+`TestNightlyLogReadFailureNamesTheStatusAndNoText`,
+`TestNightlyReportIssueTextHoldsOnlyJobsTestsAndTheRunURL`). The next red
+night with an unreadable log names the status; the token's permission is
+the fix to make if it is a 403.
 
 ## LI-20261121-01: The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline
 
