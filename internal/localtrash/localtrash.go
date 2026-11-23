@@ -458,12 +458,71 @@ func (p *Placement) Commit() (Entry, error) {
 
 // Abandon removes a reserved entry whose file never arrived. It refuses to
 // remove an entry that holds a file.
-func (p *Placement) Abandon() error {
-	if held := heldFileIn(p.entryDir); held != nil {
+func (p *Placement) Abandon() (err error) {
+	// The check and the removal run on descriptors of the trash folder and
+	// of the entry folder, opened once: a folder swapped in at the entry's
+	// path after the open is neither checked nor emptied. The entry is
+	// emptied of its record alone and removed only while empty, so nothing
+	// but what Reserve wrote is ever removed.
+	parent, err := os.OpenRoot(filepath.Dir(p.entryDir))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("opening the trash to remove unused entry %s: %w", p.entry.ID, err)
+	}
+	defer func() { err = errors.Join(err, closeRoot(parent)) }()
+	name := filepath.Base(p.entryDir)
+	entry, err := parent.OpenRoot(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("opening unused trash entry %s: %w", p.entry.ID, err)
+	}
+	held := heldFileInRoot(entry, p.entryDir)
+	if closeErr := closeRoot(entry); closeErr != nil {
+		return fmt.Errorf("closing unused trash entry %s: %w", p.entry.ID, closeErr)
+	}
+	if held != nil {
 		return fmt.Errorf("not removing trash entry %s: it holds a file at %s", p.entry.ID, held.path)
 	}
-	if err := localpath.RemoveAll(p.entryDir); err != nil {
-		return fmt.Errorf("removing unused trash entry: %w", err)
+	if err := parent.Remove(filepath.Join(name, entryFileName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing the record of unused trash entry %s: %w", p.entry.ID, err)
+	}
+	if err := parent.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing unused trash entry %s: %w", p.entry.ID, err)
+	}
+	return nil
+}
+
+// closeRoot closes a root handle the trash opened, naming the failure.
+func closeRoot(root *os.Root) error {
+	if err := root.Close(); err != nil {
+		return fmt.Errorf("closing trash folder: %w", err)
+	}
+	return nil
+}
+
+// heldFileInRoot is heldFileIn read through a descriptor of the entry
+// folder; entryDir only names the paths it reports.
+func heldFileInRoot(entry *os.Root, entryDir string) *heldFile {
+	itemPath := filepath.Join(entryDir, itemName)
+	if _, err := entry.Lstat(itemName); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return &heldFile{path: itemPath}
+	}
+	dir, err := entry.Open(".")
+	if err != nil {
+		return &heldFile{path: itemPath}
+	}
+	dirEntries, readErr := dir.ReadDir(-1)
+	if closeErr := dir.Close(); readErr != nil || closeErr != nil {
+		return &heldFile{path: itemPath}
+	}
+	for _, dirEntry := range dirEntries {
+		if dirEntry.Name() != entryFileName && dirEntry.Type().IsRegular() {
+			return &heldFile{path: filepath.Join(entryDir, dirEntry.Name()), incomplete: true}
+		}
 	}
 	return nil
 }

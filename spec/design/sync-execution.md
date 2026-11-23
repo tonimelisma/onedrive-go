@@ -823,7 +823,11 @@ but no readable record is listed as an orphan with the file's location. An
 entry directory holds a file when it has `item` or, failing that, any regular
 file other than `entry.json` (`heldFileIn`), and an entry directory that is
 gone holds nothing, so abandoning a reservation whose folder was removed
-succeeds (`TestPlacement_AbandonOfAnEntryWhoseFolderIsGoneSucceeds`). A
+succeeds (`TestPlacement_AbandonOfAnEntryWhoseFolderIsGoneSucceeds`). An abandon checks and removes through descriptors of the trash folder and the
+entry folder opened once, removes the record and then the folder only while it
+is empty, so a folder swapped in at the entry's path is never checked or
+emptied, and nothing the reservation did not write is removed
+(`TestPlacement_AbandonRemovesOnlyWhatTheReservationWrote`). A
 `.copy-*` left by a
 cross-filesystem placement an earlier build or a crash interrupted is listed
 at its own path, is never purged or expired, blocks `Placement.Abandon`, and
