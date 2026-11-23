@@ -2502,3 +2502,30 @@ func TestPlannerPairs_AFolderMovedOnBothSidesOntoAnEntryOneDriveDeletedIsMovedHe
 		}
 	}
 }
+
+// Validates: R-2.17.7, R-2.17.6
+//
+// From the held start, f, moved here into the new x, is edited, while
+// OneDrive moves it into the old x: both sides hold f at x/f, in different
+// folders. The file here has f's identity and OneDrive's move of f to the
+// same path corroborates it, so it is the same item: OneDrive's version is
+// never downloaded beside the edit, which is carried by f's move here into
+// the old x and uploaded there, and every run, with each create refused once,
+// converges.
+func TestPlannerPairs_AFileEditedHereThatBothSidesMovedStaysOneItem(t *testing.T) {
+	t.Parallel()
+
+	pair := exPair{
+		start:  exStartNamed(t, "held"),
+		local:  []exEdit{{kind: exEditFile, from: "x/f"}},
+		remote: []exEdit{{kind: exMoveFile, from: "p/f", to: "x/f"}},
+	}
+	requirePairKeepsEveryInvariant(t, &pair)
+	registerExCachingDriver(t)
+	r := newExRun(t, exQuietStore(t), &pair)
+	r.run()
+	log := strings.Join(r.log, "\n")
+	assert.NotContains(t, log, "download", "OneDrive's version is not downloaded beside the edit:\n%s", log)
+	assert.Contains(t, log, "local_move x2/f <- x/f", "the edit moves where OneDrive put f:\n%s", log)
+	assert.Contains(t, log, "upload x2/f", "the edit is uploaded there:\n%s", log)
+}

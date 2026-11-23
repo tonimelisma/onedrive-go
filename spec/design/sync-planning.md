@@ -90,6 +90,7 @@ intent; multisync receives only that child work intent.
 | A dependency cycle drops only its members and their dependents; the rest of the plan runs (R-2.17.6), and a one-shot run that ends on such a plan counts the dropped actions as work left for the next sync, so it exits 1 (R-6.6.28). A folder delete that closes a cycle through the move of a folder above it waits for the next pass instead, so the rest of that cycle runs and the next pass deletes the folder at its new path (R-2.17.2). | `TestIsolateDependencyCycles_KeepsUnrelatedWork`, `TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync`, `TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle`, `TestRunOnce_FileMovedOutOfASubfolderIntoTheRemadeFolderWithTheSubfolderRemovedConverges` |
 | A delete waits for the create on its side that writes the deleted file's content at another path, so a failed create, or a failure of what it waits for, skips the delete and the content stays on that side; an edge that would close a cycle, given the edges kept before it, is left out (R-2.17.2). | `TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent`, `TestBuildDependencies_ADeleteDoesNotWaitForACreateThatWaitsForIt`, `TestBuildDependencies_OfTwoContentEdgesThatCloseACycleOnlyTogetherTheFirstIsKept`, `TestBuildDependencies_AReusedInodeWithOtherContentCarriesNothing`, `TestRunOnce_AFileRenamedHereOntoAPathAWaitingMoveLeavesStaysOnOneDriveWhileACreateBeforeItsUploadFails` |
 | A removal of synced content (a delete of the file, or a download of another item over it here) waits while the other side holds the file at another path and no create of the plan writes its content on the removal's side, and a download over a synced file waits for the download of that file's item where OneDrive moved it, so a pass never leaves a side without content the user did not remove (R-2.17.11). | `TestPlanBuiltActions_ARemovalOfContentTheOtherSideMovedWaitsForItsCreate`, `TestBuildDependencies_ADownloadOverASyncedFileWaitsForTheDownloadOfItsItem`, `TestPlannerPairs_AFileRenamedIntoAFolderInAHeldFoldersPlaceKeepsItsOneDriveCopy`, `TestPlannerPairs_AFileOverwrittenHereWaitsForTheDownloadOfItsMovedContent` |
+| A file moved and edited here, at the path OneDrive moved the item to, is the item: its local move to OneDrive's place carries the edit and the next pass uploads it as the same item, never a download beside it nor a new file (R-2.17.7). | `TestPlannerPairs_AFileEditedHereThatBothSidesMovedStaysOneItem`, `TestRunOnce_AFileEditedHereThatBothSidesMovedStaysOneItem`, `TestRunOnce_AFileMovedAndEditedHereThatOneDriveMovedAlikeStaysOneItem` |
 | A synced folder whose place on OneDrive (where OneDrive moved it, or where it stays when this computer's move of it is undone) is held here by a new folder, its own copy here empty, is one folder with the new one by path: the new folder takes the item and the empty copy is deleted here, and nothing moves (R-2.17.13). | `TestComposeMoves_AFolderLandingOnANewFolderHereMergesWithItOnlyWhenItsCopyIsEmpty`, `TestPlannerPairs_ANewFolderHereMergesWithTheFolderOneDriveMovedOntoItsPath`, `TestPlannerPairs_AFolderWhoseMoveHereIsUndoneMergesWithANewFolderAtItsPlace`, `TestRunOnce_ANewFolderHereMergesWithTheFolderOneDriveMovedOntoItsPath`, `TestRunOnce_AFolderWhoseMoveHereIsUndoneMergesWithANewFolderAtItsPlace` |
 | A rotation through nesting split across the two sides with a third move converges: an entry holding the path the undone folder takes back moves first into its folder where that folder is now, or waits a pass where a folder above it leaves; a synced file moved here onto that path pairs by identity and goes back; an empty folder made there gives way, its delete recording nothing; a folder moved on both sides onto an entry OneDrive deleted is moved here, not made (R-2.17.6, R-2.17.13). | `TestPlannerPairs_ARotationThroughNestingSplitAcrossTheSidesConverges`, `TestBuildDependencies_AMoveLandingInNothingADestinationHoldsRunsFirst`, `TestRunOnce_ARotationThroughNestingSplitAcrossTheSidesConverges`, `TestRunOnce_AnEmptyNewFolderGivesWayToTheFolderWhoseMoveHereIsUndone`, `TestCommitMutation_DeleteOfAnUnsyncedEntryRecordsNothing`, `TestPlannerPairs_AFolderMovedOnBothSidesOntoAnEntryOneDriveDeletedIsMovedHereNotMade`, `TestRunOnce_AFolderMovedOnBothSidesOntoAnEntryOneDriveDeletedEndsOnce` |
 | A folder that must leave the path of a new folder made here, which a folder's OneDrive move lands in, while its own target lies below that move, moves first into the moving folder where that folder is on OneDrive, or aside when that name is taken; a folder OneDrive put at the path a synced item left by this computer's move is made here before the item moves into it (R-2.17.6). | `TestPlannerPairs_AHeldFolderMovedIntoAFolderThatMovesIntoTheNewFolderAtItsPathConverges`, `TestRunOnce_AHeldFolderMovedIntoAFolderThatMovesIntoTheNewFolderAtItsPathConverges`, `TestPlannerPairs_AFolderOneDriveMovedOntoThePathAFileLeftHereIsMadeHere`, `TestRunOnce_AFolderOneDriveMovedOntoThePathAFileLeftHereIsMadeHere` |
@@ -1326,6 +1327,26 @@ facts, and the next pass uploads the edit as the same item. A move outcome
 re-paths the baseline subtree from the row's own previous path (looked up by
 item ID), not from `OldPath`, which for a local copy moved to OneDrive's name is
 a path the baseline never held.
+
+A file this computer moved and edited is no move here by itself: identity
+alone never pairs a file (R-2.17.1). Where OneDrive moved the item to the
+very path where the edited file now sits, that move corroborates the
+identity, and the file is the item (`editedWhereOneDriveMovedIt`): from the
+held start, `f` moved here into the new `x` and edited while OneDrive moved
+it into the old `x`, both at `x/f` in different folders. Read as two files
+made at one path, OneDrive's version was downloaded beside the edit, which
+went up as a new file, and the item was split in two. Paired, the moves
+compose, OneDrive's place wins, the local move carries the edit, and the next
+pass uploads it as the same item, OneDrive keeping the version it replaces
+Where both sides then hold it at one place (renamed alike on both, edited
+here), the baseline is re-keyed there with the synced content, and the
+conflict copy of the edit and the download of OneDrive's version SQLite
+planned for the path as two files made there are left out
+(`dropReconciliationOfComposedMoves`), so the next pass uploads the edit as
+the same item; the reconciliation matrix records the case
+(`TestPlannerPairs_AFileEditedHereThatBothSidesMovedStaysOneItem`,
+`TestRunOnce_AFileEditedHereThatBothSidesMovedStaysOneItem`,
+`TestRunOnce_AFileMovedAndEditedHereThatOneDriveMovedAlikeStaysOneItem`).
 
 Move pairing requires the item to have left its baseline path (R-2.17.8): an
 identity pair is refused while the baseline path still holds the baseline

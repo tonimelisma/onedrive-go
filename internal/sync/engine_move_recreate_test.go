@@ -3667,3 +3667,68 @@ func TestRunOnce_ARotationThroughNestingSplitAcrossTheSidesConverges(t *testing.
 		})
 	}
 }
+
+// Validates: R-2.17.7, R-2.17.6
+//
+// Here x is renamed x2 while OneDrive makes X2, a new x is made and f moved
+// into it out of P and edited, while OneDrive moves f into the old x, so
+// both sides hold f at x/f, in different folders. The local file there has
+// f's identity, and OneDrive's move of f to the same path corroborates it: f
+// is the same item, not a file made on both sides. While X2 holds the old x's
+// move, nothing is downloaded or uploaded. Once X2 is renamed away, OneDrive's
+// place wins: f moves here into the old x, now x2, carrying the edit, which
+// is uploaded as the same item. Before, OneDrive's version was downloaded into
+// x2 and the edit went up as a new file, so f was split into two items.
+func TestRunOnce_AFileEditedHereThatBothSidesMovedStaysOneItem(t *testing.T) {
+	t.Parallel()
+
+	remote, eng, syncRoot, logs := newHeldFolderScenario(t)
+	syncfixture.WriteLocalFile(t, syncRoot, "x/f", "edited\n")
+	remote.moveAt(t, "P/f", "x/f")
+
+	runScenarioPass(t, eng)
+	assert.Zero(t, remote.uploads, "nothing is uploaded while the old x's move waits")
+	assert.NotContains(t, harnessLocalTree(t, syncRoot), "x2/f", "OneDrive's f is not downloaded beside the edit")
+
+	remote.moveAt(t, "X2", "r1")
+	_, superseded := runScenarioUntilDone(t, eng)
+	assert.Zero(t, superseded)
+	want := map[string]string{"P": "/", "r1": "/", "x": "/", "x2": "/", "x2/f": "edited\n", "z": "z\n"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "x2/f", remote.pathOf("item-f"), "the edit is uploaded as the same item")
+	assert.Equal(t, 1, remote.uploads, "the edit is uploaded once")
+	assert.Empty(t, remote.deletes, "nothing is deleted on OneDrive")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.7, R-2.17.6
+//
+// Here f is renamed g and edited, while OneDrive renames it g too. The file
+// here has f's identity at the path OneDrive moved f to, so it is f: the
+// baseline is re-keyed to g, keeping the synced content, and the edit is
+// uploaded as the same item, never downloaded over nor kept as a conflict
+// copy beside OneDrive's version.
+func TestRunOnce_AFileMovedAndEditedHereThatOneDriveMovedAlikeStaysOneItem(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFile(t, "item-f", "root", "f", "f\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Rename(local("f"), local("g")))
+	syncfixture.WriteLocalFile(t, syncRoot, "g", "edited\n")
+	remote.moveAt(t, "f", "g")
+
+	_, superseded := runScenarioUntilDone(t, eng)
+	assert.Zero(t, superseded)
+	want := map[string]string{"g": "edited\n"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "g", remote.pathOf("item-f"), "the edit is uploaded as the same item")
+	assert.Equal(t, 1, remote.uploads, "the edit is uploaded once")
+	assert.Empty(t, remote.deletes, "nothing is deleted on OneDrive")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}

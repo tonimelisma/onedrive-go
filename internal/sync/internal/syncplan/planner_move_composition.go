@@ -2305,6 +2305,9 @@ func moveCompositionInputs(
 			} else if at, ok := folderMovedOntoAPathItsItemLeft(cmp, entry, localRows, cmpByPath); ok {
 				node.paths[moveCoordLocal] = at
 				identified[at] = node.key
+			} else if at, ok := editedWhereOneDriveMovedIt(cmp, entry, localRows, remoteByID); ok {
+				node.paths[moveCoordLocal] = at
+				identified[at] = node.key
 			}
 		}
 		node.paths[moveCoordRemote] = composedRemotePosition(cmp, entry, remoteByID, cmpByPath, node.paths[moveCoordLocal])
@@ -2396,6 +2399,47 @@ func takesAnotherItemsPath(at *syncdomain.SQLiteComparisonRow, entry *syncdomain
 func pathOfAnItemMovedAwayHere(at *syncdomain.SQLiteComparisonRow) bool {
 	return at.ComparisonKind == syncdomain.ComparisonLocalMoveSource && at.LocalItemReplaced &&
 		at.RemoteItemID == at.BaselineItemID
+}
+
+// editedWhereOneDriveMovedIt finds a synced file this computer moved and
+// edited, gone from its baseline path here (cmp, the row of that path), at
+// the path where OneDrive moved the item too: the local file there has the
+// item's filesystem identity and OneDrive's item is at that very path. An
+// edit leaves only the identity to prove a move here (R-2.17.1), which alone
+// never pairs one; OneDrive's own move of the item to the same path
+// corroborates it. Unpaired, the path read as two files made on both sides:
+// OneDrive's version was downloaded beside the edited file, which went up
+// as a new file, so the item was split in two (from the held start, f moved
+// here into the new x and edited, while OneDrive moved it into the old x).
+// Paired, the moves compose and the edit is carried as a remote move of an
+// edited file is (R-2.17.7): the next pass uploads it as the same item, and
+// OneDrive keeps the version it replaces.
+func editedWhereOneDriveMovedIt(
+	cmp *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry,
+	localRows []syncdomain.LocalStateRow, remoteByID map[string]*syncdomain.RemoteStateRow,
+) (string, bool) {
+	if entry.ItemType != syncdomain.ItemTypeFile || cmp.LocalType.Present() {
+		return "", false
+	}
+	moved, online := remoteByID[entry.ItemID]
+	if !online || moved.ItemType != syncdomain.ItemTypeFile || moved.Path == cmp.Path {
+		return "", false
+	}
+	want, known := entry.FileIdentity()
+	if !known {
+		return "", false
+	}
+	for i := range localRows {
+		row := &localRows[i]
+		if row.Path != moved.Path || row.ItemType != syncdomain.ItemTypeFile {
+			continue
+		}
+		have, ok := row.FileIdentity()
+
+		return row.Path, ok && synctree.SameIdentity(have, want)
+	}
+
+	return "", false
 }
 
 // folderMovedOntoAPathItsItemLeft finds where this computer moved a synced
@@ -2616,13 +2660,23 @@ func composedRemotePosition(
 		return row.Path
 	case sitsAtAnotherSyncedItemsPath(at, entry):
 		return row.Path
-	case at.ComparisonKind == syncdomain.ComparisonLocalMoveDest && row.Path == localPosition:
+	case row.Path == localPosition && heldHereWhereOneDriveHasIt(at, entry):
 		return row.Path
 	case unpairedRemoteMoveOf(cmp, at, entry, remoteByID):
 		return row.Path
 	default:
 		return ""
 	}
+}
+
+// heldHereWhereOneDriveHasIt reports whether at, the comparison row of the
+// path where OneDrive holds the item of entry and this computer holds it
+// too, places the item there: SQLite paired the local move onto the path,
+// or the local position was found there by the item's identity
+// (editedWhereOneDriveMovedIt).
+func heldHereWhereOneDriveHasIt(at *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry) bool {
+	return at.ComparisonKind == syncdomain.ComparisonLocalMoveDest ||
+		(at.RemoteItemID == entry.ItemID && !at.BaselineType.Present())
 }
 
 // sitsAtAnotherSyncedItemsPath reports whether OneDrive holds the item of
@@ -4037,6 +4091,16 @@ func dropReconciliationOfComposedMoves(
 	moved := map[moveCoord]map[string]bool{moveCoordLocal: {}, moveCoordRemote: {}}
 	for i := range composition.moves {
 		moved[composition.moves[i].side][composition.moves[i].key] = true
+	}
+	// An item found here by its identity (identified) that both sides hold
+	// at one place is re-keyed there: the copy here is the item, so what
+	// SQLite planned for the path as two files made there (a conflict copy
+	// of the edit and a download of OneDrive's version beside it) would split
+	// it in two, as a move of it would.
+	for i := range composition.rekeys {
+		if key := composition.rekeys[i].key; identifiedKey(identified, key) {
+			moved[moveCoordLocal][key] = true
+		}
 	}
 	merged := map[string]bool{}
 	for i := range composition.merges {
