@@ -400,7 +400,11 @@ func TestNewRootCmd(t *testing.T) {
 	cmd := newRootCmd()
 	require.NotNil(t, cmd)
 	assert.Equal(t, "devtool", cmd.Use)
-	assert.Len(t, cmd.Commands(), 5)
+	names := make([]string, 0, len(cmd.Commands()))
+	for _, sub := range cmd.Commands() {
+		names = append(names, sub.Name())
+	}
+	assert.ElementsMatch(t, []string{"verify", "bench", "cleanup-audit", "worktree", "nightly", "ci"}, names)
 }
 
 // Validates: R-6.10.1
