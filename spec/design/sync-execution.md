@@ -367,7 +367,9 @@ when the trash is on another filesystem
 (`TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination`). A file that
 takes the freed name between the two steps is kept: the rename refuses, the
 move is superseded, and the displaced file stays in the trash
-(`TestExecutor_LocalMove_ReplacingMoveKeepsAFileThatTakesTheFreedName`). A
+(`TestExecutor_LocalMove_ReplacingMoveKeepsAFileThatTakesTheFreedName`); the
+next plan renames that file to a conflict copy and finishes the move
+(`TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves`). A
 trash that fails fails the move, with both files where they were, and never
 reads as a destination that left on its own
 (`TestExecutor_LocalMove_ATrashThatFailsFailsTheReplacingMove`). A
