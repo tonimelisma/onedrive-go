@@ -580,7 +580,7 @@ func TestNightlyReportPostsOnlyItsStatusWhenTheIssueCannotBeRead(t *testing.T) {
 	remote := redNightlyRemoteWithOpenIssue(t)
 	remote.labelListErrs = slices.Repeat([]error{githubBadGateway()}, githubAttempts)
 	assertNightlyReportPostsOnlyItsStatus(t, remote,
-		"nightly label list", fmt.Sprintf("GitHub answered HTTP 502 on all %d attempts", githubAttempts))
+		"nightly label (GET", fmt.Sprintf("GitHub answered HTTP 502 on all %d attempts", githubAttempts))
 }
 
 // assertNightlyReportPostsOnlyItsStatus runs a report of the red run of the

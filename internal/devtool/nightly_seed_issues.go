@@ -24,8 +24,9 @@ const (
 	seedIssueLabelColor       = "D93F0B"
 	seedIssueLabelDescription = "A seeded model test fails on this seed; the change that fixes it closes the issue"
 	seedIssueTitlePrefix      = "Seed failure: "
-	// seedIssueListLimit bounds one read of the open seed issues. A list
-	// that full may be missing some, so it fails the read.
+	// seedIssueListLimit bounds the open seed issues the nightly check takes
+	// on: the list is read in full, page by page, and more open seed issues
+	// than this means they are not being closed, which a person sorts out.
 	seedIssueListLimit = 500
 	// seedIssueWhat names the seed issue reads in their requests'
 	// descriptions.
@@ -70,26 +71,14 @@ func findSeedIssues(ctx context.Context, gh ghClient, repoRoot string, withTexts
 	if !exists {
 		return issues, nil
 	}
-	out, err := gh.output(ctx, repoRoot, "seed issue list (GET repos/{owner}/{repo}/issues)",
-		"issue", "list", "--label", seedIssueLabel, "--state", "open", "--json", "number,title,body",
-		"--limit", strconv.Itoa(seedIssueListLimit))
+	listed, err := listOpenLabeledIssues(ctx, gh, repoRoot, "seed", seedIssueLabel)
 	if err != nil {
 		return seedIssues{}, err
 	}
-	var listed []struct {
-		Number int
-		Title  string
-		Body   string
-	}
-	if decodeErr := decodeGHList("seed issue list", out, &listed); decodeErr != nil {
-		return seedIssues{}, decodeErr
-	}
 	if len(listed) >= seedIssueListLimit {
-		// A seed whose issue the list missed would get a second issue, and
-		// its claim would end with no one having fixed it.
 		return seedIssues{}, fmt.Errorf(
-			"seed issue list: GitHub listed %d open %s issues, as many as one read takes, so some may be missing; close the fixed ones",
-			len(listed), seedIssueLabel)
+			"seed issue list: GitHub listed %d open %s issues, at least %d; close the fixed ones",
+			len(listed), seedIssueLabel, seedIssueListLimit)
 	}
 	for _, entry := range listed {
 		key, named := seedIssueKey(entry.Title)

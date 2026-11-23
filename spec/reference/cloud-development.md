@@ -11,9 +11,11 @@ is still open.
   starts on a fresh machine. Anything left only in it is lost.
 - One assigned session branch (`branch/<name>`), which the session pushes and
   opens pull requests from.
-- GitHub reached through the GitHub connector tools only: there is no
-  signed-in `gh` and no GraphQL, so anything that calls `gh api graphql` (the
-  review-thread audit, the nightly claim refs, the DoD CI waits) cannot run.
+- GitHub reached through a proxy: `gh` works for the REST API (`gh api`,
+  `gh run`), GraphQL is refused with HTTP 403, and git may push only the
+  session's branch. The DoD stages read GitHub over REST alone, review threads
+  through the proxy's REST thread routes when GraphQL is refused, so they run
+  here; what they cannot do is write `refs/nightly-claims` (see Open items).
 - Builder subagents that work in their own worktrees under
   `.claude/worktrees/agent-*`, each on its own branch, whose work the session
   integrates and ships as one squash-merged pull request.
@@ -26,7 +28,7 @@ is still open.
 | merge, then `post-merge` cleans the worktree | squash merge, then reset the session branch to `origin/main` | the squash commit is not a descendant of the branch, so the next increment would otherwise carry the old commits |
 | worktrees removed by `post-merge` | `go run ./cmd/devtool worktree prune-merged` after integrating builders | builder branches are squash-merged too, so no ancestry check ever sees them merged; twenty-five builder worktrees were once left behind |
 | tests run as the developer | `verify --as-user <user>` | as root, permission tests do not bite and the sync tests that refuse root fail; running them by hand as another user was the workaround |
-| `verify --dod` stages reach GitHub | DoD checks that need GitHub done with the connector tools, stated in the PR body | without `gh` and GraphQL the stages fail, and a check skipped silently is worse than one done by other means and recorded |
+| `verify --dod` stages reach GitHub | the same stages; merging through the connector tools, after which `post-merge` reads the server's merge state | the stages read GitHub over REST, which the proxy serves, and review threads over its REST thread routes; `gh pr merge` is GraphQL, so the merge itself is the connector's |
 
 `prune-merged` judges a builder worktree merged when every commit's patch is
 in `origin/main` (`git cherry`), or when merging the branch into
@@ -134,10 +136,12 @@ reachable.
 
 ## Open items
 
-- **GitHub-dependent DoD checks belong in CI.** The review-thread audit and
-  replies, the nightly claims and the CI waits of `verify --dod` call `gh`,
-  partly through GraphQL, which a cloud session cannot. Until they move into a
-  CI job that runs with the workflow's `GITHUB_TOKEN` (for example on
-  `pull_request` and after the merge, reporting as a check), a session does
-  them with the connector tools and says so in the PR body, which is slower
-  and checked by no tool.
+- **Nightly claims cannot be written from a cloud session.** Claims are refs
+  under `refs/nightly-claims`, taken by compare-and-swap push, and the
+  session's git proxy takes pushes to the session's branch alone. Deleting a
+  retired claim is skipped with a note (the claim blocks no one), but taking a
+  claim on a red night fails the start stage naming the refusal. While the
+  nightly is green nothing is needed; on a red night either claim from a
+  checkout that can push refs, or move claims to a store a cloud session can
+  write (for example one GitHub issue per key over REST), which changes
+  R-6.10.23 and is the owner's call.

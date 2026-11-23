@@ -516,7 +516,7 @@ func TestDODPostMergeRefusesABranchThatIsNotThePRsHead(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"gh pr view 7 --json " + pullRequestStateFields: []byte(`{"state":"OPEN","headRefName":"fix/the-head"}`),
+		"gh api " + githubRepoPath + "/pulls/7": []byte(`{"state":"open","head":{"ref":"fix/the-head","sha":"head-sha"}}`),
 	}}
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:    writeWorkflowFixture(t, nightlyBoundWorkflow),
@@ -596,14 +596,14 @@ func requireMergedPRAfterMergeError(t *testing.T, mergeOutput string) {
 			"gh pr merge 682 --squash --delete-branch": errors.New("exit status 1"),
 		},
 		outputs: map[string][]byte{
-			"gh pr view 682 --json " + pullRequestStateFields: []byte(`{"state":"MERGED","mergedAt":"2026-04-30T04:15:18Z","mergeCommit":{"oid":"merge-sha"}}`),
+			"gh api " + githubRepoPath + "/pulls/682": []byte(`{"state":"closed","merged":true,"merged_at":"2026-04-30T04:15:18Z","merge_commit_sha":"merge-sha"}`),
 		},
 	}
 
 	state, err := mergePR(context.Background(), runner, newGHClient(runner, nil), testCleanupRepoRoot, 682)
 	require.NoError(t, err)
-	assert.Equal(t, "MERGED", state.State)
-	assert.Equal(t, "merge-sha", state.MergeCommit.OID)
+	assert.True(t, state.Merged)
+	assert.Equal(t, "merge-sha", state.MergeCommitSHA)
 }
 
 // Validates: R-6.10.16
@@ -618,7 +618,9 @@ func TestDODMergeWrapperFailsWhenServerSideMergeDidNotComplete(t *testing.T) {
 			"gh pr merge 682 --squash --delete-branch": errors.New("exit status 1"),
 		},
 		outputs: map[string][]byte{
-			"gh pr view 682 --json " + pullRequestStateFields: []byte(`{"state":"OPEN"}`),
+			// An open pull request carries the merge commit of its test merge:
+			// that alone does not make it merged.
+			"gh api " + githubRepoPath + "/pulls/682": []byte(`{"state":"open","merged":false,"merge_commit_sha":"test-merge-sha"}`),
 		},
 	}
 
@@ -672,4 +674,85 @@ func jsonUnmarshalString(data string, v any) error {
 		return fmt.Errorf("decode json fixture: %w", err)
 	}
 	return nil
+}
+
+// Validates: R-6.10.40
+//
+// The repository comes from REST, never `gh repo view`, whose GraphQL a
+// Claude Code cloud session refuses.
+func TestLoadGitHubRepoReadsTheRepositoryOverREST(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"gh api " + githubRepoPath: []byte(`{"full_name":"octo/widgets","name":"widgets"}`),
+	}}
+	repo, err := loadGitHubRepo(t.Context(), newGHClient(runner, nil), testCleanupRepoRoot)
+	require.NoError(t, err)
+	assert.Equal(t, githubRepo{Owner: "octo", Name: "widgets"}, repo)
+
+	for _, fullName := range []string{"", "widgets", "/widgets", "octo/", "octo/widgets/extra"} {
+		bad := &fakeRunner{outputs: map[string][]byte{
+			"gh api " + githubRepoPath: []byte(fmt.Sprintf(`{"full_name":%q}`, fullName)),
+		}}
+		_, err := loadGitHubRepo(t.Context(), newGHClient(bad, nil), testCleanupRepoRoot)
+		require.Error(t, err, fullName)
+		assert.Contains(t, err.Error(), "invalid full_name", fullName)
+	}
+}
+
+// closedPRPage renders a REST page of closed pull requests: the numbers in
+// merged are merged, the rest were closed unmerged.
+func closedPRPage(t *testing.T, numbers []int, merged map[int]bool) []byte {
+	t.Helper()
+
+	page := make([]map[string]any, 0, len(numbers))
+	for _, number := range numbers {
+		entry := map[string]any{"number": number, "merged_at": nil}
+		if merged[number] {
+			entry["merged_at"] = "2026-11-23T18:00:00Z"
+		}
+		page = append(page, entry)
+	}
+	data, err := json.Marshal(page)
+	require.NoError(t, err)
+
+	return data
+}
+
+// Validates: R-6.10.40
+//
+// Recent merged pull requests come from REST's closed list, newest first,
+// skipping the ones closed unmerged and reading further pages only while too
+// few were found.
+func TestFetchRecentMergedPullRequestNumbersReadsPagesUntilEnoughAreMerged(t *testing.T) {
+	t.Parallel()
+
+	pagePath := func(page int) string {
+		return fmt.Sprintf("gh api repos/octo/widgets/pulls?state=closed&sort=updated&direction=desc&per_page=%d&page=%d",
+			mergedPRPageSize, page)
+	}
+	first := make([]int, 0, mergedPRPageSize)
+	merged := map[int]bool{}
+	for i := range mergedPRPageSize {
+		number := 1000 - i
+		first = append(first, number)
+		merged[number] = i%50 == 0 // two merged on the first page, at its top and middle
+	}
+	runner := &fakeRunner{outputs: map[string][]byte{
+		pagePath(1): closedPRPage(t, first, merged),
+		pagePath(2): closedPRPage(t, []int{899, 898, 897}, map[int]bool{898: true, 897: true}),
+	}}
+
+	numbers, err := fetchRecentMergedPullRequestNumbers(t.Context(), newGHClient(runner, nil), testCleanupRepoRoot,
+		githubRepo{Owner: "octo", Name: "widgets"}, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []int{1000, 950, 898}, numbers)
+
+	pagesRead := 0
+	for _, command := range runner.outputCommands {
+		if strings.Contains(strings.Join(command.args, " "), "/pulls?state=closed") {
+			pagesRead++
+		}
+	}
+	assert.Equal(t, 2, pagesRead, "the third page is never read once enough are found")
 }

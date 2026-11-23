@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -183,6 +182,11 @@ type nightlyKeyResult struct {
 
 var errNightlyClaimLost = errors.New("nightly claim changed on the remote")
 
+// errNightlyClaimRefsForbidden is a claim push GitHub refused with 403: the
+// checkout may not write refs/nightly-claims, as a Claude Code cloud session,
+// whose git proxy takes pushes to its own branch alone, may not.
+var errNightlyClaimRefsForbidden = errors.New("nightly claim refs may not be pushed from this checkout")
+
 // RunNightly is the entry point of `devtool nightly`. A GitHub request that
 // still fails after the client's retries ends the command with one plain
 // sentence naming GitHub and the request.
@@ -279,13 +283,20 @@ func checkNightly(
 		}
 		results = append(results, result)
 	}
-	stale, err := pruneNightlyClaims(ctx, runner, repoRoot, failures, run, verdict.reports, now)
+	stale, kept, err := pruneNightlyClaims(ctx, runner, repoRoot, failures, run, verdict.reports, now)
 	if err != nil {
 		return err
 	}
 
 	if err := writeStatus(stdout, formatNightlyCheck(run, verdict.reports, results, stale, seeds)); err != nil {
 		return err
+	}
+	for _, key := range kept {
+		if err := writeStatus(stdout, "nightly: kept the retired claim on "+key+
+			": this checkout may not push claim refs (a Claude Code cloud session pushes only its own branch); "+
+			"it blocks no one, and a run that can push deletes it\n"); err != nil {
+			return err
+		}
 	}
 
 	return unclaimedNightlyFailures(results)
@@ -543,12 +554,13 @@ func pruneNightlyClaims(
 	run *githubRun,
 	reports []nightlyJobReport,
 	now func() time.Time,
-) ([]string, error) {
+) ([]string, []string, error) {
 	claims, err := syncNightlyClaims(ctx, runner, repoRoot)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	stale := []string{}
+	kept := []string{}
 	for _, name := range sortedClaimKeys(claims) {
 		current := claims[name]
 		if current.isStale() {
@@ -563,7 +575,7 @@ func pruneNightlyClaims(
 		case nightlyStateFixed:
 			inRun, ancestryErr := fixIsInRun(ctx, runner, repoRoot, current.Claim.FixCommit, run.HeadSHA)
 			if ancestryErr != nil {
-				return nil, ancestryErr
+				return nil, nil, ancestryErr
 			}
 			obsolete = inRun && nightlyJobsPassed(current.Claim.Jobs, reports)
 		default:
@@ -573,11 +585,17 @@ func pruneNightlyClaims(
 			continue
 		}
 		err = swapNightlyClaim(ctx, runner, repoRoot, name, current.SHA, nil)
-		if err != nil && !errors.Is(err, errNightlyClaimLost) {
-			return nil, fmt.Errorf("delete claim %s: %w", current.Claim.Key, err)
+		switch {
+		case err == nil, errors.Is(err, errNightlyClaimLost):
+		case errors.Is(err, errNightlyClaimRefsForbidden):
+			// A retired claim holds no failure, so keeping it blocks no
+			// increment; only taking or renewing a claim must reach GitHub.
+			kept = append(kept, current.Claim.Key)
+		default:
+			return nil, nil, fmt.Errorf("delete claim %s: %w", current.Claim.Key, err)
 		}
 	}
-	return stale, nil
+	return stale, kept, nil
 }
 
 func sortedClaimKeys(claims map[string]nightlyClaimRef) []string {
@@ -676,21 +694,11 @@ func renewNightlyClaims(ctx context.Context, runner commandRunner, repoRoot stri
 // the open seed issues as the check does, and only when it holds a seed key.
 // It returns the pull request's branch, the owner of its claims.
 func requireNightlyClaimsInPR(ctx context.Context, runner commandRunner, gh ghClient, repoRoot string, prNumber int) (string, error) {
-	out, err := gh.output(
-		ctx, repoRoot, fmt.Sprintf("nightly gh pr view %d", prNumber),
-		"pr", "view", strconv.Itoa(prNumber), "--json", "body,headRefName",
-	)
+	pr, err := loadPullRequest(ctx, gh, repoRoot, prNumber)
 	if err != nil {
 		return "", err
 	}
-	var pr struct {
-		Body        string `json:"body"`
-		HeadRefName string `json:"headRefName"` //nolint:tagliatelle // gh owns this JSON key.
-	}
-	if decodeErr := json.Unmarshal(out, &pr); decodeErr != nil {
-		return "", fmt.Errorf("decode gh pr view %d: %w", prNumber, decodeErr)
-	}
-	held, err := heldNightlyClaims(ctx, runner, repoRoot, pr.HeadRefName)
+	held, err := heldNightlyClaims(ctx, runner, repoRoot, pr.Head.Ref)
 	if err != nil {
 		return "", err
 	}
@@ -709,13 +717,13 @@ func requireNightlyClaimsInPR(ctx context.Context, runner commandRunner, gh ghCl
 			"dod pre-merge: %s holds nightly claims the PR body does not name (%s); "+
 				"describe each fix under a \"Nightly failures\" heading, or give one up with "+
 				"`devtool nightly release --branch %s --key <key>`",
-			pr.HeadRefName,
+			pr.Head.Ref,
 			strings.Join(missing, ", "),
-			pr.HeadRefName,
+			pr.Head.Ref,
 		)
 	}
 	if len(seedKeys) == 0 {
-		return pr.HeadRefName, nil
+		return pr.Head.Ref, nil
 	}
 	issues, err := findSeedIssues(ctx, gh, repoRoot, nil)
 	if err != nil {
@@ -725,13 +733,13 @@ func requireNightlyClaimsInPR(ctx context.Context, runner commandRunner, gh ghCl
 		return "", fmt.Errorf(
 			"dod pre-merge: %s holds seed claims whose open issues the PR body does not close (%s); "+
 				"a seed fails for as long as its issue is open, so add the issue's `%s #N` line to the body",
-			pr.HeadRefName,
+			pr.Head.Ref,
 			strings.Join(unclosed, ", "),
 			seedIssueCloseKeyword,
 		)
 	}
 
-	return pr.HeadRefName, nil
+	return pr.Head.Ref, nil
 }
 
 // nightlyBodyNamesKey reports whether body names key as a whole word, not as
@@ -861,6 +869,9 @@ func swapNightlyClaim(
 	text := string(out)
 	if strings.Contains(text, "[rejected]") || strings.Contains(text, "stale info") {
 		return fmt.Errorf("%w: %s", errNightlyClaimLost, ref)
+	}
+	if strings.Contains(text, "HTTP 403") || strings.Contains(text, "returned error: 403") {
+		return fmt.Errorf("%w: %s: %s", errNightlyClaimRefsForbidden, ref, strings.TrimSpace(text))
 	}
 	return fmt.Errorf("nightly claim push %s: %s: %w", ref, strings.TrimSpace(text), err)
 }
