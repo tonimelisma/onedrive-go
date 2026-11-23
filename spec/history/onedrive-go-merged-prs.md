@@ -133,3 +133,4 @@ What each merged PR changed, one line per PR, oldest first. `CLAUDE.md` names on
 - #990 (nightly claims are GitHub issues written over REST, with a compare-and-swap from issue-number and comment-ID order, so cloud sessions can claim a red night; the prune closes a stopped loser's duplicate issue)
 - #991 (cloud sessions are the one way an increment is built: post-merge merges over REST and restarts the session branch from main, devtool worktree add/bootstrap and .worktreeinclude are gone, --as-user trusts the checkout behind a worktree, CLAUDE.md describes the cloud process as the process)
 - #992 (the cleanup audit judges merged against origin/main, not a local main nothing moves in a cloud session)
+- #993 (post-merge repeats the restarted branch's push when GitHub's deletion of the merged branch races its lease)
