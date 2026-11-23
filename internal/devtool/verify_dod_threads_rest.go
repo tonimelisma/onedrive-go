@@ -52,8 +52,8 @@ type restReviewComment struct {
 		Login string `json:"login"`
 	} `json:"user"`
 	Body      string `json:"body"`
-	HTMLURL   string `json:"html_url"`   //nolint:tagliatelle // GitHub's REST key.
-	CreatedAt string `json:"created_at"` //nolint:tagliatelle // GitHub's REST key.
+	HTMLURL   string `json:"html_url"`
+	CreatedAt string `json:"created_at"`
 }
 
 // isGitHubForbidden reports whether a gh request failed with HTTP 403.

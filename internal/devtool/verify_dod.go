@@ -116,10 +116,10 @@ type githubPullRequest struct {
 	State          string `json:"state"`
 	Title          string `json:"title"`
 	Merged         bool   `json:"merged"`
-	MergedAt       string `json:"merged_at"`        //nolint:tagliatelle // GitHub's REST key.
-	MergeCommitSHA string `json:"merge_commit_sha"` //nolint:tagliatelle // GitHub's REST key.
+	MergedAt       string `json:"merged_at"`
+	MergeCommitSHA string `json:"merge_commit_sha"`
 	Body           string `json:"body"`
-	HTMLURL        string `json:"html_url"` //nolint:tagliatelle // GitHub's REST key.
+	HTMLURL        string `json:"html_url"`
 	Head           struct {
 		Ref string `json:"ref"`
 		SHA string `json:"sha"`
@@ -584,7 +584,7 @@ func loadGitHubRepo(ctx context.Context, gh ghClient, repoRoot string) (githubRe
 		return githubRepo{}, err
 	}
 	var response struct {
-		FullName string `json:"full_name"` //nolint:tagliatelle // GitHub's REST key.
+		FullName string `json:"full_name"`
 	}
 	if err := json.Unmarshal(out, &response); err != nil {
 		return githubRepo{}, fmt.Errorf("decode GitHub repository: %w", err)
@@ -680,7 +680,7 @@ func fetchRecentMergedPullRequestNumbers(
 		}
 		var closed []struct {
 			Number   int     `json:"number"`
-			MergedAt *string `json:"merged_at"` //nolint:tagliatelle // GitHub's REST key.
+			MergedAt *string `json:"merged_at"`
 		}
 		if err := json.Unmarshal(out, &closed); err != nil {
 			return nil, fmt.Errorf("decode recent merged PRs: %w", err)
