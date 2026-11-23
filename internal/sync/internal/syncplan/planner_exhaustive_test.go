@@ -2367,3 +2367,46 @@ func TestPlannerPairs_AFolderWhoseMoveHereIsUndoneMergesWithANewFolderAtItsPlace
 		requirePairKeepsEveryInvariant(t, &pair)
 	}
 }
+
+// Validates: R-2.17.6
+//
+// From the held start, here p moved into the new x and the held folder,
+// which OneDrive keeps at the new x's path, into p (as x/p/x2 or as x/p/f,
+// where f, which OneDrive keeps in p, leaves p for the new x). The new x is
+// made on OneDrive only once the held folder has left its path, so the held
+// folder moves first: into p where p is on OneDrive now, which p's move then
+// carries, or, with that name still f's, aside to a free name, from where the
+// next pass moves it. Every run, with each create refused once, converges.
+func TestPlannerPairs_AHeldFolderMovedIntoAFolderThatMovesIntoTheNewFolderAtItsPathConverges(t *testing.T) {
+	t.Parallel()
+
+	held := exStartNamed(t, "held")
+	for _, pair := range []exPair{
+		{start: held, local: []exEdit{
+			{kind: exMoveFolder, from: "p", to: "x/p"}, {kind: exMoveFolder, from: "x2", to: "x/p/x2"},
+		}},
+		{start: held, local: []exEdit{
+			{kind: exMoveFolder, from: "x2", to: "p/f"}, {kind: exMoveFolder, from: "p", to: "x/p"},
+		}},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}
+
+// Validates: R-2.17.6
+//
+// From the held start, f moved here into the new x while OneDrive moved it
+// into the new X2 and X2 onto f's old path, p/f. OneDrive's place wins: the
+// folder OneDrive put at p/f is made here, as SQLite plans nothing at a
+// path this computer's move left, and f moves into it. Every run, with each
+// create refused once, converges.
+func TestPlannerPairs_AFolderOneDriveMovedOntoThePathAFileLeftHereIsMadeHere(t *testing.T) {
+	t.Parallel()
+
+	requirePairKeepsEveryInvariant(t, &exPair{
+		start: exStartNamed(t, "held"),
+		remote: []exEdit{
+			{kind: exMoveFile, from: "p/f", to: "X2/f"}, {kind: exMoveFolder, from: "X2", to: "p/f"},
+		},
+	})
+}

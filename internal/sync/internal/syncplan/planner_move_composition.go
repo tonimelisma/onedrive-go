@@ -750,7 +750,8 @@ func (e *moveEmitter) takeBackHeldLandings() bool {
 	parkedNow := map[string]bool{}
 	for _, key := range slices.Sorted(maps.Keys(e.landings)) {
 		holder := e.landings[key]
-		if e.movedOnOneDrive(holder) || e.isLoopPartner(key, holder) || parkedNow[holder] {
+		if (e.movedOnOneDrive(holder) && !e.landsBelowTheMoveItHolds(holder, key)) ||
+			e.isLoopPartner(key, holder) || parkedNow[holder] {
 			continue
 		}
 		if !e.parkedFirst[holder] && e.mustLeaveBeforeItsLanding(holder, key) {
@@ -764,6 +765,32 @@ func (e *moveEmitter) takeBackHeldLandings() bool {
 	}
 
 	return changed
+}
+
+// landsBelowTheMoveItHolds reports whether holder's OneDrive move of the
+// plan lands at or below the destination of key's, which lands in the folder
+// made here at holder's path: the folder is made once holder has left, key's
+// move waits for it, and holder's for key's, a cycle dropped on every pass
+// (from the held start, here the held x moved into p as p/f and p into the
+// new x, while f, which OneDrive keeps at p/f, leaves p for the new x).
+// Such a holder moves aside first instead (mustLeaveBeforeItsLanding).
+func (e *moveEmitter) landsBelowTheMoveItHolds(holder, key string) bool {
+	var keyTarget string
+	for i := range e.result.moves {
+		if move := &e.result.moves[i]; move.key == key && move.side == moveCoordRemote {
+			keyTarget = move.newPath
+		}
+	}
+	if keyTarget == "" {
+		return false
+	}
+	for i := range e.result.moves {
+		if move := &e.result.moves[i]; move.key == holder && move.side == moveCoordRemote && pathAtOrBelow(move.newPath, keyTarget) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // mustLeaveBeforeItsLanding reports whether holder, which OneDrive keeps at
@@ -1471,9 +1498,8 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 	remotePath := ""
 	for i := range e.result.moves {
 		earlier := &e.result.moves[i]
-		if before, lands := e.landsInsideBeforeItMoves(n, side, oldPath, newPath, earlier); lands {
-			newPath = before
-			remotePath = n.paths[moveCoordRemote]
+		if before, carriedRemotePath, lands := e.landsInTheMovingFolderFirst(n, side, oldPath, newPath, earlier); lands {
+			newPath, remotePath = before, carriedRemotePath
 			continue
 		}
 		if earlier.side != side || !strings.HasPrefix(oldPath, earlier.oldPath+"/") {
@@ -1545,6 +1571,22 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 	}, true
 }
 
+// landsInTheMovingFolderFirst reports where n's move on side lands when it
+// runs inside the folder whose earlier move of the plan carries its target,
+// at the path that folder has there now (landsInsideBeforeItMoves here,
+// landsInTheFolderItMakesWayFor on OneDrive), and, for a local move, where
+// OneDrive holds the item (the move's remotePath).
+func (e *moveEmitter) landsInTheMovingFolderFirst(
+	n *moveNode, side moveCoord, oldPath, newPath string, earlier *composedMove,
+) (before, remotePath string, lands bool) {
+	if before, lands = e.landsInsideBeforeItMoves(n, side, oldPath, newPath, earlier); lands {
+		return before, n.paths[moveCoordRemote], true
+	}
+	before, lands = e.landsInTheFolderItMakesWayFor(n, side, oldPath, newPath, earlier)
+
+	return before, "", lands
+}
+
 // landsInsideBeforeItMoves reports where n's local move lands when its
 // target lies below the destination of an earlier local folder move of the
 // plan and its source outside that folder: inside the folder at the path the
@@ -1564,6 +1606,38 @@ func (e *moveEmitter) landsInsideBeforeItMoves(n *moveNode, side moveCoord, oldP
 	}
 	before := earlier.oldPath + strings.TrimPrefix(newPath, earlier.newPath)
 	if !e.localParentPresent(n, path.Dir(before)) {
+		return "", false
+	}
+
+	return before, true
+}
+
+// landsInTheFolderItMakesWayFor reports where n's OneDrive move lands when
+// n holds there the path of the new folder, made here, that the earlier
+// OneDrive move of a folder lands in (landings), and n's target lies below
+// that folder's destination: inside the folder at the path it has on
+// OneDrive now, where the folder's move then carries n
+// (landsInTheFolderMoveCarries orders the folder's move after n's, as n's
+// local position is where that move carries the path). Moved to its target
+// itself, n waited for the folder's move, which waited for the new folder,
+// which waited for n to leave its path, a cycle dropped on every pass: from
+// the held start, here p moved into the new x and the held x into p, while
+// OneDrive still holds x at the new folder's path. n's move vacates the path
+// first, the new folder is made there, and p's move lands in it.
+func (e *moveEmitter) landsInTheFolderItMakesWayFor(
+	n *moveNode, side moveCoord, oldPath, newPath string, earlier *composedMove,
+) (string, bool) {
+	if side != moveCoordRemote || earlier.side != moveCoordRemote || e.landings[earlier.key] != n.key ||
+		e.nodes[earlier.key].itemType != syncdomain.ItemTypeFolder || !strings.HasPrefix(newPath, earlier.newPath+"/") ||
+		pathAtOrBelow(oldPath, earlier.oldPath) || pathAtOrBelow(earlier.oldPath, oldPath) {
+		return "", false
+	}
+	before := earlier.oldPath + strings.TrimPrefix(newPath, earlier.newPath)
+	if n.paths[moveCoordLocal] != newPath || path.Dir(before) != earlier.oldPath ||
+		e.occupiedFolded(moveCoordRemote, e.occupancy.remote, before) {
+		// An entry OneDrive keeps at that path leaves it only by a move of
+		// its own, which may itself wait for the new folder: n moves aside
+		// first instead (takeBackHeldLandings).
 		return "", false
 	}
 

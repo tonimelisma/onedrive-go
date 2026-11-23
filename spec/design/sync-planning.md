@@ -91,6 +91,7 @@ intent; multisync receives only that child work intent.
 | A delete waits for the create on its side that writes the deleted file's content at another path, so a failed create, or a failure of what it waits for, skips the delete and the content stays on that side; an edge that would close a cycle, given the edges kept before it, is left out (R-2.17.2). | `TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent`, `TestBuildDependencies_ADeleteDoesNotWaitForACreateThatWaitsForIt`, `TestBuildDependencies_OfTwoContentEdgesThatCloseACycleOnlyTogetherTheFirstIsKept`, `TestBuildDependencies_AReusedInodeWithOtherContentCarriesNothing`, `TestRunOnce_AFileRenamedHereOntoAPathAWaitingMoveLeavesStaysOnOneDriveWhileACreateBeforeItsUploadFails` |
 | A removal of synced content (a delete of the file, or a download of another item over it here) waits while the other side holds the file at another path and no create of the plan writes its content on the removal's side, and a download over a synced file waits for the download of that file's item where OneDrive moved it, so a pass never leaves a side without content the user did not remove (R-2.17.11). | `TestPlanBuiltActions_ARemovalOfContentTheOtherSideMovedWaitsForItsCreate`, `TestBuildDependencies_ADownloadOverASyncedFileWaitsForTheDownloadOfItsItem`, `TestPlannerPairs_AFileRenamedIntoAFolderInAHeldFoldersPlaceKeepsItsOneDriveCopy`, `TestPlannerPairs_AFileOverwrittenHereWaitsForTheDownloadOfItsMovedContent` |
 | A synced folder whose place on OneDrive (where OneDrive moved it, or where it stays when this computer's move of it is undone) is held here by a new folder, its own copy here empty, is one folder with the new one by path: the new folder takes the item and the empty copy is deleted here, and nothing moves (R-2.17.13). | `TestComposeMoves_AFolderLandingOnANewFolderHereMergesWithItOnlyWhenItsCopyIsEmpty`, `TestPlannerPairs_ANewFolderHereMergesWithTheFolderOneDriveMovedOntoItsPath`, `TestPlannerPairs_AFolderWhoseMoveHereIsUndoneMergesWithANewFolderAtItsPlace`, `TestRunOnce_ANewFolderHereMergesWithTheFolderOneDriveMovedOntoItsPath`, `TestRunOnce_AFolderWhoseMoveHereIsUndoneMergesWithANewFolderAtItsPlace` |
+| A folder that must leave the path of a new folder made here, which a folder's OneDrive move lands in, while its own target lies below that move, moves first into the moving folder where that folder is on OneDrive, or aside when that name is taken; a folder OneDrive put at the path a synced item left by this computer's move is made here before the item moves into it (R-2.17.6). | `TestPlannerPairs_AHeldFolderMovedIntoAFolderThatMovesIntoTheNewFolderAtItsPathConverges`, `TestRunOnce_AHeldFolderMovedIntoAFolderThatMovesIntoTheNewFolderAtItsPathConverges`, `TestPlannerPairs_AFolderOneDriveMovedOntoThePathAFileLeftHereIsMadeHere`, `TestRunOnce_AFolderOneDriveMovedOntoThePathAFileLeftHereIsMadeHere` |
 | A delete on OneDrive of a synced file whose content the upload of the file here writes at another path, where that upload needs the path the delete frees, is a move of the item to a free temporary name above every folder the plan deletes; the next pass deletes it once the upload holds the content, or moves it back where the file is here (R-2.17.12). | `TestPlannerPairs_AFileUploadedOntoThePathItsDeleteFreesIsSetAsideOnOneDrive`, `TestAsidePath_ParksAboveTheDeletedFoldersUnderAFreeName`, `TestRunOnce_AFileMovedUpOntoItsDeletedFoldersPathStaysOnOneDriveUntilItsUploadRuns` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/internal/syncplan/planner_actions_test.go`, `internal/sync/internal/syncplan/planner_move_composition_test.go` (`TestBuildDependencies_NestedMoveEdges`, `TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove`), `internal/sync/internal/syncplan/planner_delete_safety_test.go` (`TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`) |
 | Every single-path combination of baseline, local and remote state (absent, file A/B/C, folder), and the move combinations of one synced file, has its plan checked in as `testdata/reconcile/matrix.golden` (refresh with `-update`); with `ONEDRIVE_GO_RECONCILE_CONVERGE=1` each cell is also run to convergence on a pure model and must end at the reference planner's content set. A planner-level model test applies random edits to both sides of a pure model, plans it through the real comparison SQL and planner, applies the plan without an executor (items addressed by ID, a create onto a taken name failing as a 409), and must converge with every written content kept (D-093). | `TestReconcileMatrix_Golden`, `TestPlannerModel_RandomTriplesConverge` |
@@ -992,10 +993,9 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 11 runs of `pairs.golden` (8 from the synced tree, 3 from the held
-one; a run names its start, the two histories, the refused create if any,
+The 8 runs of `pairs.golden` (all from the synced tree; a run names its start, the two histories, the refused create if any,
 and the invariants it breaks) fall into the twelve shapes below, of which
-3, 4, 5, 6, 7, 8, 9, 11 and 12 are no longer listed: every one breaks a rule
+1, 3, 4, 5, 6, 7, 8, 9, 10, 11 and 12 are no longer listed: every one breaks a rule
 of convergence. Each is an open behaviour of the planner
 unless it says it is right as it is; a fix removes its lines from the file. The refused-create variants of a run break what
 the run itself breaks, so they belong to its shape. 58 runs of shapes 4, 7
@@ -1033,7 +1033,7 @@ create, here or on OneDrive, wrote its row at its path beside the row its
 item had elsewhere, where the store's upsert keys the row by item ID and
 moves it; the plan made the same folder again on the next pass.
 
-1. A rotation through nesting made on OneDrive (1 run left, held).
+1. A rotation through nesting made on OneDrive (no runs left).
    One entry moves into a folder, which then takes the entry's old path
    (`mv p x/p, mv x p`, `mv z p/z, mv p z`, `mv p/f x/f, mv x p/f`),
    whatever this side did elsewhere. Here the entry still holds the path
@@ -1042,13 +1042,17 @@ moves it; the plan made the same folder again on the next pass.
    the entry moves first into the folder at the path the folder has here,
    and the folder's move then carries it (Move Composition,
    `moveOneIntoItsWaitingFolder`), and 51 of its runs converge (48 from
-   the synced tree, 3 from the held one). What is left is from the held start,
+   the synced tree, 3 from the held one). Fixed too, from the held start,
    where the folder made in the held one's place takes part: OneDrive
-   moves `p/f` into the held folder and that folder onto `p/f` (through
-   `X2`; through `x` it converges since the item ID places `f`,
-   `sitsAtAnotherSyncedItemsPath`) while here `f` already sits
-   in the new `x`, not in the held folder, so there is no move into the
-   folder to make first. Fixed: `mv x p/x, mv p x`, where `p` lands on the new `x` made here, empty since
+   moves `p/f` into its new `X2` and `X2` onto `p/f` (through `x` it
+   converges since the item ID places `f`, `sitsAtAnotherSyncedItemsPath`)
+   while here `f` already sits in the new `x`, so there is no move into the
+   folder to make first, and OneDrive's place for `f` wins: SQLite reads
+   `p/f` here only as the source of `f`'s move, so nothing made OneDrive's
+   folder there, and `f`'s move into it failed for want of its parent on
+   every pass; the folder is made here now
+   (`createFoldersOneDriveMadeAtAMovedSource`, above). And
+   `mv x p/x, mv p x`, where `p` lands on the new `x` made here, empty since
    `f` left it: the two folders at `x` merge by path (R-2.17.13, above).
 2. A rotation through nesting split across the two sides (8 runs, all
    synced): `p` moved into `x` here while OneDrive moved `x` into
@@ -1170,16 +1174,24 @@ moves it; the plan made the same folder again on the next pass.
    and the plan empties
    (`TestPlannerPairs_AFolderCreateRefusedAfterTheHeldFolderMovesAwayConverges`).
 10. A held folder moved into a folder that moves into the new folder made
-   in the held one's place (2 runs, all held, nothing done on OneDrive):
+   in the held one's place (no runs left, nothing done on OneDrive):
    `mv p x/p, mv x2 x/p/x2` or `mv x2 p/f, mv p x/p`. The held folder must
    go into `p` before `p` moves into the new `x`, which can only be made
-   once the held folder has left `x`, a rotation through nesting; moving the
-   held folder into `p` where `p` is now would order it, but the dependency
-   rules read a move into a path a same-side move vacates as landing in a
-   new folder that takes the path (`movesIntoVacatedPath`), and the
-   executor resolves the destination's parent by path, so the move would
-   have to name its parent by item, the device the rotations of shape 1
-   need.
+   once the held folder has left `x`, a rotation through nesting. Fixed:
+   the held folder's move on OneDrive lands in `p` where `p` is on OneDrive
+   now (`landsInTheFolderItMakesWayFor`), and its local position, where
+   `p`'s move carries that path, orders `p`'s move after it
+   (`landsInTheFolderMoveCarries`, which keeps it out of
+   `movesIntoVacatedPath`), so no move names its parent by item: the
+   executor resolves `p` by its path, which `p` still has when the held
+   folder moves. Where that name in `p` is still an entry's that leaves for
+   the new `x` (`p/f`), the held folder moves aside on OneDrive first
+   (`landsBelowTheMoveItHolds`, `takeBackHeldLandings`), and the next pass
+   moves it to its target. The engine converged on both through parking
+   before, as its passes differ from the model's, which dropped the cycle
+   on every pass; the first now takes one move fewer
+   (`TestPlannerPairs_AHeldFolderMovedIntoAFolderThatMovesIntoTheNewFolderAtItsPathConverges`,
+   `TestRunOnce_AHeldFolderMovedIntoAFolderThatMovesIntoTheNewFolderAtItsPathConverges`).
    The two runs where `p` moves elsewhere (`mv p q, mv x2 q/x2`,
    `mv x2 p/f, mv p q`) are fixed: `f`, leaving `p` for the new `x`, now
    moves after `p`'s move, which no longer waits for it.
@@ -1364,6 +1376,16 @@ parent here, and a copy holding anything is left to the move, which waits
 `TestPlannerPairs_AFolderWhoseMoveHereIsUndoneMergesWithANewFolderAtItsPlace`,
 `TestRunOnce_ANewFolderHereMergesWithTheFolderOneDriveMovedOntoItsPath`,
 `TestRunOnce_AFolderWhoseMoveHereIsUndoneMergesWithANewFolderAtItsPlace`).
+A folder OneDrive put at the path a synced item left by this computer's
+move, the path empty here, is made here
+(`createFoldersOneDriveMadeAtAMovedSource`): SQLite reconciles the path as
+the move's source alone, which plans nothing, and a local move into the
+folder, OneDrive's place winning, failed for want of its parent on every
+pass. Its create replaces at the path the baseline row of the item that
+left; the item's move, which waits for the create, records the item by item
+ID where it lands
+(`TestPlannerPairs_AFolderOneDriveMovedOntoThePathAFileLeftHereIsMadeHere`,
+`TestRunOnce_AFolderOneDriveMovedOntoThePathAFileLeftHereIsMadeHere`).
 
 SQLite pairs a local move only onto a path no synced item had. A synced
 file gone from its path on both sides that this computer moved onto a path

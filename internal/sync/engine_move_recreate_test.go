@@ -3389,6 +3389,99 @@ func TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves(t *testing
 	requireScenarioQuietPlan(t, h.eng)
 }
 
+// newHeldFolderScenario syncs x (empty), P holding f and z, then renames x
+// to x2 here, makes a new x and moves f into it out of P, while OneDrive
+// makes X2, which it takes for x2's name, so x's move waits.
+func newHeldFolderScenario(t *testing.T) (*moveScenarioRemote, *testEngine, string, *syncfixture.SyncLockedBuffer) {
+	t.Helper()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-x", "root", "x")
+	remote.addFolder("item-P", "root", "P")
+	remote.addFile(t, "item-f", "item-P", "f", "f\n")
+	remote.addFile(t, "item-z", "root", "z", "z\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	moveFOutOfPIntoANewX(t, scenarioLocalPath(syncRoot), "P/f")
+	remote.mkdirAt(t, "X2")
+
+	return remote, eng, syncRoot, logs
+}
+
+// Validates: R-2.17.6
+//
+// Here x is renamed x2 while OneDrive makes X2, a new x is made and f moved
+// into it out of P; then P is moved into the new x and the old x into P,
+// as x/P/x2, or as x/P/f once f has left. OneDrive still holds the old x at
+// the new x's path, so the new x is made there only once the old x has left
+// it, and P's move lands in the new x: the old x moves first, into P where P
+// is on OneDrive, which P's move then carries, or, with P/f still f's,
+// aside to a free name, from where the next sync moves it. The syncs finish
+// with the tree made here on both sides, every item still the item it was.
+func TestRunOnce_AHeldFolderMovedIntoAFolderThatMovesIntoTheNewFolderAtItsPathConverges(t *testing.T) {
+	t.Parallel()
+
+	for _, oldX := range []string{"x/P/x2", "x/P/f"} {
+		t.Run(oldX, func(t *testing.T) {
+			t.Parallel()
+
+			remote, eng, syncRoot, logs := newHeldFolderScenario(t)
+			local := scenarioLocalPath(syncRoot)
+			require.NoError(t, os.Rename(local("P"), local("x/P")))
+			require.NoError(t, os.Rename(local("x2"), local(oldX)))
+
+			_, superseded := runScenarioUntilDone(t, eng)
+			assert.Zero(t, superseded)
+			want := map[string]string{"X2": "/", "x": "/", "x/f": "f\n", "x/P": "/", oldX: "/", "z": "z\n"}
+			assert.Equal(t, want, remote.tree(), "OneDrive")
+			assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+			assert.Equal(t, oldX, remote.pathOf("item-x"), "the old x is still the item it was")
+			assert.Equal(t, "x/P", remote.pathOf("item-P"))
+			assert.Equal(t, "x/f", remote.pathOf("item-f"))
+			wantMoves := []string{"item-x->x.swap-1", "item-P->P", "item-f->f", "item-x->f"}
+			if oldX == "x/P/x2" {
+				wantMoves = []string{"item-x->x2", "item-P->P", "item-f->f"}
+			}
+			assert.ElementsMatch(t, wantMoves, remote.moves, "the old x moves aside only while its name in P is taken")
+			assert.Zero(t, remote.uploads, "nothing is uploaded")
+			assert.Empty(t, remote.deletes, "nothing is deleted on OneDrive")
+			assert.NotContains(t, logs.String(), "dependency cycle")
+			requireScenarioQuietPlan(t, eng)
+		})
+	}
+}
+
+// Validates: R-2.17.6
+//
+// Here x is renamed x2 while OneDrive makes X2, a new x is made and f moved
+// into it out of P, while OneDrive moves f into X2 and X2 onto P/f, the path
+// f left. OneDrive's place for f wins, and the folder it put at P/f, at a
+// path SQLite reads only as the source of f's move here, is made here, so
+// f's move into it has its parent: one sync finishes it, with every item
+// still the item it was and nothing uploaded.
+func TestRunOnce_AFolderOneDriveMovedOntoThePathAFileLeftHereIsMadeHere(t *testing.T) {
+	t.Parallel()
+
+	remote, eng, syncRoot, logs := newHeldFolderScenario(t)
+	folder, ok := remote.itemAt("X2")
+	require.True(t, ok)
+	remote.moveAt(t, "P/f", "X2/f")
+	remote.moveAt(t, "X2", "P/f")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.LessOrEqual(t, runs, 2)
+	assert.Zero(t, superseded)
+	local := harnessLocalTree(t, syncRoot)
+	assert.Equal(t, "f\n", local["P/f/f"], "f is where OneDrive put it")
+	assert.Equal(t, "/", local["P/f"])
+	assert.NotContains(t, local, "x/f", "f is not left in the new x")
+	assert.Equal(t, local, remote.tree(), "both sides hold one tree")
+	assert.Equal(t, "P/f", remote.pathOf(folder.ID), "the folder OneDrive moved is still that item")
+	assert.Equal(t, "P/f/f", remote.pathOf("item-f"), "f is still the item it was")
+	assert.Zero(t, remote.uploads, "nothing is uploaded")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-2.17.13, R-2.17.6
 //
 // Here x is moved into P and a new x made, while OneDrive moves P into x: a
