@@ -626,24 +626,23 @@ folder above the item moves on that side in the same plan, the item waits a
 pass instead. While such an item is deferred, parked or not, nothing is made
 at or below the new folder's path on its side, compared as OneDrive compares
 names (`ownLandings`), wherever that side's snapshot has the item at the
-folder's path as the item's target names it, which on OneDrive is looked up
-back through the plan's earlier OneDrive moves: nothing orders such a create
-after the move aside, so it went into the item while the item still had the
-path, and when that move failed, a folder made so between the new folder and
-the item's target held the item's own landing, which it cannot move into,
-and the syncs stalled; below a folder whose OneDrive move carries the item
-there, the create of the new folder collided with it
+folder's path as the item's target names it, looked up back through the
+plan's earlier moves on that side; on this computer the path held is the one
+in the snapshot, where writes here are addressed until the folders above
+them have moved. Nothing orders such a create after the move aside, so it
+went into the item while the item still had the path, and when that move
+failed, a folder made so between the new folder and the item's target held
+the item's own landing, which it cannot move into, and the syncs stalled;
+below a folder whose OneDrive move carries the item there, the create of the
+new folder collided with it; and when OneDrive renamed `Y` to `Z` and moved
+`Z/f` into a new `Z/f/a/f`, the create of `Z/f/a`, addressed here at `Y/f/a`
+until `Y` has moved, went into the old `f`, which could then never move into
+its own subfolder, and every later sync waited with only Debug lines. Now the
+item waits for the pass after `Y`'s move, which moves it aside there
 (`TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst`,
 `TestRunOnce_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst`,
 `TestRunOnce_AFolderMovedIntoTheFolderThatTakesItsPathConvergesWithAnEditInIt`,
 `TestRunOnce_NothingIsMadeInAFolderMovingAsideForTheNewFolderAtItsPath`).
-Known limit: on this computer the lookup is not taken back through the
-plan's local moves, so below a folder that moves here in the same plan the
-item is not found and nothing is held. When OneDrive renames `Y` to `Z` and
-moves `Z/f` into a new `Z/f/a/f`, the create of `Z/f/a` here lands inside
-the old `f` once `Y` has moved, the old `f` cannot move into its own
-subfolder, and every later sync waits for the next pass with only Debug
-lines.
 On both sides a move into a chain of new folders (`x` and `x/sub`) is held by the
 item at the first path above its new folders that a synced item holds: looked
 for at `x/sub` alone, `f`'s move into it would be planned after `x`'s and

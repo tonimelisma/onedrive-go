@@ -1193,9 +1193,11 @@ func TestComposeMoves_MoveIntoAFolderMadeHereWaitsWhileOneDriveKeepsAnItemAtItsP
 // parent's move, or that of a folder above an unmoved parent. Either way the
 // item is deferred, and the folder's path, as the plan names it, is held
 // (ownLandings) with everything below it, compared as OneDrive compares
-// names: nothing is made there this pass. The rows with a folder moving above
-// the item move it on OneDrive; on this computer such a folder hides the item
-// from the lookup, and nothing is held (a known limit, holdOwnLandings).
+// names: nothing is made there this pass. A folder moving above the item on
+// its side is looked through: renamed Y to Z on OneDrive, with Y/f moved
+// there into a new Z/f/a/f, f waits for the pass after Y's move, and the
+// path Y/f, where the creates of Z/f and Z/f/a are addressed here until Y
+// has moved, is held.
 func TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *testing.T) {
 	t.Parallel()
 
@@ -1258,6 +1260,16 @@ func TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *te
 			},
 			madeHere: []string{"Z/P/f"}, wantRemote: []string{"Y->Z"}, wantDeferred: map[string]bool{"f": true},
 			landing: "Z/P/f",
+		},
+		{
+			name: "the folder above it renamed on OneDrive, the item moved there into a new folder deeper",
+			nodes: []moveNode{
+				composeNode("Y", syncdomain.ItemTypeFolder, "Y", "Y", "Z"),
+				composeNode("f", syncdomain.ItemTypeFolder, "Y/f", "Y/f", "Z/f/a/f"),
+				composeNode("c", syncdomain.ItemTypeFile, "Y/f/c.txt", "Y/f/c.txt", "Z/f/a/f/c.txt"),
+			},
+			madeOnOneDrive: []string{"Z/f", "Z/f/a"}, wantLocal: []string{"Y->Z"}, wantDeferred: map[string]bool{"f": true},
+			landing: "Y/f",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

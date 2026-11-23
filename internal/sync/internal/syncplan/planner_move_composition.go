@@ -817,14 +817,12 @@ func (e *moveEmitter) parkAwayFromItsOwnLanding(key string, side moveCoord) bool
 // target path names it. A later pass makes the folder, once the item has left
 // the path. Made this pass, the folder would collide with the item, and what
 // is made below it would go into the item: nothing orders such a create
-// after the item's move aside (park), which may fail, nor after an OneDrive
-// move of a folder above that carries the item to that path. On OneDrive the
-// folder's path is looked up back through the plan's earlier moves
-// (snapshotPath); on this computer it is not, so below a folder that moves
-// here in the same plan the item is not found and nothing is recorded: with
-// Y renamed Z on OneDrive and Z/f moved there into a new Z/f/a/f, the create
-// of Z/f/a here lands in the old f once Y has moved (a known limit,
-// sync-planning.md, Move Composition).
+// after the item's move aside (park), which may fail, nor after a move of a
+// folder above that carries the item to that path. On both sides the
+// folder's path is looked up back through the plan's earlier moves on that
+// side (snapshotPath): with Y renamed Z on OneDrive and Z/f moved there into
+// a new Z/f/a/f, the old f is found at Y/f here, where the create of Z/f/a,
+// rebased to where Y sits here, would land inside it before Y moves.
 func (e *moveEmitter) holdOwnLandings() {
 	for key := range e.result.deferred {
 		n := e.nodes[key]
@@ -1216,10 +1214,13 @@ func (e *moveEmitter) recordLanding(key string, side moveCoord, newPath string) 
 // first path the snapshot gives a synced item, which a move into the deepest
 // would otherwise land in or be carried by. Paths are compared as OneDrive
 // compares names (occupantAt): a case-insensitive volume resolves a new folder
-// X to the item at x. On OneDrive a path is looked up where the moves the
-// plan makes before this one leave it (snapshotPath); a local move is given
-// the path where it lands by planMove. An item present on one side only is a
-// create or a delete SQLite plans and holds nothing.
+// X to the item at x. On each side a path is looked up where the moves the
+// plan makes before this one on that side leave it (snapshotPath): a local
+// move that runs inside a folder before the folder moves is given the path
+// where it lands by planMove, which no earlier move maps, and one that runs
+// after a folder above it moved finds what that folder carried. An item
+// present on one side only is a create or a delete SQLite plans and holds
+// nothing.
 func (e *moveEmitter) folderHolder(side moveCoord, key, targetPath string) (string, bool) {
 	holder, _, held := e.landingFolderHolder(side, key, targetPath)
 
@@ -1227,7 +1228,11 @@ func (e *moveEmitter) folderHolder(side moveCoord, key, targetPath string) (stri
 }
 
 // landingFolderHolder is folderHolder, and it also returns the path of the new
-// folder whose path the holder has, as the move's target path names it.
+// folder whose path the holder has, as the plan's creates on side address it:
+// on OneDrive the move's target path, as creates there are rebased through
+// the local moves of the plan; on this computer the snapshot path, as writes
+// here are rebased to where their folders sit here now
+// (rebaseLocalWritesToLocalFolderPositions).
 func (e *moveEmitter) landingFolderHolder(side moveCoord, key, targetPath string) (holder, folder string, held bool) {
 	parent := e.target[key].parent
 	if !strings.HasPrefix(parent, unsyncedParentPrefix) {
@@ -1236,12 +1241,13 @@ func (e *moveEmitter) landingFolderHolder(side moveCoord, key, targetPath string
 	_, made := e.unsyncedAnchor(parent)
 	dir := path.Dir(targetPath)
 	for range strings.Count(made, "/") + 1 {
-		at := dir
-		if side == moveCoordRemote {
-			at = e.snapshotPath(side, dir)
-		}
+		at := e.snapshotPath(side, dir)
 		if occupant, isNode := e.occupantAt(side, at); isNode {
-			return occupant, dir, e.isMoveParticipant(e.nodes[occupant])
+			folder = dir
+			if side == moveCoordLocal {
+				folder = at
+			}
+			return occupant, folder, e.isMoveParticipant(e.nodes[occupant])
 		}
 		dir = path.Dir(dir)
 	}

@@ -1312,14 +1312,21 @@ func TestRunOnce_AFolderMovedIntoTheFolderThatTakesItsPathConvergesWithAnEditInI
 // next one when the move was refused, finishes it with no action superseded:
 // both sides hold the tree made here, and the old f, still the folder it was,
 // is moved aside and into place. Below the renamed Z, Z's move comes first:
-// the old f waits for it, and the next pass finds it in Z. Every case makes
-// its moves here; the same rename and move made on OneDrive is a known limit
-// on this computer's side (holdOwnLandings).
+// the old f waits for it, and the next pass finds it in Z. The same rename
+// and move made on OneDrive is held the same way on this computer: the create
+// of Z/f/a, addressed here at Y/f/a until Y has moved, went into the old f,
+// which could then never move into its own subfolder, and every later sync
+// waited with only Debug lines. Nothing is sent to OneDrive then, the old f
+// here is still the folder it was, and c.txt is not downloaded again. A move
+// here cannot be refused by OneDrive, so that case runs without the refusal.
 func TestRunOnce_NothingIsMadeInAFolderMovingAsideForTheNewFolderAtItsPath(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range ownLandingCases() {
 		for _, refused := range []bool{false, true} {
+			if refused && tc.onOneDrive {
+				continue
+			}
 			t.Run(fmt.Sprintf("%s, moved aside refused once: %v", tc.name, refused), func(t *testing.T) {
 				t.Parallel()
 
@@ -1334,9 +1341,11 @@ func TestRunOnce_NothingIsMadeInAFolderMovingAsideForTheNewFolderAtItsPath(t *te
 type ownLandingCase struct {
 	name string
 	// parents are the folders above f on OneDrive, outermost first ("Y/P");
-	// renamed renames Y to Z here.
-	parents string
-	renamed bool
+	// renamed renames Y to Z here, or on OneDrive with onOneDrive, which
+	// makes every change of the case there.
+	parents    string
+	renamed    bool
+	onOneDrive bool
 	// into is where f goes here, made the new folders it lands in, newFile a
 	// file made here, want the tree both sides end with, and moves the moves
 	// sent to OneDrive, in order.
@@ -1361,6 +1370,11 @@ func ownLandingCases() []ownLandingCase {
 		{
 			name: "deeper below its renamed folder", parents: "Y", renamed: true,
 			into: "Z/f/a/f", made: "Z/f/a", moves: renamedFirst,
+			want: map[string]string{"Z": "/", "Z/f": "/", "Z/f/a": "/", "Z/f/a/f": "/", "Z/f/a/f/c.txt": "c\n"},
+		},
+		{
+			name: "deeper below its folder renamed on OneDrive", parents: "Y", renamed: true, onOneDrive: true,
+			into: "Z/f/a/f", made: "Z/f/a",
 			want: map[string]string{"Z": "/", "Z/f": "/", "Z/f/a": "/", "Z/f/a/f": "/", "Z/f/a/f/c.txt": "c\n"},
 		},
 		{
@@ -1412,6 +1426,37 @@ func (tc *ownLandingCase) makeChangesHere(t *testing.T, local func(string) strin
 	}
 }
 
+// makeChangesOnOneDrive is makeChangesHere made on OneDrive, for a case
+// without a new file.
+func (tc *ownLandingCase) makeChangesOnOneDrive(t *testing.T, remote *moveScenarioRemote) {
+	t.Helper()
+
+	at := "f"
+	if tc.parents != "" {
+		at = tc.parents + "/f"
+	}
+	if tc.renamed {
+		remote.moveAt(t, "Y", "Z")
+		at = "Z" + strings.TrimPrefix(at, "Y")
+	}
+	remote.moveAt(t, at, "aside")
+	made := ""
+	for _, name := range strings.Split(tc.made, "/") {
+		made = joinScenarioPath(made, name)
+		remote.mkdirAt(t, made)
+	}
+	remote.moveAt(t, "aside", tc.into)
+}
+
+// joinScenarioPath joins a slash-separated parent path and a name.
+func joinScenarioPath(dir, name string) string {
+	if dir == "" {
+		return name
+	}
+
+	return dir + "/" + name
+}
+
 // runNothingMadeInTheOldF runs tc, with OneDrive refusing the old f's move
 // aside once when refused.
 func runNothingMadeInTheOldF(t *testing.T, tc *ownLandingCase, refused bool) {
@@ -1424,7 +1469,15 @@ func runNothingMadeInTheOldF(t *testing.T, tc *ownLandingCase, refused bool) {
 	clock := syncfixture.NewManualClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 	runScenarioPass(t, eng)
-	tc.makeChangesHere(t, scenarioLocalPath(syncRoot))
+	local := scenarioLocalPath(syncRoot)
+	oldF, oldErr := os.Stat(local(path.Join(tc.parents, "f")))
+	require.NoError(t, oldErr)
+	downloads := remote.downloads
+	if tc.onOneDrive {
+		tc.makeChangesOnOneDrive(t, remote)
+	} else {
+		tc.makeChangesHere(t, local)
+	}
 	madeInTheOldF := watchCreatesIn(remote, "item-f")
 	if refused {
 		refuseMoveAsideOnce(remote, "item-f")
@@ -1445,6 +1498,12 @@ func runNothingMadeInTheOldF(t *testing.T, tc *ownLandingCase, refused bool) {
 	assert.Equal(t, tc.want, harnessLocalTree(t, syncRoot), "this computer")
 	assert.Equal(t, tc.into, remote.pathOf("item-f"), "the old f is still the folder it was")
 	assert.Equal(t, tc.moves, remote.moves, "the moves sent to OneDrive, in order")
+	if tc.onOneDrive {
+		movedF, statErr := os.Stat(local(tc.into))
+		require.NoError(t, statErr)
+		assert.True(t, os.SameFile(oldF, movedF), "the old f here is still the folder it was")
+		assert.Equal(t, downloads, remote.downloads, "c.txt is not downloaded again")
+	}
 	assert.NotContains(t, logs.String(), "dependency cycle")
 	requireScenarioQuietPlan(t, eng)
 }
