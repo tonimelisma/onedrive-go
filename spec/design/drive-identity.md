@@ -112,7 +112,11 @@ closed set by the kind of failure: a sign-in, a read-only window, access
 denied, not found, throttled, a server problem, `OneDrive answered HTTP <n>`
 for any other status, a timeout, a failed connection, or "the request failed".
 No text of the answer (its body, message, code or request id) or of the
-request (a URL) reaches the reason; the log lines keep the whole error. A
+request (a URL) reaches the reason. The Debug log lines keep the whole
+error; the Warn line of a failed site search, which the default console
+level shows, carries the account and the same plain reason, and the whole
+error goes to a Debug line beside it
+(`TestSharePointDiscovery_AFailedSiteSearchWarnsWithThePlainReason`). A
 failed site search goes into `site_search_error` as `<account>: <reason>`, in
 `drive list`, which goes on with the drives that need no site search, and in
 `drive search` beside another account's results. A `drive search` whose

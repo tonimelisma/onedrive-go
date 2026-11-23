@@ -528,6 +528,34 @@ func TestSharePointDiscovery_AStopIsNoGapAndEndsTheSiteLoop(t *testing.T) {
 	}
 }
 
+// A refused site search whose answer carries a request id and a page warns
+// with the plain reason; the request id and the page reach the debug level
+// only.
+//
+// Validates: R-3.3.14
+func TestSharePointDiscovery_AFailedSiteSearchWarnsWithThePlainReason(t *testing.T) {
+	t.Parallel()
+
+	srv := newSiteListingGraph(t, siteListingFake{refuseSiteSearch: true, unrecognizedRefusal: true})
+	var warnings, debug bytes.Buffer
+	warnLogger := slog.New(slog.NewTextHandler(&warnings, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	debugLogger := slog.New(slog.NewTextHandler(&debug, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	_, gaps := discoverSharePointDrives(
+		t.Context(), newTestGraphClient(t, srv.URL), &config.Config{}, siteListingTestAccount, sharePointSiteLimit, warnLogger)
+
+	require.Len(t, gaps.FailedSiteSearches, 1)
+	reason := gaps.FailedSiteSearches[0].Reason
+	assert.Contains(t, warnings.String(), "SharePoint site search failed")
+	assert.Contains(t, warnings.String(), reason)
+	assert.NotContains(t, warnings.String(), siteListingTestRequestID)
+	assert.NotContains(t, warnings.String(), siteListingTestPageText)
+
+	discoverSharePointDrives(
+		t.Context(), newTestGraphClient(t, srv.URL), &config.Config{}, siteListingTestAccount, sharePointSiteLimit, debugLogger)
+	assert.Contains(t, debug.String(), siteListingTestRequestID, "the debug level keeps the whole error")
+}
+
 // --quiet keeps the notes, as it keeps warnings: without them the listing
 // would read as complete.
 //

@@ -502,9 +502,14 @@ func discoverSharePointDrives(
 		if ctx.Err() != nil {
 			return nil, sharePointGaps{}
 		}
-		logger.Warn("SharePoint site search failed", "error", err)
+		// The warning says the plain reason the note gives; a Graph error's
+		// text carries the request id and the answer's body, which only a
+		// debug log is for.
+		reason := sharePointGapReason(err)
+		logger.Warn("SharePoint site search failed", "account", email, "reason", reason)
+		logger.Debug("SharePoint site search failed", "account", email, "error", err)
 
-		return nil, sharePointGaps{FailedSiteSearches: []failedSiteSearch{{Account: email, Reason: sharePointGapReason(err)}}}
+		return nil, sharePointGaps{FailedSiteSearches: []failedSiteSearch{{Account: email, Reason: reason}}}
 	}
 
 	var (
