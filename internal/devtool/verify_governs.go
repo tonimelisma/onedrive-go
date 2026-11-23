@@ -276,7 +276,7 @@ func collectProductionGoFiles(repoRoot string) ([]string, error) {
 			}
 
 			if entry.IsDir() {
-				if shouldSkipTestConventionDir(entry.Name()) {
+				if skipRepositoryRuleDir(entry.Name()) {
 					return filepath.SkipDir
 				}
 
@@ -447,7 +447,7 @@ func collectTestFunctionNames(repoRoot string) (map[string]bool, error) {
 		}
 
 		if entry.IsDir() {
-			if shouldSkipTestConventionDir(entry.Name()) {
+			if skipRepositoryRuleDir(entry.Name()) {
 				return filepath.SkipDir
 			}
 

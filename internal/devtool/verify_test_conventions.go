@@ -59,7 +59,7 @@ func findTestConventionViolations(repoRoot string) ([]testConventionViolation, e
 		}
 
 		if entry.IsDir() {
-			if shouldSkipTestConventionDir(entry.Name()) {
+			if skipRepositoryRuleDir(entry.Name()) {
 				return filepath.SkipDir
 			}
 
@@ -348,15 +348,6 @@ func constraintNamesTag(expr constraint.Expr, tag string, negated bool) bool {
 		return constraintNamesTag(node.X, tag, negated) || constraintNamesTag(node.Y, tag, negated)
 	case *constraint.OrExpr:
 		return constraintNamesTag(node.X, tag, negated) || constraintNamesTag(node.Y, tag, negated)
-	default:
-		return false
-	}
-}
-
-func shouldSkipTestConventionDir(name string) bool {
-	switch name {
-	case verifyGitDir, verifyTestdataDir, verifyWorktreesDir, verifyVendorDir:
-		return true
 	default:
 		return false
 	}

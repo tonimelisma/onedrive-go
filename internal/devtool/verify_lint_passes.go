@@ -137,9 +137,9 @@ func unlintedFileExceptions() []unlintedFileException {
 // left out. It walks the tree the way `./...` does: a directory named
 // testdata or vendor, or whose name starts with `.` or `_`, holds no package
 // of the module, and neither does a directory with its own go.mod. This
-// differs from the repository rules' skip set on purpose: it follows the go
-// command's own pattern rules, since a file the go command never builds is
-// no file a linter could read.
+// differs from the repository rules' skip set (skipRepositoryRuleDir) on
+// purpose: it follows the go command's own pattern rules, since a file the
+// go command never builds is no file a linter could read.
 func filesNoLintPassBuilds(repoRoot string) ([]string, error) {
 	unread := []string{}
 	err := filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, err error) error {
@@ -182,14 +182,10 @@ func filesNoLintPassBuilds(repoRoot string) ([]string, error) {
 	return unread, nil
 }
 
-// goTestdataDir is the directory name the go command ignores as test data,
-// unlike verifyTestdataDir, the repository's credential folder.
-const goTestdataDir = "testdata"
-
 // skipsGoPackageDir reports whether the go command's `./...` pattern leaves
 // out a directory of this name.
 func skipsGoPackageDir(name string) bool {
-	return name == goTestdataDir || name == verifyVendorDir || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")
+	return name == goTestdataDirName || name == verifyVendorDir || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")
 }
 
 // holdsOwnModule reports whether dir is the root of a nested module.

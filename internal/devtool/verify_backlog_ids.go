@@ -118,7 +118,7 @@ func collectBacklogIDCitations(
 		}
 
 		if d.IsDir() {
-			if skipBacklogScanDir(d.Name()) {
+			if skipRepositoryRuleDir(d.Name()) {
 				return filepath.SkipDir
 			}
 
@@ -150,10 +150,6 @@ func collectBacklogIDCitations(
 // exercise what they reject, so scanning them would flag the rule itself.
 func isBacklogRuleOwnFile(name string) bool {
 	return name == "verify_backlog_ids.go" || name == "verify_backlog_ids_test.go"
-}
-
-func skipBacklogScanDir(name string) bool {
-	return name == verifyGitDir || name == verifyWorktreesDir || name == verifyNodeModulesDir
 }
 
 func scanFileForBacklogIDs(

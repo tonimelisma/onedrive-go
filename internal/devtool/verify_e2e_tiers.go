@@ -145,7 +145,8 @@ func discoverE2ETests(repoRoot string, tier e2eTier) ([]e2eTest, error) {
 // e2eTestFiles lists, relative to repoRoot, the _test.go files of the
 // directories the pattern ./e2e/... names: e2e and every directory below it
 // except testdata and those whose name starts with "." or "_", which go
-// ignores.
+// ignores. It follows the go command's pattern rules, not the repository
+// rules' skip set (skipRepositoryRuleDir), since it asks what go test runs.
 func e2eTestFiles(repoRoot string) ([]string, error) {
 	root := filepath.Join(repoRoot, e2eDirName)
 	files := []string{}

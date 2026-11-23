@@ -42,7 +42,7 @@ func findMutexDocViolations(repoRoot string) ([]checkViolation, error) {
 		}
 
 		if d.IsDir() {
-			if skipMutexScanDir(d.Name()) {
+			if skipRepositoryRuleDir(d.Name()) {
 				return filepath.SkipDir
 			}
 
@@ -77,10 +77,6 @@ func findMutexDocViolations(repoRoot string) ([]checkViolation, error) {
 // names the type it looks for, so scanning it would flag the rule itself.
 func isMutexRuleOwnFile(name string) bool {
 	return name == "verify_mutex_docs.go"
-}
-
-func skipMutexScanDir(name string) bool {
-	return name == verifyGitDir || name == verifyWorktreesDir || name == verifyNodeModulesDir
 }
 
 func scanFileForUndocumentedMutexes(repoRoot string, path string) ([]checkViolation, error) {
