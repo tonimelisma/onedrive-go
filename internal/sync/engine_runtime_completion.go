@@ -299,6 +299,11 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	return nil
 }
 
+// authRequirementMarkTimeout bounds recording that the engine's account needs
+// sign-in: the catalog write waits for the catalog lock up to that lock's own
+// 10 s bound, and the rest is one small file.
+const authRequirementMarkTimeout = 15 * time.Second
+
 // persistAndHoldFailure persists a failure's retry_work and holds its action.
 // activation, when not nil, is the block scope the failure activates: its
 // row is written in the blocked row's transaction.
@@ -492,12 +497,13 @@ func (flow *engineFlow) applyFatalAuthEffects(
 	// The mark goes on the engine's own account, by canonical ID: another
 	// account at the same address keeps its own sign-in state.
 	if account := flow.cfg.accountCanonicalID; !account.IsZero() {
-		if err := config.MarkAccountAuthRequired(
-			context.WithoutCancel(ctx),
-			flow.cfg.dataDir,
-			account,
-			authstate.ReasonSyncAuthRejected,
-		); err != nil {
+		// Recorded even when the run is stopping, so a shutdown does not
+		// lose it, under the one detached-wait helper and a bound past the
+		// catalog lock's own wait.
+		if err := syncexec.RunDetachedStoreAccess(ctx, authRequirementMarkTimeout, func(markCtx context.Context) error {
+			//nolint:wrapcheck // the config package names its own failure; the Warn below says what was being done.
+			return config.MarkAccountAuthRequired(markCtx, flow.cfg.dataDir, account, authstate.ReasonSyncAuthRejected)
+		}); err != nil {
 			fields := append([]any{}, logFields...)
 			fields = append(fields,
 				slog.String("account", account.String()),

@@ -239,7 +239,9 @@ func TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt(t 
 
 	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "remote-strasse", "root", "straße.txt", "theirs\n")
-	remote.invisibleFor = map[string]int{"straße.txt": 1}
+	// The first attempt reads the name and then lists the folder; both
+	// miss the lagging item.
+	remote.invisibleFor = map[string]int{"straße.txt": 2}
 	var creates atomic.Int32
 	remote.refuseCreate = func(string, string) error {
 		creates.Add(1)
@@ -254,7 +256,7 @@ func TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt(t 
 	remote.mu.Lock()
 	lagLeft := remote.invisibleFor["straße.txt"]
 	remote.mu.Unlock()
-	assert.Zero(t, lagLeft, "the 409's listing met the lag")
+	assert.Zero(t, lagLeft, "the 409's name read and listing met the lag")
 	assert.Equal(t, int32(2), creates.Load(), "the stale create was replanned in the same run")
 	assert.Equal(t, 1, report.Superseded, "the stale 409 is superseded, not a failure")
 	require.Equal(t, 1, report.Failed, "errors: %v", report.Errors)

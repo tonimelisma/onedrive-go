@@ -145,7 +145,11 @@ func parentTestName(name string) string {
 //nolint:funlen // one scenario per line
 func runOnceScenarios() []func(*testing.T) {
 	return []func(*testing.T){
+		TestRunOnce_AMountRootPositionThatIsNotALinkIsRecoveredByAFullEnumeration,
+		TestRunOnce_ASavedPositionThatIsNotALinkIsRecoveredByAFullEnumeration,
 		TestRunOnce_DryRunLeavesSpellingRenameLeftover,
+		TestRunOnce_FileMovedOutOfASubfolderIntoTheRemadeFolderWithTheSubfolderRemovedConverges,
+		TestRunOnce_FolderMovedIntoItsOwnFormerChildConverges,
 		TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves,
 		TestRunOnce_SpellingRenameLeftoverIsPutBackBeforeThePlan,
 		TestRunOnce_SpellingRenameLeftoverWhosePlainNameIsTakenIsKeptAndReported,
