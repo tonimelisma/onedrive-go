@@ -126,3 +126,4 @@ What each merged PR changed, one line per PR, oldest first. `CLAUDE.md` names on
 - #983 (the exhaustive planner check lists no broken run: folders at one path merge, held folders land in moving folders, rotations split across the sides converge, and a file moved and edited here stays the item OneDrive moved)
 - #984 (a failed verify go test step keeps its full output under .verify-logs/, named in the failure line and the summary)
 - #985 (the test environment names no fixture: the shortcut and shared-folder names and sentinel paths come only from the environment, CI's fixtures secret carries them, and a check keeps defaults out)
+- #986 (cloud-session process and tooling: devtool worktree prune-merged removes builder worktrees already in main, verify --as-user runs go test steps as a named user when root, CLAUDE.md gains a Cloud sessions section, and spec/reference/cloud-development.md gives the reasons, a setup script and recommended permission rules)

@@ -66,6 +66,11 @@ type gitWorktreeState struct {
 	Branch  string
 	Dirty   bool
 	MainRef bool
+	// Locked is set by a `locked` line, whose text, if any, is LockReason.
+	Locked     bool
+	LockReason string
+	// Prunable is set when git found the worktree's directory gone.
+	Prunable bool
 }
 
 type gitBranchState struct {
@@ -156,6 +161,11 @@ func parseGitWorktreePorcelain(output string, repoRoot string) []gitWorktreeStat
 				state.Head = strings.TrimSpace(strings.TrimPrefix(line, "HEAD "))
 			case strings.HasPrefix(line, "branch "):
 				state.Branch = strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(line, "branch ")), "refs/heads/")
+			case line == "locked" || strings.HasPrefix(line, "locked "):
+				state.Locked = true
+				state.LockReason = strings.TrimSpace(strings.TrimPrefix(line, "locked"))
+			case line == "prunable" || strings.HasPrefix(line, "prunable "):
+				state.Prunable = true
 			}
 		}
 

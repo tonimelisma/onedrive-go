@@ -44,3 +44,4 @@ e2e/.e2e-logs/
 
 # Increment worktrees created by `devtool worktree add`
 .worktrees/
+/devtool

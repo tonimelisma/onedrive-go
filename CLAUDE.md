@@ -239,6 +239,18 @@ Run against live OneDrive accounts. Test account names are never committed — u
 
 Work is done in increments. Do not ask permission, do not skip any step.
 
+### Cloud sessions
+
+Most work runs in Claude Code cloud sessions: an ephemeral Linux container running as root, one assigned session branch, GitHub reached only through the connector tools. There the steps below apply with these changes (the why, and the recommended environment, are in `spec/reference/cloud-development.md`):
+
+- Work on the session's assigned branch. The `<type>/<task>` branch names and `devtool worktree add` of Step 3 are for local work.
+- One PR per increment, squash-merged; after the merge, reset the session branch to `origin/main` before the next increment.
+- Builder subagents start from the current integration head, never a stale base. After integrating a builder's work, run `go run ./cmd/devtool worktree prune-merged` (`--dry-run` first to see the verdicts): it removes the clean builder worktrees whose work is in `origin/main`, and their branches, and reports the rest.
+- Run the gate as a non-root user: `go run ./cmd/devtool verify --as-user <user> --dod --stage pre-pr` (or set `DEVTOOL_TEST_USER`).
+- DoD checks that need GitHub (review-thread audit and replies, nightly claims, CI waits) are done with the GitHub connector tools when the devtool stage cannot reach GitHub, and the PR body says which checks were done that way and what they found.
+- Merge on green CI, then confirm the push-to-`main` run of the merge commit is green.
+- Nothing worth keeping lives only in the container: push it, put it in the PR, or write it to the repo.
+
 ### Step 1: Claim work
 
 1. Search `spec/` for `[planned]` items.
