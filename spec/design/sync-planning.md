@@ -872,7 +872,7 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 135 runs of `pairs.golden` (89 from the synced tree, 46 from the held
+The 107 runs of `pairs.golden` (83 from the synced tree, 24 from the held
 one; a run names its start, the two histories, the refused create if any,
 and the invariants it breaks) fall into eleven shapes. Each is an open
 behaviour of the planner unless it says it is right as it is; a fix removes
@@ -887,7 +887,13 @@ and adopts only a folder OneDrive already has there (`createRemoteFolder`),
 and so does the model now; those runs converge with the planner as it is.
 The model also kept a downloaded or uploaded file's old baseline row beside
 the new one, while the store keys the baseline by item ID and moves the
-row; it now moves it too.
+row; it now moves it too. And a move in the model re-pathed the baseline
+from the action's `OldPath`, the moving side's path, where the store's
+commit re-paths it from the row the item ID names (`commitMove`), so after
+a move here to OneDrive's place of an item the two sides had put at
+different paths, the model kept the item's row at its old path and every
+later pass re-keyed it back and forth: that made all of shape 8, all of
+shape 9 and two refusal variants of shape 6, which converge now too.
 
 1. A rotation through nesting made on OneDrive (3 runs left, all held).
    One entry moves into a folder, which then takes the entry's old path
@@ -941,8 +947,8 @@ row; it now moves it too.
    kept with it, which is the delete the check reports as undone. Keeping a
    whole folder the user wrote into is the data-safe outcome; the check's
    delete rule does not yet count a conflict copy as a reason to keep a file.
-6. A move made the same on both sides, its vacated path reused on one (15
-   runs: 14 synced, 1 held): `mv p q` on both (or `mv p Q` there), and here
+6. A move made the same on both sides, its vacated path reused on one (13
+   runs: 12 synced, 1 held): `mv p q` on both (or `mv p Q` there), and here
    also `mv x p` or `mkdir p` at the old path. The sides end equal, but a
    plan with nothing to do never comes: the agreed move keeps being planned
    against the reuse of its source.
@@ -958,16 +964,20 @@ row; it now moves it too.
    its name (Move Composition, `localDisplacementAt`). Two folders given
    one name merge, keeping both folders' entries, which converges.
 8. One entry moved to two places, or moved on one side and deleted on the
-   other (4 runs, all synced): here `mv p x/p, mv x p` while OneDrive
-   renamed `p`, with the remote folder create refused once. The plan never
-   empties and the sides differ; a move should beat a delete, and two moves
-   should resolve as a move conflict.
-9. A refused folder create of the held start (22 runs, all held, each
-   breaking only the empty-plan rule): OneDrive moves the held folder away,
-   freeing its name for the folder made here in its place, and that folder's
-   create on OneDrive is refused once. The sides end equal but the plan
-   never empties: after the refusal the work that waited for the create is
-   planned again pass after pass.
+   other (no runs left). Every run of it was the check's own (above): with
+   OneDrive's folder creates modelled by name and the baseline re-pathed by
+   item ID, here `mv p x/p, mv x p` while OneDrive renamed `p`, with the
+   remote folder create refused once, and the held folder moved or deleted
+   here while OneDrive moved it, converge: OneDrive's move wins over this
+   computer's (R-2.17.6) and a move over a delete, and both copies stay.
+9. A refused folder create of the held start (no runs left): OneDrive moves
+   the held folder away, freeing its name for the folder made here in its
+   place, and that folder's create on OneDrive is refused once. The plan
+   seemed never to empty, but only because the check's model kept the held
+   folder's baseline row at its old path after this computer followed
+   OneDrive's move (above); with the row re-pathed by item ID, as the store
+   does, the next pass creates the folder and the work that waited for it,
+   and the plan empties.
 10. A held folder moved into a folder that moves in the same pass (4 runs,
    all held, nothing done on OneDrive): `mv p q, mv x2 q/x2` or
    `mv x2 p/f, mv p q`. After the name collision is resolved the held move

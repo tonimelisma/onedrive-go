@@ -1096,6 +1096,22 @@ func (w *exWorld) exDownload(a *syncdomain.Action) bool {
 	return true
 }
 
+// moveSynced re-paths the moved item's baseline row and its subtree, as the
+// executor's commit does (commitMove): from where the baseline has the item,
+// looked up by its ID, not from the action's OldPath, which is the moving
+// side's path and differs from it where the two sides diverged.
+func (w *exWorld) moveSynced(a *syncdomain.Action) {
+	from := a.OldPath
+	if a.View != nil && a.View.Baseline != nil && a.View.Baseline.ItemID != "" {
+		for held, synced := range w.baseline {
+			if synced.id == a.View.Baseline.ItemID {
+				from = held
+			}
+		}
+	}
+	moveTree(w.baseline, from, a.Path)
+}
+
 // recordSynced records the item synced at p, as the executor's commit does:
 // the baseline keys a row by item ID, so a row the item had at another path
 // goes.
@@ -1250,7 +1266,7 @@ func (w *exWorld) exLocalMove(a *syncdomain.Action) bool {
 		delete(w.local, a.Path)
 	}
 	moveTree(w.local, a.OldPath, a.Path)
-	moveTree(w.baseline, a.OldPath, a.Path)
+	w.moveSynced(a)
 
 	return true
 }
@@ -1267,7 +1283,7 @@ func (w *exWorld) exRemoteMove(a *syncdomain.Action) bool {
 	}
 	moveTree(w.remote, at, to)
 	w.bumpRemote(to)
-	moveTree(w.baseline, a.OldPath, a.Path)
+	w.moveSynced(a)
 	if row, ok := w.baseline[a.Path]; ok {
 		row.etag = w.remote[to].etag
 		w.baseline[a.Path] = row
@@ -1349,7 +1365,7 @@ func (w *exWorld) exLocalFolderCreate(a *syncdomain.Action) bool {
 
 func (w *exWorld) exBaselineUpdate(a *syncdomain.Action) bool {
 	if a.OldPath != "" {
-		moveTree(w.baseline, a.OldPath, a.Path)
+		w.moveSynced(a)
 
 		return true
 	}
