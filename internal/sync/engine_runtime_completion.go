@@ -720,7 +720,7 @@ func (flow *engineFlow) applyResultPersistence(
 ) (*syncdomain.RetryWorkRow, error) {
 	switch decision.Persistence {
 	case syncdomain.PersistNone:
-		return nil, nil
+		return nil, nil //nolint:nilnil // no row: the decision persists nothing
 	case syncdomain.PersistRetryWork:
 		return flow.recordRetryWork(ctx, decision, r, retryDelayForDecision(decision), activation)
 	default:

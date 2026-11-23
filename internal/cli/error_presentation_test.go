@@ -300,7 +300,7 @@ func TestCommandErrorText_AStalledAnswerAndALostConnectionAreKnownByType(t *test
 	// ended by closing the body: the closed body's error is kept as text only.
 	stalled := func(closedBodyText string) error {
 		return fmt.Errorf("listing %q: %w", "/", &graph.ResponseReadError{
-			Err: fmt.Errorf("%w: no data moved for 2m0s (%v)", graph.ErrResponseStalled, errors.New(closedBodyText)),
+			Err: fmt.Errorf("%w: no data moved for 2m0s (%v)", graph.ErrResponseStalled, errors.New(closedBodyText)), //nolint:errorlint // the closed body's error is text only, as the transport keeps it
 		})
 	}
 	lostBefore := fmt.Errorf("listing %q: dispatching request: %w", "/", fmt.Errorf("%w: %w", graph.ErrConnectionLost,

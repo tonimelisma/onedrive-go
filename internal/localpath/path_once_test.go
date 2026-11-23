@@ -201,7 +201,7 @@ func TestFailedPath_IsThePathAsTheCallerGaveIt(t *testing.T) {
 
 	_, openErr := Open(filepath.Join("rel", "missing"))
 	mkdirErr := MkdirAll(filepath.Join("file", "sub"), 0o700)
-	_, osErr := os.Open(filepath.Join(dir, "absent"))
+	_, osErr := os.Open(filepath.Join(dir, "absent")) //nolint:gosec // the test opens a path under its own temp folder
 
 	assert.Equal(t, filepath.Join("rel", "missing"), FailedPath(fmt.Errorf("reading: %w", openErr)))
 	assert.Equal(t, filepath.Join(dir, "file"), FailedPath(mkdirErr), "the parent the os error names")

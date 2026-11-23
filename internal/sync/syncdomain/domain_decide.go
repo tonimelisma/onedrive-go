@@ -441,6 +441,10 @@ const decisionStateRuleCount = 22
 func implies(a, b bool) bool { return !a || b }
 
 // decisionStateChecks evaluates every line of the flag definitions for s.
+// Each line is one boolean rule, so the count of branches is the count of
+// rules, not nested logic.
+//
+//nolint:gocyclo // one flat list of the definitions' rules
 func decisionStateChecks(s DecisionState) [decisionStateRuleCount]decisionStateCheck {
 	return [decisionStateRuleCount]decisionStateCheck{
 		// The content-change flags.

@@ -173,5 +173,5 @@ func (flow *engineFlow) applyTrialReclassification(
 		return row, nil
 	}
 
-	return nil, nil
+	return nil, nil //nolint:nilnil // no row: the trial persisted nothing
 }

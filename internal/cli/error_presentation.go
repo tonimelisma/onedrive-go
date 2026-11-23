@@ -202,6 +202,9 @@ func remoteFailureSubject(err error) (*remoteOpError, string, string) {
 	return op, op.path, hint
 }
 
+// unnamedPathSubject names a path in a sentence when the command recorded none.
+const unnamedPathSubject = "the path"
+
 // pathAnswersDisagreeText is the sentence for a path whose answers from
 // OneDrive name different folders for it (graph.ErrPathAnswersDisagree),
 // whether a read or listing met it or a visibility wait ran out on it
@@ -212,7 +215,7 @@ func remoteFailureSubject(err error) (*remoteOpError, string, string) {
 // put's wait for its folder meets it before anything was sent, and the
 // sentence is the same for both.
 func pathAnswersDisagreeText(err error, op *remoteOpError) string {
-	subject := "the path"
+	subject := unnamedPathSubject
 	var notVisible *driveops.PathNotVisibleError
 	switch {
 	case op != nil:
@@ -258,6 +261,8 @@ func notImplementedMessage(err error) string {
 // remoteFailureText turns the OneDrive failures a user can understand into
 // one sentence with a next step, naming the path when the command recorded
 // one. It returns "" for failures it does not recognize.
+//
+//nolint:gocyclo // one flat switch, a case per failure a user can act on
 func remoteFailureText(err error) string {
 	op, subject, parentHint := remoteFailureSubject(err)
 	movesOrCopies := op != nil && (strings.HasPrefix(op.action, "moving") || strings.HasPrefix(op.action, "copying"))

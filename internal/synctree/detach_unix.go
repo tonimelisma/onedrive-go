@@ -606,7 +606,7 @@ func (r *Root) discardOwnCopy(out *destination, copyID FileIdentity) error {
 		return fmt.Errorf("checking the copy at %s before discarding it: %w", out.path, err)
 	}
 	held := FileIdentity{Device: statFieldToUint64(st.Dev), Inode: statFieldToUint64(st.Ino)}
-	if held != copyID {
+	if !SameIdentity(held, copyID) {
 		return fmt.Errorf("%s no longer holds the copy, so it is left as it is", out.path)
 	}
 	if err := r.ops.unlink(out.folder, out.name); err != nil && !errors.Is(err, os.ErrNotExist) {

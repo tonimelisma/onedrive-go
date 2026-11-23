@@ -159,23 +159,20 @@ func (flow *engineFlow) applyTrialPermissionReclassification(
 	bl syncdomain.BaselineView,
 ) (*syncdomain.RetryWorkRow, error) {
 	if isStoppingRun(ctx) {
-		return nil, nil
+		return nil, nil //nolint:nilnil // no row: a stopping run persists nothing
 	}
 
 	evidence, handled, err := flow.permissionEvidenceForCompletion(ctx, r, bl)
 	if err != nil {
 		return nil, err
 	}
-	if !handled {
-		return nil, nil
-	}
-	if evidence.Kind == permissionEvidenceNone {
-		return nil, nil
+	if !handled || evidence.Kind == permissionEvidenceNone {
+		return nil, nil //nolint:nilnil // no row: no permission evidence to persist
 	}
 
 	work := syncdomain.RetryWorkKeyForCompletion(r)
-	if err := flow.clearBlockedRetryWorkForScope(ctx, work, r.TrialScopeKey); err != nil {
-		return nil, err
+	if clearErr := flow.clearBlockedRetryWorkForScope(ctx, work, r.TrialScopeKey); clearErr != nil {
+		return nil, clearErr
 	}
 
 	row, err := flow.applyTrialPermissionEvidence(ctx, work, r.TrialScopeKey, evidence)
