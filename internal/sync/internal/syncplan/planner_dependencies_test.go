@@ -131,6 +131,32 @@ func TestBuildDependencies_AnUpdateBelowARekeyedFolderWaitsForTheRekey(t *testin
 	assert.Equal(t, oracleBuildDependencies(actions), deps)
 }
 
+// Validates: R-2.17.6
+//
+// A rotation through nesting made here (x moved into p, p renamed x) is
+// replayed on OneDrive: x moves into p at the path p has there, and p's move
+// onto x then carries it. x's move lands in the folder p's move carries,
+// where this computer already holds x (MovedLocalPath x/x), so it runs
+// first; read as a move into a new folder taking the path p vacates, it
+// waited for p's move, which waits for it to vacate x, a cycle. A remote
+// move into p's old path that lands elsewhere here still waits for p's move.
+func TestBuildDependencies_ARemoteMoveIntoTheFolderARotationCarriesRunsFirst(t *testing.T) {
+	t.Parallel()
+
+	actions := []syncdomain.Action{
+		{Type: syncdomain.ActionRemoteMove, OldPath: "x", Path: "p/x", MovedLocalPath: "x/x", ItemID: "x"},
+		{Type: syncdomain.ActionRemoteMove, OldPath: "p", Path: "x", ItemID: "p"},
+		{Type: syncdomain.ActionRemoteMove, OldPath: "z", Path: "p/z", MovedLocalPath: "q/z", ItemID: "z"},
+	}
+
+	deps := buildDependencies(actions)
+
+	assert.Empty(t, deps[0], "x moves into p before p moves")
+	assert.Equal(t, []int{0}, deps[1], "p's move waits for x to leave its destination")
+	assert.Equal(t, []int{1}, deps[2], "a move into a new folder at p's old path waits for p's move")
+	assert.Equal(t, oracleBuildDependencies(actions), deps)
+}
+
 // Validates: R-2.17.2, R-2.17.6
 //
 // A delete waits for the create on its side that writes the deleted file's

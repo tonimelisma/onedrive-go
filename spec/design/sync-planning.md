@@ -787,10 +787,12 @@ target in the same plan (`moveOneIntoItsWaitingFolder`). The entry's move
 carries `MovedRemotePath`, OneDrive's path for it, and lands in the folder
 the folder's move carries, not in a new folder at the path that move
 vacates, so it does not wait for that move (`landsInTheFolderMoveCarries`).
-On OneDrive the same rotation needs nothing of this, since a move goes by
-item ID
+The same rotation made here is replayed on OneDrive the same way, the
+entry's remote move carrying `MovedLocalPath`, where this computer holds it,
+since OneDrive too refuses a move onto a name a sibling holds
 (`TestComposeMoves_AnEntryMovedOnOneDriveIntoAFolderThatTakesItsPathMovesIntoItHereFirst`,
-`TestRunOnce_ARotationThroughNestingMadeOnOneDriveConverges`). The loop of a
+`TestRunOnce_ARotationThroughNestingMadeOnOneDriveConverges`,
+`TestRunOnce_AFolderRotatedThroughNestingHereIsRotatedOnOneDrive`). The loop of a
 folder whose OneDrive move lands in a folder made here at the path OneDrive
 still gives another folder, whose own target lies below the first one's
 (here `H` moved aside, `Y` into a new `H` as `H/Y`, and the old `H` into
@@ -989,11 +991,11 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 37 runs of `pairs.golden` (16 from the synced tree, 21 from the held
+The 30 runs of `pairs.golden` (9 from the synced tree, 21 from the held
 one; a run names its start, the two histories, the refused create if any,
 and the invariants it breaks) fall into the twelve shapes below, of which
 4, 5, 6, 7, 8, 9 and 11 are no longer listed: 17 runs break a rule of
-convergence, and 20 (7 pairs and their refusal variants) only the
+convergence, and 13 (5 pairs and their refusal variants) only the
 `duplicated` rule of shape 12. Each is an open behaviour of the planner
 unless it says it is right as it is; a fix removes its lines from the file. The refused-create variants of a run break what
 the run itself breaks, so they belong to its shape. 58 runs of shapes 4, 7
@@ -1205,10 +1207,38 @@ and the executor. The check also counts a duplicate now (shape 12).
    create SQLite planned for it are dropped (`replacedByAComposedMove`,
    `recreatedSourceCreates`). Left: from the held start, OneDrive moving
    `p/f` into `X2` or `z` onto `x` while here `p/f` is in the new `x` or
-   `z` took `p/f` (5 pairs), where the held folder's move is involved; and
-   two synced pairs where two moves meet at one name (`mv p q` here, `mv x
-   q` there; `mv x p/x, mv p x` here, `mv p/f x/f` there), shape 7's
-   collision.
+   `z` took `p/f` (5 pairs), where the held folder's move is involved.
+   Fixed, the two synced pairs where two moves meet at one name. Here `p`
+   renamed `q` while OneDrive renamed `x` to `q` and moved `p/f` onto `x`:
+   the two `q` folders merge as one made on both sides, so SQLite never read
+   `x`'s move, and `f` on OneDrive, at a path another synced item had, read
+   as a new file; the item ID now places it there, as the path's own item is
+   elsewhere on OneDrive (`movedOntoAPathItsItemLeftOnOneDrive`), and the
+   moves compose. And here `x` moved into `p` and `p` renamed `x`, a rotation
+   through nesting, while OneDrive moved `p/f` into `x`: SQLite read `p` as
+   gone, since it pairs a local move only onto a path no synced item had,
+   deleted it on OneDrive and uploaded `f` again. A folder found here by its
+   identity at the path of a folder this computer moved into it
+   (`folderMovedOntoAPathItsItemLeft`) now has that position, the delete
+   SQLite planned for it is dropped, and the rotation is replayed on
+   OneDrive as one made there is replayed here
+   (`moveOneIntoItsWaitingFolder`, either side): `x` moves into `p` at the
+   path `p` has on OneDrive, which a remote move into the folder a folder's
+   move carries, already held there here (`MovedLocalPath`), runs before
+   that move (`landsInTheFolderMoveCarries`), and `p`'s move then carries
+   it (`TestPlannerPairs_AFileMovedOnOneDriveBesideAFolderRenamedOrRotatedHereEndsOnce`,
+   `TestBuildDependencies_ARemoteMoveIntoTheFolderARotationCarriesRunsFirst`,
+   `TestRunOnce_AFileOneDriveMovedOntoAPathItsFolderLeftWhileTheFolderMergedHereEndsOnce`,
+   `TestRunOnce_AFolderRotatedThroughNestingHereIsRotatedOnOneDrive`). The
+   identity is used only where the displaced folder went inside the one
+   that took its path, and every synced entry below both folders is still
+   here or paired as a move (`losesAnEntryHere`): an entry edited as it
+   moved leaves a delete on OneDrive below its old path that the replayed
+   rotation would wait on in a cycle, and that rotation is still taken
+   apart by parking
+   (`TestRunOnce_AFolderMovedIntoTheFolderThatTakesItsPathConvergesWithAnEditInIt`).
+   The other local rotations of a folder onto a vacated path (shape 2) stay
+   as SQLite reads them.
 
 A remote move of a locally edited file is still applied (R-2.17.7): the local
 move source must be the same item (type and identity) but its content may

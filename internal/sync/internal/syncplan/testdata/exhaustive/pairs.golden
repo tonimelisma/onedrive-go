@@ -1,16 +1,9 @@
-synced L[mv p q] R[mv x q, mv p/f x] :: duplicated
-synced L[mv p q] R[mv x q, mv p/f x] refuse download x #1 :: duplicated
-synced L[mv p q] R[mv x q, mv p/f x] refuse upload q/f #1 :: duplicated
 synced L[mv p x/p] R[mv x p/x, mv p/f x] :: sides-differ left-held
 synced L[mv p x/p] R[mv z p/z, mv x z] :: sides-differ left-held
 synced L[mv x p/x] R[mv z x/z, mv p z] :: sides-differ left-held
 synced L[mv p x/p, mv x/p/f p] R[mv x p/x] :: sides-differ left-held
 synced L[mv p x/p, mv z p] R[mv x p/x] :: sides-differ left-held
 synced L[mv p x/p, mkdir p] R[mv x p/x] :: sides-differ left-held
-synced L[mv x p/x, mv p x] R[mv p/f x/f] :: duplicated
-synced L[mv x p/x, mv p x] R[mv p/f x/f] refuse download x/x/f #1 :: duplicated
-synced L[mv x p/x, mv p x] R[mv p/f x/f] refuse folder_create x (remote) #1 :: duplicated
-synced L[mv x p/x, mv p x] R[mv p/f x/f] refuse upload x/f #1 :: duplicated
 synced L[mv x p/x, mv p/f x] R[mv p x/p] :: sides-differ left-held
 synced L[mv x p/x, mv z x] R[mv p x/p] :: sides-differ left-held
 synced L[mv x p/x, mkdir x] R[mv p x/p] :: sides-differ left-held

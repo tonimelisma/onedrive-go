@@ -809,22 +809,34 @@ func movesIntoVacatedPath(a, move *syncdomain.Action) bool {
 	return belowPathKey(namekey.OfPath(a.Path), vacated) && !belowPathKey(namekey.OfPath(a.OldPath), vacated)
 }
 
-// landsInTheFolderMoveCarries reports whether a, a local move below the path
-// local folder move vacates, lands in that folder itself rather than in a
-// new folder that takes its path: composition planned it to run inside the
-// folder before the folder moves, and OneDrive already holds the item where
-// the folder's move carries a's destination (MovedRemotePath). Such a move
-// runs first, as a write below the folder's source does; ordered after the
-// folder's move it would wait for it while the folder's move waits for it to
-// vacate the folder's destination (a rotation through nesting made on
-// OneDrive: p moved into x, x moved to p).
+// landsInTheFolderMoveCarries reports whether a, a move below the path a
+// folder move of its side vacates, lands in that folder itself rather than
+// in a new folder that takes its path: composition planned it to run inside
+// the folder before the folder moves, and the other side already holds the
+// item where the folder's move carries a's destination (MovedRemotePath for
+// a local move, MovedLocalPath for a remote one). Such a move runs first, as
+// a write below the folder's source does; ordered after the folder's move it
+// would wait for it while the folder's move waits for it to vacate the
+// folder's destination (a rotation through nesting made on one side: p
+// moved into x, x moved to p).
 func landsInTheFolderMoveCarries(a, move *syncdomain.Action) bool {
-	if a.Type != syncdomain.ActionLocalMove || move.Type != syncdomain.ActionLocalMove ||
-		a.MovedRemotePath == "" || !strings.HasPrefix(a.Path, move.OldPath+"/") {
+	if a.Type != move.Type || !strings.HasPrefix(a.Path, move.OldPath+"/") {
 		return false
 	}
+	var otherSide string
+	switch a.Type {
+	case syncdomain.ActionLocalMove:
+		otherSide = a.MovedRemotePath
+	case syncdomain.ActionRemoteMove:
+		otherSide = a.MovedLocalPath
+	case syncdomain.ActionDownload, syncdomain.ActionUpload, syncdomain.ActionLocalDelete, syncdomain.ActionRemoteDelete,
+		syncdomain.ActionFolderCreate, syncdomain.ActionConflictCopy, syncdomain.ActionBaselineUpdate, syncdomain.ActionCleanup:
+		return false
+	default:
+		panic(syncdomain.OutsideTheEnum(a.Type))
+	}
 
-	return a.MovedRemotePath == move.Path+strings.TrimPrefix(a.Path, move.OldPath)
+	return otherSide != "" && otherSide == move.Path+strings.TrimPrefix(a.Path, move.OldPath)
 }
 
 // belowPathKey reports whether the path of k lies below the path of root,

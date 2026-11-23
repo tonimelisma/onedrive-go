@@ -2190,3 +2190,37 @@ func requireExhaustiveGolden(t *testing.T, results []exResult, complete bool) {
 		}
 	}
 }
+
+// Validates: R-2.17.6
+//
+// Two pairs that ended with one content at two paths: here p renamed q
+// while OneDrive renamed x to q and moved p/f onto x, where the two q
+// folders merge and f's item ID places it at x on OneDrive; and here x
+// moved into p and p renamed x, a rotation through nesting, while OneDrive
+// moved p/f into x, where p's identity places it at x here and the rotation
+// is replayed on OneDrive. f ends once on each side, on every run with each
+// create refused once.
+func TestPlannerPairs_AFileMovedOnOneDriveBesideAFolderRenamedOrRotatedHereEndsOnce(t *testing.T) {
+	t.Parallel()
+
+	for _, pair := range []exPair{
+		{
+			start: exStartNamed(t, "synced"),
+			local: []exEdit{{kind: exMoveFolder, from: "p", to: "q"}},
+			remote: []exEdit{
+				{kind: exMoveFolder, from: "x", to: "q"},
+				{kind: exMoveFile, from: "p/f", to: "x"},
+			},
+		},
+		{
+			start: exStartNamed(t, "synced"),
+			local: []exEdit{
+				{kind: exMoveFolder, from: "x", to: "p/x"},
+				{kind: exMoveFolder, from: "p", to: "x"},
+			},
+			remote: []exEdit{{kind: exMoveFile, from: "p/f", to: "x/f"}},
+		},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}
