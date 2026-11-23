@@ -22,12 +22,24 @@ type pruneTestRepo struct {
 	mainRoot string
 }
 
+// canonicalTempDir returns t.TempDir() with symlinks resolved. git reports
+// worktree paths resolved, and on macOS the temp root /var is a link to
+// /private/var, so expected paths must be built from the resolved form.
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	return dir
+}
+
 func newPruneTestRepo(t *testing.T) *pruneTestRepo {
 	t.Helper()
 
-	origin := filepath.Join(t.TempDir(), "origin.git")
+	origin := filepath.Join(canonicalTempDir(t), "origin.git")
 	pruneGit(t, "", "init", "--bare", "--initial-branch=main", origin)
-	mainRoot := filepath.Join(t.TempDir(), "repo")
+	mainRoot := filepath.Join(canonicalTempDir(t), "repo")
 	pruneGit(t, "", "clone", origin, mainRoot)
 	pruneGit(t, mainRoot, "checkout", "-B", "main")
 	pruneGit(t, mainRoot, "config", "user.name", "Test User")
@@ -159,7 +171,7 @@ func TestPruneMergedWorktrees_KeepsUnmergedDirtyAndDetachedBuilders(t *testing.T
 	detached := filepath.Join(repo.mainRoot, ".claude", "worktrees", "agent-detached")
 	pruneGit(t, repo.mainRoot, "worktree", "add", "--detach", detached, "origin/main")
 
-	outside := filepath.Join(t.TempDir(), "by-hand")
+	outside := filepath.Join(canonicalTempDir(t), "by-hand")
 	pruneGit(t, repo.mainRoot, "worktree", "add", "-b", "by-hand", outside, "origin/main")
 
 	output, err := repo.prune(false, neverRunning)
