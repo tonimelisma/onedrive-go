@@ -246,6 +246,58 @@ func TestRestoreSpellingRenameLeftovers_KeepsWhatItCannotPutBack(t *testing.T) {
 	assert.Contains(t, output, "leftover="+spellingLeftoverName("v-2"))
 }
 
+// A put-back on a system that refuses the no-replace flag links the file to
+// its plain name and then removes the temporary name; when that removal fails
+// both names hold the file. The next start removes the temporary name, which
+// is the same file as its plain name, so no content goes; a plain name held by
+// a different file, the same bytes included, is reported and nothing is
+// removed.
+//
+// Validates: R-2.12.8
+func TestRestoreSpellingRenameLeftovers_RemovesATemporaryNameTheFileWasPutBackBeside(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	leftover := filepath.Join(root, "Docs", spellingLeftoverName("A.txt"))
+	plain := filepath.Join(root, "Docs", "A.txt")
+	writeTestFile(t, leftover, "alpha\n")
+	logger, logs := syncfixture.NewCapturedLogger()
+	tree := syncfixture.MustOpenSyncTree(t, root)
+
+	restoreSpellingRenameLeftovers(t.Context(), tree.WithoutNoReplaceFlagAndUnremovableName(spellingLeftoverName("A.txt")),
+		syncdomain.ContentFilterConfig{}, nil, logger)
+
+	require.FileExists(t, plain, "the put-back placed the file")
+	require.FileExists(t, leftover, "the fault kept the temporary name")
+	assert.Contains(t, logs.String(), "could not remove the temporary name")
+
+	restoreSpellingRenameLeftovers(t.Context(), tree, syncdomain.ContentFilterConfig{}, nil, logger)
+
+	assert.NoFileExists(t, leftover, "the next start removes the second name of the same file")
+	content, err := os.ReadFile(plain) //nolint:gosec // the test reads the file it planted
+	require.NoError(t, err)
+	assert.Equal(t, "alpha\n", string(content))
+	assert.Contains(t, logs.String(), "removed the temporary name")
+}
+
+// Validates: R-2.12.8
+func TestRestoreSpellingRenameLeftovers_KeepsALeftoverBesideADifferentFileOfItsName(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "A.txt"), "alpha\n")
+	writeTestFile(t, filepath.Join(root, spellingLeftoverName("A.txt")), "alpha\n")
+	before := treeListing(t, root)
+	logger, logs := syncfixture.NewCapturedLogger()
+
+	restoreSpellingRenameLeftovers(t.Context(), syncfixture.MustOpenSyncTree(t, root),
+		syncdomain.ContentFilterConfig{}, nil, logger)
+
+	assert.Equal(t, before, treeListing(t, root), "a copy is never removed, the same bytes included")
+	assert.Equal(t, 1, syncfixture.CountLevel(logs.String(), "WARN"), logs.String())
+	assert.Contains(t, logs.String(), "is taken")
+}
+
 // A leftover in a folder local observation does not enter (an ignored
 // folder, a shared folder's own mount) is not sync's to move: it is left
 // alone, and so is one whose plain name the content filter excludes.

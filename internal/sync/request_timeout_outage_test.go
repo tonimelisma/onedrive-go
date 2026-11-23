@@ -148,6 +148,14 @@ func localReadTimedOutError() error {
 		&url.Error{Op: http.MethodPut, URL: unreachedGraphURL + "/upload-session", Err: read})
 }
 
+// localSideStalledError is the shape graph's stall watchdog returns for a
+// transfer whose local side hung past the stall timeout: an upload's read of
+// the local file, or a download's write of it between two body reads.
+func localSideStalledError() error {
+	return fmt.Errorf("upload a chunk of a.bin: %w: %w: no data moved for 2m0s (context canceled)",
+		graph.ErrTransferStalled, graph.ErrLocalSideStalled)
+}
+
 // timedOutRequest is one way a request ends without OneDrive's answer, and
 // the error sync receives for it.
 type timedOutRequest struct {
@@ -434,10 +442,11 @@ func servicePathsInWindow(flow *engineFlow) int {
 // Only the service's silence is outage evidence: a timeout the end of the
 // run landed on, a timeout of any shape that lands once the run has ended,
 // the run's own deadline, a cancel, of the run or of something narrower, and
-// a read of the local file an upload sends that timed out add nothing to the
+// a read of the local file an upload sends that timed out, and a transfer the
+// stall watchdog abandoned while its local side hung, add nothing to the
 // service window, which one timeout of the live run then starts.
 //
-// Validates: R-6.8.29, R-2.10.3
+// Validates: R-6.8.29, R-2.10.3, R-6.8.20
 func TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -451,6 +460,7 @@ func TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence(t *testing.T) {
 		{Err: fmt.Errorf("create folder: %w", context.Canceled), RunEnded: true},
 		{Err: fmt.Errorf("create folder: %w", context.Canceled)},
 		{Err: localReadTimedOutError()},
+		{Err: localSideStalledError()},
 	}
 	apply := func(i int, completion *syncdomain.ActionCompletion) {
 		completion.Path = fmt.Sprintf("dir-%d", i)

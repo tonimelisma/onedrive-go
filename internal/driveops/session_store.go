@@ -297,6 +297,79 @@ func (s *SessionStore) DeleteForScope(mountID, localRoot string) (int, error) {
 	return deleted, errors.Join(errs...)
 }
 
+// RenameMountID gives every upload session record written for the mount
+// from the mount ID to, and returns how many it rewrote. A record's file is
+// named by its drive and local path, never by its mount, so only the record's
+// MountID changes, rewritten in place by an atomic write. An account email
+// change renames the mounts its drives and their shortcuts run as, and a
+// record left under the old ID would escape its mount's cleanup
+// (DeleteForScope). It is idempotent: a record already under to, or under
+// another mount, is left as it is, and so is a file that holds no readable
+// record, which DeleteForScope and Load remove. Every file it cannot read or
+// write is returned, joined.
+func (s *SessionStore) RenameMountID(from, to string) (int, error) {
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if from == "" || to == "" || from == to {
+		return 0, nil
+	}
+
+	root, err := fsroot.Open(s.dir)
+	if err != nil {
+		return 0, fmt.Errorf("opening session root: %w", err)
+	}
+	entries, err := root.ReadDir("")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("reading session dir: %w", err)
+	}
+
+	var errs []error
+	renamed := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), sessionRecordSuffix) {
+			continue
+		}
+		changed, err := renameRecordMountID(root, entry.Name(), from, to)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if changed {
+			renamed++
+		}
+	}
+
+	return renamed, errors.Join(errs...)
+}
+
+// renameRecordMountID rewrites the record file name with the mount ID to
+// when it is a readable record of the mount from, and says whether it did.
+func renameRecordMountID(root *fsroot.Root, name, from, to string) (bool, error) {
+	data, err := root.ReadFile(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading session file %s: %w", name, err)
+	}
+	rec, err := decodeSessionRecord(data)
+	if err != nil || rec.MountID != from {
+		return false, nil //nolint:nilerr // an unreadable record is DeleteForScope's and Load's to remove
+	}
+	rec.MountID = to
+	updated, err := json.Marshal(rec)
+	if err != nil {
+		return false, fmt.Errorf("marshaling session record %s: %w", name, err)
+	}
+	if err := root.AtomicWrite(name, updated, sessionFilePerms, sessionDirPerms, sessionTempPattern); err != nil {
+		return false, fmt.Errorf("writing session file %s: %w", name, err)
+	}
+
+	return true, nil
+}
+
 // deleteRecordForScope removes the record file name when it belongs to the
 // scope, and reports whether it removed a record of the scope. A file that
 // holds no readable record can never be resumed, whatever scope it was

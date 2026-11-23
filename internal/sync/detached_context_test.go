@@ -26,7 +26,54 @@ func syncTreePackageDirs() []string {
 	return []string{
 		".", "syncdomain", "syncshortcut", "syncstore",
 		filepath.Join("internal", "syncplan"), filepath.Join("internal", "syncobserve"), filepath.Join("internal", "syncexec"),
+		filepath.Join("internal", "syncsched"),
 	}
+}
+
+// syncTreeTestSupportDirs are the sync tree's packages that only tests
+// import: fixtures, which the source checks over product code leave out.
+func syncTreeTestSupportDirs() []string {
+	return []string{filepath.Join("internal", "syncfixture"), filepath.Join("internal", "syncstoretest")}
+}
+
+// The source checks over the sync tree's product code read every product
+// package of it: a package the list leaves out is a package no check reads.
+//
+// Validates: R-6.3.10
+func TestSyncTreePackageDirs_NameEveryProductPackage(t *testing.T) {
+	t.Parallel()
+
+	support := make(map[string]bool)
+	for _, dir := range syncTreeTestSupportDirs() {
+		support[dir] = true
+	}
+	var found []string
+	for _, pattern := range []string{"*.go", filepath.Join("*", "*.go"), filepath.Join("internal", "*", "*.go")} {
+		paths, err := filepath.Glob(pattern)
+		require.NoError(t, err)
+		for _, path := range paths {
+			dir := filepath.Dir(path)
+			if !strings.HasSuffix(path, "_test.go") && !support[dir] {
+				found = append(found, dir)
+			}
+		}
+	}
+
+	assert.ElementsMatch(t, syncTreePackageDirs(), uniqueStrings(found))
+}
+
+// uniqueStrings is values without repeats, in first-seen order.
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			unique = append(unique, value)
+		}
+	}
+
+	return unique
 }
 
 // unboundedDetachedContexts returns the context.WithoutCancel calls in file
@@ -104,12 +151,37 @@ func TestDetachedContexts_AlwaysCarryADeadline(t *testing.T) {
 			require.NoError(t, parseErr)
 			scanned++
 			for _, pos := range unboundedDetachedContexts(file) {
+				if stopArmedDetaches()[filepath.Clean(path)+":"+enclosingFunction(file, pos)] {
+					continue
+				}
 				assert.Failf(t, "detached context without a deadline",
 					"%s: wrap context.WithoutCancel in context.WithTimeout or context.WithDeadline", fset.Position(pos))
 			}
 		}
 	}
 	assert.Positive(t, scanned, "the scan found the production files")
+}
+
+// stopArmedDetaches names, by file and function, the detaches whose deadline
+// is armed when the run's context ends rather than in the same expression:
+// the context a live completion is applied on, which the run's cancel does
+// not cut and which ends at the stop's one deadline from that cancel on.
+func stopArmedDetaches() map[string]bool {
+	return map[string]bool{
+		filepath.Join("internal", "syncexec", "worker.go") + ":DetachedAtStopContext": true,
+	}
+}
+
+// enclosingFunction is the name of the function declaration of file that
+// holds pos, or "" outside every one.
+func enclosingFunction(file *ast.File, pos token.Pos) string {
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Pos() <= pos && pos < fn.End() {
+			return fn.Name.Name
+		}
+	}
+
+	return ""
 }
 
 // The rule above accepts only the bounded form.
@@ -158,8 +230,9 @@ func f(ctx context.Context) {
 // takes the helper, so a stopping run's waits share the stop's one deadline.
 func detachSiteAllowed() map[string]bool {
 	return map[string]bool{
-		filepath.Join("internal", "syncexec", "worker.go") + ":DetachedStoreContext": true,
-		filepath.Join("syncstore", "store.go") + ":Close":                            true,
+		filepath.Join("internal", "syncexec", "worker.go") + ":DetachedStoreContext":  true,
+		filepath.Join("internal", "syncexec", "worker.go") + ":DetachedAtStopContext": true,
+		filepath.Join("syncstore", "store.go") + ":Close":                             true,
 	}
 }
 

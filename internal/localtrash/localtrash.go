@@ -247,12 +247,12 @@ func ChildDir(parentDir, childStatePath string) string {
 	if parentDir == "" || childStatePath == "" {
 		return ""
 	}
-	return filepath.Join(childrenContainer(parentDir), strings.TrimSuffix(filepath.Base(childStatePath), stateDBSuffix))
+	return filepath.Join(ChildrenDir(parentDir), strings.TrimSuffix(filepath.Base(childStatePath), stateDBSuffix))
 }
 
-// childrenContainer is the folder that holds the trash directories of the
+// ChildrenDir is the folder that holds the trash directories of the
 // child mounts of the drive whose trash directory is parentDir.
-func childrenContainer(parentDir string) string {
+func ChildrenDir(parentDir string) string {
 	return filepath.Join(filepath.Dir(parentDir), childrenDirName, filepath.Base(parentDir))
 }
 
@@ -263,7 +263,7 @@ func (t *Trash) Children() ([]*Trash, error) {
 	if t == nil || t.dir == "" {
 		return nil, nil
 	}
-	container := childrenContainer(t.dir)
+	container := ChildrenDir(t.dir)
 	dirEntries, err := localpath.ReadDir(container)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"cmp"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -38,6 +39,24 @@ func dispatchOrderForward(frontier []*syncdomain.TrackedAction) []*syncdomain.Tr
 	return frontier
 }
 
+// dispatchOrderCanonical sorts a frontier by what its actions do (type,
+// path, old path), then by action ID. A seeded shuffle permutes this order,
+// not plan order: the planner's order of actions that do not depend on each
+// other is not part of its contract, and a shuffle of it replayed one seed
+// differently run to run (chaos seed 50).
+func dispatchOrderCanonical(frontier []*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
+	slices.SortStableFunc(frontier, func(a, b *syncdomain.TrackedAction) int {
+		return cmp.Or(
+			cmp.Compare(a.Action.Type.String(), b.Action.Type.String()),
+			cmp.Compare(a.Action.Path, b.Action.Path),
+			cmp.Compare(a.Action.OldPath, b.Action.OldPath),
+			compareInt64(a.ID, b.ID),
+		)
+	})
+
+	return frontier
+}
+
 func dispatchOrderReverse(frontier []*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
 	dispatchOrderForward(frontier)
 	slices.Reverse(frontier)
@@ -52,7 +71,7 @@ func dispatchOrderShuffle(seed uint64) func([]*syncdomain.TrackedAction) []*sync
 	rng := rand.New(rand.NewPCG(seed, seed^0x5851f42d4c957f2d)) //nolint:gosec // deterministic test RNG
 
 	return func(frontier []*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
-		dispatchOrderForward(frontier)
+		dispatchOrderCanonical(frontier)
 		mu.Lock()
 		defer mu.Unlock()
 		rng.Shuffle(len(frontier), func(i, j int) { frontier[i], frontier[j] = frontier[j], frontier[i] })
@@ -163,6 +182,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_BaselineUpdatedAfterRun,
 		TestRunOnce_Bidirectional_FullRun,
 		TestRunOnce_BothSidesRenamedIdenticallyConverges,
+		TestRunOnce_AFolderRenamedTheSameOnBothSidesWithANewFolderAtItsOldPathConverges,
 		TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending,
 		TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked,
 		TestRunOnce_ReportCountsTheWorkAThrottleLeftForTheNextSync,
@@ -206,8 +226,13 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_AHelperPanicOfTheCommandEndsTheActionInFlightAsAShutdown,
 		TestRunOnce_TheSignInRequirementIsTheSyncedAccountsAloneOfTwoAtOneAddress,
 		TestRunOnce_ConflictOverAnInterruptedLargeUploadDropsItsSession,
+		TestRunOnce_ConflictOverAnInterruptedLargeCreateDropsItsSession,
+		TestRunOnce_LocalMoveOfAnInterruptedLargeUploadDropsItsSession,
+		TestRunOnce_LocalDeleteOfAnInterruptedLargeUploadDropsItsSession,
 		TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth,
 		TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth,
+		TestRunOnce_CreateConflictInsideADivergentlyRenamedFolderKeepsBoth,
+		TestRunOnce_ANewFileAtAMovedFilesOldPathGivesWayToASwapOnOneDrive,
 		TestRunOnce_CreateIntentOfAFileRenamedAwayIsDropped,
 		TestRunOnce_CreateWhoseAnswerWasLostFinishesIntoItsOwnEmptyFile,
 		TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting,
@@ -371,6 +396,14 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_OneTimedOutRequestOpensNoOutageScope,
 		TestRunOnce_AnOutageOfTimeoutsIsOneConditionNotOnePerFile,
 		TestRunOnce_SubfolderMovedOnOneDriveToThePathItsMovedParentLeftConverges,
+		TestRunOnce_ARotationThroughNestingMadeOnOneDriveConverges,
+		TestRunOnce_ARotationThroughNestingSplitAcrossTheSidesKeepsOneDrivesNesting,
+		TestRunOnce_AFolderMovedIntoDifferentNewFoldersAtItsOwnPathOnEachSideConverges,
+		TestRunOnce_ThreeFoldersMovedIntoEachOthersNewFoldersConverge,
+		TestRunOnce_AFileMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere,
+		TestRunOnce_AParkedFileLeavesItsFolderBeforeTheFolderMovesOnOneDrive,
+		TestRunOnce_AFolderMovedBackOutOfANewFolderAtItsPathKeepsTheNewFolderAsAConflictCopy,
+		TestRunOnce_AFileMadeHereUnderTheNameOneDriveGaveAMovedFileIsKeptAsAConflictCopy,
 		TestRunOnce_FileMovedOnOneDriveOutOfAFolderMadeHereConverges,
 		TestRunOnce_FileMovedOutOfARenamedSubfolderIntoTheRecreatedFolderConverges,
 		TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges,

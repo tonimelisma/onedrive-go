@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -123,6 +124,28 @@ func TestEngine_WithOwnCollectorWrapsOnceAndReplacesAnother(t *testing.T) {
 func TestEngineStartup_LockedCatalogWarnsAndStarts(t *testing.T) {
 	t.Parallel()
 
+	assertStartupWarnsAndStartsWhenTheClearFails(t, fmt.Errorf("updating catalog: %w", config.ErrConfigLocked))
+}
+
+// A catalog on a filesystem that cannot lock at all (some NFS and FUSE
+// mounts) is not written, and the start is not failed for it either: the
+// clear is a best-effort mark, so the engine warns, keeps the stored
+// requirement and starts, as for a held lock.
+//
+// Validates: R-2.10.46, R-4.4.4
+func TestEngineStartup_CatalogWithoutLocksWarnsAndStarts(t *testing.T) {
+	t.Parallel()
+
+	assertStartupWarnsAndStartsWhenTheClearFails(t,
+		fmt.Errorf("updating catalog: cannot lock data dir: %w (%w)", config.ErrConfigLockUnsupported, syscall.ENOLCK))
+}
+
+// assertStartupWarnsAndStartsWhenTheClearFails runs a start whose proof
+// passes while clearing the stored sign-in requirement fails with clearErr,
+// then a start whose clear works.
+func assertStartupWarnsAndStartsWhenTheClearFails(t *testing.T, clearErr error) {
+	t.Helper()
+
 	logger, logs := syncfixture.NewCapturedLogger()
 	mock := &syncfixture.EngineMockClient{}
 	eng, _ := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), func(inputs *engineInputs) {
@@ -132,11 +155,11 @@ func TestEngineStartup_LockedCatalogWarnsAndStarts(t *testing.T) {
 	account := testEngineAccountCanonicalID()
 	require.NoError(t, config.MarkAccountAuthRequired(t.Context(), eng.dataDir, account, authstate.ReasonSyncAuthRejected))
 	eng.hooks.clearAccountAuthRequirement = func(context.Context, string, driveid.CanonicalID) error {
-		return fmt.Errorf("updating catalog: %w", config.ErrConfigLocked)
+		return clearErr
 	}
 
 	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
-	require.NoError(t, err, "the sync starts although the catalog is locked")
+	require.NoError(t, err, "the sync starts although the catalog could not be locked")
 	assert.Equal(t, authstate.ReasonSyncAuthRejected, signInRequirementOf(t, eng, account), "the stored requirement stands")
 	assert.Equal(t, 1, syncfixture.CountLevel(logs.String(), "WARN"), "one Warn: %s", logs.String())
 	assert.Contains(t, logs.String(), "Could not clear the stored sign-in requirement; the next start clears it")

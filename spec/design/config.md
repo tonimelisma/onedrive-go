@@ -58,6 +58,14 @@ drive sections, purged stores and catalog records alone
 (`TestLogout_RefusesAnEmailTwoAccountsShare`,
 `TestLogout_ACanonicalIDSelectorRemovesOnlyThatAccount`,
 `TestApplyPurgeLogout_LeavesTheOtherAccountAtTheSameAddress`; R-3.5.2).
+`status --account`, `drive search --account`, `shared --account` and the
+shared-folder search of `drive add --account` read the selector through the
+same rule (`resolveAccountSelector`, `accountTarget`): a shared email is
+refused naming the canonical IDs, and a canonical ID shows that account's
+row and drives, or searches with that account, alone
+(`TestStatus_AccountSelectorPicksOneOfTwoAccountsAtOneAddress`,
+`TestDriveSearch_AccountSelectorPicksOneOfTwoAccountsAtOneAddress`,
+`TestSharedList_AccountSelectorPicksOneOfTwoAccountsAtOneAddress`).
 `ApplyPurgeLogout` takes the account's canonical ID, never an email.
 
 ## Overview
@@ -91,7 +99,7 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | The catalog is refused whole when a record key, a record's `canonical_id`, a drive's `owner_account_canonical_id` or an account's `primary_drive_canonical_id` is not a canonical drive ID, with an error naming the file, the record and the field and saying how to recover (R-4.1.4, R-4.1.5). | `TestDecodeCatalog_RefusesAMalformedCanonicalID`, `TestUpdateCatalog_RefusesToStoreAMalformedCanonicalID`, `TestDecodeCatalog_AcceptsWhatTheWritersWrite` |
 | Drive-section values are written as the kind the drive-key schema gives their key, a value the key cannot hold is refused with the file unchanged, and a section name keeps a quote or a backslash through append, find, set and delete (R-4.2.2). | `TestSetDriveKey_StringKeyGivenTrueLoadsBackAsAString`, `TestSetDriveKey_RefusesAValueItsKeyCannotHold`, `TestConfigSchema_DriveKeyKindsMatchTheDriveStruct`, `TestDriveSection_NameWithQuoteAndBackslashRoundTrips`, `TestParseSectionHeader_ReadsEveryHeaderForm`, `TestTOMLString_EveryValueLoadsBackUnchanged` |
 | Enrolling a drive (`AddDrive`, for `drive add` and `login`) is one transaction under the config lock and then the catalog lock: a failure at any step, a held lock included, leaves config and catalog as they were; a failed catalog restore is reported and leaves what a rerun completes; a rerun completes each partial state and reports it; a complete enrollment writes nothing; a shared folder's section is one write; two processes adding one drive add one section; one directory for config and data is one lock; a config that would not load is never written (R-3.3.5, R-3.3.1, R-4.4.4). | `TestAddDrive_FailureAtEachStepLeavesConfigAndCatalogUnchanged`, `TestAddDrive_FailedCatalogRestoreLeavesWhatARerunCompletes`, `TestAddDrive_RerunCompletesEachPartialState`, `TestAddDrive_CompleteEnrollmentWritesNothing`, `TestAddDrive_SharedSectionIsOneWrite`, `TestAddDrive_CrossProcessSameDriveAddsOneSection`, `TestAddDrive_SameDirectoryForConfigAndDataDoesNotSelfDeadlock`, `TestAddDrive_RefusesAConfigThatWouldNotLoad` |
-| A config or catalog change waits at most `configLockTimeout` (10 s, polled every 50 ms) for another holder and then fails with `ErrConfigLocked` naming the locked directory, without running the change; a holder that lets go within the wait is waited for; catalog read-modify-writes run under the same lock, so concurrent updates from two processes both survive (R-4.4.4). | `TestWithConfigMutationLock_HeldLockTimesOutWithTheDirectoryNamed`, `TestWithConfigMutationLock_AcquiresWhenTheHolderReleases`, `TestSetDriveKey_CrossProcessHolderIsNotWaitedForForever`, `TestUpdateCatalog_CrossProcessUpdatesAreNotLost` |
+| A config or catalog change waits at most `configLockTimeout` (10 s, polled every 50 ms) for another holder and then fails with `ErrConfigLocked` naming the locked directory, without running the change; a holder that lets go within the wait is waited for; catalog read-modify-writes run under the same lock, so concurrent updates from two processes both survive (R-4.4.4). A directory whose filesystem cannot lock at all (flock answers one of the errnos `filelock.IsUnsupported` names, ENOLCK, EOPNOTSUPP or ENOSYS among them: some NFS and FUSE mounts) fails the change at once with `ErrConfigLockUnsupported`, naming the directory, flock's answer and the way out (a local filesystem); there is no unlocked fallback, because a change made without the lock could lose another process's change to the same file. The sync engine's own locks take the other choice (warn and run, `engine_locks.go`) because they guard no file write; a config or catalog write is one. A caller whose write is a best-effort mark treats the refusal as it treats a held lock: the sync start's clearing of a stored sign-in requirement warns and starts, writing nothing (sync-engine.md). | `TestWithConfigMutationLock_AFilesystemWithoutLocksRefusesTheChange`, `TestWithConfigMutationLock_HeldLockTimesOutWithTheDirectoryNamed`, `TestWithConfigMutationLock_AcquiresWhenTheHolderReleases`, `TestSetDriveKey_CrossProcessHolderIsNotWaitedForForever`, `TestUpdateCatalog_CrossProcessUpdatesAreNotLost` |
 | Every config and catalog writer takes the caller's context, and the lock wait ends as soon as it ends (a context already ended makes no attempt), without running the change (R-4.4.4). | `TestWithConfigMutationLock_CanceledContextEndsTheWait`, `TestWithConfigMutationLock_EndedContextMakesNoAttempt` |
 | An expired timed pause leaves the file in one locked write per drive for both `paused` and `paused_until` (R-2.6.1, R-4.4.4). | `TestClearExpiredPauses_OneLockedWritePerDrive` |
 
@@ -404,7 +412,7 @@ or legacy metadata files.
 
 ## Email Reconciliation
 
-Implements: R-3.7.1 [verified], R-3.7.2 [verified], R-3.7.3 [verified], R-3.7.4 [verified]
+Implements: R-3.7.1 [verified], R-3.7.2 [verified], R-3.7.3 [verified], R-3.7.4 [verified], R-3.7.5 [verified]
 
 `config.ReconcileAccountEmail()` owns durable email-change mutation. Given the
 current authenticated account type, stable Graph user GUID, and current Graph
@@ -449,11 +457,78 @@ email, it:
      A drive record whose key does not parse stops the step with an error:
      the catalog decoder and encoder refuse one, so it cannot be on disk
 
-Not covered yet (planned): a shortcut child's store (`state_mount_<digest of
-the mount ID>.db`, whose mount ID holds the parent's ID and so the email)
-does not move with its parent; a running `sync --watch` is not told at once
-about a change another command made; and a second config file sharing the
-data directory keeps sections under the old email. [planned]
+Three more things name the old email, and the change reaches each (R-3.7.5):
+
+- **A shortcut child's store moves with its drive's.** A child's store is
+  `state_mount_<digest of the mount ID>.db`, and the mount ID is the drive's
+  own ID (which holds the email) joined to the shortcut's binding
+  (`ChildMountID`). Each state move of a drive's own store carries the
+  drive's mount IDs before and after (`StateDBMove.FromMountID`,
+  `ToMountID`, filled from the change's drive renames and the catalog's drive
+  records under the old email, `stateDBMovesWithMounts`). The mover
+  (`syncengine.MoveStateDBs`) reads the bindings the drive's store records,
+  read-only and under its lock, at whichever name the store is now, takes the
+  child stores' locks too, checks their new names with the others before
+  the change is recorded, moves each child store's family, and gives the
+  drive's shortcut records the new mount ID
+  (`syncstore.RenameShortcutRootNamespaceAt`): a record left under the old
+  one is another mount's, which the drive would neither protect nor run.
+  The child moves are derived, not journaled: a resumed change derives the
+  same ones from the drive's store at its new name, and those already done
+  find their source gone. A drive store that cannot be read is moved as it
+  is, its children's stores staying under the old email, said in one Warn:
+  refusing would leave the change unfinished for good over state the next
+  sync rebuilds (`TestMoveStateDBs_MovesTheShortcutChildrensStoresWithTheirDrive`,
+  `TestReconcileAccountEmail_RenamesOwnedArtifacts`,
+  `TestReconcileAccountEmail_ACatalogDrivesStoreNamesItsMountIDs`). A
+  child's move carries the child's own mount IDs.
+- **A store's trash folder and its mount's upload sessions move with it.**
+  A store's trash is named by the store (`localtrash.DirForStatePath`), and
+  a shortcut child's lies under its drive's (`localtrash.ChildDir`); every
+  store move, a child's included, moves its trash folder by one rename,
+  after the stores, and the folder that held the drive's child trash under
+  the old name goes once empty. A trash folder at both names refuses the
+  change before anything moves or is recorded, as a store does: for a new
+  change the new one was there before, for a resumed one the old one was
+  made after the change moved it, and merging them would mix two folders'
+  entries. Upload session files are named by drive and path, not by mount,
+  so only each record's mount ID is rewritten, in place and idempotently
+  (`driveops.SessionStore.RenameMountID`); a record under the old ID would
+  escape its mount's cleanup
+  (`TestMoveStateDBs_MovesTrashFoldersAndUploadSessionsWithTheirStores`,
+  `TestMoveStateDBs_ATrashFolderAtItsNewNameRefusesBeforeAnythingMoves`,
+  `TestSessionStore_RenameMountID_MovesTheRecordsOfOneMount`).
+- **A running watch hears of the change and starts no engine under the old
+  name.** A command that applies or finishes a change, or catches up a
+  config file, asks a running `sync --watch` to reload at once
+  (`tellRunningWatchOfEmailChange`, `notifyDaemonIfRunning`), unless it is
+  the watch itself (`TestReconcileGraphUser_TellsARunningWatch`,
+  `TestFinishInterruptedEmailChange_TellsARunningWatch`,
+  `TestWatch_AChangeItFinishedItselfSendsNoReloadToItself`). Until that
+  reload lands, a watch runner checks the catalog each time it starts an
+  engine and starts none for an account the catalog no longer holds, or on a
+  catalog it cannot read (`OrchestratorConfig.AccountInCatalog`,
+  sync-control-plane.md; `TestRunner_DoesNotStartAnEngineForAnAccountTheCatalogNoLongerHolds`).
+  The catalog step comes before the journal is deleted, and while the
+  journal exists the engine refuses the stores it moves, so no stale runner
+  opens the old name at any instant. The rule holds for a logout racing a
+  stale runner too.
+- **A second config file is caught up.** The catalog account keeps the
+  addresses a change renamed it from (`CatalogAccount.FormerEmails`). At the
+  CLI's entry, after an unfinished change is finished, the command's config
+  file has every section under a former email of an account renamed to the
+  account's email now, by the same locked, idempotent section rename the
+  change makes, with one line to the user and the invocation's selectors
+  remapped (`CatchUpConfigFromFormerEmails`, `catchUpConfigFromFormerEmails`).
+  A former email that an account has now is that account's and never caught
+  up; a shared folder's section under an email two accounts had is left, as
+  nothing says whose it is. A sign-in that brings an address takes it off
+  every account's former list (`recordLogin`)
+  (`TestReconcileAccountEmail_RecordsTheFormerEmailOnTheAccount`,
+  `TestCatchUpConfigFromFormerEmails_RenamesASecondConfigFilesSections`,
+  `TestCatchUpConfigFromFormerEmails_LeavesWhatItCannotAssign`,
+  `TestLogin_ANewAccountTakesItsEmailOffAnotherAccountsFormerList`,
+  `TestInitializeCLIContext_ASecondConfigFileIsCaughtUpFromAFormerEmail`).
 
 Commands learn of a change from the CLI's account identity check, which is
 a freshness step and never a precondition (R-6.8.31). The catalog account

@@ -126,7 +126,10 @@ type Client struct {
 	maxListPages         int
 	maxRecursionDepth    int
 	policies             retryPolicies
-	validators           urlValidators
+	// retryJitter is the source the quirk retries' jitter is drawn from
+	// (WithRetryJitter); nil draws none.
+	retryJitter retry.JitterSource
+	validators  urlValidators
 
 	// stallTimeout bounds how long a body may make no progress: a transfer
 	// body (the stall watchdog) and every other response body

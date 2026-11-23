@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
@@ -43,6 +44,25 @@ type CatalogAccount struct {
 	// reports for it) is next asked for, RFC 3339 in UTC. Empty means due.
 	// See RecordAccountIdentityCheck.
 	IdentityCheckDueAt string `json:"identity_check_due_at,omitempty"`
+	// FormerEmails are the addresses an account email change renamed the
+	// account from, so a config file the change did not run with is caught
+	// up from them (CatchUpConfigFromFormerEmails). A sign-in that brings
+	// one of them takes it off every list (recordLogin).
+	FormerEmails []string `json:"former_emails,omitempty"`
+}
+
+// withFormerEmail returns a's former emails with email added and current, the
+// address a has now, left out.
+func (a *CatalogAccount) withFormerEmail(email string, current string) []string {
+	former := make([]string, 0, len(a.FormerEmails)+1)
+	for _, known := range append(slices.Clone(a.FormerEmails), email) {
+		if known != "" && known != current && !slices.Contains(former, known) {
+			former = append(former, known)
+		}
+	}
+	slices.Sort(former)
+
+	return former
 }
 
 type CatalogDrive struct {

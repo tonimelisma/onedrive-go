@@ -49,6 +49,40 @@ func TestRunOnce_BothSidesRenamedIdenticallyConverges(t *testing.T) {
 
 // Validates: R-2.17.6, R-2.1.7
 //
+// Both sides renamed a folder the same way and a new folder was made here at
+// its old path. The plan re-keys the renamed folder's baseline row and makes
+// the new folder on OneDrive; the re-key is publication-only, committed
+// through the store before the create is dispatched, so the create records
+// the new folder at the path the row left and the children's rows follow
+// the renamed folder. One pass converges, and the next plan is empty.
+func TestRunOnce_AFolderRenamedTheSameOnBothSidesWithANewFolderAtItsOldPathConverges(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFolder("item-dir", "root", "dir")
+	remote.addFile(t, "item-child", "item-dir", "child.txt", "child\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	require.NoError(t, os.Rename(filepath.Join(syncRoot, "dir"), filepath.Join(syncRoot, "renamed-dir")))
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "dir"), 0o700))
+	remote.move("item-dir", "root", "renamed-dir")
+
+	eng.hooks.oneShotPassLimit = 1
+	report := runScenarioPass(t, eng)
+	assert.Equal(t, 1, report.FolderCreates, "the new folder is made on OneDrive")
+	assert.Zero(t, report.Uploads+report.Downloads+report.LocalDeletes+report.RemoteDeletes)
+	assert.Equal(t, "item-dir", requireScenarioRemoteID(t, remote, "renamed-dir"))
+	assert.NotEqual(t, "item-dir", requireScenarioRemoteID(t, remote, "dir"))
+
+	requireScenarioBaselineMoved(t, eng, []string{"dir/child.txt"}, []string{"dir", "renamed-dir", "renamed-dir/child.txt"})
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.6, R-2.1.7
+//
 // Both sides renamed the file to the same name, and OneDrive also edited it.
 // Re-keying the baseline must publish only the path: the remote edit stays
 // pending and is downloaded, not recorded as already synced. The download is

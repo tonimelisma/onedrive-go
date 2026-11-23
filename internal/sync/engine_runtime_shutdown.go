@@ -43,9 +43,71 @@ type stoppingRunKey struct{}
 // held. A scope trial that succeeded still releases its scope's next batch,
 // which is a record of the success: the batch completes as shutdown, its rows
 // unblocked for the next sync.
+//
+// A completion the run began to apply while it went on becomes a stopping
+// run's completion from the moment the run's context ends
+// (syncexec.RunHasEnded): what it has left to do records and starts nothing.
 func isStoppingRun(ctx context.Context) bool {
 	stopping, ok := ctx.Value(stoppingRunKey{}).(bool)
-	return ok && stopping
+	return (ok && stopping) || syncexec.RunHasEnded(ctx)
+}
+
+// withRunStop marks ctx as this run's context (syncexec.WithRunStop): once it
+// ends, every detached store wait under it, a worker's or an executor's
+// included, ends at the stop's one deadline when that comes first.
+func (flow *engineFlow) withRunStop(ctx context.Context) context.Context {
+	return syncexec.WithRunStop(ctx, flow.stopDeadlineAfterCancel, flow.deps.logger)
+}
+
+// stopDeadlineAfterCancel is the stop's one deadline as any goroutine reads it
+// once the run's context ended: stopBound after the cancel (canceledAt), or
+// after now while the callback that records the cancel has not run yet. It
+// reads only the atomic canceledAt and the fixed stopBound, never the drain
+// the run's goroutine owns.
+func (flow *engineFlow) stopDeadlineAfterCancel() time.Time {
+	if canceled := flow.canceledAt.Load(); canceled != nil {
+		return canceled.Add(flow.stopBound)
+	}
+
+	return syncdomain.WallNow().Add(flow.stopBound)
+}
+
+// applyLiveCompletion applies a completion that reached the run while it went
+// on. It runs on a context the run's cancel does not cut
+// (syncexec.DetachedAtStopContext): a cancel that lands while the completion
+// is being applied lets it finish under the stop's one deadline, as a
+// completion that reaches the run after its stop does, and from that moment
+// it starts nothing (isStoppingRun). A record that deadline cut short is
+// counted in the stop's one warning (endStopDrain), not returned.
+func (flow *engineFlow) applyLiveCompletion(
+	ctx context.Context,
+	completion *syncdomain.ActionCompletion,
+	bl syncdomain.BaselineView,
+) ([]*syncdomain.TrackedAction, error) {
+	completionCtx, release := syncexec.DetachedAtStopContext(ctx)
+	defer release()
+
+	ready, err := flow.applyRuntimeCompletionStage(completionCtx, completion, bl)
+	if err == nil || !syncexec.RunHasEnded(completionCtx) {
+		return ready, err
+	}
+
+	var fatalErr *fatalCompletionError
+	if errors.As(err, &fatalErr) || !errors.Is(context.Cause(completionCtx), syncdomain.ErrStoreAccessTimedOut) {
+		return ready, err
+	}
+	flow.countUnrecorded(syncexec.StoreAccessError(completionCtx, err))
+
+	return ready, nil
+}
+
+// countUnrecorded counts in the stop's drain a record its deadline cut short.
+func (flow *engineFlow) countUnrecorded(err error) {
+	flow.beginStopDrain()
+	flow.stop.unrecorded++
+	if flow.stop.firstErr == nil {
+		flow.stop.firstErr = err
+	}
 }
 
 // noteRunCancel records in canceledAt when ctx ends, so the stop's bound
@@ -158,10 +220,7 @@ func (flow *engineFlow) processShutdownCompletion(
 	if err == nil || errors.As(err, &fatalErr) || !errors.Is(context.Cause(drainCtx), syncdomain.ErrStoreAccessTimedOut) {
 		return err
 	}
-	drain.unrecorded++
-	if drain.firstErr == nil {
-		drain.firstErr = syncexec.StoreAccessError(drainCtx, err)
-	}
+	flow.countUnrecorded(syncexec.StoreAccessError(drainCtx, err))
 
 	return nil
 }

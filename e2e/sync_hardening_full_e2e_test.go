@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -118,8 +119,8 @@ func writeLocal(t *testing.T, root, rel, content string) {
 	t.Helper()
 
 	abs := filepath.Join(root, filepath.FromSlash(rel))
-	require.NoError(t, os.MkdirAll(filepath.Dir(abs), 0o700))
-	require.NoError(t, os.WriteFile(abs, []byte(content), 0o600))
+	requireNoLocalError(t, os.MkdirAll(filepath.Dir(abs), 0o700), "create a local folder")
+	requireNoLocalError(t, os.WriteFile(abs, []byte(content), 0o600), "write a local file")
 }
 
 // syncUntil runs sync until ready holds for the local tree, as remote
@@ -154,7 +155,7 @@ func TestE2E_Sync_FolderMovesBothWays(t *testing.T) {
 	waitForRemoteReadContains(t, cfgPath, env, "", "b.txt", pollTimeout, "ls", "/proj-local/sub")
 	assertSameIdentity(t, "the item ID of /proj-local (a local folder rename is a remote move of the same item)",
 		folderID, remoteItemID(t, cfgPath, env, "/proj-local"))
-	assert.NotContains(t, remoteNames(t, cfgPath, env, "/"), "proj")
+	assert.False(t, slices.Contains(remoteNames(t, cfgPath, env, "/"), "proj"), "/proj is gone from the drive root")
 	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, syncDir, "sync")
 
@@ -196,7 +197,7 @@ func TestE2E_Sync_CrossMoves(t *testing.T) {
 		return contentTreeHolds(syncDir, func(tree map[string]string) bool { return assert.ObjectsAreEqual(want, tree) })
 	})
 	waitForRemoteReadContains(t, cfgPath, env, "", "top.txt", pollTimeout, "ls", "/box")
-	assert.NotContains(t, remoteNames(t, cfgPath, env, "/"), "top.txt")
+	assert.False(t, slices.Contains(remoteNames(t, cfgPath, env, "/"), "top.txt"), "/top.txt is gone from the drive root")
 	// Single pass by design: the next pass after convergence must change nothing.
 	assertSyncLeavesLocalTreeStable(t, cfgPath, env, syncDir, "sync")
 }
@@ -265,18 +266,19 @@ func TestE2E_Sync_NamingCorpusRoundtrip(t *testing.T) {
 	waitForRemoteReadContains(t, cfgPath, env, "", "children", pollTimeout, "ls", "/corpus")
 
 	listed := map[string]bool{}
-	for _, name := range remoteNames(t, cfgPath, env, "/corpus") {
-		listed[norm.NFC.String(name)] = true
+	for _, listedName := range remoteNames(t, cfgPath, env, "/corpus") {
+		listed[norm.NFC.String(listedName)] = true
 	}
 	for _, name := range namingCorpus() {
 		top := strings.SplitN(name, "/", 2)[0]
 		assert.True(t, listed[norm.NFC.String(top)], "OneDrive lists %q", top)
 	}
 	nested := strings.Split(namingCorpus()[len(namingCorpus())-1], "/")
-	assert.Contains(t, remoteNames(t, cfgPath, env, "/corpus/"+nested[0]), nested[1])
+	assert.Contains(t, printableNames(remoteNames(t, cfgPath, env, "/corpus/"+nested[0])), nested[1])
 
-	assert.Empty(t, remoteNames(t, cfgPath, env, "/rejected"), "names OneDrive cannot hold are not uploaded")
-	assert.Empty(t, remoteNames(t, cfgPath, env, "/cases"), "neither of two case-variant names is uploaded (R-2.12.2)")
+	assert.Empty(t, printableNames(remoteNames(t, cfgPath, env, "/rejected")), "names OneDrive cannot hold are not uploaded")
+	assert.Empty(t, printableNames(remoteNames(t, cfgPath, env, "/cases")),
+		"neither of two case-variant names is uploaded (R-2.12.2)")
 
 	// Download direction: the same names arriving from OneDrive.
 	otherDir := t.TempDir()

@@ -459,6 +459,17 @@ selection is not a refusal at all. Its message names the one failure, or
 counts the drives and the shared folders below them apart, each once
 (`TestWatchStartupError_CountsDrivesAndSharedFoldersApart`).
 
+A watch runner checks, each time it starts an engine, that the catalog
+still holds the account the mount syncs with
+(`OrchestratorConfig.AccountInCatalog`, which the CLI fills with a catalog
+read; nil asks nothing). An account the catalog no longer has (an email
+change another command made, a logout), or a catalog that cannot be read,
+starts no engine: the start fails like any other and is retried with the
+drive's backoff, and the reload that follows the change replaces the mount.
+An engine started under the old ID opened a fresh store under the old name
+and planned against an empty baseline (R-3.7.5,
+`TestRunner_DoesNotStartAnEngineForAnAccountTheCatalogNoLongerHolds`).
+
 Every reconcile tick, reload, and runner event re-runs the start logic, and
 the carried-over CLI conversion failures ride along on each pass. The watch
 loop therefore remembers what it has announced (`watchReportState`, owned by

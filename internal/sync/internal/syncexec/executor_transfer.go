@@ -512,8 +512,10 @@ type PendingCreateStore interface {
 //
 // An attempt whose create ended without an answer (a dropped connection, a
 // 5xx, a timeout: graph.ErrCreateOutcomeUnknown) is not known to have created
-// nothing, and its intent stays. The empty file such a create left is then
-// this client's own: observation adopts it, and a retry that gets 409 on it
+// nothing, and its intent stays. So does the intent such an earlier attempt
+// left when a later one fails short of a 409 (a 429, a request that never
+// left): that attempt created nothing, but the earlier one may have. The
+// empty file such a create left is then this client's own: observation adopts it, and a retry that gets 409 on it
 // finishes the upload into it (resolveCreateConflict). When the user renames
 // or deletes the file instead, no retry comes, and the intent is dropped once
 // OneDrive has been observed after the attempt and the file found gone (the
@@ -539,6 +541,9 @@ func (e *Executor) uploadNewFile(
 	}
 	result, err := e.transferMgr.UploadFile(ctx, driveID, parentID, filepath.Base(action.Path), localPath, opts)
 	keepIntent := false
+	// A 409 is judged by resolveCreateConflict, which says whether the file
+	// holding the name is this client's; any other failure says nothing of it.
+	conflictJudged := errors.Is(err, graph.ErrConflict)
 	switch {
 	case errors.Is(err, graph.ErrCreateOutcomeUnknown):
 		// Before the conflict case: a create that was answered 2xx and whose
@@ -553,11 +558,27 @@ func (e *Executor) uploadNewFile(
 	switch {
 	case errors.As(err, &createdErr) && createdErr.Removed && createdErr.Item != nil:
 		e.forgetRemovedPlaceholder(ctx, action, createdErr.Item.ID)
-	case !created && !keepIntent:
+	case !created && !keepIntent && !keepsEarlierIntent(priorIntent, err, conflictJudged):
+		// An attempt that made nothing clears the intent, unless an earlier
+		// attempt's create may have left its empty file there: a refusal of
+		// this attempt (a 429 or another refusal short of a 409, or a request
+		// that never left) says nothing of that file, which stays this
+		// client's to claim. Cleared, the next
+		// attempt's 409 read it as someone else's file: a conflict copy of the
+		// user's file and the empty one downloaded in its place. A 409 that
+		// resolveCreateConflict found held by another file does say, and
+		// clears it.
 		e.clearPendingCreateIntent(ctx, action, err == nil)
 	}
 
 	return result, err
+}
+
+// keepsEarlierIntent reports whether a failed attempt must leave the intent
+// an earlier attempt left: there was one, this attempt failed, and the
+// failure was not a 409 that resolveCreateConflict judged.
+func keepsEarlierIntent(priorIntent bool, err error, conflictJudged bool) bool {
+	return priorIntent && err != nil && !conflictJudged
 }
 
 // priorCreateIntent reports whether an earlier attempt left an intent to

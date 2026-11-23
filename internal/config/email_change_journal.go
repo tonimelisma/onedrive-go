@@ -261,7 +261,10 @@ func (c *emailChanger) apply(ctx context.Context, journal *emailChangeJournal, b
 // succeeds without calling begin has renamed what no journal accounts for:
 // the change stops there.
 func (c *emailChanger) moveJournalStateDBs(journal *emailChangeJournal, begin func() error) error {
-	moves := journal.stateDBMoves(c.dataDir)
+	moves, err := journal.stateDBMovesWithMounts(c.dataDir)
+	if err != nil {
+		return err
+	}
 	switch {
 	case len(moves) == 0 && begin == nil:
 		return nil
@@ -511,6 +514,53 @@ func (j *emailChangeJournal) stateDBMoves(dataDir string) []StateDBMove {
 	}
 
 	return moves
+}
+
+// stateDBMovesWithMounts is stateDBMoves with the mount IDs of every move
+// that is a drive's own store (StateDBMove.FromMountID), so the drive's
+// shortcut children move with it. A drive is known by its ID: a renamed
+// config section, or a catalog drive under a renamed account's old email.
+// The catalog is read as it is when the state step runs, before the catalog
+// step re-keys it, so a resumed change finds the same drives.
+func (j *emailChangeJournal) stateDBMovesWithMounts(dataDir string) ([]StateDBMove, error) {
+	moves := j.stateDBMoves(dataDir)
+	if len(moves) == 0 {
+		return moves, nil
+	}
+
+	candidates := make(map[driveid.CanonicalID]driveid.CanonicalID, len(j.DriveRenames))
+	for i := range j.DriveRenames {
+		candidates[j.DriveRenames[i].From] = j.DriveRenames[i].To
+	}
+	catalog, err := LoadCatalogForDataDir(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("account email change: load the catalog to move shortcut stores: %w", err)
+	}
+	for _, key := range catalog.SortedDriveKeys() {
+		driveCID, parseErr := driveid.NewCanonicalID(catalog.Drives[key].CanonicalID)
+		if parseErr != nil {
+			continue
+		}
+		for i := range j.AccountRenames {
+			if driveCID.Email() != j.AccountRenames[i].From.Email() {
+				continue
+			}
+			if renamed, renameErr := driveCID.WithEmail(j.AccountRenames[i].To.Email()); renameErr == nil {
+				candidates[driveCID] = renamed
+			}
+		}
+	}
+
+	for i := range moves {
+		for from, to := range candidates {
+			if DriveStatePathForDataDir(dataDir, from) == moves[i].From && DriveStatePathForDataDir(dataDir, to) == moves[i].To {
+				moves[i].FromMountID, moves[i].ToMountID = from.String(), to.String()
+				break
+			}
+		}
+	}
+
+	return moves, nil
 }
 
 func (j *emailChangeJournal) result() EmailReconcileResult {

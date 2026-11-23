@@ -182,8 +182,9 @@ func TestE2E_Shared_ReadOnlyFolder_DiscoveryDriveAddAndBlockedWriteUX(t *testing
 	assertOutputContains(t, out, "(download only)")
 
 	blockedLocalPath := filepath.Join(syncDir, "blocked-from-recipient.txt")
-	require.NoError(t, os.MkdirAll(filepath.Dir(blockedLocalPath), 0o700))
-	require.NoError(t, os.WriteFile(blockedLocalPath, []byte("recipient write attempt\n"), 0o600))
+	requireNoLocalError(t, os.MkdirAll(filepath.Dir(blockedLocalPath), 0o700), "create the recipient's folder")
+	requireNoLocalError(t, os.WriteFile(blockedLocalPath, []byte("recipient write attempt\n"), 0o600),
+		"write the recipient's file")
 
 	// Single pass by design: this one pass must record the denied write that
 	// status shows next. The file stays unsynced, so the pass exits 1.

@@ -141,6 +141,13 @@ func (s *shortcutRoots) reconcileShortcutRootLocalStateRecord(
 		return shortcutRootLocalReconcileStep{}, nil
 	}
 	normalized := syncshortcut.NormalizeShortcutRootRecord(record)
+	// A removed shortcut the user's filters exclude has no child run to
+	// drain it; it is finished here, its folder left as it is.
+	if syncshortcut.ShortcutRootExcludedByContentFilter(s.contentFilter, normalized.RelativeLocalPath) {
+		if next, changed := syncshortcut.PlanExcludedRetiringShortcutRoot(&normalized); changed {
+			return shortcutRootLocalReconcileStep{records: next, changed: true}, nil
+		}
+	}
 	if syncshortcut.ShortcutRootStateAwaitsReleaseCleanup(normalized.State) {
 		next, changed, err := s.finalizeShortcutRootReleaseRecord(&normalized)
 		return shortcutRootLocalReconcileStep{

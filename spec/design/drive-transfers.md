@@ -21,6 +21,7 @@ Unified download/upload manager shared by both CLI file operations and the sync 
 
 | Behavior | Evidence |
 | --- | --- |
+| Sync drops the session record of every upload it gives up and cancels its server session, for an overwrite or a create a conflict takes, a local move and a local delete; a gone session's expiry is judged on the manager's clock (R-5.6.13, R-5.6.12). | `TestRunOnce_ConflictOverAnInterruptedLargeUploadDropsItsSession`, `TestRunOnce_ConflictOverAnInterruptedLargeCreateDropsItsSession`, `TestRunOnce_LocalMoveOfAnInterruptedLargeUploadDropsItsSession`, `TestRunOnce_LocalDeleteOfAnInterruptedLargeUploadDropsItsSession`, `TestSessionUpload_SessionExpiryIsJudgedOnTheManagersClock` |
 | Downloads use partial-file resume plus hash verification before the final atomic rename. | `internal/driveops/transfer_manager_test.go` (`TestTransferManager_ResumeDownload_CorruptPartial_RetriesFresh`, `TestTransferManager_StalePartialFromOldVersionIsNotResumed`), `internal/graph/download_test.go`, `internal/driveops/hash_test.go`, `internal/localpath/localpath_test.go` (`TestAtomicWrite`) |
 | Uploads keep simple-upload and upload-session mechanics inside the transfer boundary, and persisted sessions carry mount scope so lifecycle owners can purge child-owned sessions and resume after restart. | `internal/driveops/transfer_manager_test.go` (`TestTransferManager_Upload_Success`), `internal/driveops/transfer_create_test.go` (`TestUploadFile_RecordsTheCreatedItemBeforeAnyContent`), `internal/graph/upload_test.go`, `internal/graph/item_create_test.go` (`TestCreateUploadSessionForItem_PreconditionFailureIsNeverRetriedUnconditionally`), `TestSessionStore_DeleteForScope_RemovesMatchingMountOrRoot`, `TestSessionStore_ReopenPreservesUploadSession` |
 | The iOS HEIC quirk is accepted only as a smaller HEIF-signed body; an error page, an empty or truncated body, or a larger or unsigned body is an integrity failure that never reaches the target, and an accepted server transform warns on a personal drive only. | `TestTransferManager_HEICMetadataMismatch_AcceptsFirstDownloadQuietly`, `TestTransferManager_HEICQuirkRequiresASmallerHEIFBody`, `TestTransferManager_HEICSameSizeHashMismatch_StillRetries`, `TestTransferManager_AcceptedTransformWarnsOnlyOnPersonalDrives` |
@@ -463,7 +464,11 @@ each with `dropSession`: the record goes first, then the server session is
 canceled best-effort on a detached, bounded context, so a failed cancel still
 drops the record (`TestTransferManager_DropUploadSessions_DropsBothKeysAndCancelsEachOnce`,
 `TestTransferManager_DropUploadSessions_AFailedCancelStillDropsTheRecord`,
-`TestRunOnce_ConflictOverAnInterruptedLargeUploadDropsItsSession`). An upload
+`TestRunOnce_ConflictOverAnInterruptedLargeUploadDropsItsSession`, and for
+the create key, a local move and a local delete
+`TestRunOnce_ConflictOverAnInterruptedLargeCreateDropsItsSession`,
+`TestRunOnce_LocalMoveOfAnInterruptedLargeUploadDropsItsSession`,
+`TestRunOnce_LocalDeleteOfAnInterruptedLargeUploadDropsItsSession`). An upload
 still in the plan keeps its row and its record
 (`TestChaosGraph_FragmentFaultLeavesAPartUploadedSessionToResume`), and a
 plan that deferred uploads by its mode (download-only) drops nothing, since
@@ -503,7 +508,11 @@ adopted. The item is found by name as every lookup among siblings finds it
 the same adoption through `settleUploadedItem`. A session gone before its
 expiry while the item holds other bytes, or a fragment answered 404, is
 `ErrUploadSessionInvalidated`: another writer changed the item (live probe
-L-02), and sync turns it into a stale precondition. Evidence:
+L-02), and sync turns it into a stale precondition. The expiry is judged on
+the manager's clock (`WithClock`), which the sync engine sets to its run
+clock, so a test that moves the engine's time moves a record's expiry with
+it; the CLI keeps the wall clock
+(`TestSessionUpload_SessionExpiryIsJudgedOnTheManagersClock`). Evidence:
 `TestSessionUpload_FinalFragmentFailureAdoptsCommittedItem`,
 `TestSessionUpload_GoneSessionWithLandedItemIsAdopted`,
 `TestSessionUpload_CompletedSessionWithLandedItemIsAdopted`,

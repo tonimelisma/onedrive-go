@@ -209,7 +209,7 @@ func (rt *observation) watchMountRootRemote(
 		interval = syncdomain.MinPollInterval
 	}
 
-	bo := retry.NewBackoff(retry.WatchRemotePolicy())
+	bo := retry.NewBackoff(retry.WatchRemotePolicy(), rt.deps.clock)
 	bo.SetMaxOverride(interval)
 	var outage syncobserve.PollOutageLog
 

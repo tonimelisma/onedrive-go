@@ -2,12 +2,16 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -16,8 +20,11 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
+	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
 // An email change would rename a drive's state DB; while a sync still has it
@@ -187,4 +194,204 @@ func TestInitializeCLIContext_AChangeThatCannotBeFinishedFailsOnlyCommandsThatUs
 	require.ErrorContains(t, err, journalPath)
 	require.NoError(t, closeRootCommandLogger(root))
 	assert.FileExists(t, journalPath, "a journal that cannot be read is kept")
+}
+
+// runningWatchCountingReloads is a running `sync --watch` on the control
+// socket that counts the reloads it is asked for.
+func runningWatchCountingReloads(t *testing.T) *atomic.Int32 {
+	t.Helper()
+
+	var reloads atomic.Int32
+	startCLIControlSocket(t, synccontrol.StatusResponse{OwnerMode: synccontrol.OwnerModeWatch},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != synccontrol.PathReload {
+				http.Error(w, "unexpected path", http.StatusNotFound)
+				return
+			}
+			reloads.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			assert.NoError(t, json.NewEncoder(w).Encode(synccontrol.MutationResponse{Status: synccontrol.StatusReloaded}))
+		})
+
+	return &reloads
+}
+
+// A command that finishes an interrupted email change tells a running watch
+// at once, so none of its runners starts an engine under the old name while
+// it waits for its own reread of the config file.
+//
+// Validates: R-3.7.3, R-3.7.5
+func TestFinishInterruptedEmailChange_TellsARunningWatch(t *testing.T) {
+	setTestDriveHome(t)
+	oldCID := driveid.MustCanonicalID("business:user@example.com")
+	newCID := driveid.MustCanonicalID("business:renamed@example.com")
+	cfgPath := seedInterruptedEmailChange(t, oldCID, newCID)
+	reloads := runningWatchCountingReloads(t)
+
+	var out bytes.Buffer
+	cc := newCommandContext(&out, cfgPath)
+	require.NoError(t, cc.finishInterruptedEmailChange(t.Context()))
+
+	assert.Equal(t, int32(1), reloads.Load())
+	assert.Contains(t, out.String(), "The running 'sync --watch' picked up the change.")
+}
+
+// A command that applies an email change Graph reports tells a running watch
+// the same way.
+//
+// Validates: R-3.7.3, R-3.7.5
+func TestReconcileGraphUser_TellsARunningWatch(t *testing.T) {
+	setTestDriveHome(t)
+	oldCID := driveid.MustCanonicalID("business:user@example.com")
+	newCID := driveid.MustCanonicalID("business:renamed@example.com")
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_user@example.com.json")
+	seedCatalogAccount(t, oldCID, func(account *config.CatalogAccount) {
+		account.UserID = emailChangeTestUserID
+	})
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, oldCID, t.TempDir()))
+	reloads := runningWatchCountingReloads(t)
+
+	var out bytes.Buffer
+	cc := newCommandContext(&out, cfgPath)
+	result, err := cc.reconcileGraphUser(t.Context(), newCID, &graph.User{ID: emailChangeTestUserID, Email: newCID.Email()})
+	require.NoError(t, err)
+
+	require.True(t, result.Changed())
+	assert.Equal(t, int32(1), reloads.Load())
+}
+
+// `sync --watch` finishing a change itself sends no reload: it is the
+// running watch, and it reads the renamed config as it starts.
+//
+// Validates: R-3.7.3, R-3.7.5
+func TestWatch_AChangeItFinishedItselfSendsNoReloadToItself(t *testing.T) {
+	setTestDriveHome(t)
+	oldCID := driveid.MustCanonicalID("business:user@example.com")
+	newCID := driveid.MustCanonicalID("business:renamed@example.com")
+	cfgPath := seedInterruptedEmailChange(t, oldCID, newCID)
+	reloads := runningWatchCountingReloads(t)
+
+	var out bytes.Buffer
+	cc := newCommandContext(&out, cfgPath)
+	cc.isWatchCommand = true
+	require.NoError(t, cc.finishInterruptedEmailChange(t.Context()))
+
+	assert.Zero(t, reloads.Load())
+	assert.NoFileExists(t, emailChangeJournalPathForTest(), "the change is finished all the same")
+}
+
+// A second config file the change did not run with is caught up at the CLI's
+// entry, before the command resolves its drive: a section under a former
+// email of the account takes the account's email now, the command resolves
+// the drive under the new name, and one line says so.
+//
+// Validates: R-3.7.3, R-3.7.5
+func TestInitializeCLIContext_ASecondConfigFileIsCaughtUpFromAFormerEmail(t *testing.T) {
+	setTestDriveHome(t)
+	oldCID := driveid.MustCanonicalID("business:user@example.com")
+	newCID := driveid.MustCanonicalID("business:renamed@example.com")
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_renamed@example.com.json")
+	seedCatalogAccount(t, newCID, func(account *config.CatalogAccount) {
+		account.UserID = emailChangeTestUserID
+		account.FormerEmails = []string{oldCID.Email()}
+	})
+	second := filepath.Join(t.TempDir(), "second.toml")
+	require.NoError(t, config.AppendDriveSection(t.Context(), second, oldCID, t.TempDir()))
+
+	var status bytes.Buffer
+	root := newRootCmdWithWriters(io.Discard, &status)
+	var resolved driveid.CanonicalID
+	root.AddCommand(&cobra.Command{
+		Use: "resolved-drive",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			resolved = mustCLIContext(cmd.Context()).Cfg.CanonicalID
+			return nil
+		},
+	})
+	root.SetArgs([]string{"--config", second, "--drive", oldCID.String(), "resolved-drive"})
+	require.NoError(t, root.Execute())
+	require.NoError(t, closeRootCommandLogger(root))
+
+	assert.Equal(t, newCID, resolved, "the command resolved its drive under the new name")
+	assert.Equal(t, 1, strings.Count(status.String(), "by a former email of its account"), status.String())
+	cfg, err := config.LoadOrDefault(second, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	assert.Contains(t, cfg.Drives, newCID)
+	assert.NotContains(t, cfg.Drives, oldCID)
+}
+
+// An identity probe that finds the account's email changed moves the sign-in
+// file; the shared-target path flushes the runtime's token cache with it, as
+// a drive session does, so no source cached under the old file name outlives
+// the rename: asking for the old path afterwards loads it from disk again
+// instead of reusing the source the probe built.
+//
+// Validates: R-3.7.2, R-6.8.27
+func TestSharedTargetClients_FlushTheTokenCacheAfterARename(t *testing.T) {
+	setTestDriveHome(t)
+
+	oldCID := driveid.MustCanonicalID("business:user@example.com")
+	newCID := driveid.MustCanonicalID("business:renamed@example.com")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, config.AppendDriveSection(t.Context(), configPath, oldCID, "~/Business"))
+	seedCatalogAccount(t, oldCID, func(account *config.CatalogAccount) {
+		account.UserID = snapshotTestUserID123
+		account.PrimaryDriveID = rootTestDrive123
+		account.PrimaryDriveCanonical = oldCID.String()
+	})
+	seedCatalogDrive(t, oldCID, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = rootTestDrive123
+	})
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_user@example.com.json")
+
+	rawCfg, err := config.LoadOrDefault(configPath, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/me", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponse(t, w, `{
+			"id":"user-123",
+			"displayName":"Business User",
+			"mail":"renamed@example.com",
+			"userPrincipalName":"user@example.com"
+		}`)
+	}))
+	defer srv.Close()
+
+	runtime := driveops.NewSessionRuntime(config.NewHolder(rawCfg, configPath), "test-agent", slog.New(slog.DiscardHandler))
+	runtime.GraphBaseURL = srv.URL
+	var tokenPaths []string
+	runtime.TokenSourceFn = func(path string, _ *slog.Logger) (graph.TokenSource, error) {
+		tokenPaths = append(tokenPaths, path)
+		return staticTokenSource{}, nil
+	}
+
+	cc := &CLIContext{
+		Flags:        CLIFlags{ConfigPath: configPath},
+		Logger:       slog.New(slog.DiscardHandler),
+		StatusWriter: io.Discard,
+		CfgPath:      configPath,
+		Env:          config.EnvOverrides{},
+		GraphBaseURL: srv.URL,
+		Runtime:      runtime,
+	}
+
+	clients, err := cc.sharedTargetClients(t.Context(), sharedref.Ref{
+		AccountEmail:  oldCID.Email(),
+		RemoteDriveID: "remote-drive",
+		RemoteItemID:  "remote-item",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, clients)
+	assert.Equal(t, newCID, clients.Account)
+
+	_, err = runtime.BootstrapClient(config.DriveTokenPath(oldCID))
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		config.DriveTokenPath(oldCID), // the probe
+		config.DriveTokenPath(newCID), // the shared target, at the moved file
+		config.DriveTokenPath(oldCID), // the probe's source did not outlive the rename
+	}, tokenPaths)
 }

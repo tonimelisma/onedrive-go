@@ -64,7 +64,11 @@ import (
 //   - that plan defers and drops nothing;
 //   - a synced item the user deleted on one side, making nothing at its path
 //     again, while the other side left it with everything above and below it
-//     as synced, is gone from both.
+//     as synced, is gone from both, unless it lay in a folder the user
+//     deleted with it that the other side wrote into: that folder is kept
+//     whole, and the item with it;
+//   - no side ends holding one file content at two paths, a conflict copy
+//     apart: nothing the user did copies a file.
 //
 // While a name OneDrive takes for another entry's stays on both sides, the
 // sides cannot converge; when a plan has nothing left to do or a pass changes
@@ -666,6 +670,7 @@ const (
 	exLeftHeld       = "left-held"
 	exWrittenLost    = "written-lost"
 	exDeleteUndone   = "delete-undone"
+	exDuplicated     = "duplicated"
 )
 
 func (r *exRun) failf(invariant, format string, args ...any) {
@@ -673,6 +678,37 @@ func (r *exRun) failf(invariant, format string, args ...any) {
 		r.broken = append(r.broken, invariant)
 	}
 	r.failures = append(r.failures, fmt.Sprintf(format, args...))
+}
+
+// exConflictInfix marks a conflict copy's name in the model
+// (conflictModelPath).
+const exConflictInfix = ".conflict-"
+
+// checkNoDuplicates fails the run when a side ends with one file content at
+// two plain paths (filesByContent).
+func (r *exRun) checkNoDuplicates() {
+	for _, local := range []bool{true, false} {
+		for content, paths := range r.filesByContent(local) {
+			if len(paths) > 1 {
+				r.failf(exDuplicated, "%s holds %q at %v", exSideName(local), content, paths)
+			}
+		}
+	}
+}
+
+// filesByContent lists, per file content a side holds outside conflict
+// copies, the paths it holds it at, sorted. A conflict copy keeps both on
+// purpose, under a name that tells the user; the same content at two plain
+// paths is a copy nobody asked for.
+func (w *exWorld) filesByContent(local bool) map[string][]string {
+	byContent := map[string][]string{}
+	for _, p := range sortedKeys(w.side(local)) {
+		if item := w.side(local)[p]; !item.folder && !strings.Contains(p, exConflictInfix) {
+			byContent[item.content] = append(byContent[item.content], p)
+		}
+	}
+
+	return byContent
 }
 
 // contents is the set of file contents a side holds.
@@ -698,7 +734,11 @@ func (w *exWorld) basePath(local bool, item pmItem) string {
 
 // untouchedDeletes lists the synced paths the user deleted on one side,
 // making nothing there again, while the other side left the item, the folders
-// above it and everything below it as they were synced.
+// above it and everything below it as they were synced. A synced file in a
+// folder the user deleted on that side with it (another entry may have taken
+// the folder's path), which the other side wrote into, is not listed: that folder is kept whole, as a conflict copy here or
+// made again here as OneDrive keeps it, which is the data-safe outcome, and
+// the files the user did not touch in it are kept with it.
 func (r *exRun) untouchedDeletes() []string {
 	var gone []string
 	for _, local := range []bool{true, false} {
@@ -709,13 +749,28 @@ func (r *exRun) untouchedDeletes() []string {
 			presentKeys[namekey.OfPath(p)] = true
 		}
 		for _, base := range exSyncedPaths() {
-			if !present[base] && !presentKeys[namekey.OfPath(base)] && r.leftAsSynced(!local, base) {
+			if !present[base] && !presentKeys[namekey.OfPath(base)] && r.leftAsSynced(!local, base) &&
+				!r.inAWrittenIntoDeletedFolder(local, base, present) {
 				gone = append(gone, base)
 			}
 		}
 	}
 
 	return gone
+}
+
+// inAWrittenIntoDeletedFolder reports whether a synced folder above base is
+// gone from the side local names (present holds the synced paths of the
+// items it still has; another entry may hold the folder's path), while the
+// other side did not leave the folder as it was synced.
+func (r *exRun) inAWrittenIntoDeletedFolder(local bool, base string, present map[string]bool) bool {
+	for dir := path.Dir(base); dir != "."; dir = path.Dir(dir) {
+		if !present[dir] && !r.leftAsSynced(!local, dir) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // leftAsSynced reports whether a side holds base, the folders above it and
@@ -767,6 +822,7 @@ func (r *exRun) run() {
 			r.failf(exWrittenLost, "written %q is lost", content)
 		}
 	}
+	r.checkNoDuplicates()
 	for _, base := range r.mustGo {
 		if r.stillHolds(true, base) || r.stillHolds(false, base) {
 			r.failf(exDeleteUndone, "the delete of %s did not happen", base)
@@ -1003,19 +1059,36 @@ func (w *exWorld) applyPlan(plan *syncdomain.ActionPlan, refuse string) map[stri
 }
 
 // exPlanOrder is the plan's actions in an order that respects its
-// dependencies; actions caught in a cycle come last, in plan order.
+// dependencies, as the engine reduces its ready frontier: the ready
+// publication-only actions (a baseline update, a cleanup) first, committed
+// through the store before any action of the frontier is dispatched, then
+// the other ready actions, in plan order; actions caught in a cycle come
+// last, in plan order.
 func exPlanOrder(plan *syncdomain.ActionPlan) []int {
 	done := make([]bool, len(plan.Actions))
 	order := make([]int, 0, len(plan.Actions))
+	ready := func(i int) bool {
+		return !done[i] && (i >= len(plan.Deps) || !slices.ContainsFunc(plan.Deps[i], func(dep int) bool { return !done[dep] }))
+	}
 	for progressed := true; progressed; {
 		progressed = false
+		for drained := true; drained; {
+			drained = false
+			for i := range plan.Actions {
+				if exPublicationOnly(&plan.Actions[i]) && ready(i) {
+					done[i] = true
+					order = append(order, i)
+					drained = true
+				}
+			}
+		}
+		var frontier []int
 		for i := range plan.Actions {
-			if done[i] {
-				continue
+			if ready(i) {
+				frontier = append(frontier, i)
 			}
-			if i < len(plan.Deps) && slices.ContainsFunc(plan.Deps[i], func(dep int) bool { return !done[dep] }) {
-				continue
-			}
+		}
+		for _, i := range frontier {
 			done[i] = true
 			order = append(order, i)
 			progressed = true
@@ -1028,6 +1101,12 @@ func exPlanOrder(plan *syncdomain.ActionPlan) []int {
 	}
 
 	return order
+}
+
+// exPublicationOnly reports an action the engine commits through the store
+// rather than dispatching to a worker.
+func exPublicationOnly(a *syncdomain.Action) bool {
+	return a.Type == syncdomain.ActionBaselineUpdate || a.Type == syncdomain.ActionCleanup
 }
 
 // applyAction carries out one action and reports whether it succeeded.
@@ -1091,9 +1170,37 @@ func (w *exWorld) exDownload(a *syncdomain.Action) bool {
 	}
 	inode := uint64(w.next())
 	w.local[a.Path] = pmItem{content: src.content, inode: inode}
-	w.baseline[a.Path] = pmSynced{id: src.id, localContent: src.content, remoteContent: src.content, inode: inode, etag: src.etag}
+	w.recordSynced(a.Path, pmSynced{id: src.id, localContent: src.content, remoteContent: src.content, inode: inode, etag: src.etag})
 
 	return true
+}
+
+// moveSynced re-paths the moved item's baseline row and its subtree, as the
+// executor's commit does (commitMove): from where the baseline has the item,
+// looked up by its ID, not from the action's OldPath, which is the moving
+// side's path and differs from it where the two sides diverged.
+func (w *exWorld) moveSynced(a *syncdomain.Action) {
+	from := a.OldPath
+	if a.View != nil && a.View.Baseline != nil && a.View.Baseline.ItemID != "" {
+		for held, synced := range w.baseline {
+			if synced.id == a.View.Baseline.ItemID {
+				from = held
+			}
+		}
+	}
+	moveTree(w.baseline, from, a.Path)
+}
+
+// recordSynced records the item synced at p, as the executor's commit does:
+// the baseline keys a row by item ID, so a row the item had at another path
+// goes.
+func (w *exWorld) recordSynced(p string, row pmSynced) {
+	for held, synced := range w.baseline {
+		if held != p && synced.id == row.id {
+			delete(w.baseline, held)
+		}
+	}
+	w.baseline[p] = row
 }
 
 func (w *exWorld) localReplaceable(p string) bool {
@@ -1140,7 +1247,7 @@ func (w *exWorld) exUpload(a *syncdomain.Action, kept map[string]bool) bool {
 	}
 	etag := w.next()
 	w.remote[at] = pmItem{id: id, content: src.content, etag: etag}
-	w.baseline[a.Path] = pmSynced{id: id, localContent: src.content, remoteContent: src.content, inode: src.inode, etag: etag}
+	w.recordSynced(a.Path, pmSynced{id: id, localContent: src.content, remoteContent: src.content, inode: src.inode, etag: etag})
 
 	return true
 }
@@ -1179,13 +1286,34 @@ func (w *exWorld) exLocalDelete(a *syncdomain.Action) bool {
 				return false
 			}
 		}
-	} else if row, synced := w.baseline[a.Path]; !synced || row.localContent != item.content {
+	} else if row, synced := w.plannedSynced(a); !synced || row.localContent != item.content {
 		return false
 	}
 	delete(w.local, a.Path)
 	deleteSyncedTree(w.baseline, a.Path)
 
 	return true
+}
+
+// plannedSynced is the baseline row of the item a delete was planned
+// against: the row at its path, or, when an earlier action of the pass
+// committed the item at another path (a download of OneDrive's move of it,
+// which records the row by item ID), that row. The executor verifies the
+// file against the baseline the plan carries, not the row's current path.
+func (w *exWorld) plannedSynced(a *syncdomain.Action) (pmSynced, bool) {
+	if row, synced := w.baseline[a.Path]; synced {
+		return row, true
+	}
+	if a.View == nil || a.View.Baseline == nil || a.View.Baseline.ItemID == "" {
+		return pmSynced{}, false
+	}
+	for _, row := range w.baseline {
+		if row.id == a.View.Baseline.ItemID {
+			return row, true
+		}
+	}
+
+	return pmSynced{}, false
 }
 
 // exRemoteDelete deletes the item and everything below it on OneDrive, as
@@ -1238,7 +1366,7 @@ func (w *exWorld) exLocalMove(a *syncdomain.Action) bool {
 		delete(w.local, a.Path)
 	}
 	moveTree(w.local, a.OldPath, a.Path)
-	moveTree(w.baseline, a.OldPath, a.Path)
+	w.moveSynced(a)
 
 	return true
 }
@@ -1255,7 +1383,7 @@ func (w *exWorld) exRemoteMove(a *syncdomain.Action) bool {
 	}
 	moveTree(w.remote, at, to)
 	w.bumpRemote(to)
-	moveTree(w.baseline, a.OldPath, a.Path)
+	w.moveSynced(a)
 	if row, ok := w.baseline[a.Path]; ok {
 		row.etag = w.remote[to].etag
 		w.baseline[a.Path] = row
@@ -1269,22 +1397,46 @@ func (w *exWorld) exRemoteFolderCreate(a *syncdomain.Action) bool {
 	if !localOK || !local.folder {
 		return false
 	}
-	_, remote, found := w.remoteItem(a)
+	// A create planned without OneDrive truth at its path finds OneDrive
+	// holding one there, and the worker's freshness check supersedes it
+	// before it reaches OneDrive (evaluateRemoteActionFreshness).
+	if _, held := w.remote[a.Path]; held && (a.View == nil || a.View.Remote == nil || a.View.Remote.IsDeleted) {
+		return false
+	}
+	// The executor creates the folder by its parent and name and adopts a
+	// folder OneDrive already has there (createRemoteFolder): the item ID the
+	// action carries from the baseline names nothing it creates.
+	parent, parentOK := w.remoteFolderAt(path.Dir(a.Path))
+	if !parentOK {
+		return false
+	}
+	at, found := w.remoteEntryAt(path.Join(parent, path.Base(a.Path)))
+	remote := w.remote[at]
 	if found && !remote.folder {
 		return false
 	}
 	if !found {
-		parent, parentOK := w.remoteFolderAt(path.Dir(a.Path))
-		at := path.Join(parent, path.Base(a.Path))
-		if !parentOK || !exFree(w.remote, false, at, "") {
-			return false
-		}
 		remote = pmItem{id: "item-" + strconv.Itoa(w.next()), folder: true, etag: w.next()}
 		w.remote[at] = remote
 	}
 	w.baseline[a.Path] = pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag}
 
 	return true
+}
+
+// remoteEntryAt finds the entry OneDrive holds at p, as it compares names.
+func (w *exWorld) remoteEntryAt(p string) (string, bool) {
+	if _, ok := w.remote[p]; ok {
+		return p, true
+	}
+	key := namekey.OfPath(p)
+	for held := range w.remote {
+		if namekey.OfPath(held) == key {
+			return held, true
+		}
+	}
+
+	return p, false
 }
 
 // exLocalFolderCreate makes the folder here, with any folder above it that is
@@ -1319,7 +1471,7 @@ func (w *exWorld) exLocalFolderCreate(a *syncdomain.Action) bool {
 
 func (w *exWorld) exBaselineUpdate(a *syncdomain.Action) bool {
 	if a.OldPath != "" {
-		moveTree(w.baseline, a.OldPath, a.Path)
+		w.moveSynced(a)
 
 		return true
 	}
@@ -1328,10 +1480,12 @@ func (w *exWorld) exBaselineUpdate(a *syncdomain.Action) bool {
 	if !remoteOK || !localOK {
 		return false
 	}
-	w.baseline[a.Path] = pmSynced{
+	// The store keys the row by item ID: a row the item had at another
+	// path goes (recordSynced).
+	w.recordSynced(a.Path, pmSynced{
 		id: remote.id, folder: remote.folder, localContent: local.content, remoteContent: remote.content,
 		inode: local.inode, etag: remote.etag,
-	}
+	})
 
 	return true
 }
@@ -1566,6 +1720,185 @@ func TestPlannerExhaustive_ShortHistoriesOnBothSidesKeepContentAndConverge(t *te
 		stride = exRaceStride
 	}
 	requireExhaustiveGolden(t, exRunPairs(t, exPairs(t), stride), stride == 1)
+}
+
+// Validates: R-2.17.6, R-2.1.7
+//
+// From the held start, OneDrive renamed the held folder away, which frees
+// its name for the folder made here in its place, and that folder's create
+// on OneDrive is refused once. The local move that follows OneDrive's
+// rename records the item's baseline row where the item went, as the store
+// does by item ID, so the passes after the refusal make the folder and its
+// file and the plan empties, on every run with each create refused once.
+func TestPlannerPairs_AFolderCreateRefusedAfterTheHeldFolderMovesAwayConverges(t *testing.T) {
+	t.Parallel()
+
+	requirePairKeepsEveryInvariant(t, &exPair{
+		start: exStartNamed(t, "held"),
+		remote: []exEdit{
+			{kind: exDeleteFolder, from: "p"},
+			{kind: exMoveFolder, from: "x", to: "q"},
+		},
+	})
+}
+
+// Validates: R-2.17.6, R-2.1.7
+//
+// The same rename on both sides, with a folder made here at the old path:
+// the re-key of the renamed folder's baseline row is publication-only, so
+// it is committed before the folder create is dispatched, and the create
+// then records the new folder at the path the row left. The passes make
+// the new folder on OneDrive and the plan empties.
+func TestPlannerPairs_AFolderRenamedTheSameOnBothSidesWithANewFolderAtItsOldPathConverges(t *testing.T) {
+	t.Parallel()
+
+	requirePairKeepsEveryInvariant(t, &exPair{
+		start: exStartNamed(t, "synced"),
+		local: []exEdit{
+			{kind: exMoveFolder, from: "p", to: "q"},
+			{kind: exMakeFolder, to: "p"},
+		},
+		remote: []exEdit{{kind: exMoveFolder, from: "p", to: "q"}},
+	})
+}
+
+// Validates: R-2.17.6
+//
+// From the held start, here p renamed q and the held folder moved into it as
+// q/x2: once the case collision of x2 is resolved, f, which left p for the
+// new x, moves after p's move, so x's move into q, the new x and f's move all
+// run, and the plan empties.
+func TestPlannerPairs_AHeldFolderMovedIntoARenamedFolderRunsOnceItsNameIsFree(t *testing.T) {
+	t.Parallel()
+
+	requirePairKeepsEveryInvariant(t, &exPair{
+		start: exStartNamed(t, "held"),
+		local: []exEdit{
+			{kind: exMoveFolder, from: "p", to: "q"},
+			{kind: exMoveFolder, from: "x2", to: "q/x2"},
+		},
+	})
+}
+
+// Validates: R-2.17.9, R-2.17.2
+//
+// OneDrive deleted a folder and moved a file onto its path: z onto p, which
+// held the synced f, or onto the empty x, with this computer leaving the
+// folder as synced or deleting f in it. The plan deletes the folder here and
+// the move of z onto its path waits for that delete, so z ends once on each
+// side, on every run with each create refused once. Before, the folder made
+// the move wait, and z was downloaded at the folder's path while its copy
+// here went back to OneDrive as a new file.
+func TestPlannerPairs_AFileMovedOnOneDriveOntoAFolderItDeletedEndsOnce(t *testing.T) {
+	t.Parallel()
+
+	// Registered before the subtests run in parallel: registering checks,
+	// then registers, and two at once would both register.
+	registerExCachingDriver(t)
+	for _, tc := range []struct {
+		name   string
+		folder string
+		local  []exEdit
+	}{
+		{name: "onto a folder with a file", folder: "p"},
+		{name: "onto an empty folder", folder: "x"},
+		{name: "onto a folder emptied here", folder: "p", local: []exEdit{{kind: exDeleteFile, from: "p/f"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			requirePairKeepsEveryInvariant(t, &exPair{
+				start: exStartNamed(t, "synced"),
+				local: tc.local,
+				remote: []exEdit{
+					{kind: exDeleteFolder, from: tc.folder},
+					{kind: exMoveFile, from: "z", to: tc.folder},
+				},
+			})
+		})
+	}
+}
+
+// Validates: R-2.17.6, R-2.1.7
+//
+// Here p moved aside, a new p made, x moved into it as p/x, a new p/x/a made
+// and the old p moved into it as p/x/a/p, while OneDrive kept both: x's
+// OneDrive move lands in the new p, at the old p's path there, and the old
+// p's target lies below x's. The old p moves aside on OneDrive first, the new
+// p is made there and x moves into it, and a later pass makes p/x/a and moves
+// the old p into it, on every run with each create refused once. Before,
+// x's move was taken back while the old p held the path, and the old p
+// waited for x: nothing moved, ever.
+func TestPlannerPairs_AFolderMovedIntoANewFolderAtThePathOfAFolderMovedBelowItConverges(t *testing.T) {
+	t.Parallel()
+
+	requirePairKeepsEveryInvariant(t, &exPair{
+		start: exStartNamed(t, "synced"),
+		local: []exEdit{
+			{kind: exMoveFolder, from: "p", to: "q"},
+			{kind: exMakeFolder, to: "p"},
+			{kind: exMoveFolder, from: "x", to: "p/x"},
+			{kind: exMakeFolder, to: "p/x/a"},
+			{kind: exMoveFolder, from: "q", to: "p/x/a/p"},
+		},
+	})
+}
+
+// Validates: R-2.17.6, R-2.1.7
+//
+// p moved into a new folder at its own path on each side, into p/a/p here
+// and into p/b/p on OneDrive: OneDrive's place wins, so p moves to p/b/p here
+// and the two new folders p are one folder by path. The folder made here is
+// planned at the path p left with OneDrive's own new p as its OneDrive truth,
+// so the freshness check, which supersedes a create planned without OneDrive
+// truth at a path OneDrive holds, lets it through and it adopts that folder;
+// p/a is then made on OneDrive and p/b here. Before, the create was planned
+// without OneDrive truth and superseded on every pass, and p's move, waiting
+// for p/b, never came.
+func TestPlannerPairs_AFolderMovedIntoDifferentNewFoldersAtItsOwnPathOnEachSideConverges(t *testing.T) {
+	t.Parallel()
+
+	moveInto := func(newFolder string) []exEdit {
+		return []exEdit{
+			{kind: exMoveFolder, from: "p", to: "q"},
+			{kind: exMakeFolder, to: "p"},
+			{kind: exMakeFolder, to: "p/" + newFolder},
+			{kind: exMoveFolder, from: "q", to: "p/" + newFolder + "/p"},
+		}
+	}
+	requirePairKeepsEveryInvariant(t, &exPair{start: exStartNamed(t, "synced"), local: moveInto("a"), remote: moveInto("b")})
+}
+
+// Validates: R-2.17.6
+//
+// From the held start, a folder sub made here in the new x and f moved into
+// it: OneDrive still keeps the old x at x, so sub is not made there until the
+// old x has moved to x2, and no pass carries sub along with the old x and
+// moves it back, on every run with each create refused once.
+func TestPlannerPairs_AFolderMadeInTheHeldFoldersPlaceWaitsForItToLeave(t *testing.T) {
+	t.Parallel()
+
+	registerExCachingDriver(t)
+	store := exQuietStore(t)
+	pair := &exPair{start: exStartNamed(t, "held"), local: []exEdit{
+		{kind: exMakeFolder, to: "x/sub"},
+		{kind: exMoveFile, from: "x/f", to: "x/sub/f"},
+	}}
+	r := newExRun(t, store, pair)
+	r.run()
+	runs := []*exRun{r}
+	for _, refusal := range r.exRefusals() {
+		refused := newExRun(t, store, pair)
+		refused.refusal = refusal
+		refused.run()
+		runs = append(runs, refused)
+	}
+	for _, run := range runs {
+		assert.Empty(t, run.broken, "%s", run.result(pair.id()).detail)
+		for _, line := range run.log {
+			assert.NotContains(t, line, "<- x2/sub", "sub was carried with the old x: %s", run.result(pair.id()).detail)
+		}
+	}
 }
 
 // exRunPairs runs every stride-th pair, and that pair again with each of its

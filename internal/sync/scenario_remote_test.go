@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
+	"maps"
 	"math/rand/v2"
 	"path"
 	"sort"
@@ -52,7 +54,10 @@ type moveScenarioRemote struct {
 	items    map[string]*graph.Item // by item ID, as GetItem sees them live
 	contents map[string]string      // file content by item ID
 	etagSeq  int
-	idSeq    int
+	// idCounts counts the items named per kind, parent and name (nextID),
+	// so an item's ID follows from what it names, not from how many items
+	// any other request created before it.
+	idCounts map[string]int
 	// observedFolderETags is the folder eTag delta reports. Live, a folder's
 	// eTag also changes whenever a descendant changes, but remote_state kept
 	// the eTag recorded when the folder was created (live retest, movesrc).
@@ -115,6 +120,9 @@ type moveScenarioRemote struct {
 	sessions         map[graph.UploadURL]scenarioSession
 	sessionFragments map[graph.UploadURL][]scenarioFragment
 	sessionSeq       int
+	// sessionCounts counts the sessions opened per item, which names each
+	// session's upload URL (openSessionLocked).
+	sessionCounts map[string]int
 	// interruptFragmentAt, when nonzero, drops the connection of the next
 	// session fragment sent at that offset before it reaches OneDrive, once.
 	interruptFragmentAt int64
@@ -170,9 +178,20 @@ func (r *moveScenarioRemote) nextETag() string {
 	return fmt.Sprintf("etag-%d", r.etagSeq)
 }
 
-func (r *moveScenarioRemote) nextID(prefix string) string {
-	r.idSeq++
-	return fmt.Sprintf("%s-%d", prefix, r.idSeq)
+// nextID names a new item from what it names: its kind (prefix), its parent
+// and its name, case-folded as OneDrive compares names, numbered by how many
+// items were named that way before. Two runs that create the same items in
+// another order hand out the same IDs, so a chaos stream keyed by an item ID
+// does not depend on other streams' traffic.
+func (r *moveScenarioRemote) nextID(prefix, parentID, name string) string {
+	key := prefix + "/" + parentID + "/" + strings.ToLower(name)
+	if r.idCounts == nil {
+		r.idCounts = map[string]int{}
+	}
+	r.idCounts[key]++
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(key)) // a hash.Hash never fails a write
+	return fmt.Sprintf("%s-%016x-%d", prefix, hash.Sum64(), r.idCounts[key])
 }
 
 // childNamed finds parentID's child whose name matches name the way OneDrive
@@ -389,7 +408,7 @@ func (r *moveScenarioRemote) putFileAt(t *testing.T, remotePath, content string)
 		r.setContent(t, existing.ID, content)
 		return
 	}
-	r.addFile(t, r.nextID("remote-file"), parent.ID, name, content)
+	r.addFile(t, r.nextID("remote-file", parent.ID, name), parent.ID, name, content)
 }
 
 func (r *moveScenarioRemote) mkdirAt(t *testing.T, remotePath string) {
@@ -401,7 +420,7 @@ func (r *moveScenarioRemote) mkdirAt(t *testing.T, remotePath string) {
 	if _, exists := r.childNamed(parent.ID, path.Base(remotePath)); exists {
 		return
 	}
-	r.addFolder(r.nextID("remote-folder"), parent.ID, path.Base(remotePath))
+	r.addFolder(r.nextID("remote-folder", parent.ID, path.Base(remotePath)), parent.ID, path.Base(remotePath))
 }
 
 func (r *moveScenarioRemote) deleteAt(t *testing.T, remotePath string) {
@@ -760,7 +779,7 @@ func (r *moveScenarioRemote) createFolder(parentID, name string) (*graph.Item, e
 	if _, exists := r.childNamed(parentID, name); exists {
 		return nil, scenarioNameConflict()
 	}
-	id := r.nextID("created-folder")
+	id := r.nextID("created-folder", parentID, name)
 	r.addFolder(id, parentID, name)
 	r.folderCreates = append(r.folderCreates, name)
 	copied := *r.items[id]
@@ -803,7 +822,7 @@ func (r *moveScenarioRemote) upload(t *testing.T, parentID, name string, content
 	if _, exists := r.childNamed(parentID, name); exists {
 		return nil, scenarioNameConflict()
 	}
-	id := r.nextID("uploaded")
+	id := r.nextID("uploaded", parentID, name)
 	r.addFile(t, id, parentID, name, data)
 	copied := *r.items[id]
 	return &copied, nil
@@ -834,7 +853,7 @@ func (r *moveScenarioRemote) uploadCreating(
 		return nil, scenarioNameConflict()
 	}
 	r.uploads++
-	id := r.nextID("created")
+	id := r.nextID("created", parentID, name)
 	r.addFile(t, id, parentID, name, "")
 	created := *r.items[id]
 	interrupt := r.interruptCreates
@@ -935,7 +954,7 @@ func (r *moveScenarioRemote) clone() *moveScenarioRemote {
 		items:               make(map[string]*graph.Item, len(r.items)),
 		contents:            make(map[string]string, len(r.contents)),
 		etagSeq:             r.etagSeq,
-		idSeq:               r.idSeq,
+		idCounts:            maps.Clone(r.idCounts),
 		observedFolderETags: make(map[string]string, len(r.observedFolderETags)),
 		changeSeq:           r.changeSeq,
 		changedAt:           make(map[string]int, len(r.changedAt)),
@@ -944,6 +963,7 @@ func (r *moveScenarioRemote) clone() *moveScenarioRemote {
 		versions:            append([]string(nil), r.versions...),
 		sessions:            make(map[graph.UploadURL]scenarioSession, len(r.sessions)),
 		sessionSeq:          r.sessionSeq,
+		sessionCounts:       maps.Clone(r.sessionCounts),
 	}
 	for url, session := range r.sessions {
 		c.sessions[url] = session

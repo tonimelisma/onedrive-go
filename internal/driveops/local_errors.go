@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // LocalErrorKind names what a failed local filesystem operation means for the
@@ -35,8 +37,11 @@ const (
 	// told to try again (EAGAIN can reach a regular file there, or from a
 	// lock another process holds, although regular files on a local disk
 	// ignore O_NONBLOCK). Each clears on its own, so the item is retried
-	// with backoff, not at once. A network timeout never lands here: the
-	// sync classifier reads it first, and it holds no *fs.PathError.
+	// with backoff, not at once. A transfer the stall watchdog abandoned
+	// because its local side stopped moving (graph.ErrLocalSideStalled: a
+	// hung read or write of the local file) is busy too: the local disk is
+	// slow, not OneDrive. A network timeout never lands here: the sync
+	// classifier reads it first, and it holds no *fs.PathError.
 	LocalErrorBusy
 	// LocalErrorCrossDevice is EXDEV: a rename tried to cross a mount point
 	// inside the sync folder.
@@ -61,7 +66,8 @@ func ClassifyLocalError(err error) LocalErrorKind {
 	case errors.Is(err, syscall.EFBIG):
 		return LocalErrorFileTooLarge
 	case errors.Is(err, syscall.EBUSY), errors.Is(err, syscall.ETXTBSY), errors.Is(err, syscall.ESTALE),
-		errors.Is(err, syscall.ETIMEDOUT), errors.Is(err, syscall.EAGAIN):
+		errors.Is(err, syscall.ETIMEDOUT), errors.Is(err, syscall.EAGAIN),
+		errors.Is(err, graph.ErrLocalSideStalled):
 		return LocalErrorBusy
 	case errors.Is(err, syscall.EXDEV):
 		return LocalErrorCrossDevice

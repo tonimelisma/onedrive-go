@@ -283,7 +283,10 @@ func TestComposeMoves_OccupiedDestinationDefers(t *testing.T) {
 // kept as a conflict copy when it was edited; a new file that took the path
 // (the synced copy left it: a replacing move took it into the trash and
 // another program saved a file there before the rename) is kept as a
-// conflict copy too, so the move still lands. Nothing else gives way.
+// conflict copy too, so the move still lands, and so is a new file at the
+// path of a synced copy moved elsewhere here, whatever OneDrive holds: it is
+// not the item, and waiting for it left two moves waiting on each other's
+// destinations for good (chaos seeds 162 and 385). Nothing else gives way.
 func TestComposedDisplacement_EntryAtTheDestination(t *testing.T) {
 	t.Parallel()
 
@@ -314,7 +317,15 @@ func TestComposedDisplacement_EntryAtTheDestination(t *testing.T) {
 		},
 		{name: "an empty path needs no displacement", want: moveDisplaceNever},
 		{name: "the synced copy of unknown content makes the move wait", localPosition: "b.txt", local: file(""), want: moveDisplaceNever},
-		{name: "a new file at the path of a synced copy moved elsewhere here makes the move wait", localPosition: "c.txt", local: file("new-hash"), want: moveDisplaceNever},
+		{name: "a new file at the path of a synced copy moved elsewhere here is kept as a conflict copy", localPosition: "c.txt", local: file("new-hash"), want: moveDisplaceConflictCopy},
+		{
+			name:          "a new file at the path of a synced copy moved elsewhere here is kept as a conflict copy while the item is online",
+			localPosition: "c.txt", local: file("new-hash"), remoteByID: stillOnline, want: moveDisplaceConflictCopy,
+		},
+		{
+			name: "a folder at the path of a synced copy moved elsewhere here makes the move wait", localPosition: "c.txt",
+			local: &syncdomain.LocalState{Name: "b.txt", ItemType: syncdomain.ItemTypeFolder}, want: moveDisplaceNever,
+		},
 		{name: "a new file at the path of an item still online makes the move wait", local: file("new-hash"), remoteByID: stillOnline, want: moveDisplaceNever},
 		{name: "the synced copy of an item still online makes the move wait", localPosition: "b.txt", local: file(syncedHash), remoteByID: stillOnline, want: moveDisplaceNever},
 	}
@@ -530,7 +541,7 @@ func composedMoveActions(c *moveComposition, nodes []moveNode) []syncdomain.Acti
 			moveType = syncdomain.ActionLocalMove
 		}
 		actions = append(actions, syncdomain.Action{
-			Type: moveType, OldPath: c.moves[i].oldPath, Path: c.moves[i].newPath,
+			Type: moveType, OldPath: c.moves[i].oldPath, Path: c.moves[i].newPath, MovedRemotePath: c.moves[i].remotePath,
 			View: &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: itemTypes[c.moves[i].key]}},
 		})
 	}
@@ -1412,6 +1423,159 @@ func TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *te
 
 // Validates: R-2.17.6, R-2.17.1
 //
+// An earlier pass parked d/c.md at d/c.swap-1.md for a swap on OneDrive, and
+// OneDrive has since moved d into e and the file at c.md into d. Here the
+// parked file moves to c.md, out of d, before d moves; the file at c.md has
+// its target inside d's destination, so it moves into d at d's path here,
+// where d's move carries it. Ordered after d's move it waited for it, while
+// d waited for the parked file to leave and the parked file for c.md: a cycle
+// dropped on every pass (chaos seeds 189 and 232).
+func TestComposeMoves_AFileWhoseTargetIsInAMovingFolderLandsInsideItFirst(t *testing.T) {
+	t.Parallel()
+
+	nodes := []moveNode{
+		composeNode("e", syncdomain.ItemTypeFolder, "e", "e", "e"),
+		composeNode("d", syncdomain.ItemTypeFolder, "d", "d", "e/d"),
+		composeNode("c", syncdomain.ItemTypeFile, "d/c.swap-1.md", "d/c.swap-1.md", "c.md"),
+		composeNode("r", syncdomain.ItemTypeFile, "c.md", "c.md", "e/d/c.md"),
+	}
+	c := composeForTest(nodes...)
+
+	assert.ElementsMatch(t, []string{"d->e/d", "c.md->d/c.md", "d/c.swap-1.md->c.md"}, composedMovesBySide(&c, moveCoordLocal))
+	assert.Empty(t, c.deferred)
+	actions := composedMoveActions(&c, nodes)
+	kept, _, _ := isolateDependencyCycles(actions, nil)
+	assert.Len(t, kept, len(actions), "every action of the plan has an order")
+}
+
+// Validates: R-2.17.6, R-2.17.2
+//
+// Here x moved into Q as Q/renamed-x, a new x was made and Q moved into it,
+// while OneDrive moved Q into the old x. OneDrive's move wins, so the old x
+// must move back onto x, which the new folder holds while it holds the old
+// x's source too: no move can land. The new folder is renamed to a conflict
+// copy this pass, kept with everything in it, and the old x waits for the
+// next pass, which moves it out of the copy onto its path.
+func TestComposeMoves_AFolderInsideTheNewFolderAtItsPathMovesItAsideFirst(t *testing.T) {
+	t.Parallel()
+
+	nodes := []moveNode{
+		composeNode("x", syncdomain.ItemTypeFolder, "x", "x/Q/renamed-x", "x"),
+		composeNode("Q", syncdomain.ItemTypeFolder, "Q", "x/Q", "x/Q"),
+	}
+	occupancy := composeOccupancy(nodes)
+	occupancy.local["x"] = true
+	c := composeMoves(nodes, occupancy, nil)
+
+	assert.Equal(t, []string{"x"}, c.asideFolders)
+	assert.True(t, c.deferred["x"], "the old x waits for the next pass")
+	assert.Empty(t, composedMovesBySide(&c, moveCoordLocal), "nothing moves into the folder renamed aside")
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// Here H moved aside, Y/f moved into a new Y/f/a/f, Y moved into a new folder
+// H as H/Y, and the old H into H/Y/f/a/H, while OneDrive kept H, Y and Y/f.
+// Y's OneDrive move lands in the folder made at H's path, which OneDrive
+// gives the old H, and H's own target lies below Y's: taken back, Y's move
+// held H, and H's waited for Y, so all three waited for good. H moves aside
+// on OneDrive first, which frees its path for the new H, and Y moves into
+// it in the same plan; f, whose new folder is at its own path, and H wait
+// for a later pass, and nothing is made at f's path (ownLandings). Every
+// move of the plan has an order.
+func TestComposeMoves_AFolderWhoseTargetLiesBelowAMoveIntoAFolderAtItsPathMovesAsideFirst(t *testing.T) {
+	t.Parallel()
+
+	nodes := []moveNode{
+		composeNode("H", syncdomain.ItemTypeFolder, "H", "H/Y/f/a/H", "H"),
+		composeNode("h", syncdomain.ItemTypeFile, "H/h.txt", "H/Y/f/a/H/h.txt", "H/h.txt"),
+		composeNode("Y", syncdomain.ItemTypeFolder, "Y", "H/Y", "Y"),
+		composeNode("f", syncdomain.ItemTypeFolder, "Y/f", "H/Y/f/a/f", "Y/f"),
+		composeNode("c", syncdomain.ItemTypeFile, "Y/f/c.txt", "H/Y/f/a/f/c.txt", "Y/f/c.txt"),
+	}
+	occupancy := composeOccupancy(nodes)
+	for _, made := range []string{"H", "H/Y/f", "H/Y/f/a"} {
+		occupancy.local[made] = true
+	}
+	c := composeMoves(nodes, occupancy, nil)
+
+	assert.Equal(t, []string{"Y->H/Y", "H->H.swap-1"}, composedMovesBySide(&c, moveCoordRemote))
+	assert.Empty(t, composedMovesBySide(&c, moveCoordLocal))
+	assert.Equal(t, map[string]bool{"H": true, "f": true}, c.deferred)
+	assert.True(t, atOrBelowOwnLanding("H/Y/f/a", c.ownLandings[moveCoordRemote]), "nothing is made at f's path")
+	assert.False(t, atOrBelowOwnLanding("H", c.ownLandings[moveCoordRemote]), "the new H is made on OneDrive")
+
+	actions := composedMoveActions(&c, nodes)
+	kept, _, _ := isolateDependencyCycles(actions, nil)
+	assert.Len(t, kept, len(actions), "every action of the plan has an order")
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// On OneDrive an entry is moved into a folder and the folder then takes the
+// entry's old path: p into x and x to p, x into p and p to x, p/f into x and
+// x onto p/f, or the file z into p and p onto z. Here the entry still holds
+// the path the folder's move lands on, and its own target hangs off the
+// folder, so both waited for each other and were deferred on every pass. The
+// entry moves first into the folder at the folder's path here, and the
+// folder's move, which waits for it to leave that path, then carries it to
+// its target: both run in one plan, with no cycle between them.
+func TestComposeMoves_AnEntryMovedOnOneDriveIntoAFolderThatTakesItsPathMovesIntoItHereFirst(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		nodes []moveNode
+		want  []string
+	}{
+		{
+			name: "p into x, x to p",
+			nodes: []moveNode{
+				composeNode("p", syncdomain.ItemTypeFolder, "p", "p", "p/p"),
+				composeNode("f", syncdomain.ItemTypeFile, "p/f", "p/f", "p/p/f"),
+				composeNode("x", syncdomain.ItemTypeFolder, "x", "x", "p"),
+			},
+			want: []string{"p->x/p", "x->p"},
+		},
+		{
+			name: "p/f into x, x onto p/f",
+			nodes: []moveNode{
+				composeNode("p", syncdomain.ItemTypeFolder, "p", "p", "p"),
+				composeNode("f", syncdomain.ItemTypeFile, "p/f", "p/f", "p/f/f"),
+				composeNode("x", syncdomain.ItemTypeFolder, "x", "x", "p/f"),
+			},
+			want: []string{"p/f->x/f", "x->p/f"},
+		},
+		{
+			name: "the file z into p, p onto z",
+			nodes: []moveNode{
+				composeNode("p", syncdomain.ItemTypeFolder, "p", "p", "z"),
+				composeNode("f", syncdomain.ItemTypeFile, "p/f", "p/f", "z/f"),
+				composeNode("z", syncdomain.ItemTypeFile, "z", "z", "z/z"),
+			},
+			want: []string{"z->p/z", "p->z"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := composeMoves(tc.nodes, composeOccupancy(tc.nodes), nil)
+
+			require.Equal(t, tc.want, composedMovesBySide(&c, moveCoordLocal))
+			assert.Empty(t, composedMovesBySide(&c, moveCoordRemote))
+			assert.Empty(t, c.deferred)
+
+			actions := composedMoveActions(&c, tc.nodes)
+			kept, deps, _ := isolateDependencyCycles(actions, nil)
+			require.Len(t, kept, len(actions), "no move is dropped as a dependency cycle")
+			assert.Equal(t, []int{0}, deps[1], "the folder's move waits for the entry to leave its destination")
+			assert.Empty(t, deps[0], "the entry's move into the folder waits for nothing")
+		})
+	}
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
 // On OneDrive Q is renamed R, the folders z and h inside it trade names, a new
 // Q is made with a new folder z in it, and m is moved into that z. On this
 // computer m's move lands in the folder at Q/z, which the old z holds until
@@ -2217,6 +2381,67 @@ func TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt(t *testin
 	}
 }
 
+// Validates: R-2.17.9, R-2.17.2
+//
+// OneDrive deleted archive and moved notes.txt onto its path, and the plan
+// deletes archive here: the local move of notes.txt onto archive waits for
+// that delete, which waits for the deletes and the cleanup below it, and
+// those do not wait for the move. Below a local move's destination a local
+// delete, in snapshot coordinates, and a cleanup, in the baseline's, remove
+// what holds the destination now; ordered after the move they closed a cycle
+// through the folder's delete, dropped on every pass.
+func TestBuildDependencies_ALocalMoveOntoAFolderDeletedHereWaitsForItsDelete(t *testing.T) {
+	t.Parallel()
+
+	folder := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFolder}}
+	file := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFile}}
+	actions := []syncdomain.Action{
+		{Type: syncdomain.ActionLocalDelete, Path: "archive/old.txt", View: file},
+		{Type: syncdomain.ActionCleanup, Path: "archive/gone.txt", View: file},
+		{Type: syncdomain.ActionLocalDelete, Path: "archive", View: folder},
+		{Type: syncdomain.ActionLocalMove, OldPath: "notes.txt", Path: "archive", View: file},
+	}
+	kept, deps, _ := isolateDependencyCycles(actions, nil)
+	require.Len(t, kept, len(actions), "no action is dropped as a cycle")
+	assert.Equal(t, [][]int{nil, nil, {0, 1}, {2}}, deps)
+
+	remote := []syncdomain.Action{
+		{Type: syncdomain.ActionRemoteDelete, Path: "archive/old.txt", View: file},
+		{Type: syncdomain.ActionRemoteMove, OldPath: "notes.txt", Path: "archive", View: file},
+	}
+	assert.Equal(t, [][]int{{1}, nil}, buildDependencies(remote), "a delete on OneDrive below a move's destination still waits for it")
+}
+
+// Validates: R-2.17.6
+//
+// Local moves are in the snapshot's coordinates, so a local move whose source
+// lies below another local move's destination moves an entry out of what
+// holds that destination now: here p moved into x while OneDrive moved x into
+// p and z onto x, and this computer follows OneDrive. p leaves x first, x
+// moves into p, and z lands where x was. On OneDrive a move's source is
+// rebased through the moves before it, so a remote move from below another
+// remote move's destination still waits for it.
+func TestBuildDependencies_ALocalMoveFromBelowAnotherLocalMovesDestinationRunsFirst(t *testing.T) {
+	t.Parallel()
+
+	folder := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFolder}}
+	file := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFile}}
+	local := []syncdomain.Action{
+		{Type: syncdomain.ActionLocalMove, OldPath: "x/p", Path: "p", View: folder},
+		{Type: syncdomain.ActionLocalMove, OldPath: "x", Path: "p/x", View: folder},
+		{Type: syncdomain.ActionLocalMove, OldPath: "z", Path: "x", View: file},
+	}
+	kept, deps, _ := isolateDependencyCycles(local, nil)
+	require.Len(t, kept, len(local), "no move is dropped as a cycle")
+	assert.Equal(t, [][]int{nil, {0}, {1}}, deps, "p leaves x, x moves into p, z lands where x was")
+
+	remote := []syncdomain.Action{
+		{Type: syncdomain.ActionRemoteMove, OldPath: "z", Path: "x", View: file},
+		{Type: syncdomain.ActionRemoteMove, OldPath: "x/a.txt", Path: "b.txt", View: file},
+	}
+	assert.Equal(t, [][]int{nil, {0}}, buildDependencies(remote), "a rebased OneDrive source below x waits for the move onto x")
+}
+
 // Validates: R-2.17.6
 //
 // A folder deleted on OneDrive while a folder is made here at its path, x
@@ -2443,4 +2668,87 @@ func TestIsolateDependencyCycles_KeepsUnrelatedWork(t *testing.T) {
 	require.Len(t, kept, 1)
 	assert.Equal(t, "unrelated.txt", kept[0].Path)
 	require.NoError(t, detectDependencyCycle(deps))
+}
+
+// Validates: R-2.17.6
+//
+// Here p was renamed q, the folder x moved into it as q/x2 and a new x made,
+// and f moved out of p into the new x; OneDrive changed nothing. x's move
+// lands below p's new path, so it runs after p's; the new x waits for x to
+// leave its path, and f's move waits for the new x. Leaving p first, f's
+// move held p's move back and closed a cycle with all of them; a file
+// directly in a folder OneDrive moves leaves after the folder's move, from
+// below its new path, so every action has an order. A file further down
+// still leaves first (TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource).
+func TestComposeMoves_AFileLeavingAFolderMovedOnOneDriveMovesAfterIt(t *testing.T) {
+	t.Parallel()
+
+	nodes := []moveNode{
+		composeNode("p", syncdomain.ItemTypeFolder, "p", "q", "p"),
+		composeNode("x", syncdomain.ItemTypeFolder, "x", "q/x2", "x"),
+		composeNode("f", syncdomain.ItemTypeFile, "p/f", "x/f", "p/f"),
+	}
+	occupancy := composeOccupancy(nodes)
+	occupancy.local["x"] = true
+	c := composeMoves(nodes, occupancy, nil)
+
+	assert.ElementsMatch(t, []string{"p->q", "x->q/x2", "q/f->x/f"}, composedMovesBySide(&c, moveCoordRemote))
+	assert.Empty(t, composedMovesBySide(&c, moveCoordLocal))
+
+	actions := append(composedMoveActions(&c, nodes), syncdomain.Action{Type: syncdomain.ActionFolderCreate, Path: "x", CreateSide: syncdomain.CreateRemote})
+	kept, _, cycled := isolateDependencyCycles(actions, nil)
+	assert.Len(t, kept, len(actions))
+	assert.Empty(t, cycled)
+}
+
+// Validates: R-2.17.6
+//
+// Here x was renamed x2 while OneDrive keeps it at x (its move waits), and a
+// new x with a folder sub in it was made here. The create of sub on OneDrive
+// lies below x, which the old x still holds there, and its source here is not
+// in the old x: it waits a pass and logs the folder, rather than being made
+// inside the old x, carried to x2/sub and moved back. An upload of a file made
+// in the old x here, at x2, runs, and so does work below a folder no other
+// item holds. Here such a create is kept: a move of the plan into the folder
+// it makes relies on it.
+func TestDropCreatesOntoComposedItems_ACreateBelowAnotherItemsFolderWaits(t *testing.T) {
+	t.Parallel()
+
+	inputs := &moveInputs{nodes: []moveNode{
+		composeNode("x", syncdomain.ItemTypeFolder, "x", "x2", "x"),
+		composeNode("y", syncdomain.ItemTypeFolder, "y", "y", "y"),
+	}}
+	composition := &moveComposition{
+		deferred:      map[string]bool{"x": true},
+		deferredMoves: map[string][]syncdomain.ActionType{"x": {syncdomain.ActionRemoteMove}},
+	}
+	folderHere := &syncdomain.LocalState{ItemType: syncdomain.ItemTypeFolder}
+	actions := []syncdomain.Action{
+		{
+			Type: syncdomain.ActionFolderCreate, CreateSide: syncdomain.CreateRemote, Path: "x/sub",
+			View: &syncdomain.PathView{Path: "x/sub", Local: folderHere},
+		},
+		uploadOfIdentity("x2/g", 7),
+		{
+			Type: syncdomain.ActionFolderCreate, CreateSide: syncdomain.CreateRemote, Path: "y/sub",
+			View: &syncdomain.PathView{Path: "y/sub", Local: folderHere},
+		},
+		{Type: syncdomain.ActionFolderCreate, CreateSide: syncdomain.CreateLocal, Path: "x2/sub", View: &syncdomain.PathView{Path: "x2/sub"}},
+	}
+
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	kept, dropped := dropCreatesOntoComposedItems(logger, actions, inputs, composition)
+
+	var keptPaths, droppedPaths []string
+	for i := range kept {
+		keptPaths = append(keptPaths, kept[i].Path)
+	}
+	for i := range dropped {
+		droppedPaths = append(droppedPaths, dropped[i].Path)
+	}
+	assert.Equal(t, []string{"x2/g", "y/sub", "x2/sub"}, keptPaths)
+	assert.Equal(t, []string{"x/sub"}, droppedPaths)
+	assert.Contains(t, logs.String(),
+		`msg="create waits for another item to leave the folder path above it" action=folder_create path=x/sub folder=x`)
 }

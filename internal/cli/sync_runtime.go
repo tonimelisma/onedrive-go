@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/sdnotify"
@@ -233,11 +234,12 @@ func runSyncDaemonWithFactory(
 				logger.Warn(startWarningUnwrittenMessage, slog.Any("error", warnErr))
 			}
 		},
-		DebugEventHook: debugEventHook,
-		ActivityHook:   console.ActivityHook(),
-		WatchLifecycle: serviceNotifier.lifecycle,
-		PerfParent:     perf.FromContext(ctx),
-		ApplyLogLevel:  applyLogLevelFunc(ctx),
+		DebugEventHook:   debugEventHook,
+		ActivityHook:     console.ActivityHook(),
+		WatchLifecycle:   serviceNotifier.lifecycle,
+		PerfParent:       perf.FromContext(ctx),
+		ApplyLogLevel:    applyLogLevelFunc(ctx),
+		AccountInCatalog: catalogHoldsAccount,
 	})
 
 	if beating, ok := orch.(interface {
@@ -309,4 +311,17 @@ func parseDurationOrZero(s string) time.Duration {
 	}
 
 	return d
+}
+
+// catalogHoldsAccount reports whether the catalog holds account, the check a
+// watch runner makes before it starts an engine
+// (multisync.OrchestratorConfig.AccountInCatalog).
+func catalogHoldsAccount(account driveid.CanonicalID) (bool, error) {
+	catalog, err := config.LoadCatalog()
+	if err != nil {
+		return false, fmt.Errorf("load the catalog: %w", err)
+	}
+	_, found := catalog.AccountByCanonicalID(account)
+
+	return found, nil
 }

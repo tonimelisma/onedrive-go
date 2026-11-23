@@ -24,6 +24,13 @@ type CanonicalIDRename struct {
 type StateDBMove struct {
 	From string
 	To   string
+	// FromMountID and ToMountID are the mount IDs of the drive whose own
+	// store this is, before and after the change, or empty for a store that
+	// is no drive's own. A drive's shortcut children name their stores and
+	// their records by ChildMountID of that mount ID, which holds the email,
+	// so they move with it (syncengine.MoveStateDBs).
+	FromMountID string
+	ToMountID   string
 }
 
 // StateDBMover renames state DBs, each with its whole file family, under the
@@ -515,6 +522,7 @@ func renameCatalogAccount(catalog *Catalog, rename *CanonicalIDRename) error {
 	from, to := rename.From, rename.To
 	if account, found := catalog.AccountByCanonicalID(from); found {
 		catalog.DeleteAccount(from)
+		account.FormerEmails = account.withFormerEmail(from.Email(), to.Email())
 		account.CanonicalID = to.String()
 		account.Email = to.Email()
 		account.DriveType = to.DriveType()
@@ -710,4 +718,133 @@ func validateManagedRename(source string, target string) error {
 		return fmt.Errorf("account email change target already exists: %s; it was there before the email "+
 			"changed, so %s cannot be renamed to it: remove %s and run the command again", target, source, target)
 	}
+}
+
+// CatchUpConfigFromFormerEmails renames the sections of the config file at
+// configPath that still name a drive under a former email of an account
+// (CatalogAccount.FormerEmails) to the account's email now. An account email
+// change renames the sections of the one config file its command ran with; a
+// second config file sharing the data directory is caught up here, at the
+// CLI's entry, the first time a command uses it. A former email that an
+// account has now names that account's drives and is never caught up. A
+// shared folder's section under an email two accounts had is left as it is,
+// since nothing says whose it is. The rename is the same idempotent, locked
+// section rename the change itself makes (RenameDriveSections), which also
+// carries a stored default display name over to the new address.
+func CatchUpConfigFromFormerEmails(ctx context.Context, configPath string) (EmailReconcileResult, error) {
+	catalog, err := LoadCatalog()
+	if err != nil {
+		return EmailReconcileResult{}, fmt.Errorf("load the catalog to catch up %s: %w", configPath, err)
+	}
+	formerOwners, currentEmails := formerEmailIndex(catalog)
+	if len(formerOwners) == 0 {
+		return EmailReconcileResult{}, nil
+	}
+
+	data, err := readManagedFile(configPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return EmailReconcileResult{}, nil
+	}
+	if err != nil {
+		return EmailReconcileResult{}, fmt.Errorf("read %s to catch it up: %w", configPath, err)
+	}
+
+	renames, err := formerEmailSectionRenames(parseLines(string(data)), formerOwners, currentEmails)
+	if err != nil || len(renames) == 0 {
+		return EmailReconcileResult{}, err
+	}
+
+	if err := RenameDriveSections(ctx, configPath, renames); err != nil {
+		var collision *driveSectionCollisionError
+		if errors.As(err, &collision) {
+			return EmailReconcileResult{}, fmt.Errorf("catch up %s: config sections %q and %q both exist, so the "+
+				"first, under a former email of the account, cannot be renamed to the second: remove the one you "+
+				"no longer use and run the command again", configPath, collision.from, collision.to)
+		}
+
+		return EmailReconcileResult{}, fmt.Errorf("catch up %s: %w", configPath, err)
+	}
+
+	return EmailReconcileResult{DriveRenames: canonicalRenameSlice(renames)}, nil
+}
+
+// formerEmailIndex maps each former email of the catalog's accounts to the
+// accounts that had it, and lists the emails accounts have now.
+func formerEmailIndex(catalog *Catalog) (map[string][]driveid.CanonicalID, map[string]struct{}) {
+	formerOwners := make(map[string][]driveid.CanonicalID)
+	currentEmails := make(map[string]struct{}, len(catalog.Accounts))
+	for _, key := range catalog.SortedAccountKeys() {
+		account := catalog.Accounts[key]
+		currentEmails[account.Email] = struct{}{}
+		cid, err := driveid.NewCanonicalID(account.CanonicalID)
+		if err != nil {
+			continue
+		}
+		for _, former := range account.FormerEmails {
+			formerOwners[former] = append(formerOwners[former], cid)
+		}
+	}
+
+	return formerOwners, currentEmails
+}
+
+// formerEmailSectionRenames is the rename of every drive section of lines
+// under a former email that no account has now, to the email its account has
+// now (formerEmailOwner).
+func formerEmailSectionRenames(
+	lines []parsedLine,
+	formerOwners map[string][]driveid.CanonicalID,
+	currentEmails map[string]struct{},
+) (map[driveid.CanonicalID]driveid.CanonicalID, error) {
+	renames := make(map[driveid.CanonicalID]driveid.CanonicalID)
+	for i := range lines {
+		if lines[i].kind != lineSection {
+			continue
+		}
+		cid, err := driveid.NewCanonicalID(lines[i].sectionName)
+		if err != nil {
+			continue
+		}
+		if _, stillCurrent := currentEmails[cid.Email()]; stillCurrent {
+			continue
+		}
+		owner, found := formerEmailOwner(cid, formerOwners[cid.Email()])
+		if !found {
+			continue
+		}
+		renamed, err := cid.WithEmail(owner.Email())
+		if err != nil {
+			return nil, fmt.Errorf("rewrite configured drive ID %s: %w", cid, err)
+		}
+		renames[cid] = renamed
+	}
+
+	return renames, nil
+}
+
+// formerEmailOwner is the account a drive section under a former email
+// belongs to, among the accounts that had that email: the personal account
+// for a personal drive, the work or school account for a work, school or
+// SharePoint drive, and the one account that had it for a shared folder.
+func formerEmailOwner(section driveid.CanonicalID, owners []driveid.CanonicalID) (driveid.CanonicalID, bool) {
+	wantType := ""
+	switch section.DriveType() {
+	case driveid.DriveTypePersonal:
+		wantType = driveid.DriveTypePersonal
+	case driveid.DriveTypeBusiness, driveid.DriveTypeSharePoint:
+		wantType = driveid.DriveTypeBusiness
+	case driveid.DriveTypeShared:
+		if len(owners) == 1 {
+			return owners[0], true
+		}
+
+		return driveid.CanonicalID{}, false
+	}
+	for _, owner := range owners {
+		if owner.DriveType() == wantType {
+			return owner, true
+		}
+	}
+
+	return driveid.CanonicalID{}, false
 }

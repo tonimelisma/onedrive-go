@@ -67,7 +67,8 @@ func TestSeedRun_AppliesOneRuleToEveryFamily(t *testing.T) {
 //
 // The helper changed no family's plain run: with none of their variables set,
 // each runs exactly the seeds it ran before, with and without the race
-// detector.
+// detector. The chaos run's plain seeds add its race seed, which a plain run
+// now affords since it runs in virtual time.
 func TestSeededFamilies_DefaultRunsAreUnchanged(t *testing.T) {
 	for _, vars := range []syncfixture.SeedVars{modelSeedVars(), syncfixture.PlannerSeedVars(), chaosSeedVars()} {
 		t.Setenv(vars.Single, "")
@@ -79,10 +80,10 @@ func TestSeededFamilies_DefaultRunsAreUnchanged(t *testing.T) {
 		"engine":  {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
 		"crash":   {1, 2, 3, 4},
 		"planner": {1, 2, 3, 4, 5, 6, 7, 8},
-		"chaos":   {1, 2},
+		"chaos":   {1, 2, chaosRaceSeed},
 	}
 	if syncfixture.RaceDetectorEnabled {
-		want = map[string][]uint64{"engine": {1, 2}, "crash": {1}, "planner": {1}, "chaos": {2}}
+		want = map[string][]uint64{"engine": {1, 2}, "crash": {1}, "planner": {1}, "chaos": {chaosRaceSeed}}
 	}
 	assert.Equal(t, want, map[string][]uint64{
 		"engine":  modelSeeds(t),

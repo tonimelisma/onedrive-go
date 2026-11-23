@@ -266,6 +266,49 @@ func TestCommitObservation_IntentClaimsTheEmptyFileACrashLeftUnrecorded(t *testi
 
 // Validates: R-5.6.15
 //
+// A folder was replaced by a file of its name: sync deleted the folder on
+// OneDrive and then created the file, whose answer was lost. The next delta
+// reports the folder's deletion and the empty file together, in either
+// order. The folder's deletion at the path is not the file the intent
+// describes and says nothing of it, so the intent stays and claims the empty
+// file. Dropping it on the folder's tombstone made the file read as someone
+// else's: the user's file became a conflict copy and the empty one was
+// downloaded in its place (chaos seed 63).
+func TestCommitObservation_AFolderDeletedAtThePathKeepsTheIntent(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(syncfixture.TestDriveID)
+	folderGone := syncdomain.ObservedItem{
+		DriveID: driveID, ItemID: "old-folder", ParentID: "root", Path: "x", ItemType: syncdomain.ItemTypeFolder,
+		IsDeleted: true,
+	}
+	placeholder := syncdomain.ObservedItem{
+		DriveID: driveID, ItemID: "new-file", ParentID: "root", Path: "x", ItemType: syncdomain.ItemTypeFile,
+		Hash: syncfixture.EmptyQuickXor, Size: 0, ETag: `"n,1"`,
+	}
+	for name, items := range map[string][]syncdomain.ObservedItem{
+		"the tombstone first": {folderGone, placeholder},
+		"the file first":      {placeholder, folderGone},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			mgr := newTestStore(t)
+			require.NoError(t, mgr.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{
+				DriveID: driveID, Path: "x", ParentID: "root", LocalSize: 7, LocalHash: "local-hash",
+			}))
+			require.NoError(t, mgr.CommitObservation(t.Context(), items, "t1", driveID))
+
+			pending, found, err := mgr.PendingCreateAt(t.Context(), "x")
+			require.NoError(t, err)
+			require.True(t, found, "the folder's tombstone does not drop the file's intent")
+			assert.Equal(t, "new-file", pending.ItemID, "the intent claims the empty file")
+		})
+	}
+}
+
+// Validates: R-5.6.15
+//
 // An intent claims only an empty file, and only while fresh: a file with
 // content at the path is someone's real file, and an intent older than the
 // TTL could meet a stranger's empty file long after the attempt. Both drop

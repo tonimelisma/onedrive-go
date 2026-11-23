@@ -17,7 +17,7 @@ import (
 // http.DefaultClient, which would wait on a stalled server forever.
 func NewClient(
 	baseURL string, httpClient *http.Client, token TokenSource,
-	logger *slog.Logger, userAgent string,
+	logger *slog.Logger, userAgent string, opts ...ClientOption,
 ) (*Client, error) {
 	if token == nil {
 		return nil, errors.New("graph.NewClient: token source must not be nil")
@@ -39,7 +39,7 @@ func NewClient(
 		return nil, fmt.Errorf("graph.NewClient: invalid base URL: %w", err)
 	}
 
-	return &Client{
+	client := &Client{
 		baseURL:              baseURL,
 		httpClient:           httpClient,
 		token:                token,
@@ -60,7 +60,24 @@ func NewClient(
 			copyDestination:      retry.CopyDestinationPolicy(),
 		},
 		validators: newURLValidators(baseURL),
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(client)
+	}
+
+	return client, nil
+}
+
+// ClientOption configures a Client at construction.
+type ClientOption func(*Client)
+
+// WithRetryJitter makes jitter the source the client's quirk retries draw
+// their jitter from (retry.Policy.Delay): the process's source, seeded once
+// at its start. A client built without one waits the policies' curves.
+func WithRetryJitter(jitter retry.JitterSource) ClientOption {
+	return func(c *Client) {
+		c.retryJitter = jitter
+	}
 }
 
 // newURLValidators returns the production allow-lists for every
@@ -93,9 +110,9 @@ func newURLValidators(baseURL string) urlValidators {
 // on invalid static construction parameters.
 func MustNewClient(
 	baseURL string, httpClient *http.Client, token TokenSource,
-	logger *slog.Logger, userAgent string,
+	logger *slog.Logger, userAgent string, opts ...ClientOption,
 ) *Client {
-	client, err := NewClient(baseURL, httpClient, token, logger, userAgent)
+	client, err := NewClient(baseURL, httpClient, token, logger, userAgent, opts...)
 	if err != nil {
 		panic(err)
 	}

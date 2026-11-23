@@ -62,14 +62,20 @@ import (
 // whatever its name (printed_value_flow_test.go): what a JSON decode fills is
 // a command's output, what a CLI runner returns (suiteCLIRunners) its output
 // or its command line, and a variable set or ranged from a known value, the
-// error of an os call given one, and a suite function's parameter a caller
-// passes one hold its class.
+// error of an os call given one, a suite function's parameter a caller
+// passes one, and a suite function's text result (a string, a []string or an
+// error) one of its return statements returns one hold its class, followed
+// to a fixed point through any number of calls.
 //
-// What the rule cannot see: a value a suite function other than a runner
-// decodes or reads and returns; a method's parameters, since the scan builds
-// no types and does not know a call's receiver; and a value any other call
-// makes of a known one (a method's result, liveConfig.CandidateDriveIDs()) or
-// a strings.Builder collects. A composite literal ends the flow: the fields of
+// What the rule cannot see: a struct, a map or a pointer a suite function
+// decodes or reads and returns, since without types the scan cannot tell a
+// count or a state field of it from a name field, and would class every
+// decoded count the suite compares; a method's parameters and results, since
+// the scan builds no types and does not know a call's receiver; and a value
+// any other call makes of a known one (a method's result,
+// liveConfig.CandidateDriveIDs()) or a strings.Builder collects. Results are
+// followed per function, not per call: a helper that returns what it is
+// given returns the class of what any caller gives it. A composite literal ends the flow: the fields of
 // a struct or slice literal built from a known value are not followed. A
 // function literal's parameters and a range key are never classed. A field
 // named Name, DisplayName or OrgName holds no identity by its name, so a
@@ -86,15 +92,15 @@ import (
 // element, a ranged value and a variable set from either.
 //
 // The sites of the live suite a hand fix masks and the rule cannot see are
-// accepted, for these reasons. Values a suite function decodes or returns:
+// accepted, for these reasons. Structs a suite function decodes and returns:
 // the status issues readStatusSyncState returns, the control socket's
-// mounts, a status drive's issues, the shortcut root waits' poll state,
-// liveConfig.CandidateDriveIDs() and the errors the shared fixture helpers
-// return; following a function's results would class every decoded count
-// and name the suite compares. Messages a suite function builds from its
-// parameters and returns: outputMismatch, printableIssues, redactedSummary,
-// sharedRootListingDescription, the status poll descriptions and
-// formatAuthPreflightFailure; each masks what it is given. The local paths
+// mounts, a status drive's issues and the shortcut root waits' poll state;
+// and a method's result, liveConfig.CandidateDriveIDs(). The messages a suite
+// function builds from its parameters and returns (outputMismatch,
+// printableIssues, redactedSummary, sharedRootListingDescription, the status
+// poll descriptions, formatAuthPreflightFailure) and the errors the shared
+// fixture helpers return are followed, and pass because each masks what it
+// is given. The local paths
 // assertSamePath compares, classed only when built from a fixture's name. The
 // error of a product call or a CLI run (the catalog learnSuiteRoles loads, a
 // drive's token source, the baseline pass of the standing conditions), which
@@ -156,7 +162,7 @@ func findPrintedValues(dir string) ([]printedValueFinding, error) {
 	}
 	live := scannedFuncs(files, src)
 
-	scan.followParameters(live)
+	scan.followFunctions(live)
 	for _, fn := range live {
 		scan.flow, scan.elements = scan.flowOf(fn), elementNames(fn.Body)
 		ast.Inspect(fn.Body, scan.inspect)
@@ -260,10 +266,12 @@ type printedValueScan struct {
 	// messages are the suite functions that print a message argument
 	// (messageParameters).
 	messages map[string]messageParameter
-	// paramNames are the parameter names of each suite function, and params
-	// the classes its callers pass them (followParameters).
+	// paramNames are the parameter names of each suite function, params
+	// the classes its callers pass them (followParameters) and results the
+	// classes its return statements return (followResults).
 	paramNames map[string][]string
 	params     map[string]valueFlow
+	results    map[string][]string
 	// flow is what the variables of the function being read hold, and
 	// elements those of its variables set from an element (elementNames).
 	flow     valueFlow
@@ -637,7 +645,7 @@ func (scan *printedValueScan) printedLeaves(expr ast.Expr) []ast.Expr {
 			return append(scan.printedLeaves(expr.X), scan.printedLeaves(expr.Y)...)
 		}
 	case *ast.CallExpr:
-		if scan.runnerResults(expr) != nil {
+		if scan.callResults(expr) != nil {
 			return []ast.Expr{expr}
 		}
 

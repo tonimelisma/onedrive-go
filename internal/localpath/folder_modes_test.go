@@ -51,6 +51,7 @@ func classifiedFolderModes() map[string]folderKind {
 		"internal/multisync.controlSocketDirPerm":  managedStateFolder,
 		"internal/perf.captureDirPerm":             managedStateFolder,
 		"internal/sync.engineLocksDirPerm":         managedStateFolder,
+		"internal/sync.trashFolderPerm":            managedStateFolder,
 		"internal/sync/syncstore.syncStoreDirPerm": managedStateFolder,
 		"internal/tokenfile.DirPerms":              managedStateFolder,
 	}

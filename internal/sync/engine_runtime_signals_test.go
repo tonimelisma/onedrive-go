@@ -12,15 +12,13 @@ type recordingSignals struct {
 	held   int
 	retry  int
 	trial  int
-	kick   int
 	replan int
 }
 
-func (s *recordingSignals) armHeldTimers()      { s.held++ }
-func (s *recordingSignals) armRetryTimer()      { s.retry++ }
-func (s *recordingSignals) armTrialTimer()      { s.trial++ }
-func (s *recordingSignals) kickDueHeldRelease() { s.kick++ }
-func (s *recordingSignals) markReplanNeeded()   { s.replan++ }
+func (s *recordingSignals) armHeldTimers()    { s.held++ }
+func (s *recordingSignals) armRetryTimer()    { s.retry++ }
+func (s *recordingSignals) armTrialTimer()    { s.trial++ }
+func (s *recordingSignals) markReplanNeeded() { s.replan++ }
 
 // A one-shot flow must default to signals that schedule nothing. Nothing armed
 // during a one-shot pass could ever fire, and the previous design expressed
@@ -43,7 +41,6 @@ func TestEngineFlow_OneShotDefaultsToNoRuntimeSignals(t *testing.T) {
 		runner.signals.armHeldTimers()
 		runner.signals.armRetryTimer()
 		runner.signals.armTrialTimer()
-		runner.signals.kickDueHeldRelease()
 		runner.signals.markReplanNeeded()
 	})
 }

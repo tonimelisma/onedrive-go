@@ -2999,6 +2999,68 @@ func TestExecutor_MoveOutcome_TakesTheBaselineRemoteTimeOnlyForAnUnobservedRemot
 	assert.Equal(t, baseline.RemoteMtime, unobserved.RemoteMtime, "the remote side was not observed")
 }
 
+// A move's outcome reads the moved item's type from one side, in one order:
+// the remote observation, then the source baseline, then the moved local
+// truth. A file is a type like any other, never "unknown" to be replaced by
+// another side's type, and the view's local side, what sat at the destination,
+// is never the moved item's.
+//
+// Validates: R-2.2.3
+func TestExecutor_MoveOutcome_ReadsTheMovedItemsTypeFromOneSide(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
+	e := NewExecution(cfg, syncfixture.EmptyBaseline())
+	folderBaseline := &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFolder}
+	tests := []struct {
+		name       string
+		actionType syncdomain.ActionType
+		view       syncdomain.PathView
+		movedLocal *syncdomain.LocalState
+		want       syncdomain.ItemType
+	}{
+		{
+			name:       "an observed remote folder",
+			actionType: syncdomain.ActionLocalMove,
+			view:       syncdomain.PathView{Remote: &syncdomain.RemoteState{ItemType: syncdomain.ItemTypeFolder}, Baseline: folderBaseline},
+			want:       syncdomain.ItemTypeFolder,
+		},
+		{
+			name:       "an observed remote file stays a file whatever the baseline says",
+			actionType: syncdomain.ActionLocalMove,
+			view:       syncdomain.PathView{Remote: &syncdomain.RemoteState{ItemType: syncdomain.ItemTypeFile}, Baseline: folderBaseline},
+			want:       syncdomain.ItemTypeFile,
+		},
+		{
+			name:       "no remote side: the baseline the rename preserves",
+			actionType: syncdomain.ActionRemoteMove,
+			view:       syncdomain.PathView{Baseline: folderBaseline, Local: &syncdomain.LocalState{ItemType: syncdomain.ItemTypeFile}},
+			movedLocal: &syncdomain.LocalState{ItemType: syncdomain.ItemTypeFolder},
+			want:       syncdomain.ItemTypeFolder,
+		},
+		{
+			name:       "only the moved local truth",
+			actionType: syncdomain.ActionRemoteMove,
+			view:       syncdomain.PathView{Local: &syncdomain.LocalState{ItemType: syncdomain.ItemTypeFile}},
+			movedLocal: &syncdomain.LocalState{ItemType: syncdomain.ItemTypeFolder},
+			want:       syncdomain.ItemTypeFolder,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			view := tt.view
+			view.Path = "dst"
+			o := e.moveOutcome(&syncdomain.Action{
+				Type: tt.actionType, Path: "dst", OldPath: "src", ItemID: "item1",
+				DriveID: driveid.New(synctest.TestDriveID), View: &view, MovedLocal: tt.movedLocal,
+			})
+			assert.Equal(t, tt.want, o.ItemType)
+		})
+	}
+}
+
 // Fix 12: Test large-file upload delegates to Uploader with correct size.
 func TestExecutor_Upload_LargeFileSizePassedToUploader(t *testing.T) {
 	t.Parallel()

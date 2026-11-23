@@ -89,7 +89,7 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	assertOutputDoesNotMatch(t, syncLeftWorkPattern, stdout)
 	assertOutputContains(t, combinedOutput, heldDeletesLineText, "the deletes are held")
 	assertOutputContains(t, combinedOutput, "sync --confirm-deletes", "the summary names the command")
-	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),
+	assert.ElementsMatch(t, keysOf(contents), printableNames(remoteFileNames(t, cfgPath, env, "/"+folder)),
 		"nothing is deleted on OneDrive while the hold stands")
 
 	status := readStatus(t, cfgPath, env)
@@ -112,7 +112,7 @@ func TestE2E_SyncFull_DeleteHoldKeepsOneDriveUntilConfirmed(t *testing.T) {
 	stdout, stderr, syncErr = runCLIWithConfigAllowError(t, cfgPath, env, "sync")
 	require.NoErrorf(t, syncErr, "a pass that only holds deletes exits 0: %s", printable(stdout)+printable(stderr))
 	assertOutputContains(t, stdout+stderr, heldDeletesLineText)
-	assert.Len(t, remoteFileNames(t, cfgPath, env, "/"+folder), safetyFileCount)
+	assert.Len(t, printableNames(remoteFileNames(t, cfgPath, env, "/"+folder)), safetyFileCount)
 
 	runSyncThroughTransientFailures(t, cfgPath, env, "--confirm-deletes")
 	// The folder's own delete is confirmed with its files, so the listing ends
@@ -205,7 +205,7 @@ func TestE2E_SyncFull_ReplacedSyncFolderIsRefusedUntilRebound(t *testing.T) {
 
 	refusal := runCLIWithConfigExpectError(t, cfgPath, env, "sync")
 	assertOutputContains(t, refusal, "rebind-root", "the refusal names the command")
-	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),
+	assert.ElementsMatch(t, keysOf(contents), printableNames(remoteFileNames(t, cfgPath, env, "/"+folder)),
 		"a refused sync deletes nothing on OneDrive")
 	assert.NoFileExists(t, filepath.Join(syncDir, folder, "f00.txt"), "and downloads nothing into the stranger")
 
@@ -218,7 +218,7 @@ func TestE2E_SyncFull_ReplacedSyncFolderIsRefusedUntilRebound(t *testing.T) {
 	require.NoErrorf(t, syncErr, "the rebound folder's held deletes are not work left: %s", printable(stdout)+printable(stderr))
 	assertOutputContains(t, stdout+stderr, heldDeletesLineText,
 		"the rebound empty folder holds the deletes it implies")
-	assert.ElementsMatch(t, keysOf(contents), remoteFileNames(t, cfgPath, env, "/"+folder),
+	assert.ElementsMatch(t, keysOf(contents), printableNames(remoteFileNames(t, cfgPath, env, "/"+folder)),
 		"still nothing deleted on OneDrive")
 }
 

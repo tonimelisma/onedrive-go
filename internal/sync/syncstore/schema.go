@@ -78,7 +78,13 @@ const (
 	// the rows that are not blocked. The stored issue type of a file that could
 	// not be read or hashed is renamed hash_error, the name of its condition;
 	// the old name named only a panic in a hash worker.
-	currentSyncStoreGeneration = 29
+	//
+	// Generation 30 adds local_move_intents: a local file move records its
+	// old and new paths before it renames, and clears them once the old name
+	// is gone, so an old name the move could not remove (a link or copy where
+	// the system refuses the no-replace flag) is known at the next start as
+	// the move's leftover, never uploaded as a new file (R-2.12.9).
+	currentSyncStoreGeneration = 30
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -136,6 +142,12 @@ CREATE TABLE IF NOT EXISTS pending_creates (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pending_creates_item_id ON pending_creates(item_id);
+
+CREATE TABLE IF NOT EXISTS local_move_intents (
+    old_path     TEXT    NOT NULL PRIMARY KEY CHECK(old_path <> ''),
+    new_path     TEXT    NOT NULL CHECK(new_path <> ''),
+    intended_at  INTEGER NOT NULL DEFAULT 0
+);
 
 CREATE TABLE IF NOT EXISTS mount_boundaries (
     path       TEXT    NOT NULL PRIMARY KEY
@@ -297,6 +309,9 @@ func canonicalSyncStoreColumns() map[string][]string {
 		},
 		"pending_creates": {
 			"path", "item_id", "drive_id", "parent_id", "created_etag", "local_size", "local_hash", "intended_at",
+		},
+		"local_move_intents": {
+			"old_path", "new_path", "intended_at",
 		},
 		"mount_boundaries": {
 			"path",

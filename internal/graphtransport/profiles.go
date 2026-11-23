@@ -44,27 +44,32 @@ type ClientSet struct {
 // Every retrying builder takes the caller's shared *retry.Notices so that one
 // outage or long rate-limit wait is announced once per process, not once per
 // client (R-6.6.8). A nil notices gives the client private announcements.
+// It takes the process's jitter source too (retry.JitterSource), seeded once
+// at start, which every retry wait draws its jitter from.
 
 // BootstrapMetadataClient builds the retrying metadata client used before
 // account identity is known.
-func BootstrapMetadataClient(logger *slog.Logger, notices *retry.Notices) *http.Client {
-	return retryingMetadataClient(logger, nil, notices)
+func BootstrapMetadataClient(logger *slog.Logger, notices *retry.Notices, jitter retry.JitterSource) *http.Client {
+	return retryingMetadataClient(logger, nil, notices, jitter)
 }
 
 // InteractiveMetadataClient builds the retrying metadata client used for one
 // interactive target. Callers own any shared throttle-gate lifetime.
-func InteractiveMetadataClient(logger *slog.Logger, gate *retry.ThrottleGate, notices *retry.Notices) *http.Client {
-	return retryingMetadataClient(logger, gate, notices)
+func InteractiveMetadataClient(
+	logger *slog.Logger, gate *retry.ThrottleGate, notices *retry.Notices, jitter retry.JitterSource,
+) *http.Client {
+	return retryingMetadataClient(logger, gate, notices, jitter)
 }
 
 // InteractiveTransferClient builds the retrying transfer client shared by
 // interactive commands once a target has been selected.
-func InteractiveTransferClient(logger *slog.Logger, notices *retry.Notices) *http.Client {
+func InteractiveTransferClient(logger *slog.Logger, notices *retry.Notices, jitter retry.JitterSource) *http.Client {
 	return &http.Client{
 		Timeout: 0,
 		Transport: &retry.RetryTransport{
 			Inner:   perf.RoundTripper{Inner: transferTransport()},
 			Policy:  retry.TransportPolicy(),
+			Jitter:  jitter,
 			Logger:  normalizeLogger(logger),
 			Notices: notices,
 		},
@@ -100,12 +105,15 @@ func SyncClientSet() ClientSet {
 	}
 }
 
-func retryingMetadataClient(logger *slog.Logger, gate *retry.ThrottleGate, notices *retry.Notices) *http.Client {
+func retryingMetadataClient(
+	logger *slog.Logger, gate *retry.ThrottleGate, notices *retry.Notices, jitter retry.JitterSource,
+) *http.Client {
 	return &http.Client{
 		Timeout: 0,
 		Transport: &retry.RetryTransport{
 			Inner:        perf.RoundTripper{Inner: metadataTransport()},
 			Policy:       retry.TransportPolicy(),
+			Jitter:       jitter,
 			Logger:       normalizeLogger(logger),
 			ThrottleGate: gate,
 			Notices:      notices,

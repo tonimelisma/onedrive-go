@@ -182,7 +182,7 @@ type currentInputs struct {
 	remoteRows        []syncdomain.RemoteStateRow
 	observationIssues []syncdomain.ObservationIssueRow
 	// baseline is read in the same transaction as the comparison rows, so a
-	// baseline_present row always has its entry. It is a snapshot, a type the
+	// row with a baseline side always has its entry. It is a snapshot, a type the
 	// run's live baseline view is not: the planner cannot be handed the cache,
 	// which can lag or lead the comparison rows when a commit lands between
 	// them.

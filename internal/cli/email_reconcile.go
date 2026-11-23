@@ -173,8 +173,9 @@ func (cc *CLIContext) askAccountIdentity(
 }
 
 // applyAccountIdentity applies what OneDrive answered for the account and
-// records the next check 24 hours on,
-// under the account's name after any email change. A change it cannot apply
+// records the next check 24 hours on, under the account's name after any
+// email change; an email change also flushes the session runtime's token
+// cache, since the sign-in file moved. A change it cannot apply
 // is returned and records nothing, so the next command asks and applies
 // again.
 func (cc *CLIContext) applyAccountIdentity(
@@ -187,6 +188,13 @@ func (cc *CLIContext) applyAccountIdentity(
 		return config.EmailReconcileResult{}, err
 	}
 	cc.recordIdentityCheck(ctx, remapCanonicalIDWithResult(accountCID, &result), true)
+	if result.Changed() {
+		// A rename moved the sign-in file. A token source or bootstrap client
+		// cached under the old path would refresh into a file that no longer
+		// names the account, so every client built after the probe (a drive
+		// session, a shared target's clients) reads the moved file afresh.
+		cc.runtime().FlushTokenCache()
+	}
 
 	return result, nil
 }
@@ -233,8 +241,61 @@ func (cc *CLIContext) finishInterruptedEmailChange(ctx context.Context) error {
 		return fmt.Errorf("finish an interrupted account email change: %w", err)
 	}
 	cc.applyEmailReconcileResult(&result)
+	cc.tellRunningWatchOfEmailChange(ctx, &result)
 
 	return nil
+}
+
+// catchUpEmailChanges is the CLI's entry step for account email changes: it
+// finishes one an earlier command was cut short in, then catches the
+// command's config file up from the former emails accounts keep.
+func (cc *CLIContext) catchUpEmailChanges(ctx context.Context) error {
+	if err := cc.finishInterruptedEmailChange(ctx); err != nil {
+		return err
+	}
+
+	return cc.catchUpConfigFromFormerEmails(ctx)
+}
+
+// catchUpConfigFromFormerEmails renames, in the command's config file, the
+// sections an account email change left under a former email of an account
+// because that change ran with another config file, says so in one line, and
+// remaps this invocation's selectors from the old names. A file that cannot
+// be caught up fails the command, as an unfinished change does: its drives
+// would resolve under names no store or token has any more.
+func (cc *CLIContext) catchUpConfigFromFormerEmails(ctx context.Context) error {
+	if cc.CfgPath == "" {
+		return nil
+	}
+	result, err := config.CatchUpConfigFromFormerEmails(ctx, cc.CfgPath)
+	if err != nil {
+		return fmt.Errorf("catch up the config file from an account email change: %w", err)
+	}
+	if !result.Changed() {
+		return nil
+	}
+	for i := range result.DriveRenames {
+		cc.Statusf("Config file %s still named drive %s by a former email of its account; renamed it to %s.\n",
+			cc.CfgPath, result.DriveRenames[i].From, result.DriveRenames[i].To)
+	}
+	cc.applyEmailReconcileResult(&result)
+	cc.tellRunningWatchOfEmailChange(ctx, &result)
+
+	return nil
+}
+
+// tellRunningWatchOfEmailChange asks a running `sync --watch` to reload once
+// this command applied or finished an account email change. Until its own
+// reread of the config file, a runner of a drive that was paused or backing
+// off could start an engine under the old name (which the runner's catalog
+// check then refuses, multisync); the reload replaces the runner at once.
+// The watch itself is not told: it is the running watch.
+func (cc *CLIContext) tellRunningWatchOfEmailChange(ctx context.Context, result *config.EmailReconcileResult) {
+	if result == nil || !result.Changed() || cc.isWatchCommand {
+		return
+	}
+
+	notifyDaemonIfRunning(ctx, cc)
 }
 
 // reconcileGraphUser applies an account email change Graph reports, as one
@@ -263,6 +324,7 @@ func (cc *CLIContext) reconcileGraphUser(
 
 	if result.Changed() {
 		cc.applyEmailReconcileResult(&result)
+		cc.tellRunningWatchOfEmailChange(ctx, &result)
 	}
 
 	return result, nil

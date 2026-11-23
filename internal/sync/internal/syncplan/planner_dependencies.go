@@ -22,7 +22,8 @@ import (
 // remote delete or move-away of a sibling whose name differs only in case,
 // (7) a delete waits for the create on its side that writes the deleted
 // file's content at another path, unless that closes a cycle
-// (addContentCarrierDeps).
+// (addContentCarrierDeps), (8) a baseline update below the path a baseline
+// rekey moves a subtree to waits for the rekey (addRekeyDestinationDep).
 //
 // Every rule relates an action to actions at its own path, at the folders
 // above it, at the OneDrive name keys of its path and of those folders, or
@@ -49,6 +50,7 @@ func buildDependencyGraph(actions []syncdomain.Action) (deps [][]int, leftOut []
 		deps[i] = addMoveDeps(deps[i], i, &actions[i], actions, index)
 		deps[i] = addMoveOutOfDeletedFolderDeps(deps[i], i, &actions[i], actions, index)
 		deps[i] = addRemoteCaseVariantDeps(deps[i], i, &actions[i], actions, index)
+		deps[i] = addRekeyDestinationDep(deps[i], i, &actions[i], index.rekeysByPath)
 		// Sort dependency indices for reproducible ordering (B-154).
 		sort.Ints(deps[i])
 	}
@@ -65,6 +67,10 @@ func buildDependencyGraph(actions []syncdomain.Action) (deps [][]int, leftOut []
 // folders above the action (pathAncestors), so the lists cost the depth of
 // each path to build and hold each pair once.
 type dependencyIndex struct {
+	// rekeysByPath holds the baseline updates that move a baseline subtree
+	// (an OldPath) by the path they move it to.
+	rekeysByPath map[string][]int
+
 	folderCreateIdx map[string]int
 	conflictCopyIdx map[string]int
 	deleteIdx       map[string]int
@@ -145,10 +151,42 @@ func (index *dependencyIndex) indexByPath(i int, a *syncdomain.Action, folderDel
 		if key, writes := carriedContentKey(a); writes {
 			index.contentCarriers[key] = append(index.contentCarriers[key], i)
 		}
+		if _, removes := deletedContentKey(a); removes {
+			index.contentDeletes = append(index.contentDeletes, i)
+		}
 	case syncdomain.ActionBaselineUpdate:
+		if a.OldPath != "" && a.OldPath != a.Path {
+			if index.rekeysByPath == nil {
+				index.rekeysByPath = map[string][]int{}
+			}
+			index.rekeysByPath[a.Path] = append(index.rekeysByPath[a.Path], i)
+		}
 	default:
 		panic(syncdomain.OutsideTheEnum(a.Type))
 	}
+}
+
+// addRekeyDestinationDep makes a baseline update below the path a rekey
+// moves a baseline subtree to wait for it. Both items moved here and on
+// OneDrive (a folder renamed alike on both sides) are rekeyed as one subtree
+// move of their baseline rows, and a row written below the destination first
+// (the rebind of a folder OneDrive deleted and made again at its path,
+// R-2.10.49) took the path a row of the subtree moves to: the rekey failed on
+// the store's unique path every pass and sync never converged (chaos seed
+// 324). Once the rekey has run, the update below rewrites the moved row.
+func addRekeyDestinationDep(deps []int, idx int, a *syncdomain.Action, rekeysByPath map[string][]int) []int {
+	if a.Type != syncdomain.ActionBaselineUpdate || len(rekeysByPath) == 0 {
+		return deps
+	}
+	for parent := range pathAncestors(a.Path) {
+		for _, rekey := range rekeysByPath[parent] {
+			if rekey != idx {
+				deps = append(deps, rekey)
+			}
+		}
+	}
+
+	return deps
 }
 
 // linkWorkBelowFolders fills the per-action candidate lists by walking the
@@ -538,7 +576,11 @@ func carriedContentKey(create *syncdomain.Action) (contentKey, bool) {
 
 // deletedContentKey reports the synced file a delete removes from its side,
 // under the key a create of that content on the same side carries: its
-// synced local identity on OneDrive, its item ID here.
+// synced local identity on OneDrive, its item ID here. A download of another
+// item over the synced file here removes the file's content from this side
+// as a delete does (OneDrive moved the synced item away and put another at
+// its path), so it waits for the download that writes that content where
+// the item went, and is skipped with it when that download fails.
 func deletedContentKey(deleted *syncdomain.Action) (contentKey, bool) {
 	if deleted.View == nil || deleted.View.Baseline == nil || deleted.View.Baseline.ItemType != syncdomain.ItemTypeFile {
 		return contentKey{}, false
@@ -549,7 +591,12 @@ func deletedContentKey(deleted *syncdomain.Action) (contentKey, bool) {
 		return contentKey{device: synced.LocalDevice, inode: synced.LocalInode}, synced.LocalHasIdentity
 	case syncdomain.ActionLocalDelete:
 		return contentKey{itemID: synced.ItemID}, synced.ItemID != ""
-	case syncdomain.ActionDownload, syncdomain.ActionUpload, syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove,
+	case syncdomain.ActionDownload:
+		replaces := synced.ItemID != "" && deleted.ItemID != "" && synced.ItemID != deleted.ItemID &&
+			deleted.Path == syncdomain.ActionViewPath(deleted)
+
+		return contentKey{itemID: synced.ItemID}, replaces
+	case syncdomain.ActionUpload, syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove,
 		syncdomain.ActionFolderCreate,
 		syncdomain.ActionConflictCopy, syncdomain.ActionBaselineUpdate, syncdomain.ActionCleanup:
 		return contentKey{}, false
@@ -681,6 +728,10 @@ func moveOrderDependency(a, other *syncdomain.Action, sourceRecreated bool) bool
 		!movesIntoRecreatedSource(other, a, sourceRecreated) {
 		return true
 	}
+	if landsInTheFolderMoveCarries(other, a) {
+		// It lands inside the folder before the folder moves.
+		return true
+	}
 
 	return (isDeleteAction(other) || other.Type == syncdomain.ActionConflictCopy) && other.Path == a.Path
 }
@@ -730,12 +781,30 @@ func movePrecedes(move, a *syncdomain.Action) bool {
 // (namekey.OfPath): a new folder X takes the path x leaves there and on a volume
 // that folds case.
 func movesIntoVacatedPath(a, move *syncdomain.Action) bool {
-	if move.OldPath == "" {
+	if move.OldPath == "" || landsInTheFolderMoveCarries(a, move) {
 		return false
 	}
 	vacated := namekey.OfPath(move.OldPath)
 
 	return belowPathKey(namekey.OfPath(a.Path), vacated) && !belowPathKey(namekey.OfPath(a.OldPath), vacated)
+}
+
+// landsInTheFolderMoveCarries reports whether a, a local move below the path
+// local folder move vacates, lands in that folder itself rather than in a
+// new folder that takes its path: composition planned it to run inside the
+// folder before the folder moves, and OneDrive already holds the item where
+// the folder's move carries a's destination (MovedRemotePath). Such a move
+// runs first, as a write below the folder's source does; ordered after the
+// folder's move it would wait for it while the folder's move waits for it to
+// vacate the folder's destination (a rotation through nesting made on
+// OneDrive: p moved into x, x moved to p).
+func landsInTheFolderMoveCarries(a, move *syncdomain.Action) bool {
+	if a.Type != syncdomain.ActionLocalMove || move.Type != syncdomain.ActionLocalMove ||
+		a.MovedRemotePath == "" || !strings.HasPrefix(a.Path, move.OldPath+"/") {
+		return false
+	}
+
+	return a.MovedRemotePath == move.Path+strings.TrimPrefix(a.Path, move.OldPath)
 }
 
 // belowPathKey reports whether the path of k lies below the path of root,
@@ -745,13 +814,33 @@ func belowPathKey(k, root namekey.PathKey) bool {
 }
 
 // underMoveDestination reports whether a works at or below move's
-// destination.
+// destination. A move whose source lies below the destination moves
+// something the destination will hold once move has run: on OneDrive a move
+// is rebased through the moves before it, so its source can name such a
+// path. A local move is not rebased (local_state is observation-owned), so
+// a local move's source below another local move's destination is in
+// what holds that destination now, which leaves it, children first, before
+// move can land there: here p moved into x while OneDrive moved x into p
+// and z onto x, so p leaves x first, then x moves into p, then z onto x.
+// Ordered after move, a waited for it while move waited for the path a's
+// folder leaves, a cycle dropped on every pass.
 func underMoveDestination(a, move *syncdomain.Action) bool {
 	if a.Path == move.Path && !isMoveAction(a) && !isDeleteAction(a) && a.Type != syncdomain.ActionConflictCopy {
 		return true
 	}
+	if (a.Type == syncdomain.ActionLocalDelete || a.Type == syncdomain.ActionCleanup) && move.Type == syncdomain.ActionLocalMove {
+		// A local delete is in snapshot coordinates too, and a cleanup in
+		// the baseline's, which the move re-paths only once it commits:
+		// below the destination either removes what holds the destination
+		// now, the folder the move waits to see deleted
+		// (moveDisplaceDeleteFirst), whose delete waits for them.
+		return false
+	}
 	if strings.HasPrefix(a.Path, move.Path+"/") {
 		return true
+	}
+	if a.Type == syncdomain.ActionLocalMove && move.Type == syncdomain.ActionLocalMove {
+		return false
 	}
 
 	return isMoveAction(a) && strings.HasPrefix(a.OldPath, move.Path+"/")

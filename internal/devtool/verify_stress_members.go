@@ -133,6 +133,8 @@ func stressSyncRunWatchMembers() []string {
 // stressSyncWatchRuntimeMembers are the members of the watch runtime.
 func stressSyncWatchRuntimeMembers() []string {
 	return []string{
+		"TestWatchRuntime_ACompletionAppliedAtTheCancelIsCountedWhenTheStopsTimeRunsOut",
+		"TestWatchRuntime_ACompletionAppliedAtTheCancelIsRecorded",
 		"TestWatchRuntime_ADrainRecordsTheCompletionsItReceives",
 		"TestWatchRuntime_ASnapshotCommitsRowsFindingsAndMountsTogether",
 		"TestWatchRuntime_ASnapshotRefreshesTheObserversMountFlags",
@@ -342,6 +344,7 @@ func stressSyncShutdownAndCancellationMembers() []string {
 		"TestDrainAfterCanceledStepError_CanceledStepFailureStartsTheDrain",
 		"TestDrainAfterCanceledStepError_LiveContextReportsTheError",
 		"TestDrainAfterCanceledStepError_NoErrorDoesNothing",
+		"TestEngineFlow_ALiveCompletionAppliedAtTheCancelIsRecorded",
 		"TestEngineFlow_CompleteOutboxAsShutdown_CompletesTrackedActions",
 		"TestEngineFlow_CompleteQueuedDispatchAsShutdown_CompletesQueuedSubtree",
 		"TestEngineFlow_ProcessNormalDecision_ShutdownReturnsWithoutPersistence",
@@ -423,6 +426,7 @@ func stressSyncStoreShutdownAndCancellationMembers() []string {
 // pass that runs the worker pool is one, whatever its subject.
 func stressSyncConcurrencyNonMembers() []stressNonMember {
 	return []stressNonMember{
+		{test: "TestEngine_ARemovedShortcutTheFiltersExcludeDoesNotWaitForADrainForEver", reason: stressNonMemberRootState},
 		{test: "TestEngine_AcknowledgeChildFinalDrainBlocksWhenAliasProjectionCannotBeRemoved", reason: stressNonMemberRootState},
 		{test: "TestEngine_AcknowledgeChildFinalDrainReleasesParentShortcutRoot", reason: stressNonMemberRootState},
 		{test: "TestEngine_AcknowledgeChildFinalDrainSendsANonEmptyRootBackToTheFinalDrain", reason: stressNonMemberRootState},
@@ -476,6 +480,7 @@ func stressSyncStoreConcurrencyNonMembers() []stressNonMember {
 // These tests are in internal/sync/syncshortcut.
 func stressSyncShortcutConcurrencyNonMembers() []stressNonMember {
 	return []stressNonMember{
+		{test: "TestPlanExcludedRetiringShortcutRootSkipsTheDrainNoChildRuns", reason: stressNonMemberRootState},
 		{test: "TestPlanShortcutRootReleaseCleanupSendsANonEmptyRootBackToTheFinalDrain", reason: stressNonMemberRootState},
 	}
 }

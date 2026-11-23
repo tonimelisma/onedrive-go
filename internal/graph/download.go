@@ -267,7 +267,7 @@ func (c *Client) downloadFromURLWithRange(
 		return 0, bodyErr
 	}
 
-	n, copyErr := io.Copy(w, watchdog.reader(resp.Body))
+	n, copyErr := io.Copy(w, watchdog.networkBody(resp.Body))
 	if copyErr != nil {
 		// Returned, not logged above Debug: the caller reports the failure
 		// once, and a canceled context here is an ordinary shutdown.
@@ -390,7 +390,7 @@ func (c *Client) downloadFromURL(ctx context.Context, item *Item, w io.Writer) (
 		return 0, bodyErr
 	}
 
-	n, copyErr := io.Copy(w, watchdog.reader(resp.Body))
+	n, copyErr := io.Copy(w, watchdog.networkBody(resp.Body))
 	if copyErr != nil {
 		// Returned, not logged above Debug: the caller reports the failure
 		// once, and a canceled context here is an ordinary shutdown.
@@ -472,7 +472,7 @@ func (c *Client) downloadViaContentEndpoint(
 		return 0, bodyErr
 	}
 
-	n, copyErr := io.Copy(w, watchdog.reader(resp.Body))
+	n, copyErr := io.Copy(w, watchdog.networkBody(resp.Body))
 	if copyErr != nil {
 		return n, watchdog.explain(ctx, fmt.Errorf("graph: streaming content download: %w", copyErr))
 	}

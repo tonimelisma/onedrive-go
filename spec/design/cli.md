@@ -537,6 +537,22 @@ and prints the "Account email changed" line once, so a command run with a
 drive's old name resolves it under the new one
 (`TestInitializeCLIContext_FinishesAnInterruptedEmailChangeBeforeTheCommandResolvesItsDrive`,
 `TestApplyEmailReconcileResult_RemapsEveryExactSelectorOfTheInvocation`).
+Right after, the command's config file is caught up from the former emails
+the catalog accounts keep (`catchUpConfigFromFormerEmails`,
+`config.CatchUpConfigFromFormerEmails`): a section another config file's
+change left under an old address is renamed, said in one line, and the
+selectors remapped (R-3.7.5,
+`TestInitializeCLIContext_ASecondConfigFileIsCaughtUpFromAFormerEmail`). A
+change applied or finished, or a file caught up, asks a running `sync
+--watch` to reload (`tellRunningWatchOfEmailChange`), except from the watch
+itself (`isWatchCommand`).
+An email change the identity probe applies (`applyAccountIdentity`, under
+every caller of `probeAccountIdentity` and `probeAccountIdentities`) also
+flushes the command's session runtime's token cache, since the sign-in file
+moved: a drive session, the shared-target clients and the shared bootstrap
+client built after the probe load the moved file, and no source cached under
+the old name lives on (`TestSharedTargetClients_FlushTheTokenCacheAfterARename`,
+`TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive`).
 A change that cannot be finished fails the command with the reason, because
 every name it would resolve may be half renamed. The commands cobra adds
 itself need no account and skip the whole CLI context
@@ -613,10 +629,13 @@ change landed; the folders' item IDs are only in `--verbose`'s details
 (`TestCommandErrorText_DisagreeingAnswersForAPathAreOneSentence`). A name with `:`
 is read through its parent folder's listing (R-6.7.38), so a command that
 does not find it names the path once with the `ls` of its folder, as any
-missing path does (`TestCommandErrorText_ANameAPathCannotCarryIsOneSentence`);
-where `graph.ErrNameNotPathAddressable` still reaches the command, the
-sentence names the path once and the character, or says a name is too long
-for a path route.
+missing path does (`TestCommandErrorText_ANameAPathCannotCarryIsOneSentence`).
+`graph.ErrNameNotPathAddressable` no longer reaches a command: every path
+read that could refuse a name is preceded by `graph.NameIsPathAddressable`
+(`driveops` walks such a path by name instead), and every read of one name
+under its parent lists the parent on that refusal (`FindExistingChild`, the
+executor's `childrenHoldingName`, the listing fallback of
+`ListChildrenPages`), so the command error text has no sentence for it.
 Command-line
 mistakes become `usageError` through cobra's flag-error hook, a wrapper on
 every command's `Args` validator, and a flag-group check that runs before
@@ -1149,7 +1168,16 @@ an `internal_error`, and every other decode or close failure stays an
 `Unwrap` (`TestDecodeControlJSONResponse_BodyTimeoutReadsAsDidNotAnswer`,
 `TestDecodeControlJSONResponse_AnInternalErrorKeepsItsCause`). Only a watch owner can be busy, since
 a one-shot owner answers status in the handler. `drive reset-sync-state`
-refuses on it as on any probe that could not tell.
+refuses on it as on any probe that could not tell. A one-shot `sync`
+refuses on it too, before its "Checking ..." banner and with the same
+"another onedrive-go sync is already running" error a watch or one-shot
+owner gets (`answerOrRefuseForRunningOwner`): it is a live sync of unknown
+mode, so starting would only fail later on the ownership lock after the
+banner read as a run that began, and a `--confirm-deletes` cannot be handed
+to an owner that does not answer
+(`TestRunSyncCommand_UnresponsiveOwnerRefusesBeforeTheBanner`). A probe that
+failed in another way is not read as a running sync; the ownership lock
+(R-2.9.4) decides.
 
 The probe sees only an owner that holds the control socket. After the
 confirmation, `drive reset-sync-state`, `drive rebind-root` and

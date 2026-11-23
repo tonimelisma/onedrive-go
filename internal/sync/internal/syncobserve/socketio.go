@@ -161,7 +161,7 @@ func (s *socketIOWakeSource) Run(ctx context.Context, wakes chan<- struct{}) err
 	s.emitLifecycleEvent(SocketIOLifecycleEvent{Type: SocketIOLifecycleEventStarted})
 	defer s.emitLifecycleEvent(SocketIOLifecycleEvent{Type: SocketIOLifecycleEventStopped})
 
-	bo := retry.NewBackoff(retry.WatchRemotePolicy())
+	bo := retry.NewBackoff(retry.WatchRemotePolicy(), s.clock)
 	bo.SetMaxOverride(s.backoffMax)
 
 	for {

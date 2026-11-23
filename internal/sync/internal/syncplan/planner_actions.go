@@ -57,10 +57,6 @@ func (p *Planner) PlanCurrentState(
 		return nil, err
 	}
 
-	inputs := moveCompositionInputs(comparisons, views, remoteRows, localRows)
-	composition := composeMoves(inputs.nodes, inputs.occupancy, inputs.frozen)
-	logMoveNotices(p.logger, composition.notices)
-
 	var reconciled []syncdomain.Action
 	for i := range reconciliations {
 		rec := reconciliations[i]
@@ -76,9 +72,25 @@ func (p *Planner) PlanCurrentState(
 
 		reconciled = append(reconciled, actions...)
 	}
+	inputs := moveCompositionInputs(comparisons, views, remoteRows, localRows)
+	displaceFoldersDeletedHere(&inputs, localDeletePaths(reconciled))
+	composition := composeMoves(inputs.nodes, inputs.occupancy, inputs.frozen)
+	logMoveNotices(p.logger, composition.notices)
 	composed, waiting := buildComposedMoveActions(&composition, &inputs, views, baseline)
 
 	return p.planBuiltActions(reconciled, composed, waiting, &composition, &inputs, mount, mode)
+}
+
+// localDeletePaths lists the paths the reconciliation actions delete here.
+func localDeletePaths(reconciled []syncdomain.Action) map[string]bool {
+	paths := map[string]bool{}
+	for i := range reconciled {
+		if reconciled[i].Type == syncdomain.ActionLocalDelete {
+			paths[reconciled[i].Path] = true
+		}
+	}
+
+	return paths
 }
 
 // planBuiltActions turns the actions PlanCurrentState built, from the
@@ -438,21 +450,21 @@ func buildSQLitePathViews(
 			Path:        row.Path,
 			TruthStatus: truthStatus,
 		}
-		if row.BaselinePresent {
+		if row.BaselineType.Present() {
 			entry, ok := baseline.GetByPath(row.Path)
 			if !ok {
 				return nil, nil, fmt.Errorf("sync: missing baseline entry for comparison path %q", row.Path)
 			}
 			view.Baseline = &entry
 		}
-		if row.LocalPresent {
+		if row.LocalType.Present() {
 			localRow, ok := localByPath[row.Path]
 			if !ok {
 				return nil, nil, fmt.Errorf("sync: missing local_state row for comparison path %q", row.Path)
 			}
 			view.Local = LocalStateFromSnapshotRow(&localRow)
 		}
-		if row.RemotePresent {
+		if row.RemoteType.Present() {
 			remoteRow, ok := remoteByPath[row.Path]
 			if !ok {
 				return nil, nil, fmt.Errorf("sync: missing remote_state row for comparison path %q", row.Path)

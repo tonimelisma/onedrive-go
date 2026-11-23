@@ -71,6 +71,7 @@ func (e *Engine) runWatch(ctx context.Context, rt *watchRuntime, mode syncdomain
 
 	stopNoting := rt.noteRunCancel(ctx)
 	defer stopNoting()
+	ctx = rt.withRunStop(ctx)
 	bl, err := e.runStartup(ctx, rt.engineFlow)
 	if err != nil {
 		if isWatchShutdownError(ctx, err) {
@@ -80,6 +81,7 @@ func (e *Engine) runWatch(ctx context.Context, rt *watchRuntime, mode syncdomain
 		return err
 	}
 	e.restoreSpellingRenameLeftovers(ctx)
+	e.settleLocalMoveLeftovers(ctx)
 
 	// Step 1: Set up watch infrastructure (no observers yet).
 	pipe, err := rt.initWatchInfra(ctx, mode, opts)

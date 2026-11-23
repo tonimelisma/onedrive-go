@@ -543,12 +543,6 @@ func (rt *watchRuntime) resetRefreshTimer(next syncdomain.SyncTimer) {
 	rt.resources.refreshTimer = next
 }
 
-// kickDueHeldRelease satisfies runtimeSignals; the watch loop releases
-// due held retry work immediately rather than waiting for the next tick.
-func (rt *watchRuntime) kickDueHeldRelease() {
-	rt.kickRetryHeldReleaseNow()
-}
-
 // markReplanNeeded satisfies runtimeSignals: committed truth changed under the
 // current plan, so the debounce buffer should schedule a replan.
 func (rt *watchRuntime) markReplanNeeded() {

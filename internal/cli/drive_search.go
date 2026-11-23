@@ -24,9 +24,15 @@ func runDriveSearchWithContext(ctx context.Context, cc *CLIContext, query string
 		return err
 	}
 
-	businessTokens := searchableBusinessTokenIDs(snapshot.Accounts, cc.Flags.Account)
+	target, selected, err := cc.selectedAccount(snapshot.Stored, "search with")
+	if err != nil {
+		return err
+	}
+	account := target.orNone(selected)
+
+	businessTokens := searchableBusinessTokenIDs(snapshot.Accounts, account)
 	businessAuthRequired := authRequirements(snapshot, func(entry accountView) bool {
-		if cc.Flags.Account != "" && entry.Email != cc.Flags.Account {
+		if account != nil && !account.includesView(&entry) {
 			return false
 		}
 		return entry.DriveType == driveid.DriveTypeBusiness

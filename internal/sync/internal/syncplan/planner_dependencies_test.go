@@ -86,6 +86,51 @@ func TestBuildDependencies_MatchesScanningOracle(t *testing.T) {
 	assert.Positive(t, edgesOnContent)
 }
 
+// oracleAddRekeyDestinationDep is addRekeyDestinationDep by scanning every
+// other action.
+func oracleAddRekeyDestinationDep(deps []int, idx int, a *syncdomain.Action, actions []syncdomain.Action) []int {
+	if a.Type != syncdomain.ActionBaselineUpdate {
+		return deps
+	}
+	for parent := range pathAncestors(a.Path) {
+		for other := range actions {
+			rekey := &actions[other]
+			if other != idx && rekey.Type == syncdomain.ActionBaselineUpdate && rekey.OldPath != "" &&
+				rekey.OldPath != rekey.Path && rekey.Path == parent {
+				deps = append(deps, other)
+			}
+		}
+	}
+
+	return deps
+}
+
+// Validates: R-2.17.1
+//
+// Both sides moved a folder alike, so its baseline subtree is rekeyed in one
+// update, and OneDrive deleted a folder below it and made one again at its
+// path, whose rebind is a baseline update at the moved folder's new path.
+// The rebind waits for the rekey: run first, it took the path a row of the
+// subtree moves to, the rekey failed on the store's unique path every pass,
+// and sync never converged (chaos seed 324). An update that is not below the
+// rekey's destination, and the rekey itself, wait for nothing.
+func TestBuildDependencies_AnUpdateBelowARekeyedFolderWaitsForTheRekey(t *testing.T) {
+	t.Parallel()
+
+	actions := []syncdomain.Action{
+		{Type: syncdomain.ActionBaselineUpdate, Path: "photos/x/q", ItemID: "new-q"},
+		{Type: syncdomain.ActionBaselineUpdate, Path: "photos/x", OldPath: "q", ItemID: "x"},
+		{Type: syncdomain.ActionBaselineUpdate, Path: "photos/y", ItemID: "y"},
+	}
+
+	deps := buildDependencies(actions)
+
+	assert.Equal(t, []int{1}, deps[0], "the rebind below the destination waits for the rekey")
+	assert.Empty(t, deps[1])
+	assert.Empty(t, deps[2])
+	assert.Equal(t, oracleBuildDependencies(actions), deps)
+}
+
 // Validates: R-2.17.2, R-2.17.6
 //
 // A delete waits for the create on its side that writes the deleted file's
@@ -529,6 +574,7 @@ func oracleBuildDependencies(actions []syncdomain.Action) [][]int {
 		deps[i] = oracleAddMoveDeps(deps[i], i, &actions[i], actions)
 		deps[i] = oracleAddMoveOutOfDeletedFolderDeps(deps[i], i, &actions[i], actions)
 		deps[i] = oracleAddRemoteCaseVariantDeps(deps[i], i, &actions[i], actions)
+		deps[i] = oracleAddRekeyDestinationDep(deps[i], i, &actions[i], actions)
 		sort.Ints(deps[i])
 	}
 

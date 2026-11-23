@@ -9,12 +9,16 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/filelock"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
@@ -350,22 +354,30 @@ func MoveStateDBs(
 		}
 	}()
 
-	pending, leftovers, err := splitStateDBMoves(moves)
+	// A drive's shortcut children name their stores by the drive's mount ID,
+	// which holds the email: they move with it, under their own locks too.
+	children, err := childStateDBMoves(ctx, dataDir, moves, logger)
 	if err != nil {
 		return err
 	}
-	if checkErr := checkStateDBMoveTargets(pending, begin == nil); checkErr != nil {
-		return checkErr
+	releaseChildren, err := lockStateDBMoves(ctx, dataDir, children, logger)
+	if err != nil {
+		return err
 	}
-	if begin != nil {
-		for _, move := range pending {
-			if removeErr := syncstore.RemoveStateDBSidecars(move.To); removeErr != nil {
-				return removeErr
-			}
+	defer func() {
+		if releaseErr := releaseChildren(); releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("release sync state lock: %w", releaseErr))
 		}
-		if beginErr := begin(); beginErr != nil {
-			return fmt.Errorf("record the account email change: %w", beginErr)
-		}
+	}()
+
+	all := append(slices.Clone(moves), children...)
+	pending, leftovers, err := splitStateDBMoves(all)
+	if err != nil {
+		return err
+	}
+	trashMoves, err := beginStateDBMoves(dataDir, all, pending, begin)
+	if err != nil {
+		return err
 	}
 
 	for _, move := range pending {
@@ -377,9 +389,140 @@ func MoveStateDBs(
 			slog.String("from", move.From), slog.String("to", move.To))
 	}
 
+	if companionErr := moveStoreCompanions(ctx, dataDir, moves, all, trashMoves, logger); companionErr != nil {
+		return companionErr
+	}
+
 	for _, dbPath := range leftovers {
 		if removeErr := removeStateDBLeftovers(dbPath, logger); removeErr != nil {
 			return removeErr
+		}
+	}
+
+	return nil
+}
+
+// beginStateDBMoves checks every target of pending and of the trash folders
+// of all and, for a new change (begin not nil), deletes the stranger's
+// sidecars at the new names and records the change, before the first
+// rename. It returns the trash folder moves.
+func beginStateDBMoves(dataDir string, all, pending []config.StateDBMove, begin func() error) ([]trashDirMove, error) {
+	trashMoves, err := trashDirMoves(dataDir, all)
+	if err != nil {
+		return nil, err
+	}
+	if checkErr := checkTrashDirMoveTargets(trashMoves, begin == nil); checkErr != nil {
+		return nil, checkErr
+	}
+	if checkErr := checkStateDBMoveTargets(pending, begin == nil); checkErr != nil {
+		return nil, checkErr
+	}
+	if begin == nil {
+		return trashMoves, nil
+	}
+	for _, move := range pending {
+		if removeErr := syncstore.RemoveStateDBSidecars(move.To); removeErr != nil {
+			return nil, removeErr
+		}
+	}
+	if beginErr := begin(); beginErr != nil {
+		return nil, fmt.Errorf("record the account email change: %w", beginErr)
+	}
+
+	return trashMoves, nil
+}
+
+// childStateDBMoves are the moves of the stores of the shortcut children of
+// every drive moves renames (a move with mount IDs): ChildMountID of the old
+// mount ID to that of the new one, for each shortcut the drive's store
+// records. The bindings are read from the drive's store where it is now, at
+// its old name before the move or at its new one when a resumed change
+// already moved it; the caller holds that store's lock. A move derived so is
+// idempotent like every other: a resumed change derives the same moves, and
+// the ones already done find their source gone.
+func childStateDBMoves(
+	ctx context.Context, dataDir string, moves []config.StateDBMove, logger *slog.Logger,
+) ([]config.StateDBMove, error) {
+	var children []config.StateDBMove
+	for _, move := range moves {
+		if move.FromMountID == "" || move.ToMountID == "" || move.FromMountID == move.ToMountID {
+			continue
+		}
+		storePath, found, err := currentStateDBOfMove(move)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		bindings, err := syncstore.ShortcutRootBindingsAt(ctx, storePath,
+			[]string{move.FromMountID, move.ToMountID}, logger)
+		if err != nil {
+			// A store that cannot be read names no shortcut this change can
+			// know of: it moves as it is, and so does nothing else of it.
+			// Refusing would leave the change unfinished for good, every
+			// command failing on it, over sync state the next sync rebuilds.
+			logger.Warn("Could not read the shared folders of a drive's sync state to move theirs with it; "+
+				"their sync state stays under the old email, and the next sync rebuilds it",
+				slog.String("db_path", storePath), slog.Any("error", err))
+			continue
+		}
+		for _, binding := range bindings {
+			from := config.MountStatePathForDataDir(dataDir, config.ChildMountID(move.FromMountID, binding))
+			to := config.MountStatePathForDataDir(dataDir, config.ChildMountID(move.ToMountID, binding))
+			if from != "" && to != "" && from != to {
+				children = append(children, config.StateDBMove{
+					From: from, To: to,
+					FromMountID: config.ChildMountID(move.FromMountID, binding),
+					ToMountID:   config.ChildMountID(move.ToMountID, binding),
+				})
+			}
+		}
+	}
+
+	return children, nil
+}
+
+// currentStateDBOfMove is where move's store is now: at its old name, or at
+// its new one once moved; found is false when neither holds a database.
+func currentStateDBOfMove(move config.StateDBMove) (path string, found bool, err error) {
+	for _, candidate := range []string{move.From, move.To} {
+		exists, statErr := syncstore.StateDBFileExists(candidate)
+		if statErr != nil {
+			return "", false, fmt.Errorf("check sync state %s: %w", candidate, statErr)
+		}
+		if exists {
+			return candidate, true, nil
+		}
+	}
+
+	return "", false, nil
+}
+
+// renameMovedShortcutNamespaces gives the shortcut roots of every moved
+// drive's store its new mount ID, once the store is at its new name.
+func renameMovedShortcutNamespaces(ctx context.Context, moves []config.StateDBMove, logger *slog.Logger) error {
+	for _, move := range moves {
+		if move.FromMountID == "" || move.ToMountID == "" || move.FromMountID == move.ToMountID {
+			continue
+		}
+		exists, err := syncstore.StateDBFileExists(move.To)
+		if err != nil {
+			return fmt.Errorf("check sync state %s: %w", move.To, err)
+		}
+		if !exists {
+			continue
+		}
+		_, renameErr := syncstore.RenameShortcutRootNamespaceAt(ctx, move.To, move.FromMountID, move.ToMountID, logger)
+		switch {
+		case renameErr == nil:
+		case errors.Is(renameErr, syncstore.ErrShortcutRootsUnreadable):
+			// childStateDBMoves already said, once, that this store could not
+			// be read; it names no shortcut to rename.
+			logger.Debug("no shared folders to rename in a moved sync state that cannot be read",
+				slog.String("db_path", move.To), slog.Any("error", renameErr))
+		default:
+			return fmt.Errorf("rename the shortcuts of %s for an account email change: %w", move.To, renameErr)
 		}
 	}
 
@@ -624,4 +767,173 @@ func (l *dataDirLock) release() error {
 	l.file = nil
 
 	return err
+}
+
+// moveStoreCompanions moves what is named after the stores once the stores
+// moved: the moved drives' shortcut records take their new mount IDs, every
+// store's trash folder its new name, and every moved mount's upload sessions
+// its new ID. Each step is idempotent, so a resumed change runs them all.
+func moveStoreCompanions(
+	ctx context.Context, dataDir string, drives, all []config.StateDBMove, trashMoves []trashDirMove, logger *slog.Logger,
+) error {
+	if err := renameMovedShortcutNamespaces(ctx, drives, logger); err != nil {
+		return err
+	}
+	if err := moveTrashDirs(trashMoves, logger); err != nil {
+		return err
+	}
+	removeEmptyChildTrashContainers(drives, logger)
+
+	return renameUploadSessionMounts(dataDir, all, logger)
+}
+
+// trashDirMove is the move of one store's trash folder for an account email
+// change: a store's trash is named by the store, and a shortcut child's lies
+// under its drive's name (localtrash.ChildDir), so both move with the store.
+type trashDirMove struct {
+	from string
+	to   string
+}
+
+// trashDirMoves are the trash folder moves of every store move.
+func trashDirMoves(dataDir string, moves []config.StateDBMove) ([]trashDirMove, error) {
+	trash := make([]trashDirMove, 0, len(moves))
+	for _, move := range moves {
+		from, err := storeTrashDir(dataDir, move.From, move.FromMountID)
+		if err != nil {
+			return nil, err
+		}
+		to, err := storeTrashDir(dataDir, move.To, move.ToMountID)
+		if err != nil {
+			return nil, err
+		}
+		if from != "" && to != "" && from != to {
+			trash = append(trash, trashDirMove{from: from, to: to})
+		}
+	}
+
+	return trash, nil
+}
+
+// storeTrashDir is the trash folder of the store at statePath that mountID
+// runs on: a shortcut child's under its drive's trash, any other store's
+// beside it (localtrash.DirForStatePath), as the engine's mount config has it.
+func storeTrashDir(dataDir, statePath, mountID string) (string, error) {
+	if !config.IsChildMountID(mountID) {
+		return localtrash.DirForStatePath(statePath), nil
+	}
+	parent, err := driveid.NewCanonicalID(config.ChildMountParentID(mountID))
+	if err != nil {
+		return "", fmt.Errorf("find the drive of shortcut mount %s to move its trash: %w", mountID, err)
+	}
+
+	return localtrash.ChildDir(localtrash.DirForStatePath(config.DriveStatePathForDataDir(dataDir, parent)), statePath), nil
+}
+
+// checkTrashDirMoveTargets refuses, before anything moves, a trash folder
+// that exists at both names: for a new change the new one was there before
+// the email changed, and for a resumed one the old one was made after the
+// change moved it; merging the two would mix two folders' entries.
+func checkTrashDirMoveTargets(moves []trashDirMove, isResumed bool) error {
+	for _, move := range moves {
+		fromExists, err := pathExists(move.from)
+		if err != nil || !fromExists {
+			if err != nil {
+				return fmt.Errorf("check trash folder %s: %w", move.from, err)
+			}
+			continue
+		}
+		toExists, err := pathExists(move.to)
+		switch {
+		case err != nil:
+			return fmt.Errorf("check trash folder %s: %w", move.to, err)
+		case !toExists:
+			continue
+		case isResumed:
+			return fmt.Errorf("finish moving trash folder %s: %s exists too; the account email change already moved "+
+				"the trash to %s, so %s was made after the account's email changed: restore or move what you need "+
+				"out of %s, remove it, and run the command again", move.from, move.to, move.to, move.from, move.from)
+		default:
+			return fmt.Errorf("move trash folder %s: %s already exists; it was there before the account's email "+
+				"changed: restore or move what you need out of %s, remove it, and run the command again",
+				move.from, move.to, move.to)
+		}
+	}
+
+	return nil
+}
+
+// moveTrashDirs renames each trash folder whose old name still exists to its
+// new one; a folder already moved, or never made, needs nothing. The targets
+// were checked before the change began, and engines are refused while it is
+// unfinished, so nothing makes a new name meanwhile.
+func moveTrashDirs(moves []trashDirMove, logger *slog.Logger) error {
+	for _, move := range moves {
+		exists, err := pathExists(move.from)
+		if err != nil {
+			return fmt.Errorf("check trash folder %s: %w", move.from, err)
+		}
+		if !exists {
+			continue
+		}
+		if mkdirErr := localpath.MkdirAll(filepath.Dir(move.to), trashFolderPerm); mkdirErr != nil {
+			return fmt.Errorf("make the folder of trash %s: %w", move.to, mkdirErr)
+		}
+		if renameErr := localpath.Rename(move.from, move.to); renameErr != nil {
+			return fmt.Errorf("move trash folder %s to %s: %w", move.from, move.to, renameErr)
+		}
+		logger.Info("moved a trash folder for an account email change",
+			slog.String("from", move.from), slog.String("to", move.to))
+	}
+
+	return nil
+}
+
+// trashFolderPerm is the mode of a trash folder's parent the move makes,
+// that of every trash folder (localtrash).
+const trashFolderPerm = 0o700
+
+// removeEmptyChildTrashContainers removes the folder that held a moved
+// drive's shortcut trash under the drive's old name, once its children moved
+// out. Only an empty folder goes: whatever is still in it is left, said at
+// Debug, since a folder that keeps something is no harm and nothing is lost.
+func removeEmptyChildTrashContainers(moves []config.StateDBMove, logger *slog.Logger) {
+	for _, move := range moves {
+		if move.FromMountID == "" || config.IsChildMountID(move.FromMountID) {
+			continue
+		}
+		container := localtrash.ChildrenDir(localtrash.DirForStatePath(move.From))
+		if err := localpath.Remove(container); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logger.Debug("left the old folder of a drive's shortcut trash", slog.String("path", container), slog.Any("error", err))
+		}
+	}
+}
+
+// renameUploadSessionMounts gives the upload session records of every moved
+// mount its new mount ID (driveops.SessionStore.RenameMountID).
+func renameUploadSessionMounts(dataDir string, moves []config.StateDBMove, logger *slog.Logger) error {
+	sessions := driveops.NewSessionStore(dataDir, logger)
+	for _, move := range moves {
+		if move.FromMountID == "" || move.ToMountID == "" || move.FromMountID == move.ToMountID {
+			continue
+		}
+		if _, err := sessions.RenameMountID(move.FromMountID, move.ToMountID); err != nil {
+			return fmt.Errorf("rename the upload sessions of %s for an account email change: %w", move.FromMountID, err)
+		}
+	}
+
+	return nil
+}
+
+// pathExists reports whether anything is at path, without following it.
+func pathExists(path string) (bool, error) {
+	_, err := localpath.Lstat(path)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	default:
+		return false, err //nolint:wrapcheck // the caller names the path
+	}
 }

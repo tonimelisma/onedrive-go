@@ -8,6 +8,7 @@ import (
 	"strings"
 	gosync "sync"
 	"sync/atomic"
+	"time"
 )
 
 // TransferManager provides unified download/upload with resume, shared between
@@ -29,6 +30,11 @@ type TransferManager struct {
 	syncFile         func(*os.File) error
 	sessionMountID   string
 	sessionLocalRoot string
+	// now is the clock a recorded session's expiry is judged on. It is the
+	// wall clock unless the owner runs on a clock of its own (WithClock):
+	// the sync engine passes its run clock, so the instant a session record
+	// expires at moves with the time a test gives the engine.
+	now func() time.Time
 
 	// minFreeSpace is the minimum free disk space (bytes) required before
 	// downloads. Zero disables the check (R-6.4.7). Configured via WithDiskCheck.
@@ -81,6 +87,14 @@ func WithContentHasher(fn func(ctx context.Context, fsPath string) (string, erro
 	}
 }
 
+// WithClock makes now the clock the manager judges a recorded upload
+// session's expiry on. The sync engine passes its run clock.
+func WithClock(now func() time.Time) Option {
+	return func(tm *TransferManager) {
+		tm.now = now
+	}
+}
+
 // NewTransferManager creates a TransferManager. sessionStore may be nil if
 // upload session persistence is not needed (e.g., small-file-only workflows).
 // Options configure optional behaviors like disk space checking.
@@ -94,6 +108,7 @@ func NewTransferManager(
 		logger:       logger,
 		hashFunc:     ComputeQuickXorHashContext,
 		syncFile:     (*os.File).Sync,
+		now:          time.Now,
 	}
 
 	for _, opt := range opts {

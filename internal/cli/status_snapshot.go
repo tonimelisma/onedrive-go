@@ -188,7 +188,12 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, showPerf bool) error 
 		return writeStatusEmpty(cc, "No accounts configured. Run 'onedrive-go login' to get started.")
 	}
 
-	filteredSnapshot, err := filterStatusSnapshot(snapshot, cc.Flags.Account, cc.Flags.Drive, logger)
+	target, selected, err := cc.selectedAccount(snapshot.Stored, "show")
+	if err != nil {
+		return err
+	}
+	account := target.orNone(selected)
+	filteredSnapshot, err := filterStatusSnapshot(snapshot, account, cc.Flags.Drive, logger)
 	if err != nil {
 		return err
 	}
@@ -256,106 +261,71 @@ func writeStatusEmpty(cc *CLIContext, message string) error {
 	return writeln(cc.Output(), message)
 }
 
+// filterStatusSnapshot narrows the snapshot to the account --account names
+// (nil for none) and the drives --drive names; given both, they intersect.
 func filterStatusSnapshot(
 	snapshot accountViewSnapshot,
-	account string,
+	account *accountTarget,
 	selectors []string,
 	logger *slog.Logger,
 ) (accountViewSnapshot, error) {
-	if account == "" && len(selectors) == 0 {
+	if account == nil && len(selectors) == 0 {
 		return snapshot, nil
 	}
 
 	filtered := *snapshot.Config
 	filtered.Drives = make(map[driveid.CanonicalID]config.Drive)
 
-	selectedAccounts, err := filterStatusDrives(
-		&filtered,
-		snapshot.Config,
-		account,
-		selectors,
-		logger,
-	)
-	if err != nil {
-		return accountViewSnapshot{}, err
+	includeDrive := func(cid driveid.CanonicalID) bool {
+		return account == nil || account.includesDrive(cid, snapshot.Stored)
+	}
+	// Without --account, the accounts shown are the addresses of the drives
+	// selected.
+	selectedEmails := make(map[string]struct{})
+	if len(selectors) > 0 {
+		selectedDrives, err := config.ResolveDrives(snapshot.Config, selectors, true, logger)
+		if err != nil {
+			return accountViewSnapshot{}, fmt.Errorf("resolving status drive selectors: %w", err)
+		}
+		for i := range selectedDrives {
+			cid := selectedDrives[i].CanonicalID
+			if includeDrive(cid) {
+				filtered.Drives[cid] = snapshot.Config.Drives[cid]
+				selectedEmails[cid.Email()] = struct{}{}
+			}
+		}
+	} else {
+		for cid := range snapshot.Config.Drives {
+			if includeDrive(cid) {
+				filtered.Drives[cid] = snapshot.Config.Drives[cid]
+			}
+		}
 	}
 
 	return accountViewSnapshot{
 		Config:        &filtered,
 		Stored:        snapshot.Stored,
 		ShortcutRoots: filterShortcutRootSnapshots(snapshot.ShortcutRoots, filtered.Drives),
-		Accounts:      filterSnapshotAccounts(snapshot.Accounts, selectedAccounts),
+		Accounts:      filterSnapshotAccounts(snapshot.Accounts, account, selectedEmails),
 	}, nil
 }
 
-func filterStatusDrives(
-	filtered *config.Config,
-	full *config.Config,
-	account string,
-	selectors []string,
-	logger *slog.Logger,
-) (map[string]struct{}, error) {
-	selectedAccounts := make(map[string]struct{})
-	if account != "" {
-		selectedAccounts[account] = struct{}{}
-	}
-
-	if len(selectors) > 0 {
-		selectedDrives, err := config.ResolveDrives(full, selectors, true, logger)
-		if err != nil {
-			return nil, fmt.Errorf("resolving status drive selectors: %w", err)
-		}
-
-		addResolvedStatusDrives(filtered, full, selectedAccounts, selectedDrives, account)
-		return selectedAccounts, nil
-	}
-
-	addAccountStatusDrives(filtered, selectedAccounts, full, account)
-	return selectedAccounts, nil
-}
-
-func addResolvedStatusDrives(
-	filtered *config.Config,
-	full *config.Config,
-	selectedAccounts map[string]struct{},
-	selectedDrives []*config.ResolvedDrive,
-	account string,
-) {
-	for i := range selectedDrives {
-		rd := selectedDrives[i]
-		if account != "" && rd.CanonicalID.Email() != account {
-			continue
-		}
-		filtered.Drives[rd.CanonicalID] = full.Drives[rd.CanonicalID]
-		if account == "" {
-			selectedAccounts[rd.CanonicalID.Email()] = struct{}{}
-		}
-	}
-}
-
-func addAccountStatusDrives(
-	filtered *config.Config,
-	selectedAccounts map[string]struct{},
-	full *config.Config,
-	account string,
-) {
-	for cid := range full.Drives {
-		if account != "" && cid.Email() != account {
-			continue
-		}
-		filtered.Drives[cid] = full.Drives[cid]
-		selectedAccounts[cid.Email()] = struct{}{}
-	}
-}
-
-func filterSnapshotAccounts(accounts []accountView, selectedAccounts map[string]struct{}) []accountView {
-	if len(selectedAccounts) == 0 {
-		return accounts
-	}
-
+// filterSnapshotAccounts keeps the views of the named account, or, without
+// one, those at the selected drives' addresses.
+func filterSnapshotAccounts(
+	accounts []accountView,
+	account *accountTarget,
+	selectedEmails map[string]struct{},
+) []accountView {
 	filteredAccounts := make([]accountView, 0, len(accounts))
 	for i := range accounts {
-		if _, keep := selectedAccounts[accounts[i].Email]; keep {
+		var keep bool
+		if account != nil {
+			keep = account.includesView(&accounts[i])
+		} else {
+			_, keep = selectedEmails[accounts[i].Email]
+		}
+		if keep {
 			filteredAccounts = append(filteredAccounts, accounts[i])
 		}
 	}

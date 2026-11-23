@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -216,7 +217,7 @@ func TestStallWatchdog_AWaitThatStartsDuringAReadLeavesTheTimerStopped(t *testin
 	body := bytes.NewReader(bytes.Repeat([]byte("u"), rounds))
 	for round := range rounds {
 		watchdog := newRoundStallWatchdog()
-		reader := watchdog.reader(body)
+		reader := watchdog.localBody(body)
 
 		start := make(chan struct{})
 		var both sync.WaitGroup
@@ -253,7 +254,7 @@ func TestStallWatchdog_AnAbandonedAttemptsReadCannotDisarmTheNextAttempt(t *test
 
 	// The first attempt's body is inside a read when its request is abandoned.
 	abandoned := &gatedReader{entered: make(chan struct{}), release: make(chan struct{}), err: io.EOF}
-	first := watchdog.reader(abandoned)
+	first := watchdog.localBody(abandoned)
 	firstDone := make(chan struct{})
 	go func() {
 		defer close(firstDone)
@@ -264,7 +265,7 @@ func TestStallWatchdog_AnAbandonedAttemptsReadCannotDisarmTheNextAttempt(t *test
 
 	// The retry wait starts and ends, and the next attempt's body moves.
 	watchdog.waitStarts()
-	second := watchdog.reader(bytes.NewReader([]byte("uu")))
+	second := watchdog.localBody(bytes.NewReader([]byte("uu")))
 	_, err := second.Read(make([]byte, 1))
 	require.NoError(t, err)
 
@@ -281,7 +282,7 @@ func TestStallWatchdog_AnAbandonedAttemptsReadCannotDisarmTheNextAttempt(t *test
 // Validates: R-6.8.20
 func TestStallWatchdog_NothingArmsItOnceTheTransferHasEnded(t *testing.T) {
 	watchdog := newTestStallWatchdog(t)
-	reader := watchdog.reader(bytes.NewReader([]byte("uu")))
+	reader := watchdog.localBody(bytes.NewReader([]byte("uu")))
 
 	// The transport can still be reading the request body after the call
 	// that owns the transfer has returned.
@@ -302,7 +303,7 @@ func TestStallWatchdog_ABodyItReadsStartsNoTimerOfItsOwn(t *testing.T) {
 	t.Parallel()
 
 	body := newResponseBody(io.NopCloser(bytes.NewReader([]byte("content"))), time.Hour, slog.New(slog.DiscardHandler))
-	data, err := io.ReadAll(newTestStallWatchdog(t).reader(body))
+	data, err := io.ReadAll(newTestStallWatchdog(t).networkBody(body))
 	require.NoError(t, err)
 	assert.Equal(t, "content", string(data))
 
@@ -344,4 +345,164 @@ func TestStallWatchdog_ACallbackPanicFailsTheTransferWithIt(t *testing.T) {
 	require.Len(t, logged, 1, "logged once")
 	assert.Equal(t, "stall cancel exploded", logged[0].Attrs["panic"])
 	assert.Contains(t, logged[0].Attrs["stack"], "TestStallWatchdog_ACallbackPanicFailsTheTransferWithIt")
+}
+
+// blockingChunk is an upload's local file whose reads past its first
+// readable bytes block until release is closed: a local disk that hangs.
+type blockingChunk struct {
+	readable int64
+	release  chan struct{}
+}
+
+func (c *blockingChunk) ReadAt(p []byte, off int64) (int, error) {
+	if off >= c.readable {
+		<-c.release
+		return 0, io.ErrUnexpectedEOF
+	}
+	n := min(int64(len(p)), c.readable-off)
+	for i := range n {
+		p[i] = 'u'
+	}
+
+	return int(n), nil
+}
+
+// Validates: R-6.8.20
+//
+// An upload whose read of the local file blocks past the stall timeout is
+// abandoned as stalled, and the error says the local side stalled: a hung
+// local disk is not the service's silence.
+func TestUploadChunk_AStallInTheLocalReadSaysTheLocalSideStalled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		// The server reads everything the client sends; the client never
+		// finishes the body.
+		_, _ = io.Copy(io.Discard, r.Body) //nolint:errcheck // the body is cut off, which is the point
+	}))
+	defer srv.Close()
+
+	client := newNoRetryTestClient(t, srv.URL)
+	client.stallTimeout = testStallTimeout
+
+	// The local read hangs for longer than the stall timeout, then returns:
+	// the transport does not return before the body read it is inside does.
+	chunk := &blockingChunk{readable: 1024, release: make(chan struct{})}
+	unblock := time.AfterFunc(4*testStallTimeout, func() { close(chunk.release) })
+	defer unblock.Stop()
+	_, _, err := client.UploadChunk(t.Context(), &UploadSession{UploadURL: UploadURL(srv.URL + "/s")},
+		chunk, 0, ChunkedUploadChunkSize, ChunkedUploadChunkSize)
+
+	require.ErrorIs(t, err, ErrTransferStalled)
+	require.ErrorIs(t, err, ErrLocalSideStalled)
+	require.NotErrorIs(t, err, context.Canceled)
+}
+
+// Validates: R-6.8.20
+//
+// A fragment whose network side goes quiet (the server stops reading) is a
+// stall of the service, not of the local side.
+func TestUploadChunk_AStallOnTheNetworkSideIsNotALocalStall(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 1024)
+		_, readErr := r.Body.Read(buf)
+		assert.NoError(t, readErr)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release) // before Close, which waits for the blocked handler
+
+	client := newNoRetryTestClient(t, srv.URL)
+	client.stallTimeout = testStallTimeout
+
+	chunk := bytes.Repeat([]byte("u"), ChunkedUploadChunkSize)
+	_, _, err := client.UploadChunk(t.Context(), &UploadSession{UploadURL: UploadURL(srv.URL + "/s")},
+		bytes.NewReader(chunk), 0, int64(len(chunk)), int64(len(chunk)))
+
+	require.ErrorIs(t, err, ErrTransferStalled)
+	assert.NotErrorIs(t, err, ErrLocalSideStalled)
+}
+
+// blockingWriter is a download's local file whose writes block until
+// release is closed: a local disk that hangs between two reads of the body.
+type blockingWriter struct {
+	release <-chan struct{}
+}
+
+func (w *blockingWriter) Write(p []byte) (int, error) {
+	<-w.release
+
+	return len(p), nil
+}
+
+// newQuietDownload serves an item whose download body delivers 1 KiB and then
+// goes quiet, and returns the Graph server's URL.
+func newQuietDownload(t *testing.T) string {
+	t.Helper()
+
+	release := make(chan struct{})
+	dlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		if !assert.True(t, ok) {
+			return
+		}
+		writeDownloadTestBody(t, w, strings.Repeat("x", 1024))
+		flusher.Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	graphSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponsef(t, w, `{"id":"i","name":"a.bin","size":4096,"file":{"mimeType":"application/octet-stream"},
+			"@microsoft.graph.downloadUrl":%q}`, dlSrv.URL+"/dl")
+	}))
+	t.Cleanup(func() {
+		graphSrv.Close()
+		close(release) // before Close, which waits for the blocked handler
+		dlSrv.Close()
+	})
+
+	return graphSrv.URL
+}
+
+// Validates: R-6.8.20
+//
+// A download whose write of the local file blocks between two reads of the
+// body, past the stall timeout, is abandoned as stalled, and the error says
+// the local side stalled.
+func TestDownload_AStallInTheLocalWriteSaysTheLocalSideStalled(t *testing.T) {
+	client := newNoRetryTestClient(t, newQuietDownload(t))
+	client.stallTimeout = testStallTimeout
+
+	// The local write hangs for longer than the stall timeout, then returns:
+	// a hung write holds the copy whatever the watchdog does.
+	release := make(chan struct{})
+	unblock := time.AfterFunc(4*testStallTimeout, func() { close(release) })
+	defer unblock.Stop()
+	_, err := client.Download(t.Context(), driveid.New("d"), "i", &blockingWriter{release: release})
+
+	require.ErrorIs(t, err, ErrTransferStalled)
+	require.ErrorIs(t, err, ErrLocalSideStalled)
+	require.NotErrorIs(t, err, context.Canceled)
+}
+
+// Validates: R-6.8.20
+//
+// A download whose body goes quiet while the client waits for it is a stall
+// of the service, not of the local side.
+func TestDownload_AStallOnTheNetworkSideIsNotALocalStall(t *testing.T) {
+	client := newNoRetryTestClient(t, newQuietDownload(t))
+	client.stallTimeout = testStallTimeout
+
+	var buf bytes.Buffer
+	_, err := client.Download(t.Context(), driveid.New("d"), "i", &buf)
+
+	require.ErrorIs(t, err, ErrTransferStalled)
+	assert.NotErrorIs(t, err, ErrLocalSideStalled)
 }

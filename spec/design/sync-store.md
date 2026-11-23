@@ -1,6 +1,6 @@
 # Sync Store
 
-GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/syncstore/store_remote_twins.go, internal/sync/syncstore/store_pending_creates.go, internal/sync/syncstore/store_held_deletes.go, internal/sync/syncstore/store_delete_ledger.go, internal/sync/syncstore/store_local_hash_cache.go, internal/sync/syncstore/block_scope_rows.go, internal/sync/syncstore/blocked_retry_projection.go, internal/sync/syncstore/condition_projection.go, internal/sync/syncstore/observation_reconcile_policy.go, internal/sync/syncstore/schema.go, internal/sync/syncstore/scope_lifecycle_policy.go, internal/sync/syncstore/sqlite_compare.go, internal/sync/syncstore/store.go, internal/sync/syncstore/store_compatibility.go, internal/sync/syncstore/store_inspect.go, internal/sync/syncstore/store_local_state.go, internal/sync/syncstore/store_observation_issues.go, internal/sync/syncstore/store_observation_state.go, internal/sync/syncstore/store_planner_visible.go, internal/sync/syncstore/store_read_remote_state.go, internal/sync/syncstore/store_reset.go, internal/sync/syncstore/store_retry_work.go, internal/sync/syncstore/store_scope_admin.go, internal/sync/syncstore/store_scratch.go, internal/sync/syncstore/store_sql_encoding.go, internal/sync/syncstore/store_write_baseline.go, internal/sync/syncstore/baseline_cache.go, internal/sync/syncstore/store_write_block_scopes.go, internal/sync/syncstore/store_write_observation.go, internal/sync/syncstore/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go, internal/sync/syncstore/store_sync_root.go, internal/sync/syncstore/store_test_seams.go, internal/sync/syncstore/doc.go
+GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/syncstore/store_remote_twins.go, internal/sync/syncstore/store_local_move_intents.go, internal/sync/syncstore/store_pending_creates.go, internal/sync/syncstore/store_held_deletes.go, internal/sync/syncstore/store_delete_ledger.go, internal/sync/syncstore/store_local_hash_cache.go, internal/sync/syncstore/block_scope_rows.go, internal/sync/syncstore/blocked_retry_projection.go, internal/sync/syncstore/condition_projection.go, internal/sync/syncstore/observation_reconcile_policy.go, internal/sync/syncstore/schema.go, internal/sync/syncstore/scope_lifecycle_policy.go, internal/sync/syncstore/sqlite_compare.go, internal/sync/syncstore/store.go, internal/sync/syncstore/store_compatibility.go, internal/sync/syncstore/store_inspect.go, internal/sync/syncstore/store_local_state.go, internal/sync/syncstore/store_observation_issues.go, internal/sync/syncstore/store_observation_state.go, internal/sync/syncstore/store_planner_visible.go, internal/sync/syncstore/store_read_remote_state.go, internal/sync/syncstore/store_reset.go, internal/sync/syncstore/store_retry_work.go, internal/sync/syncstore/store_scope_admin.go, internal/sync/syncstore/store_scratch.go, internal/sync/syncstore/store_sql_encoding.go, internal/sync/syncstore/store_write_baseline.go, internal/sync/syncstore/baseline_cache.go, internal/sync/syncstore/store_write_block_scopes.go, internal/sync/syncstore/store_write_observation.go, internal/sync/syncstore/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go, internal/sync/syncstore/store_sync_root.go, internal/sync/syncstore/store_test_seams.go, internal/sync/syncstore/doc.go
 
 Implements: R-6.2.18 [verified], R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.10.50 [verified], R-2.10.49 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
@@ -57,7 +57,10 @@ for the same reason every other table writer is: it issues the `INSERT` and
 is the only file outside this family that consumed the store's SQL encoding
 helpers (`boolInt`, `nullString`, `nullKnownInt64`, `nullOptionalInt64`,
 `SqlTxRunner`). Deciding *what* is visible remains planning policy through the
-compiled `contentFilter`; writing the rows is store work. The rows go in as
+compiled `contentFilter`; writing the rows is store work. The two tables
+refuse an `item_type` outside `file`, `folder` and `root`, as `local_state`
+and `remote_state` do, so the comparison query can read a side's presence
+from its type (sync-planning.md, Comparison Facts). The rows go in as
 200-row `INSERT ... VALUES` statements (`plannerVisibleInsertChunkRows`): one
 statement per row cost a compile per row, three times a prepared statement and
 ten times a chunk. The prune that removes the rows below folders the baseline
@@ -553,6 +556,14 @@ Administrative write helpers are split by authority:
 
 ### Pending creates
 
+`local_move_intents` (generation 30, `store_local_move_intents.go`) holds
+the local file moves between their record and their end: old and new stored
+path, written before the rename and deleted once the old name is gone. One
+that outlives its move names an old name the move could not remove; the
+planner-visible local rows leave that path out while it has no baseline row
+(`sqlHideLocalMoveLeftovers`), and the engine's next start settles it
+(sync-execution.md, R-2.12.9).
+
 A new file is created as an empty item first and filled by ID second; until
 the content commits, that empty item is a real OneDrive file (and a
 path-routed upload session makes one too, L-34). Seen by the next pass without
@@ -576,8 +587,17 @@ baseline already holds drops the intent. The last is a zero-byte file whose
 create completed (it never runs the hook) while its intent outlived it,
 canceled as it succeeded or with a failed clear; claimed, the record named a
 file that stays empty and was never dropped
-(`TestCommitObservation_IntentDoesNotClaimAFileTheBaselineHolds`). An
-attempt known to have created nothing clears the intent. An attempt that was
+(`TestCommitObservation_IntentDoesNotClaimAFileTheBaselineHolds`). A
+folder's deletion observed at the path neither claims nor drops the intent:
+sync deletes a folder on OneDrive before it creates the file that replaced
+it here, and the delta that follows reports both, in either order; dropped on
+the folder's tombstone, the intent left the file's empty item to read as
+someone else's, a conflict copy of the user's file and the empty one
+downloaded in its place (`TestCommitObservation_AFolderDeletedAtThePathKeepsTheIntent`,
+chaos seed 63). An attempt known to have created nothing clears the intent, unless an earlier
+attempt left a fresh intent without an item at the path before it: that
+attempt's outcome is still unknown, so a refusal short of a 409 keeps it
+(`TestUploadNewFile_RefusedRetryKeepsTheIntentOfAnEarlierLostCreate`). An attempt that was
 canceled, or whose create ended without an answer
 (`graph.ErrCreateOutcomeUnknown`), is not known to: its create may have
 landed or may still land, so the intent is kept. An attempt that succeeded

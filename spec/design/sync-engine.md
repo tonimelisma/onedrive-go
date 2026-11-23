@@ -125,8 +125,8 @@ removed shared folder that cannot be read reconciles the same batch empty.
 | A rescan that changes no committed truth schedules no replan and leaves the admitted plan dispatchable. | `TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan`, `TestWatchRuntime_SkippedFindingsReplanOnlyWhenTheyChange` |
 | Pending watch replans retire old-runtime work that has not started yet, including dependents released by already-running old actions, and leave replacement work to a fresh plan from current truth. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal` |
 | `RunOnce`, `RunWatch` and `Close` put the engine's own perf collector on their context (`withOwnCollector`), so what the transports, the store and the transfers record counts on the mount's collector without its owner wrapping the context; a context that already carries it is left as it is (R-6.6.15). | `TestRunOnce_CountsOnTheEngineCollectorWithoutAnOwnerWrap`, `TestRunWatch_CountsOnTheEngineCollectorWithoutAnOwnerWrap`, `TestEngine_WithOwnCollectorWrapsOnceAndReplacesAnother` |
-| A startup proof that cannot clear a stored sign-in requirement because another process holds the catalog logs one Warn, keeps the requirement and starts; the next start clears it (R-2.10.46). | `TestEngineStartup_LockedCatalogWarnsAndStarts` |
-| A live one-shot run and a watch, after the startup stage and before their first plan, put back under its plain name every entry an interrupted spelling-only rename left under its temporary sibling name (`restoreSpellingRenameLeftovers`, `engine_spelling_leftovers.go`), so the plan reads the entry where it is and the rename is planned again from truth; a dry run moves nothing. The walk reads names only, plus one lstat per folder, and enters only the folders local observation enters: an excluded folder, a shared folder's own mount and another filesystem it does not cross are left alone, and so is a leftover whose plain name the content filter excludes. The move back is the rooted no-replace rename; a plain name the folder already holds in any spelling OneDrive treats as the same, a temporary name whose `-1` to `-9` suffix does not say which name it had, and a move back that fails keep the leftover where it is with a Warn naming both paths, and nothing is deleted. A leftover is never read as a delete: until it is put back, observation hides it, and the scan keeps the synced path of the entry it finds under that name unavailable instead of deleted (R-2.12.8). | `TestRunOnce_SpellingRenameLeftoverIsPutBackBeforeThePlan`, `TestRunOnce_SpellingRenameLeftoverWhosePlainNameIsTakenIsKeptAndReported`, `TestRunOnce_DryRunLeavesSpellingRenameLeftover`, `TestRestoreSpellingRenameLeftovers_NoLeftoverTouchesNothing`, `TestRestoreSpellingRenameLeftovers_PutsBackFilesAndFolders`, `TestRestoreSpellingRenameLeftovers_KeepsWhatItCannotPutBack`, `TestRestoreSpellingRenameLeftovers_LeavesFoldersSyncDoesNotObserveAlone`, `TestSpellingRenameArtifactPlainName` |
+| A startup proof that cannot clear a stored sign-in requirement because another process holds the catalog, or because the catalog's filesystem cannot lock at all (`config.ErrConfigLockUnsupported`), logs one Warn, keeps the requirement and starts; nothing is written without the lock, since the clear is a best-effort mark; the next start that can lock clears it (R-2.10.46). | `TestEngineStartup_LockedCatalogWarnsAndStarts`, `TestEngineStartup_CatalogWithoutLocksWarnsAndStarts` |
+| A live one-shot run and a watch, after the startup stage and before their first plan, put back under its plain name every entry an interrupted spelling-only rename left under its temporary sibling name (`restoreSpellingRenameLeftovers`, `engine_spelling_leftovers.go`), so the plan reads the entry where it is and the rename is planned again from truth; a dry run moves nothing. The walk reads names only, plus one lstat per folder, and enters only the folders local observation enters: an excluded folder, a shared folder's own mount and another filesystem it does not cross are left alone, and so is a leftover whose plain name the content filter excludes. The move back is the rooted no-replace rename; a plain name the folder already holds in any spelling OneDrive treats as the same, a temporary name whose `-1` to `-9` suffix does not say which name it had, and a move back that fails keep the leftover where it is with a Warn naming both paths, and nothing is deleted. The one exception is a leftover that is the very file its plain name holds (same device and inode): a put-back or a respell where the system refuses the no-replace flag links the file to its plain name, and when the temporary name then cannot be removed (`synctree.ErrSourceNotRemoved`) both names hold one file. The next start removes that second name through `RemoveVerifiedRegularFile`, checked through the open descriptor to be the file the plain name holds and to have another name, so no content goes; a copy or a different file, the same bytes included, is kept and reported. A leftover is never read as a delete: until it is put back, observation hides it, and the scan keeps the synced path of the entry it finds under that name unavailable instead of deleted (R-2.12.8). | `TestRunOnce_SpellingRenameLeftoverIsPutBackBeforeThePlan`, `TestRunOnce_SpellingRenameLeftoverWhosePlainNameIsTakenIsKeptAndReported`, `TestRunOnce_DryRunLeavesSpellingRenameLeftover`, `TestRestoreSpellingRenameLeftovers_NoLeftoverTouchesNothing`, `TestRestoreSpellingRenameLeftovers_PutsBackFilesAndFolders`, `TestRestoreSpellingRenameLeftovers_KeepsWhatItCannotPutBack`, `TestRestoreSpellingRenameLeftovers_RemovesATemporaryNameTheFileWasPutBackBeside`, `TestRestoreSpellingRenameLeftovers_KeepsALeftoverBesideADifferentFileOfItsName`, `TestRestoreSpellingRenameLeftovers_LeavesFoldersSyncDoesNotObserveAlone`, `TestSpellingRenameArtifactPlainName` |
 | A planning-state load error reads the same in a one-shot pass, the watch bootstrap and a watch replan, and names the failed query once (R-6.2.16). | `TestPlanningLoadError_SameTextInOneShotAndWatch` |
 | A watch starts no observer before its fallible set-up has succeeded, returns only after the goroutines it started beside its loop have exited, and names, after one bound on the engine clock, a goroutine that ignores its context (R-6.3.4, R-6.3.9). | `TestStartObservers_LocalSetupFailureStartsNoObserver`, `TestRunWatch_ReturnsOnlyAfterObserversHaveExited`, `TestRunWatch_ObserverThatIgnoresItsContextIsNamedAfterTheBound`, `TestAckHandle_ConcurrentWithFullRefresh_IsRaceFree` |
 | The scheduler's scopes, the watch timers and the dependency graph are owned by the run's goroutine without a lock; each accessor runs a test-installed owner check, and timer callbacks touch only their channels (R-6.3.4). | `TestOwnerCheck_DependencyGraphCatchesASecondGoroutine`, `TestOwnerCheck_SchedulerScopesCatchASecondGoroutine`, `TestOwnerCheck_WatchTimersCatchASecondGoroutine`, `TestWatchRuntime_TimerCallbacksTouchOnlyChannels`, `TestRunOnce_UsesRunStateOnlyFromItsGoroutine`, `TestRunWatch_UsesRunStateOnlyFromItsGoroutine` |
@@ -141,6 +141,14 @@ clock (`wallClock`, which is that value unless a test replaced it through `engin
 safety-scan ticks, retry sleeps, and write-coalesce timers. A pass's full local
 scan, which runs no timer, measures its racily-clean window (R-2.2.4) on the
 run's clock (`TestObserveLocal_MeasuresTheRacilyCleanWindowOnTheRunsClock`).
+The observers stay on the real clock even when a test replaces the run's: a
+timer callback's panic ends the run only on the clock that reports to the
+engine's timer panics (below), and a test clock has none. A test that needs
+the observers' waits in virtual time runs the engine inside a
+`testing/synctest` bubble, where the real clock is the bubble's, as every
+one-shot model run does (system.md, the chaos model). The transfer manager
+judges a recorded upload session's expiry on the run's clock
+(`driveops.WithClock`).
 
 These were five independently injectable function fields (`nowFn`, `afterFunc`,
 `newTicker`, `sleepFn`, `jitterFn`) plus three more on the local observer. Each
@@ -422,8 +430,9 @@ explicitly rather than relying on a read-through.
 
 Completion, admission, and scope decisions do not reach for the watch runtime.
 They report through `runtimeSignals`: arm the held timers, arm the retry timer,
-arm the trial timer, release due held work now, or mark that a replan is
-needed.
+arm the trial timer, or mark that a replan is needed. The interface holds only
+what product code asks through it; the watch loop releases due held work
+itself, on its own goroutine, so that request is no method of the seam.
 
 One-shot and watch differ in exactly one way those decisions can observe:
 whether there is a future. A one-shot pass returns when its work settles, so
@@ -431,7 +440,7 @@ nothing armed during it could fire and no replan mark has a reader. (A one-shot
 run's follow-up passes are decided by the plan's `FollowUp`, not by replan
 marks: a superseded action means truth changed under the run, which the next
 sync observes.) Watch keeps
-the runtime alive across timer ticks and observation batches, so all five mean
+the runtime alive across timer ticks and observation batches, so all four mean
 something.
 
 This was previously expressed by passing `watch *watchRuntime` into `engineFlow`
@@ -443,7 +452,9 @@ implementation states the same rule as a fact about one-shot rather than as an
 absence every call site must remember to check.
 
 `watchInspector` is the parallel seam for the debug-only invariant pass, which
-production leaves disabled through `engineHooks.assertInvariants`. It is separate
+production leaves disabled through `engineHooks.assertInvariants`; it holds the
+reads that pass makes and nothing else (the watch loop reads its own phase
+directly). It is separate
 from `runtimeSignals` because the two have different lifetimes, and keeping them
 apart stops a debug-only read from re-introducing the production coupling.
 
@@ -1709,9 +1720,20 @@ cancellation, because a shutdown must not drop the record of work that
 already happened or skip a cleanup. Every one of them goes through the one
 helper, `syncexec.RunDetachedStoreAccess` (a bound from now) or
 `RunDetachedStoreAccessUntil` (a deadline the caller holds), both on
-`DetachedStoreContext`; only that helper and `SyncStore.Close` detach by hand
+`DetachedStoreContext`; only that helper, `DetachedAtStopContext` (below) and
+`SyncStore.Close` detach by hand
 (`TestDetachedContexts_TheSyncTreeDetachesOnlyThroughTheOneHelper`,
-`TestHandMadeDetaches_NamesTheFunctionOfEachDetach`):
+`TestHandMadeDetaches_NamesTheFunctionOfEachDetach`). Once the run's context
+ended, every one of them ends at the stop's one deadline when that comes
+before its own bound: the run marks its context (`withRunStop`,
+`syncexec.WithRunStop`, on the watch's context and on a one-shot pass's, which
+the workers run under), and `RunDetachedStoreAccess` reads the stop's deadline
+from it (`stopBound` after the cancel, `canceledAt`, which any goroutine may
+read). A worker's outcome commit or an executor write that starts after the
+cancel therefore takes what remains of the stop's bound, not a whole bound of
+its own; one that started before the cancel ends within its own bound, which
+is the stop's bound and so ends no later
+(`TestRunDetachedStoreAccess_AfterTheRunEndedSharesTheStopsDeadline`):
 
 | Access | Where | Bound |
 | --- | --- | --- |
@@ -1742,7 +1764,8 @@ plane's stop and close bounds are derived from them
 `TestDetachedContexts_AlwaysCarryADeadline` fails on any
 `context.WithoutCancel` in `internal/sync` or `internal/multisync` production
 code that is not the first argument of `context.WithTimeout`,
-`context.WithDeadline` or their `Cause` forms (R-6.3.9).
+`context.WithDeadline` or their `Cause` forms, except `DetachedAtStopContext`,
+whose deadline is armed at the run's end (R-6.3.9).
 
 The commit of an outcome and the record of a created item fail the action
 they belong to, so both run through `RunDetachedStoreAccess`: its bound
@@ -1766,12 +1789,28 @@ a scan is observation, not the record of work done, and the next sync scans
 the tree again. Until 2026-11-23 the commit took its own 30 s bound and a
 timeout there was read as the stop's echo and dropped without a word
 (`TestWatchRuntime_AScanCommitTheStopsDeadlineCutsIsSaidNotAnError`,
-`TestWatchRuntime_AScanAfterTheStopIsStillCommitted`). The executor's
-best-effort pending-create writes and the release's row restores keep their
-own bound when they run on a live context, and the outer deadline when they
-run inside a stopping run's detached one; a completion in flight on the live
-context at the instant the cancel lands is still cut by the cancel, not
-finished under the stop's deadline.
+`TestWatchRuntime_AScanAfterTheStopIsStillCommitted`).
+
+A completion the run applies while it goes on (`applyLiveCompletion`, in the
+watch loop and in a one-shot pass's results loop) runs on
+`syncexec.DetachedAtStopContext`: a context the run's cancel does not cut,
+with no deadline while the run goes on, which from the cancel ends at the
+stop's one deadline with `ErrStoreAccessTimedOut` as its cause. A cancel that
+lands while the completion is being applied lets it finish its records, as a
+completion that reaches the drain after the cancel does, and from that moment
+it starts nothing (`isStoppingRun` reads `syncexec.RunHasEnded`: no probe, no
+admission, no release of held work). A record the deadline cuts short is
+counted in the stop's one warning (`endStopDrain`), not returned as the run's
+failure. A probe of OneDrive already under way at the cancel runs to its end
+or to the stop's deadline, whichever comes first. Its deadline is armed when
+the run's context ends, not in the same expression, so
+`TestDetachedContexts_AlwaysCarryADeadline` names it as its one exception
+(`TestWatchRuntime_ACompletionAppliedAtTheCancelIsRecorded`,
+`TestWatchRuntime_ACompletionAppliedAtTheCancelIsCountedWhenTheStopsTimeRunsOut`,
+`TestEngineFlow_ALiveCompletionAppliedAtTheCancelIsRecorded`,
+`TestDetachedAtStopContext_EndsAtTheStopsDeadlineOnceTheRunEnded`). Before
+2026-11-23 such a completion ran on the live context and the cancel cut its
+records.
 
 ### Permission recovery
 

@@ -1,8 +1,8 @@
 # Retry
 
-GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/named.go, internal/retry/notices.go, internal/retry/policy.go, internal/retry/retry_after.go, internal/retry/throttle_gate.go, internal/retry/transport.go, internal/retry/unreached.go
+GOVERNS: internal/retry/backoff.go, internal/retry/doc.go, internal/retry/jitter.go, internal/retry/named.go, internal/retry/notices.go, internal/retry/policy.go, internal/retry/retry_after.go, internal/retry/throttle_gate.go, internal/retry/transport.go, internal/retry/unreached.go
 
-Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.6 [verified], R-6.8.7 [designed], R-6.8.8 [verified], R-6.8.19 [verified], R-6.8.10 [designed], R-6.8.11 [designed], R-6.6.8 [verified], R-2.10.3 [designed], R-2.10.5 [designed], R-2.10.6 [designed], R-2.10.7 [designed], R-2.10.8 [designed], R-2.10.14 [designed], R-6.8.16 [designed], R-6.10.6 [verified]
+Implements: R-6.8.1 [verified], R-6.8.2 [verified], R-6.8.6 [verified], R-6.8.7 [designed], R-6.8.8 [verified], R-6.8.19 [verified], R-6.8.10 [designed], R-6.8.11 [designed], R-6.6.8 [verified], R-2.10.3 [designed], R-2.10.5 [designed], R-2.10.6 [designed], R-2.10.7 [designed], R-2.10.8 [designed], R-2.10.14 [designed], R-6.8.16 [designed], R-6.10.6 [verified], R-6.10.35 [verified]
 
 ## Overview
 
@@ -37,6 +37,7 @@ rely on transport-level retry loops for action execution.
 
 | Behavior | Evidence |
 | --- | --- |
+| A retry wait's jitter comes from the source its caller passes, never from the global math/rand source; the engine draws from its clock and a process from one source seeded at start, and the linter refuses a global draw in product code (R-6.10.35). | `TestPolicy_Delay_DrawsItsJitterFromTheSourceTheCallerPasses`, `TestJitter_ConcurrentDrawsStayInRange`, `TestNewRealClock_DrawsJitterFromItsOwnSource`, `TestGolangciConfig_ForbidigoRefusesTheGlobalRandomSource` |
 | Retry policy curves and backoff timing remain package-owned value logic. | `internal/retry/backoff_test.go`, `internal/retry/policy_test.go`, `internal/retry/named_test.go` |
 | One parser reads `Retry-After` for every HTTP caller: delay-seconds or an HTTP-date measured against the response's `Date`, trimmed, saturating instead of wrapping, uncapped. | `TestResponseRetryAfter`, `TestRetryTransport_RetryAfterParsing`, `TestTerminalError_RetryAfter` |
 | Shared `Retry-After` coordination stays optional and caller-injected. | `internal/retry/transport_test.go` (`TestRetryTransport_ThrottleCoordination`, `TestRetryTransport_SharedThrottleGateAcrossTransports`, `TestRetryTransport_429SetsThrottleDeadline`) |
@@ -70,6 +71,27 @@ attempts; `TransportPolicy()` now says 6 to keep the same six attempts.)
 `ReconcilePolicy()` is the single retry curve for durable transient work in the
 sync engine. The engine computes `next_retry_at` from that policy and persists
 the result into `retry_work`.
+
+## Jitter sources (`jitter.go`)
+
+`Policy.Delay(attempt, jitter)` draws its jitter from the `JitterSource` its
+caller passes, never from the global `math/rand` source, which nothing can
+seed; a nil source draws none and the delay is the curve itself
+(`TestPolicy_Delay_DrawsItsJitterFromTheSourceTheCallerPasses`). The sync
+engine's clock is the engine's one source (`syncdomain.SyncClock.Jitter`):
+the reconcile curve of retry work, the observers' backoffs and the release
+ramp draw from it, and `syncdomain.NewRealClock` seeds its own `Jitter` once
+when the engine builds it (`TestNewRealClock_DrawsJitterFromItsOwnSource`).
+A process that has no engine clock seeds one `Jitter` at start
+(`NewEntropyJitter`, eight bytes of `crypto/rand`): `driveops.SessionRuntime`
+does, and hands it to every retrying transport it builds (`RetryTransport.Jitter`,
+the `graphtransport` builders) and to every graph client's quirk retries
+(`graph.WithRetryJitter`). `Jitter` is safe for concurrent use
+(`TestJitter_ConcurrentDrawsStayInRange`). A forbidigo rule refuses every
+package-level function of `math/rand` and `math/rand/v2` in product code; a
+method of a seeded `*rand.Rand` stays allowed, and test files draw from
+their own seeded generators
+(`TestGolangciConfig_ForbidigoRefusesTheGlobalRandomSource`, R-6.10.35).
 
 ## RetryTransport (`transport.go`)
 

@@ -129,6 +129,12 @@ type SessionRuntime struct {
 	// and never replaced; Notices guards its own state.
 	retryNotices *retry.Notices
 
+	// retryJitter is the one source every retry wait of this runtime's
+	// clients draws its jitter from: the retrying transports and the graph
+	// clients' quirk retries. Seeded once when the runtime is built, at
+	// process start, and never replaced; Jitter guards its own state.
+	retryJitter *retry.Jitter
+
 	// mu guards holder and the lazily built caches below: tokenSources,
 	// bootstrapMeta, interactiveMeta, interactiveTransfer, and syncClients.
 	// Sessions for different mounts build them concurrently. It is never
@@ -173,6 +179,7 @@ func NewSessionRuntime(holder *config.Holder, userAgent string, logger *slog.Log
 		logger:          logger,
 		authHTTP:        graphtransport.AuthClient(),
 		retryNotices:    &retry.Notices{},
+		retryJitter:     retry.NewEntropyJitter(),
 		tokenSources:    make(map[string]*tokenSourceLoad),
 		bootstrapMeta:   make(map[string]*http.Client),
 		interactiveMeta: make(map[string]*http.Client),
@@ -325,7 +332,8 @@ func (r *SessionRuntime) BootstrapClient(tokenPath string) (*graph.Client, error
 		return nil, err
 	}
 
-	client, err := graph.NewClient(r.graphBaseURL(), r.BootstrapMeta(tokenPath), ts, r.logger, r.userAgent)
+	client, err := graph.NewClient(r.graphBaseURL(), r.BootstrapMeta(tokenPath), ts, r.logger, r.userAgent,
+		graph.WithRetryJitter(r.retryJitter))
 	if err != nil {
 		return nil, fmt.Errorf("create bootstrap graph client: %w", err)
 	}
@@ -400,12 +408,12 @@ func (r *SessionRuntime) clientsForTokenPath(
 
 	baseURL := r.graphBaseURL()
 
-	meta, err := graph.NewClient(baseURL, httpClients.Meta, ts, r.logger, r.userAgent)
+	meta, err := graph.NewClient(baseURL, httpClients.Meta, ts, r.logger, r.userAgent, graph.WithRetryJitter(r.retryJitter))
 	if err != nil {
 		return nil, nil, fmt.Errorf("create metadata graph client: %w", err)
 	}
 
-	transfer, err := graph.NewClient(baseURL, httpClients.Transfer, ts, r.logger, r.userAgent)
+	transfer, err := graph.NewClient(baseURL, httpClients.Transfer, ts, r.logger, r.userAgent, graph.WithRetryJitter(r.retryJitter))
 	if err != nil {
 		return nil, nil, fmt.Errorf("create transfer graph client: %w", err)
 	}
@@ -519,7 +527,7 @@ func (r *SessionRuntime) BootstrapMeta(tokenPath string) *http.Client {
 
 	client := r.bootstrapMeta[tokenPath]
 	if client == nil {
-		client = graphtransport.BootstrapMetadataClient(r.logger, r.retryNotices)
+		client = graphtransport.BootstrapMetadataClient(r.logger, r.retryNotices, r.retryJitter)
 		r.bootstrapMeta[tokenPath] = client
 	}
 
@@ -552,12 +560,12 @@ func (r *SessionRuntime) interactiveClientsForKey(targetKey string) graphtranspo
 
 	meta := r.interactiveMeta[targetKey]
 	if meta == nil {
-		meta = graphtransport.InteractiveMetadataClient(r.logger, &retry.ThrottleGate{}, r.retryNotices)
+		meta = graphtransport.InteractiveMetadataClient(r.logger, &retry.ThrottleGate{}, r.retryNotices, r.retryJitter)
 		r.interactiveMeta[targetKey] = meta
 	}
 
 	if r.interactiveTransfer == nil {
-		r.interactiveTransfer = graphtransport.InteractiveTransferClient(r.logger, r.retryNotices)
+		r.interactiveTransfer = graphtransport.InteractiveTransferClient(r.logger, r.retryNotices, r.retryJitter)
 	}
 
 	return graphtransport.ClientSet{
@@ -809,7 +817,8 @@ func (s *Session) visibilitySchedule() []time.Duration {
 		}
 		schedule := make([]time.Duration, 0, delayCount)
 		for attempt := range policy.MaxAttempts - 1 {
-			schedule = append(schedule, policy.Delay(attempt))
+			// The visibility policy has no jitter, so no source is drawn.
+			schedule = append(schedule, policy.Delay(attempt, nil))
 		}
 
 		return schedule

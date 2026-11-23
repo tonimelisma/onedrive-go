@@ -21,15 +21,15 @@ func TestRetryDelayForCondition_ConditionsThatDoNotClearByThemselvesWaitOnTheDur
 	t.Parallel()
 
 	for _, condition := range []syncdomain.IssueType{syncdomain.IssueCaseCollision, syncdomain.IssueRemoteFolderUnverifiable} {
-		delay := retryDelayForCondition(condition)
+		delay := retryDelayForCondition(condition, nil)
 		assert.Equal(t, durableRecheckDelay, delay(0), condition)
 		assert.Equal(t, 2*durableRecheckDelay, delay(1), condition)
 		assert.Equal(t, time.Hour, delay(20), "%s caps at an hour", condition)
 	}
 
-	transient := retryDelayForCondition(syncdomain.IssueRequestTimeout)
+	transient := retryDelayForCondition(syncdomain.IssueRequestTimeout, nil)
 	assert.Less(t, transient(0), durableRecheckDelay, "a condition that clears by itself keeps the transient curve, which starts at a second")
-	assert.LessOrEqual(t, transient(0), 2*retry.ReconcilePolicy().Delay(0)+time.Second)
+	assert.LessOrEqual(t, transient(0), 2*retry.ReconcilePolicy().Delay(0, nil)+time.Second)
 }
 
 // The curve of every condition. The table must name every declared member,
@@ -43,7 +43,7 @@ func TestRetryDelayForCondition_EveryMemberIsDecided(t *testing.T) {
 	t.Parallel()
 
 	waitsOnTheDurableCurve := func(condition syncdomain.IssueType) bool {
-		return retryDelayForCondition(condition)(0) == durableRecheckDelay
+		return retryDelayForCondition(condition, nil)(0) == durableRecheckDelay
 	}
 
 	syncfixture.RequireEveryIssueTypeDecided(t, syncfixture.IssueTypeVerdicts(t,

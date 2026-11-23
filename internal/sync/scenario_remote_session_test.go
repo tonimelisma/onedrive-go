@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"testing"
 	"time"
@@ -258,7 +259,7 @@ func (r *moveScenarioRemote) createUploadSession(t *testing.T, parentID, name st
 		return nil, scenarioNameConflict()
 	}
 	r.uploads++
-	id := r.nextID("created")
+	id := r.nextID("created", parentID, name)
 	r.addFile(t, id, parentID, name, "")
 	created := *r.items[id]
 
@@ -295,8 +296,15 @@ func (r *moveScenarioRemote) createUploadSessionForItem(itemID, ifMatch string) 
 }
 
 func (r *moveScenarioRemote) openSessionLocked(itemID string) *graph.UploadSession {
+	// The URL names the session's item and how many sessions it had, not
+	// how many sessions any item had: a chaos stream keyed by an upload URL
+	// depends on that item's traffic alone.
 	r.sessionSeq++
-	url := graph.UploadURL(fmt.Sprintf("https://upload.scenario.invalid/session-%d", r.sessionSeq))
+	if r.sessionCounts == nil {
+		r.sessionCounts = map[string]int{}
+	}
+	r.sessionCounts[itemID]++
+	url := graph.UploadURL(fmt.Sprintf("https://upload.scenario.invalid/%s/session-%d", neturl.PathEscape(itemID), r.sessionCounts[itemID]))
 	if r.sessions == nil {
 		r.sessions = map[graph.UploadURL]scenarioSession{}
 	}

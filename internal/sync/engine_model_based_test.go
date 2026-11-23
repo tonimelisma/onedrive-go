@@ -21,6 +21,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -206,6 +207,9 @@ type modelRun struct {
 	// expectHoldOf is the side a wipe emptied: the next pass must hold the
 	// deletes it would propagate.
 	expectHoldOf string
+	// wipeDeletesUnheld counts the local deletes passes ran without a hold
+	// while a chaos run saw a remote wipe in part (requireWipeHeld).
+	wipeDeletesUnheld int
 	// afterFirstPass is a user's response to what the first pass did (a
 	// collision to rename); its edits join the batch's.
 	afterFirstPass func() []syncfixture.ModelEdit
@@ -235,6 +239,9 @@ type modelRun struct {
 	// numbers the files its second waves create.
 	faults   watchFaultPlan
 	newFiles int
+	// waited is how long a run in virtual time waited on its bubble's
+	// clock (runModelSeedInVirtualTime); zero for a watch run.
+	waited time.Duration
 }
 
 func runModelScenario(t *testing.T, seed uint64) *modelRun {
@@ -270,8 +277,24 @@ func (o modelOptions) batchCount() int {
 	return modelBatches
 }
 
-// runModelScenarioWith runs one seed under opts.
+// runModelScenarioWith runs one seed under opts. A one-shot run runs in
+// virtual time (runModelSeedInVirtualTime); a watch run, whose local
+// observer waits on the kernel's file events, runs on the wall clock with
+// its long waits compressed (modelClock.compressed).
 func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRun {
+	t.Helper()
+
+	report := newModelSeedReport(t, seed)
+	if opts.watch {
+		return runModelSeed(t, seed, opts, report)
+	}
+
+	return runModelSeedInVirtualTime(t, seed, opts, report)
+}
+
+// runModelSeed runs one seed under opts on t, telling report about the chaos
+// layer it builds.
+func runModelSeed(t *testing.T, seed uint64, opts modelOptions, report *modelSeedReport) *modelRun {
 	t.Helper()
 
 	crashes := opts.crashes
@@ -282,10 +305,7 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 	if opts.chaos {
 		chaos = newChaosGraph(seed)
 		client = chaos.wrap(client)
-		// A cleanup, so a failing seed prints what the storm did too.
-		t.Cleanup(func() {
-			t.Logf("seed %d chaos faults: %s", seed, chaos.faultSummary())
-		})
+		report.setChaos(chaos)
 	}
 	h := newSyncHarnessWithClient(t, remote, client)
 	run := &modelRun{
@@ -353,6 +373,10 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 		order = dispatchOrderShuffle(r.seed)
 	}
 	eng.hooks.serializeWorkers = true
+	// One hash worker: the bubble fixes time, not the order in which
+	// goroutines that run at one instant reach a shared step, and a scan's
+	// parallel hash workers are such goroutines.
+	eng.checkWorkers = 1
 	eng.hooks.shadowPlanned = r.checkShadowPlan
 	eng.hooks.dispatchOrder = order
 	eng.hooks.recordFrontier = r.recordFrontierStep
@@ -528,9 +552,9 @@ func (r *modelRun) syncUntilQuiet(label string) []syncfixture.ModelEdit {
 			changed++
 		}
 		if checkWipe {
-			// The first pass that observed both sides must hold a wipe.
-			checkWipe = false
-			r.requireWipeHeld(label, report)
+			// The first pass that observed both sides must hold a wipe; in a
+			// storm, the first that observed the wipe whole (requireWipeHeld).
+			checkWipe = !r.requireWipeHeld(label, report)
 		}
 		if r.afterFirstPass != nil {
 			userEdits = append(userEdits, r.afterFirstPass()...)
@@ -544,6 +568,9 @@ func (r *modelRun) syncUntilQuiet(label string) []syncfixture.ModelEdit {
 		if quiet || (report.Failed > 0 && pass > 1) {
 			resolved := r.resolveNameCollisions()
 			if quiet && len(resolved) == 0 {
+				// A wipe a storm let through in part, with nothing left
+				// to hold, ends its check with the loop.
+				r.expectHoldOf, r.wipeDeletesUnheld = "", 0
 				return userEdits
 			}
 			userEdits = append(userEdits, resolved...)
@@ -686,21 +713,55 @@ func (c *modelClock) advance(d time.Duration) {
 }
 
 // requireWipeHeld checks that the first pass after a side was wiped held the
-// deletes instead of propagating them (D-002).
-func (r *modelRun) requireWipeHeld(label string, report *Report) {
+// deletes instead of propagating them (D-002), and reports whether the check
+// is done. The hold for a vanished side (side_vanished) applies to a pass
+// whose observation sees the side empty. Through the chaos layer a pass can
+// see the wipe in part: a storm leaves items OneDrive no longer lists that
+// it could not confirm gone ("could not confirm an item missing from a
+// listing is gone; keeping it"), or a delta that has not shown the deletes
+// yet. Such a pass may run the deletes it did see, as few as the
+// proportional rule lets through without a hold (syncplan.DeleteSafetyMinItems
+// in all), and the check moves to the next pass, until one holds the rest or
+// nothing of the wipe is left to delete. A pass that resynced after a 410
+// uploads what OneDrive no longer has instead of deleting it here (R-2.15.3),
+// which loses nothing either. A local wipe is seen whole, but the pass that
+// held it can fail in the storm, so the hold is not confirmed, and a later
+// pass finds the local side no longer empty once a download brought back a
+// file OneDrive edited (an edit beats a delete): it may run the few OneDrive
+// deletes left, as the proportional rule lets through (chaos seed 75).
+func (r *modelRun) requireWipeHeld(label string, report *Report) bool {
 	switch r.expectHoldOf {
 	case syncfixture.ModelLocalSide:
+		if r.chaos != nil && report.HeldRemoteDeletes == 0 {
+			r.wipeDeletesUnheld += report.RemoteDeletes
+			require.Less(r.t, r.wipeDeletesUnheld, syncplan.DeleteSafetyMinItems,
+				"%s: a wiped local side ran more OneDrive deletes without a hold than the proportional rule lets through; %s", label, r.failureContext())
+			if report.Downloads == 0 && len(r.localTree()) == 0 && len(r.remote.tree()) > 0 {
+				// The pass that held the wipe failed in the storm and the
+				// hold was not confirmed: the next pass holds it again.
+				return false
+			}
+			break
+		}
 		require.Positive(r.t, report.HeldRemoteDeletes, "%s: a wiped local side must hold the OneDrive deletes; %s", label, r.failureContext())
 	case syncfixture.ModelRemoteSide:
-		if r.chaos != nil && report.HeldLocalDeletes == 0 && report.LocalDeletes == 0 && report.Uploads > 0 {
-			// The pass that saw the wipe resynced after a 410: what OneDrive
-			// no longer has is uploaded again rather than deleted locally
-			// (R-2.15.3), which loses nothing either.
+		if r.chaos != nil && report.HeldLocalDeletes == 0 {
+			r.wipeDeletesUnheld += report.LocalDeletes
+			require.Less(r.t, r.wipeDeletesUnheld, syncplan.DeleteSafetyMinItems,
+				"%s: a wiped OneDrive ran more local deletes without a hold than the proportional rule lets through; %s", label, r.failureContext())
+			if report.Uploads == 0 && len(r.localTree()) > 0 {
+				// The wipe was seen in part or not yet: the next pass, which
+				// sees more of it, holds what is left.
+				return false
+			}
 			break
 		}
 		require.Positive(r.t, report.HeldLocalDeletes, "%s: a wiped OneDrive must hold the local deletes; %s", label, r.failureContext())
 	}
 	r.expectHoldOf = ""
+	r.wipeDeletesUnheld = 0
+
+	return true
 }
 
 func (r *modelRun) requireConverged(label string) map[string]string {

@@ -1,13 +1,11 @@
 package syncdomain
 
+import "fmt"
+
 type SQLiteComparisonRow struct {
 	Path                    string
 	BaselineItemID          string
 	RemoteItemID            string
-	ItemType                ItemType
-	BaselinePresent         bool
-	LocalPresent            bool
-	RemotePresent           bool
 	LocalChanged            bool
 	RemoteChanged           bool
 	CurrentEqual            bool
@@ -17,7 +15,12 @@ type SQLiteComparisonRow struct {
 	RemoteMoveTarget        string
 	RemoteMoveSource        string
 	// BaselineType, LocalType and RemoteType are what each side holds at the
-	// path; the flags below are the rest of the decision table's inputs.
+	// path, SideAbsent where it holds nothing: whether a side is present and
+	// the path's item type are read from them (ItemType). The schema makes
+	// every item_type of the three tables, and of the planner-visible copies,
+	// one of the enum's names, so a side is present exactly when its type is
+	// not SideAbsent. The flags below are the rest of the decision table's
+	// inputs.
 	BaselineType, LocalType, RemoteType SideType
 	LocalItemReplaced                   bool
 	RemoteItemReplaced                  bool
@@ -30,6 +33,28 @@ type SQLiteComparisonRow struct {
 	RemoteSubtreeChanged                bool
 	MetadataDrift                       bool
 	ComparisonKind                      ComparisonKind
+}
+
+// ItemType is the path's item type: that of the first side present of the
+// baseline, local and remote ones. Every row of the comparison query has a
+// side present, as its path comes from one; a row with none, which only a
+// test can build, is a file, the enum's zero value.
+func (r *SQLiteComparisonRow) ItemType() ItemType {
+	for _, side := range []SideType{r.BaselineType, r.LocalType, r.RemoteType} {
+		switch side {
+		case SideFile:
+			return ItemTypeFile
+		case SideFolder:
+			return ItemTypeFolder
+		case SideRoot:
+			return ItemTypeRoot
+		case SideAbsent:
+		default:
+			panic(fmt.Sprintf("sync: item type of %v", side))
+		}
+	}
+
+	return ItemTypeFile
 }
 
 // DecisionState is the decision table's input this row carries. The move

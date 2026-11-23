@@ -107,6 +107,9 @@ import (
 // succeeds). It is kept when an attempt that did not succeed was canceled,
 // and when its create ended without an answer (graph.ErrCreateOutcomeUnknown:
 // no response, a 5xx, a 408): the create may have landed, or may still land.
+// A later attempt that fails short of a 409 (a 429, a request that never
+// left) keeps such an earlier intent too: it created nothing itself, but it
+// cannot tell whether the earlier create did.
 //
 // A kept intent ends in one of these ways. Observation claims the empty file
 // at its path, or meets something else there and drops it. A retry of the
@@ -927,7 +930,8 @@ func adoptPlaceholderTx(
 //
 // A live file whose size Graph did not report (R-2.4.16) may be that empty
 // file or not: a fresh intent neither claims it nor is dropped, and an
-// observation that knows the size decides.
+// observation that knows the size decides. Nor does the deletion of a folder
+// at the path (observationLeavesIntent).
 func claimIntendedPlaceholderTx(
 	ctx context.Context, tx SqlTxRunner, item *syncdomain.ObservedItem, now time.Time,
 ) (syncdomain.PendingCreate, bool, error) {
@@ -936,10 +940,10 @@ func claimIntendedPlaceholderTx(
 	if err != nil || !found {
 		return syncdomain.PendingCreate{}, false, err
 	}
-	isLiveFile := !item.IsDeleted && item.ItemType == syncdomain.ItemTypeFile
-	if isLiveFile && item.SizeUnknown && pending.IntentIsFresh(now) {
+	if observationLeavesIntent(item, &pending, now) {
 		return syncdomain.PendingCreate{}, false, nil
 	}
+	isLiveFile := !item.IsDeleted && item.ItemType == syncdomain.ItemTypeFile
 	claimable := pending.IntentIsFresh(now) && isLiveFile && !item.SizeUnknown && item.Size == 0
 	if claimable {
 		synced, syncedErr := baselineHoldsItemTx(ctx, tx, item.ItemID)
@@ -964,6 +968,21 @@ func claimIntendedPlaceholderTx(
 	pending.CreatedETag = item.ETag
 
 	return pending, true, nil
+}
+
+// observationLeavesIntent reports an observation at an intent's path that
+// neither claims the intent nor drops it. A folder's deletion there is another
+// item than the file the intent describes: sync deletes a folder before it
+// creates the file that replaced it locally, and the delta that follows
+// reports both, so it says nothing of the file. A live file whose size Graph
+// did not report may be the empty file or not, so a fresh intent waits for an
+// observation that knows.
+func observationLeavesIntent(item *syncdomain.ObservedItem, pending *syncdomain.PendingCreate, now time.Time) bool {
+	if item.IsDeleted {
+		return item.ItemType == syncdomain.ItemTypeFolder
+	}
+
+	return item.ItemType == syncdomain.ItemTypeFile && item.SizeUnknown && pending.IntentIsFresh(now)
 }
 
 // baselineHoldsItemTx reports whether the baseline has a row for itemID.

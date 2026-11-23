@@ -74,7 +74,7 @@ func (c *Client) UploadChunk(
 	resp, err := c.doPreAuth(ctx, uploadChunkDesc, func() (*http.Request, error) {
 		// Fresh SectionReader per attempt — io.ReaderAt.ReadAt is goroutine-safe,
 		// so no race with a previous attempt's transport writeLoop goroutine.
-		reader := watchdog.reader(io.NewSectionReader(chunk, 0, length))
+		reader := watchdog.localBody(io.NewSectionReader(chunk, 0, length))
 		uploadURL, urlErr := c.validatedUploadURL(session.UploadURL)
 		if urlErr != nil {
 			return nil, urlErr

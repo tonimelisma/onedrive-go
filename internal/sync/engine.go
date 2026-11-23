@@ -165,19 +165,15 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 	trash := localtrash.Open(trashDir, nil)
 
-	// Construct sessionStore and TransferManager together so the TM is
-	// immutable after creation (no post-hoc field mutation). Disk space
-	// checking is configured via WithDiskCheck so every download (sync
-	// and CLI) gets automatic protection (R-6.2.6).
+	// The session store is built here and the TransferManager below, once
+	// the engine exists to lend it its run clock; the TM is immutable after
+	// creation (no post-hoc field mutation). Disk space checking is
+	// configured via WithDiskCheck so every download (sync and CLI) gets
+	// automatic protection (R-6.2.6).
 	var sessionStore *driveops.SessionStore
 	if cfg.DataDir != "" {
 		sessionStore = driveops.NewSessionStore(cfg.DataDir, cfg.Logger)
 	}
-	transfers := driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
-		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
-		driveops.WithSessionScope(cfg.MountID, cfg.SyncRoot),
-	)
-
 	e := &Engine{
 		baseline:               bm,
 		planner:                syncplan.NewPlanner(cfg.Logger),
@@ -230,6 +226,11 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	// timestamps read the engine clock, or a retry scheduled by one clock is
 	// judged due by another.
 	bm.SetNowFunc(e.nowFunc)
+	transfers := driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
+		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
+		driveops.WithSessionScope(cfg.MountID, cfg.SyncRoot),
+		driveops.WithClock(e.nowFunc),
+	)
 	execCfg, execErr := newEngineExecutorConfig(cfg, syncTree, transfers, trash, rootIdentity, bm, e.nowFunc)
 	if execErr != nil {
 		return nil, execErr
@@ -268,6 +269,7 @@ func newEngineExecutorConfig(
 		PathConvergence:  cfg.PathConvergence,
 		Trash:            trash,
 		PendingCreates:   store,
+		MoveIntents:      store,
 		Now:              now,
 		Hooks:            cfg.hooks.exec,
 	})
@@ -333,6 +335,9 @@ func openBoundSyncTree(
 	}
 	if cfg.hooks.interposeSyncTree != nil {
 		syncTree = syncTree.Interpose(cfg.hooks.interposeSyncTree)
+	}
+	if cfg.hooks.adaptSyncTree != nil {
+		syncTree = cfg.hooks.adaptSyncTree(syncTree)
 	}
 	warnAboutForeignSyncClients(cfg.SyncRoot, cfg.Logger)
 	binding, err := resolveExpectedSyncRoot(ctx, store, syncTree, cfg.ExpectedSyncRootIdentity)
@@ -504,10 +509,12 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 		clearRequirement = config.ClearAccountAuthRequirement
 	}
 	if err := clearRequirement(ctx, e.dataDir, e.accountCanonicalID); err != nil {
-		if !errors.Is(err, config.ErrConfigLocked) {
+		if !errors.Is(err, config.ErrConfigLocked) && !errors.Is(err, config.ErrConfigLockUnsupported) {
 			return fmt.Errorf("sync: clearing catalog auth requirement: %w", err)
 		}
-		// Another onedrive-go process holds the catalog. The proof has
+		// Another onedrive-go process holds the catalog, or its filesystem
+		// cannot lock at all. Either way nothing was written: the clear is
+		// a best-effort mark, never made without the lock. The proof has
 		// passed, so the sync starts; the stored requirement stands until a
 		// start that can take the lock clears it.
 		e.logger.Warn("Could not clear the stored sign-in requirement; the next start clears it",

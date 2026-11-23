@@ -180,6 +180,23 @@ type CLIContext struct {
 	reconcileMu      sync.Mutex                 // guards reconcileNotices and selector mutation
 	reconcileNotices map[string]struct{}
 	lastBadLogLevel  string // the unknown log_level last warned about on a reload
+	// isWatchCommand marks `sync --watch` itself, which an account email
+	// change it applies or finishes does not tell: it is the running watch
+	// such a change tells, and it reads the renamed config as it starts.
+	isWatchCommand bool
+}
+
+// syncCommandName is the name of the `sync` command.
+const syncCommandName = "sync"
+
+// isSyncWatchCommand reports `sync --watch`.
+func isSyncWatchCommand(cmd *cobra.Command) bool {
+	if cmd == nil || cmd.Name() != syncCommandName {
+		return false
+	}
+	watch, err := cmd.Flags().GetBool("watch")
+
+	return err == nil && watch
 }
 
 func (cc *CLIContext) replaceCommandLogger(logger *slog.Logger, closer io.Closer) error {
@@ -444,7 +461,7 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.MountSession, erro
 			return nil, fmt.Errorf("probe account identity: %w", probeErr)
 		}
 		if result.Changed() {
-			runtime.FlushTokenCache()
+			// The probe flushed the token cache with the rename.
 			if reloadErr := cc.reloadResolvedDriveFromFlags(); reloadErr != nil {
 				return nil, reloadErr
 			}
@@ -583,6 +600,7 @@ func initializeCLIContext(
 		CfgPath:      config.ResolveConfigPath(env, config.CLIOverrides{ConfigPath: flags.ConfigPath}, bootstrapLogger),
 		Env:          env,
 	}
+	cc.isWatchCommand = isSyncWatchCommand(cmd)
 
 	ctx := cmd.Context()
 	if ctx == nil {
@@ -617,7 +635,7 @@ func initializeCLIContext(
 	// An account email change an earlier command was cut short in is
 	// finished here, once, before anything resolves a drive or a shared
 	// target by name; a command whose change cannot be finished fails.
-	if err := cc.finishInterruptedEmailChange(ctx); err != nil {
+	if err := cc.catchUpEmailChanges(ctx); err != nil {
 		return err
 	}
 
@@ -665,7 +683,8 @@ func initializeResolvedCLIContext(cmd *cobra.Command, cc *CLIContext) error {
 
 func bindRootFlags(cmd *cobra.Command, bindings *rootFlagBindings) {
 	cmd.PersistentFlags().StringVar(&bindings.configPath, "config", "", "config file path")
-	cmd.PersistentFlags().StringVar(&bindings.account, "account", "", "account for auth commands (e.g., user@example.com)")
+	cmd.PersistentFlags().StringVar(&bindings.account, "account", "",
+		"account email, or account ID when two accounts share it (e.g., user@example.com, business:user@example.com)")
 	cmd.PersistentFlags().StringArrayVar(&bindings.drive, "drive", nil,
 		"drive selector (canonical ID, display name, or partial match); repeatable for sync")
 	cmd.PersistentFlags().BoolVar(&bindings.json, "json", false, "output in JSON format")
@@ -990,7 +1009,7 @@ func newCommandPerfSession(
 	}
 
 	interval := commandPerfUpdateInterval
-	if cmd.Name() == "sync" {
+	if cmd.Name() == syncCommandName {
 		if watch, err := cmd.Flags().GetBool("watch"); err == nil && watch {
 			interval = watchCommandPerfUpdateInterval
 		}

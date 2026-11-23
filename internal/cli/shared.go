@@ -55,7 +55,11 @@ func runSharedList(ctx context.Context, cc *CLIContext) error {
 		return err
 	}
 
-	discovery := discoverSharedTargets(ctx, cc, cc.runtime(), filterAccountViews(snapshot.Accounts, cc.Flags.Account))
+	target, selected, err := cc.selectedAccount(snapshot.Stored, "list shared items of")
+	if err != nil {
+		return err
+	}
+	discovery := discoverSharedTargets(ctx, cc, cc.runtime(), filterAccountViews(snapshot.Accounts, target.orNone(selected)))
 	items := sharedListItemsFromTargets(discovery.Targets)
 	if cc.Flags.JSON {
 		return printSharedJSON(cc.Output(), items, discovery.AccountsRequiringAuth, discovery.AccountsDegraded)
@@ -126,14 +130,16 @@ func printSharedText(
 	return nil
 }
 
-func filterAccountViews(views []accountView, account string) []accountView {
-	if account == "" {
+// filterAccountViews keeps the views of the account --account names, or
+// every view when account is nil.
+func filterAccountViews(views []accountView, account *accountTarget) []accountView {
+	if account == nil {
 		return views
 	}
 
 	filtered := make([]accountView, 0, len(views))
 	for i := range views {
-		if !accountViewMatchesSelector(&views[i], account) {
+		if !account.includesView(&views[i]) {
 			continue
 		}
 		filtered = append(filtered, views[i])

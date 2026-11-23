@@ -236,7 +236,7 @@ func TestWatch_MountRootPollThatTimedOutBacksOffAndPollsAgain(t *testing.T) {
 
 	w := newMountRootPollTest(t, stalledGraphRequestError(t, clientTimeoutKind()))
 	polledBefore := w.polls.Load()
-	bo := retry.NewBackoff(retry.WatchRemotePolicy())
+	bo := retry.NewBackoff(retry.WatchRemotePolicy(), nil)
 	bo.SetMaxOverride(syncdomain.MinPollInterval)
 	backoff := bo.Next()
 	backoffEnds := w.clock.Now().Add(backoff)

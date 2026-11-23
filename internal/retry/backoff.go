@@ -8,14 +8,16 @@ import "time"
 // watch loops.
 type Backoff struct {
 	policy      Policy
+	jitter      JitterSource
 	consecutive int
 	maxOverride time.Duration // dynamic max (e.g., poll interval for remote observer)
 }
 
-// NewBackoff creates a Backoff from a Policy. The initial state is zero
-// consecutive errors (first call to Next returns the base delay).
-func NewBackoff(p Policy) *Backoff {
-	return &Backoff{policy: p}
+// NewBackoff creates a Backoff from a Policy, drawing its jitter from
+// jitter (Policy.Delay). The initial state is zero consecutive errors (first
+// call to Next returns the base delay).
+func NewBackoff(p Policy, jitter JitterSource) *Backoff {
+	return &Backoff{policy: p, jitter: jitter}
 }
 
 // Next returns the current backoff delay and advances the consecutive error
@@ -28,7 +30,7 @@ func (b *Backoff) Next() time.Duration {
 		p.Max = b.maxOverride
 	}
 
-	delay := p.Delay(b.consecutive)
+	delay := p.Delay(b.consecutive, b.jitter)
 	b.consecutive++
 
 	return delay

@@ -101,7 +101,7 @@ func (c *Client) readCreatedFolderAfterEmptySuccessBody(
 			break
 		}
 
-		backoff := c.policies.createFolderReadback.Delay(attempt)
+		backoff := c.policies.createFolderReadback.Delay(attempt, c.retryJitter)
 		c.logger.Debug("waiting to confirm created folder after empty success body",
 			slog.String("drive_id", driveID.String()),
 			slog.String("parent_id", parentID),

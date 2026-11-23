@@ -260,8 +260,132 @@ func (wp *WorkerPool) commitOutcome(ctx context.Context, mutation *syncdomain.Ba
 // not its cause. The sentinel is joined last: the sync console prints the
 // innermost error of the last error a chain joins, so a user reads that the
 // sync database did not answer, not the deadline the store gave up at.
+//
+// Once the run ctx belongs to has ended (WithRunStop), the access ends at the
+// stop's one deadline when that comes first, so a worker's commit or an
+// executor write that starts after a cancel shares the stop's bound instead
+// of taking a whole bound of its own after it.
 func RunDetachedStoreAccess(ctx context.Context, bound time.Duration, access func(context.Context) error) error {
-	return RunDetachedStoreAccessUntil(ctx, syncdomain.WallNow().Add(bound), access)
+	deadline := syncdomain.WallNow().Add(bound)
+	if stop, ended := runStopDeadline(ctx); ended && stop.Before(deadline) {
+		deadline = stop
+	}
+
+	return RunDetachedStoreAccessUntil(ctx, deadline, access)
+}
+
+// runStopKey marks a context that belongs to a run whose stop has one
+// deadline (WithRunStop).
+type runStopKey struct{}
+
+// runStop is what WithRunStop hands down about the run's own context, whose
+// end is the stop: whether it ended, a callback on its end, and the stop's one
+// deadline, read once it ended. It holds functions over that context rather
+// than the context itself, so a context derived from a detached one cannot
+// take the run's cancellation back by mistake.
+type runStop struct {
+	ended    func() bool
+	onEnd    func(func()) func() bool
+	deadline func() time.Time
+	logger   *slog.Logger
+}
+
+// WithRunStop returns ctx carrying the stop of the run ctx is: once ctx has
+// ended, every detached store access under it, its own or a context derived
+// from it (the workers', a completion's), ends at deadline() when that comes
+// before its own bound. deadline is called from any goroutine once ctx ended,
+// so it reads only what is safe to read there. A panic in a callback the
+// run's end starts is logged through logger and ends that callback only.
+func WithRunStop(ctx context.Context, deadline func() time.Time, logger *slog.Logger) context.Context {
+	return context.WithValue(ctx, runStopKey{}, runStop{
+		ended: func() bool { return ctx.Err() != nil },
+		onEnd: func(f func()) func() bool {
+			return context.AfterFunc(ctx, func() {
+				defer recoverRunStopCallback(logger)
+				f()
+			})
+		},
+		deadline: deadline,
+		logger:   logger,
+	})
+}
+
+// recoverRunStopCallback is the panic boundary of a goroutine the run's end
+// starts: the panic is a bug, logged with its stack, and the callback ends.
+func recoverRunStopCallback(logger *slog.Logger) {
+	if r := recover(); r != nil {
+		//nolint:errcheck // Recovered logs the panic at Error; the callback has no caller to return it to
+		_ = panicguard.Recovered(logger, "in the run stop's deadline watch", r)
+	}
+}
+
+// RunHasEnded reports that ctx belongs to a run (WithRunStop) whose context
+// has ended, even when ctx itself is detached from that end.
+func RunHasEnded(ctx context.Context) bool {
+	stop, ok := ctx.Value(runStopKey{}).(runStop)
+	return ok && stop.ended()
+}
+
+// runStopDeadline is the stop's one deadline of the run ctx belongs to, and
+// whether that run's context has ended.
+func runStopDeadline(ctx context.Context) (time.Time, bool) {
+	stop, ok := ctx.Value(runStopKey{}).(runStop)
+	if !ok || !stop.ended() {
+		return time.Time{}, false
+	}
+
+	return stop.deadline(), true
+}
+
+// DetachedAtStopContext is the context a run applies a completion on while
+// the run goes on: it keeps ctx's values but not its cancellation, so a
+// cancel that lands while the completion is being applied does not cut its
+// records short; from the moment the run's context ends (WithRunStop) it ends
+// at the stop's one deadline, with ErrStoreAccessTimedOut as its cause. A
+// ctx that carries no run stop is returned as it is. The returned cancel
+// releases the watch on the run's end; the caller defers it.
+func DetachedAtStopContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	stop, ok := ctx.Value(runStopKey{}).(runStop)
+	if !ok {
+		return ctx, func() {}
+	}
+
+	// The stop's deadline is armed when the run's context ends, so this
+	// detach has no deadline before then: a live completion is not bounded,
+	// as the run's own context bounds nothing either.
+	detached, cancelCause := context.WithCancelCause(context.WithoutCancel(ctx))
+	var (
+		// mu guards cancelDeadline, which the callback on the run's end sets
+		// and the returned cancel calls.
+		mu             stdsync.Mutex
+		cancelDeadline context.CancelFunc
+	)
+	stopWatching := stop.onEnd(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if detached.Err() != nil {
+			return
+		}
+		// The deadline is a context deadline on detached itself, so its end
+		// carries the store-timeout cause to the context the completion
+		// runs on.
+		bounded, cancel := context.WithDeadlineCause(detached, stop.deadline(), syncdomain.ErrStoreAccessTimedOut)
+		cancelDeadline = cancel
+		context.AfterFunc(bounded, func() {
+			defer recoverRunStopCallback(stop.logger)
+			cancelCause(context.Cause(bounded))
+		})
+	})
+
+	return detached, func() {
+		stopWatching()
+		cancelCause(context.Canceled)
+		mu.Lock()
+		defer mu.Unlock()
+		if cancelDeadline != nil {
+			cancelDeadline()
+		}
+	}
 }
 
 // RunDetachedStoreAccessUntil is RunDetachedStoreAccess under a deadline the
