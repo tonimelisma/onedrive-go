@@ -66,7 +66,7 @@ In flight: W57 has branch `test/crash-model-replacing-move` at `c6e273a6` (built
 - [x] W102 — devtool links no product package, also through testutil — devtool. — built in #976
 - [x] W103 — Every repository-rule walk of devtool skips the same folders — devtool. — built in #976
 - [x] W104 — The benchmark's retries wait on an injected clock and read the CLI's server-error line — benchmark tooling. — built in #976
-- [x] W115 — Every run the exhaustive planner check records as broken has a row — after F3/F4. — built in #976; in #979 shapes 5, 6, 8 and 9 and most of 1, 4, 7 and 11 are fixed (several were faults of the check's own model), the check counts a duplicated file as broken (shape 12), and the shapes section lists what remains
+- [x] W115 — Every run the exhaustive planner check records as broken has a row — after F3/F4. — built in #976; every broken run fixed over #979–#983 (several were faults of the check's own model); pairs.golden is empty
 
 ## Wording and lint
 - [x] W26 — Human units are rendered by one package — wording. — built in #977
