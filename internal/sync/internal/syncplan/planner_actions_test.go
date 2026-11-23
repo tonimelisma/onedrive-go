@@ -1905,7 +1905,7 @@ func TestPlannerActionTypeDecisions_PanicOnATypeOutsideTheEnum(t *testing.T) {
 		"pathsVacatedByPlan":                func() { pathsVacatedByPlan([]syncdomain.Action{*outside()}) },
 		"createSide":                        func() { createSide(outside()) },
 		"deleteSide":                        func() { deleteSide(outside()) },
-		"dropReconciliationOfComposedMoves": func() { dropReconciliationOfComposedMoves([]syncdomain.Action{*outside()}, movedLocally, mode) },
+		"dropReconciliationOfComposedMoves": func() { dropReconciliationOfComposedMoves([]syncdomain.Action{*outside()}, movedLocally, nil, mode) },
 	}
 	for name, decide := range decisions {
 		assert.PanicsWithValue(t, syncdomain.OutsideTheEnum(unlisted), decide, name)

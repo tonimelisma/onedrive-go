@@ -565,6 +565,174 @@ func TestRunOnce_AFileMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere(t
 	requireScenarioQuietPlan(t, eng)
 }
 
+// Validates: R-2.17.9, R-2.17.2
+//
+// OneDrive deleted the folder archive, which held a synced file, and moved
+// the folder notes onto its path. SQLite reconciles archive as one folder
+// replaced by another, so the plan deletes the old folder here (it is as
+// synced) and the move of notes waits for that delete, and the delete of
+// archive/old.txt stays at archive here, where the file is, rather than
+// going into notes. Before, the delete was addressed at notes/old.txt and
+// the move waited for good. One sync converges with notes at archive,
+// nothing uploaded or downloaded.
+func TestRunOnce_AFolderMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-archive", "root", "archive")
+	remote.addFile(t, "item-old", "item-archive", "old.txt", "old\n")
+	remote.addFolder("item-notes", "root", "notes")
+	remote.addFile(t, "item-n", "item-notes", "n.txt", "n\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	remote.deleteAt(t, "archive")
+	remote.moveAt(t, "notes", "archive")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes")
+	assert.Zero(t, superseded)
+
+	want := map[string]string{"archive": "/", "archive/n.txt": "n\n"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "archive", remote.pathOf("item-notes"), "archive is the folder OneDrive moved")
+	assert.Zero(t, remote.uploads, "nothing is uploaded again")
+	assert.Equal(t, downloadsBefore, remote.downloads, "notes is moved here, not downloaded")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.9, R-2.17.6
+//
+// The folder docs was renamed docs2 here, carrying a.txt, while OneDrive
+// deleted the folder archive and moved docs/a.txt onto its path. The row of
+// a.txt is a local move, which names no OneDrive target, so the item ID
+// places a.txt at archive on OneDrive: the moves compose, OneDrive's place
+// wins, archive is deleted here and a.txt moved onto it, and docs is renamed
+// docs2 on OneDrive. Before, a.txt had no OneDrive position: it was
+// downloaded at archive while its copy in docs2 went back to OneDrive as a
+// new file. One sync converges with a.txt once on each side, nothing
+// uploaded or downloaded.
+func TestRunOnce_AFileOfAFolderRenamedHereMovedOnOneDriveOntoAFolderItDeletedEndsOnce(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-docs", "root", "docs")
+	remote.addFile(t, "item-a", "item-docs", "a.txt", "a\n")
+	remote.addFolder("item-archive", "root", "archive")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Rename(local("docs"), local("docs2")))
+	remote.deleteAt(t, "archive")
+	remote.moveAt(t, "docs/a.txt", "archive")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes")
+	assert.Zero(t, superseded)
+
+	want := map[string]string{"archive": "a\n", "docs2": "/"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "archive", remote.pathOf("item-a"), "a.txt is the item OneDrive moved")
+	assert.Equal(t, "docs2", remote.pathOf("item-docs"), "docs is renamed on OneDrive")
+	assert.Zero(t, remote.uploads, "nothing is uploaded again")
+	assert.Equal(t, downloadsBefore, remote.downloads, "a.txt is moved here, not downloaded")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.6, R-2.17.8
+//
+// Here the folder archive was deleted and notes.txt moved onto its path,
+// while OneDrive renamed notes.txt to final.txt. SQLite pairs a local move
+// only onto a path no synced item had, so it read notes.txt at archive as
+// new content and final.txt as a new file on OneDrive; the file's identity
+// places it at archive here, so its moves compose: OneDrive's name wins,
+// notes.txt is moved to final.txt here, and archive is deleted on OneDrive.
+// Before, final.txt was downloaded and archive uploaded as a new file: the
+// content twice on both sides. One sync converges with the file once,
+// nothing uploaded or downloaded.
+func TestRunOnce_AFileMovedHereOntoAFolderDeletedHereAndRenamedOnOneDriveEndsOnce(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-archive", "root", "archive")
+	remote.addFile(t, "item-notes", "root", "notes.txt", "notes\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Remove(local("archive")))
+	require.NoError(t, os.Rename(local("notes.txt"), local("archive")))
+	remote.moveAt(t, "notes.txt", "final.txt")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes")
+	assert.Zero(t, superseded)
+
+	want := map[string]string{"final.txt": "notes\n"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "final.txt", remote.pathOf("item-notes"), "final.txt is the item OneDrive renamed")
+	assert.Zero(t, remote.uploads, "nothing is uploaded again")
+	assert.Equal(t, downloadsBefore, remote.downloads, "notes.txt is moved here, not downloaded")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.9, R-2.17.10
+//
+// OneDrive deleted the folder archive and moved notes.txt onto its path,
+// while a new file was saved in archive here. The folder holds more than was
+// synced, so it is renamed to a conflict copy with everything in it, the
+// move of notes.txt lands at archive here, and the conflict copy goes to
+// OneDrive as a new folder. Before, notes.txt was downloaded at archive
+// while its copy here went back to OneDrive as a new file: the file twice on
+// both sides. One sync converges with notes.txt once, at archive, and the
+// new file kept in the conflict copy on both sides.
+func TestRunOnce_AFolderWrittenIntoHereThatOneDriveReplacedByAMovedFileIsKeptAsAConflictCopy(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-archive", "root", "archive")
+	remote.addFile(t, "item-old", "item-archive", "old.txt", "old\n")
+	remote.addFile(t, "item-notes", "root", "notes.txt", "notes\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.WriteFile(local("archive/new.txt"), []byte("new\n"), 0o600))
+	remote.deleteAt(t, "archive")
+	remote.moveAt(t, "notes.txt", "archive")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.LessOrEqual(t, runs, 2, "the conflict copy goes up in the sync after the rename")
+	assert.Zero(t, superseded)
+
+	tree := harnessLocalTree(t, syncRoot)
+	assert.Equal(t, tree, remote.tree(), "both sides hold the same")
+	assert.Equal(t, "notes\n", tree["archive"], "notes.txt is at archive")
+	var copies []string
+	for p, content := range tree {
+		if content == "notes\n" && p != "archive" {
+			copies = append(copies, p)
+		}
+		if strings.HasSuffix(p, "/new.txt") {
+			assert.Equal(t, "new\n", content)
+			assert.True(t, strings.HasPrefix(p, "archive.conflict"), "the new file is kept in the conflict copy: %s", p)
+		}
+	}
+	assert.Empty(t, copies, "notes.txt is once on each side")
+	assert.Len(t, tree, 4, "notes.txt and the conflict copy with its two files: %v", tree)
+	assert.Equal(t, "archive", remote.pathOf("item-notes"), "notes.txt is the item OneDrive moved")
+	assert.Equal(t, downloadsBefore, remote.downloads, "notes.txt is moved here, not downloaded")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-2.17.6, R-2.1.7
 //
 // Three folders moved into each other's new folders here: H moved aside,

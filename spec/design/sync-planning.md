@@ -81,8 +81,8 @@ intent; multisync receives only that child work intent.
 | A folder whose OneDrive move lands in a folder made here at another folder's path, the other folder's target below it, converges: the holder moves aside on OneDrive first, the new folder is made there after it and the move lands in it, and nothing is moved into or made inside an old folder (R-2.17.6). | `TestComposeMoves_AFolderWhoseTargetLiesBelowAMoveIntoAFolderAtItsPathMovesAsideFirst`, `TestPlannerPairs_AFolderMovedIntoANewFolderAtThePathOfAFolderMovedBelowItConverges`, `TestRunOnce_ThreeFoldersMovedIntoEachOthersNewFoldersConverge` |
 | Moves are composed per item (R-2.17.6): the same rename on both sides only re-keys the baseline and keeps either side's edit pending; divergent renames keep OneDrive's name; cross moves that would nest folders keep the OneDrive move; collisions undo the local claim; moves order against each other and their surroundings, a local move never fabricates its parent, and a pass that cannot order a move defers it, except that a cycle of moves each waiting for the next one's source (a swap or rotation of names) parks one item at a free `<name>.swap-N` sibling so the rest can run, and the parked item follows next pass. Work under a moved file's old path belongs to the folder that takes the path and waits for the move. A delete or cleanup never waits for its parent's folder create. A destination is free only when no other entry holds it under OneDrive's name folding, and an item's remote position may be a path another synced item is moving away from, or a path whose own synced item is gone here (the item ID proves it), so a rename here composes with OneDrive's move of the item onto a path deleted here instead of copying the item. | `TestComposeMoves_DestinationFreeUnderNameFolding`, `TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges`, `TestRunOnce_LocalRenameAndDeleteWhileOneDriveSwapsThemConverges`, `TestPlannerPairs_AFileRenamedHereAndMovedOnOneDriveOntoAPathDeletedHereMoves`, `TestComposeMoves_RotationParksOneItemAndMovesTheRest`, `TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove`, `TestBuildDependencies_DeleteUnderARecreatedFolderDoesNotWaitForTheCreate`, `TestRunOnce_SwapOfTwoNamesConverges`, `TestComposeMoves_OneSidedRenamesMoveTheOtherSide`, `TestComposeMoves_SameRenameOnBothSidesOnlyRekeysTheBaseline`, `TestComposeMoves_DivergentRenameKeepsTheOneDriveName`, `TestComposeMoves_CrossMoveCycleKeepsTheRemoteMove`, `TestComposeMoves_DescendantRenameInsideRenamedFolder`, `TestComposeMoves_RemoteHierarchyInversionOrdersLocalMoves`, `TestComposeMoves_LocalMoveIntoRemotelyRenamedFolder`, `TestComposeMoves_OccupiedDestinationDefers`, `TestComposeMoves_FrozenItemsAndTheirSubtreesDoNotMove`, `TestBuildDependencies_NestedMoveEdges`, `TestBuildDependencies_MatchesScanningOracle`, `TestRunOnce_BothSidesRenamedIdenticallyConverges`, `TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending`, `TestRunOnce_DivergentRenameConvergesInOneSync`, `TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting`, `TestRunOnce_RemoteHierarchyInversionConverges`, `TestRunOnce_RemoteFolderRenameWithChildRenameAndMoveInConverges`, `TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass`, `TestRunOnce_RemoteFolderRenameWithNewSubfolderConverges`, `TestExecutor_LocalMove_MissingDestinationParentIsStale`, `TestRunOnce_RandomizedBidirectionalEditsConverge`, `TestComposeMoves_AnEntryMovedOnOneDriveIntoAFolderThatTakesItsPathMovesIntoItHereFirst`, `TestRunOnce_ARotationThroughNestingMadeOnOneDriveConverges` |
 | A remote move of a locally edited file moves the local copy with its edit and uploads the edit afterwards (R-2.17.7); a local rename racing a remote edit downloads the edit (R-2.17.3). | `TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads`, `TestExecutor_LocalMove_LocallyEditedSourceStillMovesAndKeepsTheEditPending`, `TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit` |
-| A remote move over a file OneDrive deleted moves the local copy onto it, replacing a verified unchanged file or conflict-copying an edited one or a new file that took the name (one saved at the name a replacing move freed, between its two steps), and never re-uploads the moved item or downloads it beside its old copy; a move over a folder OneDrive deleted that the plan deletes here waits for that delete and then runs (R-2.17.9). | `TestPlannerPairs_AFileMovedOnOneDriveOntoAFolderItDeletedEndsOnce`, `TestBuildDependencies_ALocalMoveOntoAFolderDeletedHereWaitsForItsDelete`, `TestRunOnce_AFileMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere`, `TestComposedDisplacement_EntryAtTheDestination`, `TestComposeMoves_MoveOntoANewFileAtTheFreedNameKeepsItAsAConflictCopy`, `TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves`, `TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting`, `TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit`, `TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination`, `TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace`, `TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass`, `TestRunOnce_AFileMadeHereUnderTheNameOneDriveGaveAMovedFileIsKeptAsAConflictCopy` |
-| Move pairing requires the item to have left its baseline path: hard links and copies are new files, rename-and-recreate is a move plus a create (R-2.17.8). A folder made here at the path a moved folder left, where OneDrive moved the folder away too and made a folder of its own, adopts OneDrive's folder instead of being superseded on every pass (R-2.17.6). | `TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated`, `TestRunOnce_HardLinkUploadsAsANewFile`, `TestRunOnce_RenameAndRecreateMovesThenCreates`, `TestPlannerPairs_AFolderMovedIntoDifferentNewFoldersAtItsOwnPathOnEachSideConverges`, `TestRunOnce_AFolderMovedIntoDifferentNewFoldersAtItsOwnPathOnEachSideConverges` |
+| A remote move over a file OneDrive deleted moves the local copy onto it, replacing a verified unchanged file or conflict-copying an edited one or a new file that took the name (one saved at the name a replacing move freed, between its two steps), and never re-uploads the moved item or downloads it beside its old copy; a move over a folder OneDrive deleted that holds only its synced content waits for that folder's delete here and then runs, and over one written into here renames it to a conflict copy first (R-2.17.9). | `TestPlannerPairs_AFileMovedOnOneDriveOntoAFolderItDeletedEndsOnce`, `TestPlannerPairs_AFolderOneDriveDeletedGivesWayToAnItemItMovedOntoItsPath`, `TestRunOnce_AFolderMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere`, `TestRunOnce_AFolderWrittenIntoHereThatOneDriveReplacedByAMovedFileIsKeptAsAConflictCopy`, `TestBuildDependencies_ALocalMoveOntoAFolderDeletedHereWaitsForItsDelete`, `TestRunOnce_AFileMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere`, `TestComposedDisplacement_EntryAtTheDestination`, `TestComposeMoves_MoveOntoANewFileAtTheFreedNameKeepsItAsAConflictCopy`, `TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves`, `TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting`, `TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit`, `TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination`, `TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace`, `TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass`, `TestRunOnce_AFileMadeHereUnderTheNameOneDriveGaveAMovedFileIsKeptAsAConflictCopy` |
+| Move pairing requires the item to have left its baseline path: hard links and copies are new files, rename-and-recreate is a move plus a create (R-2.17.8). A folder made here at the path a moved folder left, where OneDrive moved the folder away too and made a folder of its own, adopts OneDrive's folder instead of being superseded on every pass (R-2.17.6). A synced file moved here onto a path another synced item had pairs by its identity and synced content, OneDrive's move of it by item ID (R-2.17.8). | `TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated`, `TestMovedOntoAnotherItemsPath_NeedsTheIdentityAndTheSyncedContent`, `TestPlannerPairs_AFileMovedHereOntoAPathAnotherItemHadAndElsewhereOnOneDriveEndsOnce`, `TestRunOnce_AFileMovedHereOntoAFolderDeletedHereAndRenamedOnOneDriveEndsOnce`, `TestPlannerPairs_AnItemMovedOnBothSidesOntoAnEntryOneDriveDeletedEndsOnce`, `TestRunOnce_AFileOfAFolderRenamedHereMovedOnOneDriveOntoAFolderItDeletedEndsOnce`, `TestRunOnce_HardLinkUploadsAsANewFile`, `TestRunOnce_RenameAndRecreateMovesThenCreates`, `TestPlannerPairs_AFolderMovedIntoDifferentNewFoldersAtItsOwnPathOnEachSideConverges`, `TestRunOnce_AFolderMovedIntoDifferentNewFoldersAtItsOwnPathOnEachSideConverges` |
 | Remote moves applied locally carry the source baseline and do not re-upload unchanged content. | `TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline`, `TestRunOnce_RemoteRenameAppliedLocallyDoesNotReupload` |
 | Type changes with content on both sides keep both (`conflict_keep_both`, and type-mismatched create/create): a type-aware conflict copy of the local entry, then OneDrive's item at the path; a folder's change includes its subtree; nothing below the path is deleted on either side (R-2.17.10). Both sides replacing the item with the same new type are two creates at one path: equal content (or two folders) only updates the baseline, different files keep both as a create/create conflict.  A new filesystem identity alone is never a local change (D-057): a folder rebuilt, restored from a copy or on a renumbered disk, with nothing changed below it, accepts OneDrive's delete or replacement, and the executor's folder delete checks the identity the plan saw rather than the baseline's (R-2.8.10). | `TestRunOnce_RemoteFolderDeleteAcceptsAContentIdenticalLocalRestore`, `TestRunOnce_RemoteFolderDeleteAfterDeviceRenumberingIsApplied`, `TestRunOnce_RemoteDeleteOfALocallyRecreatedEmptyFolderIsApplied`, `TestRunOnce_RemoteReplaceOfALocallyRecreatedFolderConverges`, `TestRunOnce_FolderReplacedByFilesOnBothSidesKeepsBoth`, `TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem`, `TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth`, `TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth`, `TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth`, `TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth`, `TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth`, `TestExecutor_ConflictCopy_DirectorySourceIsRenamed`, `TestExecutor_ConflictCopy_DirectoryNeverReplacesAnEmptyDirectoryAtItsName`, `TestExecutor_DirectoryConflictCopy_ParentSwappedForSymlinkStaysInside`, `TestExecutor_ConflictCopy_UncheckableSourceFailsWithItsReason` |
 | Type changes on either side are replacements ordered delete-then-create, never a silent stall. | `TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem`, `TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem`, `TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem`, `TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem`, `TestRunOnce_LocalFileReplacedByFolderConverges`, `TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges` |
@@ -960,14 +960,13 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 379 runs of `pairs.golden` (325 from the synced tree, 54 from the held
+The 41 runs of `pairs.golden` (17 from the synced tree, 24 from the held
 one; a run names its start, the two histories, the refused create if any,
 and the invariants it breaks) fall into the twelve shapes below, of which
-4, 5, 6, 7, 8 and 9 are no longer listed: 46 runs break a rule of content or
-convergence, and 333 (116 pairs and their refusal variants) only the
-`duplicated` rule of shape 12. Each is an open
-behaviour of the planner unless it says it is right as it is; a fix removes
-its lines from the file. The refused-create variants of a run break what
+4, 5, 6, 7, 8 and 9 are no longer listed: 21 runs break a rule of content or
+convergence, and 20 (7 pairs and their refusal variants) only the
+`duplicated` rule of shape 12. Each is an open behaviour of the planner
+unless it says it is right as it is; a fix removes its lines from the file. The refused-create variants of a run break what
 the run itself breaks, so they belong to its shape. 58 runs of shapes 4, 7
 and 8 were the check's own: its model of OneDrive gave a remote folder
 create the item the action's baseline row names, wherever that item now
@@ -995,7 +994,7 @@ checks it against the baseline the plan carries (`verifyLocalDeleteContent`):
 the model refused deletes the executor runs. Both now follow the store
 and the executor. The check also counts a duplicate now (shape 12).
 
-1. A rotation through nesting made on OneDrive (3 runs left, all held).
+1. A rotation through nesting made on OneDrive (2 runs left, all held).
    One entry moves into a folder, which then takes the entry's old path
    (`mv p x/p, mv x p`, `mv z p/z, mv p z`, `mv p/f x/f, mv x p/f`),
    whatever this side did elsewhere. Here the entry still holds the path
@@ -1006,8 +1005,9 @@ and the executor. The check also counts a duplicate now (shape 12).
    `moveOneIntoItsWaitingFolder`), and 51 of its runs converge (48 from
    the synced tree, 3 from the held one). What is left is from the held start,
    where the folder made in the held one's place takes part: OneDrive
-   moves `p/f` into the held folder and that folder onto `p/f`
-   (`mv p/f x/f, mv x p/f`, also through `X2`) while here `f` already sits
+   moves `p/f` into the held folder and that folder onto `p/f` (through
+   `X2`; through `x` it converges since the item ID places `f`,
+   `sitsAtAnotherSyncedItemsPath`) while here `f` already sits
    in the new `x`, not in the held folder, so there is no move into the
    folder to make first; and `mv x p/x, mv p x`, where `p` lands on the
    new `x` made here, shape 7's collision of two entries at one name.
@@ -1048,13 +1048,21 @@ and the executor. The check also counts a duplicate now (shape 12).
    which shows this shape in its tree too (`mv p q, mkdir p, mkdir p/a,
    mv q p/a/p` against the same through `p/b`), and also a run of the held
    start, `mv x X2/x, mv X2 x` on OneDrive, that the same fix converges.
-3. A folder moved onto the path of a folder deleted on the same side (27
-   runs: 24 synced, 3 held): `rm p, mv x p` or `rm x, mv p x` on OneDrive.
-   A replacing move onto a folder's path waits while the folder is there
-   (see the replacing move above), and nothing removes the deleted folder's
-   copy here, so the move waits for good; with the other side writing into
-   the deleted folder the deleted entry also comes back. The deleted folder
-   should go, keeping what the other side wrote, and the move then run.
+3. A folder moved onto the path of a folder deleted on the same side (3
+   runs left, one held pair and its refusals): `rm p, mv x p` or `rm x, mv p x` on OneDrive. SQLite
+   reconciles a folder replaced by a folder as unchanged at its path, so
+   nothing deleted the old folder here and the move onto its path waited
+   for good, and the local rebase sent the deleted folder's child deletes
+   into the moved folder (`local_delete x/f` for `p/f`), so with the other
+   side writing into the moved folder the deleted entry came back. Fixed
+   (`giveWayFoldersReplacedOnOneDrive`, `deletesWhatIsHere`): the old
+   folder is deleted here when it holds only what was synced, or renamed to
+   a conflict copy with all it holds when it holds more, and the move then
+   lands, and the child deletes stay where the children are; 26 of its
+   runs converge (24 synced, 2 held). Left: from the held start, `rm x, mv p x`, where `x` here
+   is the new folder made in the held one's place, not the deleted folder
+   (that is `x2` here and goes), so `p` landing on it is shape 7's
+   collision of two entries at one name.
 4. No longer listed: a replacing move that meets the other side's move of
    its entry, on OneDrive `x` moved onto the path of a deleted entry
    (`rm p, mv x p`, `rm p/f, mv x p/f`) while here `x` moved elsewhere
@@ -1146,24 +1154,35 @@ and the executor. The check also counts a duplicate now (shape 12).
    although the other side held the moved file elsewhere and nothing carried
    it (R-2.17.11) are fixed and no longer listed.
 12. One synced or written content at two plain paths of a side at the end
-   (`duplicated`, 116 pairs: 106 synced, 10 held; a conflict copy keeps
+   (`duplicated`, 7 pairs left: 2 synced, 5 held; a conflict copy keeps
    both on purpose, under a name that tells the user, and is not counted).
    Nothing is lost, so the content rules hold, but the user finds a copy
-   nobody asked for, and edits to one never reach the other. Two families:
-   OneDrive moved a file onto the path of an entry it deleted (`rm x,
-   mv z x`, `rm p, mv z p`, `rm z, mv p/f z`, 26 pairs), with this computer
-   moving or writing beside it, where the move waits while the entry stands
-   at its destination here and the file is downloaded there while its copy
-   here is uploaded again. Fixed where this computer left the deleted
-   folder as synced, or emptied it: the plan deletes the folder here and
-   the move waits for that delete instead of for good (Move Composition);
-   9 pairs and their variants converge, with nothing done here, the folder's
-   file deleted or moved here. And a move here onto a path another entry vacated or a delete freed
-   (`mv p q, mv z p`, `rm p, mv z p`, `mv x q, mv p/f x`) against
-   OneDrive's move of the same file elsewhere (92 pairs), where SQLite does
-   not pair the move here onto a path the baseline gives another item, so
-   composition does not see the move conflict, and the file is downloaded
-   at OneDrive's path and uploaded at this computer's.
+   nobody asked for, and edits to one never reach the other. Two families,
+   both fixed. OneDrive moved a file onto the path of an entry it deleted
+   (`rm x, mv z x`, `rm p, mv z p`, `rm z, mv p/f z`, 26 pairs), with this
+   computer moving or writing beside it, where the move waited while the
+   entry stood at its destination here and the file was downloaded there
+   while its copy here was uploaded again: the deleted folder is deleted
+   here when as synced, renamed to a conflict copy when written into
+   (shape 3's fix); a file this computer also moved has its OneDrive place
+   read by item ID at the deleted entry's path, where its row, a local
+   move, names no OneDrive target (`unpairedRemoteMoveOf`); and a new
+   folder made here at the path, from the held start, is kept as a
+   conflict copy (`newFolderMeetsAFile`). And a move here onto a path
+   another entry vacated or a delete freed (`mv p q, mv z p`,
+   `rm p, mv z p`, `mv x q, mv p/f x`) against OneDrive's move of the same
+   file elsewhere (90 pairs): SQLite does not pair a local move onto a path
+   the baseline gives another item, so it read the file here as new content
+   and OneDrive's copy as a new file. The file is now found by its identity
+   and synced hash (`movedOntoAnotherItemsPath`), OneDrive's copy by item ID,
+   the moves compose, and the upload, download, cleanup and recreated-path
+   create SQLite planned for it are dropped (`replacedByAComposedMove`,
+   `recreatedSourceCreates`). Left: from the held start, OneDrive moving
+   `p/f` into `X2` or `z` onto `x` while here `p/f` is in the new `x` or
+   `z` took `p/f` (5 pairs), where the held folder's move is involved; and
+   two synced pairs where two moves meet at one name (`mv p q` here, `mv x
+   q` there; `mv x p/x, mv p x` here, `mv p/f x/f` there), shape 7's
+   collision.
 
 A remote move of a locally edited file is still applied (R-2.17.7): the local
 move source must be the same item (type and identity) but its content may
@@ -1201,7 +1220,55 @@ the delete's own checks keep a folder that holds anything not as synced,
 and the move is then skipped with it), and anything else (a folder kept
 here, unknown content) makes the move wait
 (`TestPlannerPairs_AFileMovedOnOneDriveOntoAFolderItDeletedEndsOnce`,
-`TestRunOnce_AFileMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere`). A file at the destination that
+`TestRunOnce_AFileMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere`).
+A synced folder OneDrive deleted while it moved another synced item onto its
+path, which this computer left where it was, gives way whatever moves there
+(`giveWayFoldersReplacedOnOneDrive`): holding only what was synced, or less
+(`holdsOnlySyncedHere`: every entry below it a synced item at its baseline
+path, a file with its synced hash), it is deleted here and the move waits
+for that delete; SQLite reconciles a folder replaced by a folder as
+unchanged at its path, with a baseline update that would bind the path to
+the moved folder, so the planner plans the delete in its place. Holding
+anything else written here, it is renamed to a conflict copy with all it
+holds (`moveDisplaceConflictCopy`; a folder's conflict copy trims the work
+below it like one between types, `keepBothPaths`) and the move lands, and
+the next pass uploads the copy as a new folder. Such a delete is never
+turned into a folder create to keep it for work below its path
+(`deletesAFolderOneDriveGaveAway`): that work, on OneDrive, belongs to the
+item that took the path. And a local delete of what this computer holds at
+its path is never rebased through a folder's remote move
+(`deletesWhatIsHere`): where OneDrive deleted p and moved x onto it, the
+delete of p/f removes the local p/f, not x/f
+(`TestPlannerPairs_AFolderOneDriveDeletedGivesWayToAnItemItMovedOntoItsPath`,
+`TestRunOnce_AFolderMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere`,
+`TestRunOnce_AFolderWrittenIntoHereThatOneDriveReplacedByAMovedFileIsKeptAsAConflictCopy`).
+Where this computer moved the item OneDrive moved onto a deleted entry's
+path, the item's own row is a local move and names no OneDrive target; the
+item ID places it at that path (`unpairedRemoteMoveOf`), so the moves compose
+and OneDrive's place wins
+(`TestPlannerPairs_AnItemMovedOnBothSidesOntoAnEntryOneDriveDeletedEndsOnce`,
+`TestRunOnce_AFileOfAFolderRenamedHereMovedOnOneDriveOntoAFolderItDeletedEndsOnce`).
+A file moving onto a folder here that is no synced item at its place (one
+made here) is composed with that folder renamed to a conflict copy, which
+the path's reconciliation keeps anyway (`newFolderMeetsAFile`).
+
+SQLite pairs a local move only onto a path no synced item had. A synced
+file gone from its path on both sides that this computer moved onto a path
+another synced item had, vacated by its move or freed by its delete
+(`mv p q, mv z p`, `rm p, mv z p`), was read as new content there, and
+OneDrive's move of it elsewhere as a new file: downloaded at OneDrive's path
+and uploaded at this computer's. Composition now finds it by its filesystem
+identity and synced hash (`movedOntoAnotherItemsPath`; an edited file, or a
+new file on a reused inode, stays new content) and OneDrive's copy by item ID,
+so its moves compose; the upload at its path, the download of it, the
+cleanup of its baseline row and the create planned for the entry at a
+renamed item's old path are dropped (`replacedByAComposedMove`,
+`recreatedSourceCreates`)
+(`TestMovedOntoAnotherItemsPath_NeedsTheIdentityAndTheSyncedContent`,
+`TestPlannerPairs_AFileMovedHereOntoAPathAnotherItemHadAndElsewhereOnOneDriveEndsOnce`,
+`TestRunOnce_AFileMovedHereOntoAFolderDeletedHereAndRenamedOnOneDriveEndsOnce`).
+A download of an item the plan moves on OneDrive is dropped too: the move
+puts OneDrive's copy where this one is. A file at the destination that
 is not the baseline item at all (the node has no local position: another
 program saved a new file at the name after a replacing move took the old one
 into the trash and before its rename, so the rename refused and the move was

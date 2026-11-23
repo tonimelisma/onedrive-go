@@ -1665,9 +1665,9 @@ func TestDropReconciliationOfComposedMoves_HeldMoveKeepsItsBaselineRow(t *testin
 	update := syncdomain.Action{Type: syncdomain.ActionBaselineUpdate, Path: "f/b.txt", ItemID: "item-b"}
 	other := syncdomain.Action{Type: syncdomain.ActionBaselineUpdate, Path: "f/c.txt", ItemID: "item-c"}
 
-	assert.Equal(t, []syncdomain.Action{other}, dropReconciliationOfComposedMoves([]syncdomain.Action{update, other}, held, syncdomain.SyncBidirectional))
+	assert.Equal(t, []syncdomain.Action{other}, dropReconciliationOfComposedMoves([]syncdomain.Action{update, other}, held, nil, syncdomain.SyncBidirectional))
 	assert.Equal(t, []syncdomain.Action{update, other},
-		dropReconciliationOfComposedMoves([]syncdomain.Action{update, other}, held, syncdomain.SyncDownloadOnly),
+		dropReconciliationOfComposedMoves([]syncdomain.Action{update, other}, held, nil, syncdomain.SyncDownloadOnly),
 		"download-only never moves the item on OneDrive")
 }
 
@@ -2751,4 +2751,45 @@ func TestDropCreatesOntoComposedItems_ACreateBelowAnotherItemsFolderWaits(t *tes
 	assert.Equal(t, []string{"x/sub"}, droppedPaths)
 	assert.Contains(t, logs.String(),
 		`msg="create waits for another item to leave the folder path above it" action=folder_create path=x/sub folder=x`)
+}
+
+// Validates: R-2.17.8
+//
+// A synced file gone from its path on both sides is found by its identity at
+// a path whose baseline names another item, only while it also holds its
+// synced content: an edited file, or a new file on a reused inode, stays new
+// content, so a move never carries it over OneDrive's copy of the item.
+func TestMovedOntoAnotherItemsPath_NeedsTheIdentityAndTheSyncedContent(t *testing.T) {
+	t.Parallel()
+
+	const inode = 42
+	entry := &syncdomain.BaselineEntry{
+		ItemID: "item-z", ItemType: syncdomain.ItemTypeFile, LocalHash: "hash-z",
+		LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
+	}
+	gone := &syncdomain.SQLiteComparisonRow{Path: "z", BaselineType: syncdomain.SideFile}
+	cmpByPath := map[string]*syncdomain.SQLiteComparisonRow{
+		"z": gone,
+		"p": {Path: "p", BaselineItemID: "item-p", BaselineType: syncdomain.SideFolder, LocalType: syncdomain.SideFile},
+		"n": {Path: "n", LocalType: syncdomain.SideFile},
+	}
+	local := func(p, hash string) []syncdomain.LocalStateRow {
+		return []syncdomain.LocalStateRow{{
+			Path: p, ItemType: syncdomain.ItemTypeFile, Hash: hash, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
+		}}
+	}
+
+	at, ok := movedOntoAnotherItemsPath(gone, entry, local("p", "hash-z"), cmpByPath)
+	assert.True(t, ok)
+	assert.Equal(t, "p", at, "the file sits at p, the path of the folder p")
+
+	_, ok = movedOntoAnotherItemsPath(gone, entry, local("p", "hash-edited"), cmpByPath)
+	assert.False(t, ok, "edited, the file is not proven the item")
+
+	_, ok = movedOntoAnotherItemsPath(gone, entry, local("n", "hash-z"), cmpByPath)
+	assert.False(t, ok, "at a path no synced item had, SQLite pairs the move itself")
+
+	stillHere := &syncdomain.SQLiteComparisonRow{Path: "z", BaselineType: syncdomain.SideFile, RemoteType: syncdomain.SideFile}
+	_, ok = movedOntoAnotherItemsPath(stillHere, entry, local("p", "hash-z"), cmpByPath)
+	assert.False(t, ok, "OneDrive still holds the item at its path")
 }
