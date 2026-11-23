@@ -56,8 +56,10 @@ func encodePathSegments(path string) string {
 
 // routeIDRefusedChars are the characters a drive or site ID may not hold to
 // go into a route as it is: each would change the request it went into ("/"
-// a segment, "?" the query, "#" the fragment, "%" an escape).
-const routeIDRefusedChars = "/?#%"
+// a segment, "?" the query, "#" the fragment, "%" an escape). The set does
+// not start with "/", so the route-format source checks never read it as a
+// route.
+const routeIDRefusedChars = "?#%/"
 
 // errRouteID is a drive or site ID a route cannot carry: empty, or holding
 // one of routeIDRefusedChars. No ID OneDrive answers is known to be either,
