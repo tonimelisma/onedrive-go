@@ -246,6 +246,7 @@ func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 		"go test -c",
 		"go vet -tags=e2e e2e_full",
 		"go vet -tags=integration",
+		"go vet -tags=race",
 	}, gotSequence)
 
 	e2eCompile := runner.runCommands[cmdE2EFullCompile]

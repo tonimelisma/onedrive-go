@@ -182,6 +182,7 @@ func quickCommandSequence() []string {
 		"go build ./... GOOS=freebsd",
 		"go vet -tags=e2e e2e_full",
 		"go vet -tags=integration",
+		"go vet -tags=race",
 		"go test -short",
 	}
 }
