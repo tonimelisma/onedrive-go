@@ -341,7 +341,10 @@ under its plain name before the first plan, through the no-replace rename,
 and keeps it, warning with both paths, where that name is taken or the
 temporary name does not say which it was (R-2.12.8, sync-engine.md,
 `TestRunOnce_SpellingRenameLeftoverIsPutBackBeforeThePlan`); the rename is
-then planned again from truth. Accepting it
+then planned again from truth. A temporary name that is a second name of the
+file its plain name holds (a link whose source could not be removed) is the
+one leftover the next start removes, since no content goes with it
+(`TestRestoreSpellingRenameLeftovers_RemovesATemporaryNameTheFileWasPutBackBeside`). Accepting it
 is what lets a remote case-only rename apply on macOS's case-insensitive volume.
 A failure of either step through the temporary sibling, the second finding the
 new spelling taken included, is the rename's own failure, not a superseded

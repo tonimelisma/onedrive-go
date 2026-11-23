@@ -3,10 +3,13 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -228,6 +231,12 @@ func restoreSpellingRenameLeftover(tree *synctree.Root, leftover spellingRenameL
 	match := namekey.Find(entries, filepath.Base(leftover.plainPath), func(entry *fs.DirEntry) (string, bool) {
 		return (*entry).Name(), true
 	})
+	if match.Found() {
+		holder := filepath.Join(filepath.Dir(leftover.plainPath), entries[match.Index].Name())
+		if removeLinkedSpellingLeftover(tree, leftover, holder, logger) {
+			return
+		}
+	}
 	if match.Found() || match.Ambiguous {
 		logger.Warn(keptTaken, attrs...)
 		return
@@ -240,11 +249,65 @@ func restoreSpellingRenameLeftover(tree *synctree.Root, leftover spellingRenameL
 			attrs...)
 	case errors.Is(err, synctree.ErrSourceNotRemoved):
 		logger.Warn("Put back "+leftover.plainPath+", but could not remove the temporary name an interrupted "+
-			"rename had left it under", append(attrs, slog.Any("error", err))...)
+			"rename had left it under; the next sync removes that name when it still holds the same file",
+			append(attrs, slog.Any("error", err))...)
 	case errors.Is(err, synctree.ErrTargetExists):
 		logger.Warn(keptTaken, attrs...)
 	default:
 		logger.Warn("Kept "+leftover.path+": an interrupted rename left it under this temporary name, and "+
 			"putting it back as "+leftover.plainPath+" failed", append(attrs, slog.Any("error", err))...)
 	}
+}
+
+// removeLinkedSpellingLeftover removes the temporary name of a leftover whose
+// plain name, held at holder, is the very same file: a second name of one
+// inode, which is what a put-back leaves where the system refuses the
+// no-replace flag, links the file to its plain name and then cannot remove
+// the temporary one (synctree.ErrSourceNotRemoved). Removing that name
+// removes no content, since holder keeps the file. It reports whether it
+// removed the name; a copy, a folder, a different file, or a removal that
+// fails is left where it is for the caller to report, never deleted.
+//
+// The removal is bound to the inode it checks: the leftover is opened once
+// and checked through that descriptor (RemoveVerifiedRegularFile) to be the
+// file holder names at that moment and to have another name besides, so a
+// holder replaced after the listing never makes the leftover's file lose its
+// last name.
+func removeLinkedSpellingLeftover(tree *synctree.Root, leftover spellingRenameLeftover, holder string, logger *slog.Logger) bool {
+	leftoverInfo, err := tree.Lstat(leftover.path)
+	if err != nil || !leftoverInfo.Mode().IsRegular() {
+		return false
+	}
+	holderInfo, err := tree.Lstat(holder)
+	if err != nil || !synctree.SameFile(leftoverInfo, holderInfo) {
+		return false
+	}
+
+	err = tree.RemoveVerifiedRegularFile(leftover.path, func(_ *os.File, info os.FileInfo) error {
+		current, lstatErr := tree.Lstat(holder)
+		if lstatErr != nil {
+			return fmt.Errorf("checking %s: %w", holder, lstatErr)
+		}
+		if !synctree.SameFile(info, current) || !hasAnotherName(info) {
+			return fmt.Errorf("%s no longer holds the same file", holder)
+		}
+
+		return nil
+	})
+	if err != nil {
+		logger.Debug("could not remove the temporary name of a file already put back",
+			slog.String("leftover", leftover.path), slog.String("path", holder), slog.Any("error", err))
+		return false
+	}
+	logger.Info("removed the temporary name "+leftover.path+", which an interrupted rename had left beside "+holder,
+		slog.String("leftover", leftover.path), slog.String("path", holder))
+
+	return true
+}
+
+// hasAnotherName reports that the file info describes has more than one
+// name, so removing one of them removes no content.
+func hasAnotherName(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && stat.Nlink > 1
 }
