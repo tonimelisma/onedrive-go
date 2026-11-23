@@ -8,48 +8,48 @@ In flight: W57 has branch `test/crash-model-replacing-move` at `c6e273a6` (built
 
 ## Data safety
 - [x] W101 (in progress, not queued here) — A rebind after a mount vanished deletes no unmounted disk's content unconfirmed — being fixed now as its own PR, ahead of the refactor. — built in #954
-- [x] W44 — An entry left under the temporary spelling name is finished or made visible at the next start — touches start-up, which E2/E7/E10 reshape. — built in #974 (rider 1, the old name an unremovable source leaves, not built: proving it needs a run)
+- [x] W44 — An entry left under the temporary spelling name is finished or made visible at the next start — touches start-up, which E2/E7/E10 reshape. — built in #974; rider 1 (a temporary name that is a second name of the put-back file) and the plain local move's leftover old name built in #979
 - [x] W32 — A shortcut child's trash is reachable, purged after retention, and says why a released file is there — shortcut release code moves in the split. — built in #974
 - [x] W67 — A replacing local move that finds a new file at the freed name still moves — planner composition; do it after F4, against the Go `decide`. — built in #974
 
 ## Correctness
 - [x] W20 — The account identity check never fails or stalls a command — in flight (worktree); ship when a slot is free. — built in #959
 - [x] W34 — `status --perf` counts a committed transaction once — in flight (worktree). — built in #959
-- [x] W6 — Control client: one probe, honest errors, one runtime per sync — CLI and control-plane; not refactor. — built in #975 (still open: refusing a one-shot sync before its banner when the owner does not answer; flushing the shared-target clients' token cache after a rename)
-- [x] W13 — Config writers: one write per expired pause, a context, portable locks — after W8 (in R1). — built in #975 (still open: portable locks; no FUSE filesystem here to probe flock on)
-- W15 — A live test loses a create's answer on the wire — product handling of a lost answer; not refactor. — still open: needs fault injection in the live harness and a live run, which only CI can make
-- W22 — An account email change reaches everything that names the old email — cross-package feature. — partly built in #975 (a default display name follows the address; an unrecorded shared store moves when one account had the address); still open: a shortcut child's store moving with its parent, the watch checking the catalog and hearing of the change, a second config file caught up through former emails
+- [x] W6 — Control client: one probe, honest errors, one runtime per sync — CLI and control-plane; not refactor. — built in #975; refusing a one-shot sync beside an owner that does not answer, and the token-cache flush after a rename, built in #979
+- [x] W13 — Config writers: one write per expired pause, a context, portable locks — after W8 (in R1). — built in #975; on a filesystem without flock a config change is refused (never written unlocked) in #979; a lock-file fallback for such homes is not built
+- [x] W15 — A live test loses a create's answer on the wire — product handling of a lost answer; not refactor. — built in #979 as a nightly e2e_full test (a TLS proxy drops one create's answer); proved only by the nightly live run
+- [x] W22 — An account email change reaches everything that names the old email — cross-package feature. — partly built in #975; a shortcut child's store, trash folders and upload sessions moving with their parent, a running watch hearing of the change, and a second config file caught up through former emails built in #979
 - [x] W25 — The status model has one field per fact — CLI status; not refactor. — built in #975
-- [x] W33 — An upload sync gives up drops its session record and cancels the server session — executor code that moves in the split. — built in #975 (still open: the new-file, local-move and local-delete variants and the clock rider)
+- [x] W33 — An upload sync gives up drops its session record and cancels the server session — executor code that moves in the split. — built in #975; the new-file, local-move and local-delete variants and the clock rider built in #979
 - [x] W39 — A shortcut the user's filters exclude leaves no folder and no work behind — sync behaviour; after the split. — built in #975
 - [x] W40 — A sync whose output cannot be written says so and exits non-zero, in text and in JSON — CLI output. — built in #975
 - [x] W52 — A subfolder moved onto its moved parent's old path on this computer converges — move planner; after F4. — closed without code: owner's choice on the comparison model; kept today's behaviour, which drops the cycle and loses nothing
 - [x] W53 — A folder moved into its own former child converges — move planner; after F4. — built in #975
 - [x] W60 — The engine treats every failure to reach OneDrive as one family — classifier change; after the split. — built in #975
 - [x] W63 — A watch user can confirm held deletes — needs a DoR choice; watch loop is rebuilt in E5. — built in #975 (a confirmation names the held set; a stale one is refused)
-- [x] W64 — A local read that times out is retried as busy — classifier; after the split. — built in #975 (rider, a stall whose local side blocks, still open)
+- [x] W64 — A local read that times out is retried as busy — classifier; after the split. — built in #975; the rider (a stall of the local side) built in #979: the watchdog names the side, but a blocked file call still holds its worker
 - [x] W68 — A file moved out of a subfolder into the folder re-made at the old path converges — move planner; after F4. — built in #975 (the vacatingFolder rider shapes not checked)
-- [x] W73 — A name the path route does not resolve is found through its parent's listing in every command — uses G2's `namekey.Find`; after R2. — built in #975 (rider, the CLI fake graph's root ID, still open)
+- [x] W73 — A name the path route does not resolve is found through its parent's listing in every command — uses G2's `namekey.Find`; after R2. — built in #975; the rider (the CLI fake graph's root ID) built in #979
 - [x] W80 — A folder moved into a new folder at its own path converges — move planner; after F4. — built in #975
 - [x] W81 — A publication's item type has one rule — sync code that moves in the split. — built in #975
 - [x] W91 — The sync summary counts a deleted folder as a folder, not as a file — summary text and counts. — built in #975
-- W92 — A folder made below a path whose old holder has not left waits for it — planner dependencies; after F4. — still open: a create below a vacating path cannot yet be told from the moved item's content after the local rebase
+- [x] W92 — A folder made below a path whose old holder has not left waits for it — planner dependencies; after F4. — built in #979 for the OneDrive side (a create waits below a folder another synced item holds); the local side keeps its designed carry
 - [x] W95 — A change list that leads back is refused and recovered wherever it is read — observer code; after G7 and the split. — built in #975 (no new sentinel, per the earlier decision; a shared folder's looping change list still waits for the periodic full refresh)
-- W96 — Every store wait after a run's context ended goes through one helper and the stop's deadline — conflicts with E5's watch-loop edits; after R8. — partly built in #975 (one helper under the stop's deadline, held by a source check); still open: a completion on the live context at the cancel, and executor writes on a live worker context
+- [x] W96 — Every store wait after a run's context ended goes through one helper and the stop's deadline — conflicts with E5's watch-loop edits; after R8. — partly built in #975; a completion at the cancel and the workers' writes share the stop's deadline in #979
 - [x] W100 — A refused stderr line of the sync console and of main's last lines is recorded — CLI. — built in #975
-- [x] W105 — Each account at a shared address has its own view, status row and selector — CLI and config feature. — built in #975 (status --account and drive search --account still filter by email)
+- [x] W105 — Each account at a shared address has its own view, status row and selector — CLI and config feature. — built in #975; status, drive search, shared and drive add take an account ID for --account in #979
 - [x] W106 — A panic on main's goroutine completes the performance summary; a failed watch start keeps a keepalive panic — CLI and panic boundaries. — built in #975
 - [x] W109 — A folder create's empty answer and sync's 409s read the one name before listing the folder — executor; after R2. — built in #975
 - [x] W112 — Creates at a waiting item's own landing below a folder moved here wait until it has left — move planner; after F4. — built in #975
-- W113 — A folder moved into different new folders at its own path on each side converges — move planner; after F4. — still open: the stall looks to be outside move composition and needs a run to find
-- W114 — Three folders moved into each other's new folders converge — move planner; after F4. — still open: depends on W113
+- [x] W113 — A folder moved into different new folders at its own path on each side converges — move planner; after F4. — built in #979
+- [x] W114 — Three folders moved into each other's new folders converge — move planner; after F4. — built in #979
 
 ## Tests and tooling
 - [x] W57 — The crash model draws the crash point of the replacing move — built and unreviewed; review and ship when a slot is free. — built in #959
 - [x] A22 — The nightly issue reads each red job's log, and a go test alarm keys only the test it names — CI only. — built in #976 (a job log's read failure now names its HTTP status; the cause of the unreadable log is unknown until the next red night)
-- W45 — The chaos model runs in virtual time — after F5/F7 (R10), which give the one clock. — still open: the chaos model on virtual time needs runs of the chaos seeds to build and prove
-- W46 — Jitter comes from a source the caller passes; a chaos seed replays identically — the jitter source lands in F5; the replay assertion is left, after W45. — still open: a jitter source passed through every retry and backoff caller is too wide to build without running the tests
-- [x] W61 — The tree names no fixture folder and no live item ID — test hygiene. — built in #976 (the reference docs quote only invented IDs, held by a test; still open: removing the fixture defaults, which needs the CI fixtures secret checked by the owner)
+- [x] W45 — The chaos model runs in virtual time — after F5/F7 (R10), which give the one clock. — built in #979: every one-shot model seed runs in a synctest bubble
+- [x] W46 — Jitter comes from a source the caller passes; a chaos seed replays identically — the jitter source lands in F5; the replay assertion is left, after W45. — built in #979: retry jitter comes from a source the caller passes; a seed replays usually, not always (the model's real filesystem reuses inodes), so R-6.10.34 stays planned
+- [x] W61 — The tree names no fixture folder and no live item ID — test hygiene. — built in #976 (the reference docs quote only invented IDs, held by a test); still open: removing the fixture defaults, which needs the owner to check the CI fixtures secret
 - [x] W71 — An e2e assertion on what a sync did reads every attempt of its converge loop — e2e helper. — built in #976
 - [x] W72 — A seeded model of move steps holds that every plan converges — after F4 and the simulation rows. — closed without code: the exhaustive check of short histories on both sides (#952) enumerates the move steps a seeded model would draw
 - [x] W74 — The crash model checks every empty file of a converged tree against a declared allowance — after W57. — built in #976
@@ -59,14 +59,14 @@ In flight: W57 has branch `test/crash-model-replacing-move` at `c6e273a6` (built
 - [x] W83 — Test masks cover a sharer's name and any address — test hygiene. — built in #976
 - [x] W84 — The test environment prints no account path — test hygiene. — built in #976
 - [x] W85 — The e2e recorders take the roles they redact with — e2e helper. — built in #976
-- W86 — The print rule follows what a suite function returns — devtool check. — still open: following function results changes which live sites the print rule flags, which needs the rule run while the list shrinks
+- [x] W86 — The print rule follows what a suite function returns — devtool check. — built in #979: the print rule follows text results of suite functions; returned structs and methods are not followed
 - [x] W89 — The multisync panic-boundary tests that rerun the test binary run side by side — test speed. — built in #976
 - [x] W90 — Two sync tests that take 8 to 25 seconds are profiled and made cheap — test speed; after the split. — closed without code: the row asks for profiling, which the closing rules allow only when a gate fails, and none did
 - [x] W94 — Lint reads every Go file, also one built only on another platform or with the race tag — lint config. — built in #976
 - [x] W102 — devtool links no product package, also through testutil — devtool. — built in #976
 - [x] W103 — Every repository-rule walk of devtool skips the same folders — devtool. — built in #976
 - [x] W104 — The benchmark's retries wait on an injected clock and read the CLI's server-error line — benchmark tooling. — built in #976
-- [x] W115 — Every run the exhaustive planner check records as broken has a row — after F3/F4. — built in #976 (each broken run's shape is written into the planning design; the behaviours it names stay open)
+- [x] W115 — Every run the exhaustive planner check records as broken has a row — after F3/F4. — built in #976; in #979 shapes 5, 6, 8 and 9 and most of 1, 4, 7 and 11 are fixed (several were faults of the check's own model), the check counts a duplicated file as broken (shape 12), and the shapes section lists what remains
 
 ## Wording and lint
 - [x] W26 — Human units are rendered by one package — wording. — built in #977
@@ -122,7 +122,7 @@ In flight: W57 has branch `test/crash-model-replacing-move` at `c6e273a6` (built
 - [x] R7-7: `Engine.trash` and `Engine.sessionStore` remain beside the housekeeper's copies (the shortcut release and `Close` read them). — built in #977
 - [x] R9-1: `DecisionState.Valid` (`internal/sync/syncdomain/domain_decide.go`) is checked only by tests (planner helpers, matrix, planner model); a production pass decides an invalid state like any other. Fix: check it in `queryPlannerRowsTx` when the engine asserts invariants. — built in #977
 - [x] R9-2: `DecisionState.Valid` rebuilds its 22 rule closures on every call (`decisionStateRules`), so `TestDecide_EveryValidStateHasTheTableProperties` takes 25-40 s; fix: evaluate the rules without allocating per call. — built in #977
-- R9-3: `SQLiteComparisonRow` still carries `BaselinePresent`/`LocalPresent`/`RemotePresent` and `ItemType`, which the side types now give (`domain_sqlite_rows.go`); the planner could read the side types and the query drop those columns. — still open: the side types' equivalence on every row is not proven
+- [x] R9-3: `SQLiteComparisonRow` still carries `BaselinePresent`/`LocalPresent`/`RemotePresent` and `ItemType`, which the side types now give (`domain_sqlite_rows.go`); the planner could read the side types and the query drop those columns. — built in #979: the side types give presence and item type, proved over every row the query can produce
 - [x] R9-4: C3 not built in R9 (see `reports/R9-report.md`): the foreign-key form is decided there; the write-order rework is in engine runtime files F1-F4 never touched. — closed: already done on main before this program's last PRs
 - [x] R7-8: hook reads in Engine methods still go to the live `e.hooks` rather than the flow's start-of-run copy: `runClock`, `newSocketIOWakeSource` (engine_hooks.go), `buildLocalObserver` (engine.go), `waitFor`/`oneShotPasses` (engine_run_once.go), `workerPoolSize` (engine_results.go) and the owner-check factory in `beginRun`; the config reads (account, mount root, scan coverage) now read `flow.cfg`. Production hooks are zero, so only a test that sets a hook after a flow exists sees the split. — built in #977
 - [x] F3-1: `engine_watch_drain.go` and `syncsched/scheduler_test.go` are not gofmt-clean (trailing blank line; found by both PR 3 builders). — closed: already done on main before this program's last PRs
