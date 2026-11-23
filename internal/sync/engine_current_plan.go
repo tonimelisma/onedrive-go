@@ -604,12 +604,9 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
-	var approved []syncdomain.HeldDelete
-	if opts.ConfirmDeletes {
-		approved, err = flow.deps.store.ListHeldDeletes(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("sync: reading the held deletes to confirm: %w", err)
-		}
+	approved, err := flow.approvedHeldDeletes(ctx, opts)
+	if err != nil {
+		return nil, err
 	}
 	recentDeletes, err := flow.deps.store.RecentUnconfirmedDeletes(ctx, flow.deps.now().Add(-syncdomain.DeleteSafetyWindow))
 	if err != nil {

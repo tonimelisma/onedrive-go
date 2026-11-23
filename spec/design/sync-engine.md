@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/permissions_rdonly_bsd.go, internal/sync/permissions_rdonly_linux.go, internal/sync/report_left_work.go, internal/sync/engine_shortcut_alias_mutation.go, internal/sync/syncshortcut/shortcut_root_lifecycle.go, internal/sync/syncshortcut/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go, internal/sync/engine_shadow_plan.go
 
-Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.12.8 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified], R-6.3.8 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.10.29 [verified], R-2.4.18 [verified]
+Implements: R-6.2.17 [verified], R-2.1 [verified], R-2.1.7 [verified], R-2.12.8 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified], R-6.3.8 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.10.29 [verified], R-2.4.18 [verified]
 
 ## Overview
 
@@ -1142,6 +1142,39 @@ suppression separately. Signature/fingerprint helpers belong in that watch-log
 boundary too, but the fingerprint itself must stay raw-only and must not
 depend on the current human-readable breakdown wording. The store does not own
 grouped watch-condition projections or watch-specific presentation.
+
+### Confirming Held Deletes in a Running Watch
+
+A user confirms held deletes (R-6.2.5) without stopping the watch (R-6.2.17).
+A confirmation names the held set the user was shown: its count and a token
+derived from exactly those deletes (`syncdomain.ConfirmationOf`, a digest of
+each delete's side, path, item ID, type and reason, independent of order),
+written `<count>-<token>`. `Engine.ConfirmHeldDeletes` carries it, from any
+goroutine, over the engine's unbuffered `heldDeleteConfirms` channel to the
+running watch loop, which reads that channel only while running
+(`watchInputHeldDeleteConfirm`): before the watch runs steadily, or once it
+drains, nobody takes it and the caller's deadline answers
+`ErrConfirmationNotTaken`, never a confirmation kept for later.
+
+The loop checks the confirmation against the held set the store records now
+(`acceptHeldDeleteConfirmation`). Only exactly that set is taken: a set that
+changed since it was shown (a delete held or released after the user looked)
+is `ErrHeldDeletesChanged`, and a drive holding none is `ErrNoHeldDeletes`;
+neither keeps anything. A taken set is kept on the flow
+(`confirmedHeldDeletes`, owned by the loop goroutine) and a replan is asked
+for; the next plan takes it once (`approvedHeldDeletes`) as the approved set
+of the delete-safety hold, exactly as a one-shot `--confirm-deletes` approves
+the recorded set, so deletes held after the confirmation are judged by the
+hold again. A replan that fails before planning leaves the confirmation for
+the next one; a plan that fails after taking it has released nothing, and
+the deletes stay held until the user confirms again.
+
+| Behavior | Evidence |
+| --- | --- |
+| The next plan releases exactly the confirmed set; deletes made after the user looked are held again; a confirmation of a set no longer held is refused and releases nothing. | `TestHeldDeleteConfirmation_ReleasesOnlyTheSetItNames` |
+| The watch loop takes only the held set recorded now, asks for a replan only then, and the plan after the one that released it releases nothing. | `TestWatchHeldDeleteConfirm_AcceptsOnlyTheHeldSet` |
+| A confirmation no running watch takes is refused. | `TestEngine_ConfirmHeldDeletes_WithoutARunningWatchIsNotTaken` |
+| A confirmation names exactly one held set, whatever the order of its deletes, and its written form reads back as itself. | `TestConfirmationOf_NamesExactlyTheHeldSet` |
 
 ## Drive-Root And Mount-Root Runtime Shapes
 

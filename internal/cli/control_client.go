@@ -29,6 +29,11 @@ const (
 	// reload_in_progress instead of giving up first and guessing.
 	controlReloadClientTimeout = synccontrol.LoopAcceptTimeout + synccontrol.ReloadAnswerTimeout +
 		synccontrol.ReplyWriteTimeout + controlReloadClientMargin
+	// controlConfirmClientTimeout outlasts every wait the watch owner may
+	// spend before it answers a confirmation of held deletes: its loop taking
+	// the request and naming the drive, then the drive's own loop taking it.
+	controlConfirmClientTimeout = 2*synccontrol.LoopAcceptTimeout + synccontrol.ConfirmTakeTimeout +
+		synccontrol.ReplyWriteTimeout + controlReloadClientMargin
 )
 
 type controlOwnerState string
@@ -239,6 +244,19 @@ func (c *controlSocketClient) reload(ctx context.Context) (synccontrol.Status, e
 	}
 
 	return response.Status, nil
+}
+
+// confirmDeletes asks a watch owner to apply the held set request names. A
+// set the drive no longer holds, a drive that holds none and a busy owner are
+// errors (controlDaemonError); nothing is confirmed then.
+func (c *controlSocketClient) confirmDeletes(ctx context.Context, request synccontrol.ConfirmDeletesRequest) error {
+	payload, encodeErr := encodeControlRequest(request)
+	if encodeErr != nil {
+		return encodeErr
+	}
+
+	var response synccontrol.MutationResponse
+	return c.postJSONInto(ctx, synccontrol.PathConfirmDeletes, payload, controlConfirmClientTimeout, &response)
 }
 
 func (c *controlSocketClient) getJSON(ctx context.Context, path string, timeout time.Duration, target any) error {

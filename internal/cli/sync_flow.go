@@ -23,6 +23,9 @@ type syncCommandOptions struct {
 	DryRun         *bool
 	FullReconcile  bool
 	ConfirmDeletes bool
+	// HeldSet names the held set ConfirmDeletes confirms to a running watch
+	// (confirmDeletesToRunningWatch); empty without one.
+	HeldSet string
 }
 
 type syncWatchRunner func(
@@ -102,9 +105,17 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	// Refuse before announcing: "Checking (dry run) ~/OneDrive..." followed
 	// by "another onedrive-go sync is already running" read as a run that
 	// started and then broke.
-	if probe, probeErr := probeControlOwner(ctx); probeErr == nil &&
+	probe, probeErr := probeControlOwner(ctx)
+	if probeErr == nil && opts.ConfirmDeletes && probe.state == controlOwnerStateWatchOwner {
+		// The watch keeps running and takes the confirmation itself.
+		return confirmDeletesToRunningWatch(ctx, cc, probe.client, drives, opts.HeldSet)
+	}
+	if probeErr == nil &&
 		(probe.state == controlOwnerStateWatchOwner || probe.state == controlOwnerStateOneShotOwner) {
 		return &multisync.ControlSocketInUseError{Path: controlSocketPath}
+	}
+	if opts.HeldSet != "" {
+		return errHeldSetWithoutWatch
 	}
 
 	console := newSyncConsole(cc, false)

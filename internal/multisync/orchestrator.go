@@ -22,6 +22,10 @@ type engineRunner interface {
 	RunWatch(ctx context.Context, mode syncdomain.SyncMode, opts syncengine.WatchOptions) error
 	Close(ctx context.Context) error
 	ShortcutChildAckHandle() shortcutChildAckHandle
+	// ConfirmHeldDeletes hands a user's confirmation of held deletes to the
+	// engine's running watch (syncengine.Engine.ConfirmHeldDeletes). It is
+	// safe to call from any goroutine.
+	ConfirmHeldDeletes(ctx context.Context, confirmation syncdomain.HeldDeleteConfirmation) error
 }
 
 type engineRunnerAdapter struct {
@@ -56,6 +60,11 @@ func (a engineRunnerAdapter) Close(ctx context.Context) error {
 
 func (a engineRunnerAdapter) ShortcutChildAckHandle() shortcutChildAckHandle {
 	return a.engine.ShortcutChildAckHandle()
+}
+
+func (a engineRunnerAdapter) ConfirmHeldDeletes(ctx context.Context, confirmation syncdomain.HeldDeleteConfirmation) error {
+	//nolint:wrapcheck // The engine error already carries its own context; see the adapter comment.
+	return a.engine.ConfirmHeldDeletes(ctx, confirmation)
 }
 
 func shortcutParentAckHandleForMount(mount *mountSpec, engine engineRunner) shortcutChildAckHandle {

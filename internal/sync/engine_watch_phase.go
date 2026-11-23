@@ -147,6 +147,7 @@ const (
 	watchInputHeldTimers // trial, retry and admit timers
 	watchInputBootstrapLog
 	watchInputCancel
+	watchInputHeldDeleteConfirm // a user's confirmation of held deletes
 )
 
 // watchInputsEnabled says which inputs each phase reads; it replaces turning
@@ -162,7 +163,7 @@ var watchInputsEnabled = map[watchPhase][]watchInput{ //nolint:gochecknoglobals 
 		watchInputDispatch, watchInputReplanReady, watchInputCompletions,
 		watchInputObservations, watchInputRefreshTick, watchInputRefreshResults,
 		watchInputMaintenance, watchInputObserverErrs, watchInputHeldTimers,
-		watchInputCancel,
+		watchInputCancel, watchInputHeldDeleteConfirm,
 	},
 	watchPhaseDraining: {
 		watchInputCompletions, watchInputRefreshResults, watchInputObserverErrs,

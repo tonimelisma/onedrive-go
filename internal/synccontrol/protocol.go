@@ -20,6 +20,9 @@ const (
 	PathStop        = "/v1/stop"
 	PathPerfStatus  = "/v1/perf"
 	PathPerfCapture = "/v1/perf/capture"
+	// PathConfirmDeletes confirms one drive's held deletes to a running
+	// watch (ConfirmDeletesRequest).
+	PathConfirmDeletes = "/v1/confirm-deletes"
 )
 
 type OwnerMode string
@@ -44,6 +47,11 @@ const (
 	ReloadAnswerTimeout = 60 * time.Second
 	// ReplyWriteTimeout bounds writing one answer once it is ready.
 	ReplyWriteTimeout = 5 * time.Second
+	// ConfirmTakeTimeout is how long the watch owner waits for the drive's
+	// own sync loop to take a confirmation of held deletes, after its control
+	// loop took the request. A confirmation the drive's loop did not take in
+	// time is answered ErrorBusy and confirmed nothing.
+	ConfirmTakeTimeout = 5 * time.Second
 )
 
 type Status string
@@ -57,6 +65,9 @@ const (
 	// still runs to the end; a failure is logged by the owner.
 	StatusReloadInProgress Status = "reload_in_progress"
 	StatusStopping         Status = "stopping"
+	// StatusDeletesConfirmed means the drive's running sync took the
+	// confirmation: its next pass applies exactly the confirmed held set.
+	StatusDeletesConfirmed Status = "deletes_confirmed"
 )
 
 type ErrorCode string
@@ -73,7 +84,25 @@ const (
 	// ErrorBusy means the watch owner's control loop did not take the
 	// command within LoopAcceptTimeout (HTTP 503). Nothing was changed.
 	ErrorBusy ErrorCode = "busy"
+	// ErrorHeldDeletesChanged means a confirmation named a held set other
+	// than the one the drive holds now (HTTP 409). Nothing was confirmed.
+	ErrorHeldDeletesChanged ErrorCode = "held_deletes_changed"
+	// ErrorNoHeldDeletes means the drive holds no deletes (HTTP 409).
+	ErrorNoHeldDeletes ErrorCode = "no_held_deletes"
+	// ErrorUnknownDrive means the running watch does not sync the drive a
+	// request named (HTTP 404).
+	ErrorUnknownDrive ErrorCode = "unknown_drive"
 )
+
+// ConfirmDeletesRequest confirms the held deletes of one drive the running
+// watch syncs. Count and Token name the held set the user was shown
+// (syncdomain.HeldDeleteConfirmation); the watch applies the confirmation
+// only while that drive still holds exactly that set.
+type ConfirmDeletesRequest struct {
+	Drive string `json:"drive"`
+	Count int    `json:"count"`
+	Token string `json:"token"`
+}
 
 type StatusResponse struct {
 	OwnerMode               OwnerMode                   `json:"owner_mode"`

@@ -52,22 +52,24 @@ const (
 // defaultControlTimeouts; tests shorten them so a deadline is reached in
 // milliseconds instead of seconds.
 type controlTimeouts struct {
-	header time.Duration // reading a request's headers
-	read   time.Duration // reading a whole request, body included
-	idle   time.Duration // a keep-alive connection with no request
-	accept time.Duration // the watch loop taking a command
-	reload time.Duration // a reload the loop took finishing
-	write  time.Duration // writing one answer
+	header  time.Duration // reading a request's headers
+	read    time.Duration // reading a whole request, body included
+	idle    time.Duration // a keep-alive connection with no request
+	accept  time.Duration // the watch loop taking a command
+	reload  time.Duration // a reload the loop took finishing
+	confirm time.Duration // a drive's sync loop taking a confirmation of held deletes
+	write   time.Duration // writing one answer
 }
 
 func defaultControlTimeouts() controlTimeouts {
 	return controlTimeouts{
-		header: controlHeaderTimeout,
-		read:   controlReadTimeout,
-		idle:   controlIdleTimeout,
-		accept: synccontrol.LoopAcceptTimeout,
-		reload: synccontrol.ReloadAnswerTimeout,
-		write:  synccontrol.ReplyWriteTimeout,
+		header:  controlHeaderTimeout,
+		read:    controlReadTimeout,
+		idle:    controlIdleTimeout,
+		accept:  synccontrol.LoopAcceptTimeout,
+		reload:  synccontrol.ReloadAnswerTimeout,
+		confirm: synccontrol.ConfirmTakeTimeout,
+		write:   synccontrol.ReplyWriteTimeout,
 	}
 }
 
@@ -90,11 +92,14 @@ const (
 	controlCommandStatus controlCommandKind = iota
 	controlCommandReload
 	controlCommandStop
+	controlCommandConfirmDeletes
 )
 
 type controlCommand struct {
-	kind     controlCommandKind
-	response chan controlResponse
+	kind controlCommandKind
+	// confirmDeletes is a confirmDeletes command's request.
+	confirmDeletes synccontrol.ConfirmDeletesRequest
+	response       chan controlResponse
 }
 
 type controlResponse struct {
@@ -102,6 +107,11 @@ type controlResponse struct {
 	Code       synccontrol.ErrorCode
 	Body       any
 	Err        error
+	// confirmTarget is the engine a confirmDeletes command names, which the
+	// handler hands the confirmation to off the watch loop
+	// (confirmHeldDeletes), so a drive's busy sync loop never holds up the
+	// loop that serves every drive.
+	confirmTarget engineRunner
 }
 
 type ControlSocketInUseError struct {
@@ -450,7 +460,7 @@ func (o *Orchestrator) handleControlRequest(
 
 	timeouts := o.controlTimeouts
 	answerWait := controlAnswerWait(cmd.kind, timeouts)
-	extendControlWriteDeadline(w, timeouts.accept+answerWait+timeouts.write, o.logger)
+	extendControlWriteDeadline(w, timeouts.accept+answerWait+confirmTakeWait(cmd.kind, timeouts)+timeouts.write, o.logger)
 
 	// Two bounded waits with different answers: a command the loop never took
 	// changed nothing (busy); a command it took is carried out whether or not
@@ -473,6 +483,9 @@ func (o *Orchestrator) handleControlRequest(
 	defer answerTimer.Stop()
 	select {
 	case response := <-cmd.response:
+		if response.confirmTarget != nil {
+			response = confirmHeldDeletes(r.Context(), response.confirmTarget, cmd.confirmDeletes, timeouts.confirm)
+		}
 		writeControlResponse(w, response)
 	case <-answerTimer.C:
 		writeControlResponse(w, controlUnansweredResponse(cmd.kind))
@@ -490,6 +503,51 @@ func controlAnswerWait(kind controlCommandKind, timeouts controlTimeouts) time.D
 	}
 
 	return timeouts.accept
+}
+
+// confirmTakeWait is the extra time a confirmDeletes command may spend
+// after the watch loop answered it: the drive's own sync loop taking the
+// confirmation (confirmHeldDeletes).
+func confirmTakeWait(kind controlCommandKind, timeouts controlTimeouts) time.Duration {
+	if kind == controlCommandConfirmDeletes {
+		return timeouts.confirm
+	}
+
+	return 0
+}
+
+// confirmHeldDeletes hands request's confirmation to engine and answers with
+// what the drive's running sync decided. A confirmation of a set the drive no
+// longer holds is refused and confirms nothing (R-6.2.17).
+func confirmHeldDeletes(
+	ctx context.Context,
+	engine engineRunner,
+	request synccontrol.ConfirmDeletesRequest,
+	takeWait time.Duration,
+) controlResponse {
+	confirmCtx, cancel := context.WithTimeout(ctx, takeWait)
+	defer cancel()
+
+	err := engine.ConfirmHeldDeletes(confirmCtx, syncdomain.HeldDeleteConfirmation{Count: request.Count, Token: request.Token})
+	switch {
+	case err == nil:
+		return controlResponse{Body: synccontrol.MutationResponse{
+			Status:  synccontrol.StatusDeletesConfirmed,
+			Message: fmt.Sprintf("the next pass applies the %d confirmed deletes", request.Count),
+		}}
+	case errors.Is(err, syncengine.ErrHeldDeletesChanged):
+		return controlResponse{StatusCode: http.StatusConflict, Code: synccontrol.ErrorHeldDeletesChanged, Err: err}
+	case errors.Is(err, syncengine.ErrNoHeldDeletes):
+		return controlResponse{StatusCode: http.StatusConflict, Code: synccontrol.ErrorNoHeldDeletes, Err: err}
+	case errors.Is(err, syncengine.ErrConfirmationNotTaken):
+		return controlBusyResponse()
+	default:
+		return controlResponse{
+			StatusCode: http.StatusInternalServerError,
+			Code:       synccontrol.ErrorInternal,
+			Err:        fmt.Errorf("confirm held deletes: %w", err),
+		}
+	}
 }
 
 func controlBusyResponse() controlResponse {
@@ -605,9 +663,28 @@ func parseRootControlCommand(r *http.Request) (controlCommand, bool) {
 		return controlCommand{kind: controlCommandReload}, true
 	case r.Method == http.MethodPost && r.URL.Path == synccontrol.PathStop:
 		return controlCommand{kind: controlCommandStop}, true
+	case r.Method == http.MethodPost && r.URL.Path == synccontrol.PathConfirmDeletes:
+		return parseConfirmDeletesCommand(r)
 	default:
 		return controlCommand{}, false
 	}
+}
+
+// parseConfirmDeletesCommand reads a confirmDeletes request's body. A body
+// that does not name a drive and a held set is malformed: a confirmation
+// must say what it confirms.
+func parseConfirmDeletesCommand(r *http.Request) (controlCommand, bool) {
+	var request synccontrol.ConfirmDeletesRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxControlRequestBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return controlCommand{}, false
+	}
+	if request.Drive == "" || request.Count < 1 || request.Token == "" {
+		return controlCommand{}, false
+	}
+
+	return controlCommand{kind: controlCommandConfirmDeletes, confirmDeletes: request}, true
 }
 
 func writeControlResponse(w http.ResponseWriter, response controlResponse) {
@@ -778,9 +855,27 @@ func (o *Orchestrator) handleControlCommand(
 	case controlCommandStop:
 		cmd.response <- controlResponse{Body: synccontrol.MutationResponse{Status: synccontrol.StatusStopping}}
 		return true, nil
+	case controlCommandConfirmDeletes:
+		cmd.response <- confirmTargetResponse(runners, mountID(cmd.confirmDeletes.Drive))
 	}
 
 	return false, nil
+}
+
+// confirmTargetResponse names the engine of the drive a confirmation is for,
+// which the handler then confirms to; a drive the watch does not sync now, or
+// whose runner is stuck, is refused.
+func confirmTargetResponse(runners map[mountID]*watchRunner, id mountID) controlResponse {
+	runner, ok := runners[id]
+	if !ok || runner == nil || runner.engine == nil || runner.stuckErr != nil {
+		return controlResponse{
+			StatusCode: http.StatusNotFound,
+			Code:       synccontrol.ErrorUnknownDrive,
+			Err:        fmt.Errorf("the running sync is not syncing %s now", id),
+		}
+	}
+
+	return controlResponse{confirmTarget: runner.engine}
 }
 
 func closeListenerAndRemoveSocket(listener net.Listener, path string) error {

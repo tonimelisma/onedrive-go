@@ -115,6 +115,12 @@ type Engine struct {
 	// release through the ack handle.
 	releasedRootJunkFailing atomic.Bool
 	releaseRefusalFailing   atomic.Bool
+
+	// heldDeleteConfirms carries a user's confirmation of held deletes from
+	// any goroutine (ConfirmHeldDeletes) to the engine's running watch loop,
+	// which alone receives on it, and only while running steadily. Unbuffered:
+	// a confirmation is taken by a loop or by nobody.
+	heldDeleteConfirms chan heldDeleteConfirmRequest
 }
 
 // newEngine creates an Engine and opens the per-mount SyncStore. Existing
@@ -207,6 +213,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		wallClock:              syncdomain.NewRealClock(cfg.Logger, &syncdomain.TimerPanics{}),
 		hooks:                  cfg.hooks,
 		protectedRoots:         newProtectedRootSet(bm, cfg.ShortcutNamespaceID),
+		heldDeleteConfirms:     make(chan heldDeleteConfirmRequest),
 	}
 	e.upkeep = &housekeeper{
 		syncTree:      syncTree,

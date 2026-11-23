@@ -1076,8 +1076,10 @@ The hold is re-derived from current truth on every plan, so it stays while
 the evidence is unchanged and lifts by itself when the user restores the
 files. The engine records the held deletes in `held_deletes` for `status`
 (condition `deletes_held`, scope `delete_safety:{local|remote}`) and in the
-pass report. `sync --confirm-deletes` (one-shot only) releases exactly the
-recorded held set, matched by path, side and item ID (a delete that knows its
+pass report. `sync --confirm-deletes` releases exactly the recorded held set
+(a one-shot run), or the set a running watch's user confirmed by its count and
+token (R-6.2.17, `sync-engine.md` "Confirming Held Deletes in a Running
+Watch"), matched by path, side and item ID (a delete that knows its
 item is approved only by a row naming the same item); the rules are then
 applied to every other delete in that pass, so a batch that appeared after the
 user looked is held again rather than waved through. The approved deletes

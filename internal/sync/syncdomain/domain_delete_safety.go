@@ -1,6 +1,14 @@
 package syncdomain
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+)
 
 // Delete-safety vocabulary shared by the planner, which decides the hold
 // (planner_delete_safety.go), the store, which records it for status, and the
@@ -77,6 +85,66 @@ func CountHeldDeletesBySide(held []HeldDelete) (local int, remote int) {
 		remote++
 	}
 	return local, remote
+}
+
+// heldDeleteTokenLength is how many hex digits of the held set's digest a
+// confirmation carries: 64 bits, short enough to type and far beyond what
+// two held sets of one drive could share by chance.
+const heldDeleteTokenLength = 16
+
+// HeldDeleteConfirmation names one held set the user was shown: how many
+// deletes it held and a token derived from exactly those deletes. A running
+// watch applies a confirmation only while its held set is still that set, so
+// a delete held after the user looked is never confirmed unseen (R-6.2.17).
+type HeldDeleteConfirmation struct {
+	Count int
+	Token string
+}
+
+// ConfirmationOf is the confirmation that names held: its count and the token
+// of its deletes, whatever their order.
+func ConfirmationOf(held []HeldDelete) HeldDeleteConfirmation {
+	lines := make([]string, 0, len(held))
+	for i := range held {
+		lines = append(lines, strings.Join([]string{
+			string(held[i].Side), held[i].Path, held[i].ItemID, held[i].ItemType.String(), string(held[i].Reason),
+		}, "\x00"))
+	}
+	slices.Sort(lines)
+	digest := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+
+	return HeldDeleteConfirmation{
+		Count: len(held),
+		Token: hex.EncodeToString(digest[:])[:heldDeleteTokenLength],
+	}
+}
+
+// Matches reports whether c names exactly held.
+func (c HeldDeleteConfirmation) Matches(held []HeldDelete) bool {
+	return c == ConfirmationOf(held)
+}
+
+// String is the confirmation as the user types it: the count, a dash and the
+// token ("215-3fa9c1d2e4b5a6f7").
+func (c HeldDeleteConfirmation) String() string {
+	return strconv.Itoa(c.Count) + "-" + c.Token
+}
+
+// ParseHeldDeleteConfirmation reads a confirmation as String writes it.
+func ParseHeldDeleteConfirmation(text string) (HeldDeleteConfirmation, error) {
+	countText, token, found := strings.Cut(strings.TrimSpace(text), "-")
+	if !found {
+		return HeldDeleteConfirmation{}, fmt.Errorf("parse held set %q: expected <count>-<token>", text)
+	}
+	count, err := strconv.Atoi(countText)
+	if err != nil || count < 1 {
+		return HeldDeleteConfirmation{}, fmt.Errorf("parse held set %q: the count must be a positive number", text)
+	}
+	if _, decodeErr := hex.DecodeString(token); decodeErr != nil || len(token) != heldDeleteTokenLength {
+		return HeldDeleteConfirmation{}, fmt.Errorf("parse held set %q: the token must be %d hex digits", text, heldDeleteTokenLength)
+	}
+
+	return HeldDeleteConfirmation{Count: count, Token: strings.ToLower(token)}, nil
 }
 
 // HeldDeleteSides lists the distinct sides of held, in order of first

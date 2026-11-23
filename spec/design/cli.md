@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/loglevel/loglevel.go, internal/sdnotify/sdnotify.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.36 [verified], R-6.6.33 [verified], R-6.6.37 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.8.28 [verified], R-6.8.31 [verified]
+Implements: R-1 [implemented], R-6.2.17 [verified], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.36 [verified], R-6.6.33 [verified], R-6.6.37 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.8.28 [verified], R-6.8.31 [verified]
 
 ## Overview
 
@@ -617,6 +617,21 @@ pass already counted as failed or left. The exit status therefore says
 what `status` says on every run, including the later runs of a write into a
 read-only shared folder, which hold the upload under the write block and
 leave it for the next sync.
+While a watch runs, `sync --confirm-deletes` does not refuse as another sync
+would: it reads each selected drive's held set from its state store, shows it
+with the command that confirms exactly it
+(`onedrive-go sync --confirm-deletes --held-set <count>-<token>`), and
+confirms nothing (exit 1, `errHeldDeletesNotConfirmed`). With `--held-set` it
+finds the drive whose held set the value names, refuses at once when none
+does (the set changed since it was shown; the sets held now are listed), and
+otherwise sends the set to the watch (`POST /v1/confirm-deletes`), whose own
+refusal of a set that changed in between is reported with its reason; only a
+taken confirmation prints that the watch applies it in its next pass
+(R-6.2.17; `TestConfirmDeletesToRunningWatch_ShowsTheHeldSetAndConfirmsNothing`,
+`TestConfirmDeletesToRunningWatch_SendsTheNamedSetToTheWatch`,
+`TestConfirmDeletesToRunningWatch_RefusesASetThatChanged`). The held-deletes
+condition of `status` says so in its action.
+
 Work a one-way mode held back, deletes held for `--confirm-deletes`, conflict
 copies, a paused drive beside a drive that ran, and a dry run are not work
 left (`TestRunSyncCommand_FailedActionsExitNonZero`,

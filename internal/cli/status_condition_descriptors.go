@@ -209,7 +209,8 @@ func describeStatusCondition(key syncdomain.ConditionKey) statusConditionDescrip
 			"More was deleted than looks intended (a whole side is empty, more than 30% of synced files and at least "+
 				"50, or the folder of a disk sync crossed into is gone), so sync held these deletes. Everything else keeps syncing.",
 			"Check the sync folder and OneDrive. If the deletes are intended, run 'onedrive-go sync --confirm-deletes'; "+
-				"otherwise restore the missing files.",
+				"while 'sync --watch' runs, it keeps running, and that command shows the held set and the command that "+
+				"confirms exactly that set. Otherwise restore the missing files.",
 		)
 	case syncdomain.ConditionAuthenticationRequired:
 		presentation := authstate.UnauthorizedIssuePresentation()
