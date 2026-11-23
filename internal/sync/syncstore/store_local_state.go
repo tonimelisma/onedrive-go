@@ -288,7 +288,6 @@ func (s *SyncStore) DeleteLocalStatePrefix(ctx context.Context, prefix string) (
 func (s *SyncStore) ApplyLocalStatePatch(
 	ctx context.Context,
 	rows []syncdomain.LocalStateRow,
-	deletedPaths []string,
 	deletedPrefixes []string,
 ) (err error) {
 	tx, err := BeginPerfTx(ctx, s.db)
@@ -301,11 +300,6 @@ func (s *SyncStore) ApplyLocalStatePatch(
 
 	for _, prefix := range deletedPrefixes {
 		if err := deleteLocalStatePrefixTx(ctx, tx, prefix); err != nil {
-			return err
-		}
-	}
-	for _, path := range deletedPaths {
-		if err := deleteLocalStatePathTx(ctx, tx, path); err != nil {
 			return err
 		}
 	}

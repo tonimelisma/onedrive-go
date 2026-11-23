@@ -708,7 +708,6 @@ func (o *LocalObserver) TrySendLocalObservationBatch(ctx context.Context, batch 
 		o.logger.Debug("local observation batch channel full, marking local truth suspect on maintenance",
 			slog.String("kind", batch.Kind.String()),
 			slog.Int("rows", len(batch.Rows)),
-			slog.Int("deleted_paths", len(batch.DeletedPaths)),
 			slog.Int("deleted_prefixes", len(batch.DeletedPrefixes)),
 		)
 	}

@@ -14,9 +14,9 @@ type LocalObservation struct {
 
 	// rows are the patch's upserts, or every row of the snapshot's scan.
 	Rows []syncdomain.LocalStateRow
-	// deletedPaths and deletedPrefixes are the patch's exact and subtree
-	// deletes.
-	DeletedPaths    []string
+	// DeletedPrefixes are the patch's deletes. Every local delete removes the
+	// path's whole subtree (a path is its own prefix), so there is no
+	// separate list of exact deletes.
 	DeletedPrefixes []string
 	// dirty asks the patch's apply to mark the runtime dirty.
 	Dirty bool

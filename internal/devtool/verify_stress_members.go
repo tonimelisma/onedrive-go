@@ -161,7 +161,6 @@ func stressSyncWatchRuntimeMembers() []string {
 		"TestWatchRuntime_InitWatchInfraUsesUnbufferedDispatch",
 		"TestWatchRuntime_IsItsOwnSignalSinkAndInspector",
 		"TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix",
-		"TestWatchRuntime_LocalObservationBatchDeletesExactPath",
 		"TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth",
 		"TestWatchRuntime_LocalObservationBatchMarksLocalTruthSuspect",
 		"TestWatchRuntime_LocalObservationBatchUpsertsScopedRows",

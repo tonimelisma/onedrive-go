@@ -38,7 +38,6 @@ func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 		LocalInode:       78,
 		LocalHasIdentity: true,
 	}}, batch.Rows)
-	assert.Empty(t, batch.DeletedPaths)
 	assert.Empty(t, batch.DeletedPrefixes)
 }
 
@@ -55,7 +54,6 @@ func TestLocalObservationBatchForEvent_FileDeleteRemovesSubtree(t *testing.T) {
 
 	assert.True(t, batch.Dirty)
 	assert.Empty(t, batch.Rows)
-	assert.Empty(t, batch.DeletedPaths)
 	assert.Equal(t, []string{"gone"}, batch.DeletedPrefixes,
 		"a removed path can still have rows below it")
 }

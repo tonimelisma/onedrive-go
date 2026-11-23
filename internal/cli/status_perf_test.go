@@ -198,7 +198,6 @@ func TestStatusPerf_PrintStatusPerfText_IncludesNonzeroStaleWorkCounters(t *test
 			SupersededLiveRemotePreconditionCount:    3,
 			LocalObservationScopedCommitCount:        4,
 			LocalObservationScopedUpsertCount:        5,
-			LocalObservationExactDeleteCount:         6,
 			LocalObservationPrefixDeleteCount:        7,
 			LocalObservationSuspectWatcherErrorCount: 8,
 			ReplanIdleWaitingDrainMS:                 9,
@@ -211,7 +210,7 @@ func TestStatusPerf_PrintStatusPerfText_IncludesNonzeroStaleWorkCounters(t *test
 	assert.Contains(t, rendered, "Stale:")
 	assert.Contains(t, rendered, "admission 1, worker local 2, live remote 3")
 	assert.Contains(t, rendered, "Local obs:")
-	assert.Contains(t, rendered, "commits 4, upserts 5, deletes 6, prefix deletes 7, suspect 8")
+	assert.Contains(t, rendered, "commits 4, upserts 5, deletes 7, suspect 8")
 	assert.Contains(t, rendered, "Replan idle:")
 	assert.Contains(t, rendered, "drain 9ms, plan 10ms")
 }

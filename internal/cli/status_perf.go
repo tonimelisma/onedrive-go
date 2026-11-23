@@ -302,7 +302,6 @@ func formatDetailedPerfStaleWork(snapshot *perf.Snapshot) string {
 func hasDetailedPerfLocalObservation(snapshot *perf.Snapshot) bool {
 	return snapshot.LocalObservationScopedCommitCount > 0 ||
 		snapshot.LocalObservationScopedUpsertCount > 0 ||
-		snapshot.LocalObservationExactDeleteCount > 0 ||
 		snapshot.LocalObservationPrefixDeleteCount > 0 ||
 		snapshot.LocalObservationFullSnapshotReplacementCount > 0 ||
 		localObservationSuspectCount(snapshot) > 0
@@ -312,8 +311,7 @@ func formatDetailedPerfLocalObservation(snapshot *perf.Snapshot) string {
 	return formatPerfCounterList([]perfCounterText{
 		{label: "commits", count: snapshot.LocalObservationScopedCommitCount},
 		{label: "upserts", count: snapshot.LocalObservationScopedUpsertCount},
-		{label: "deletes", count: snapshot.LocalObservationExactDeleteCount},
-		{label: "prefix deletes", count: snapshot.LocalObservationPrefixDeleteCount},
+		{label: "deletes", count: snapshot.LocalObservationPrefixDeleteCount},
 		{label: "full snapshots", count: snapshot.LocalObservationFullSnapshotReplacementCount},
 		{label: "suspect", count: localObservationSuspectCount(snapshot)},
 	})
