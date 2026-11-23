@@ -1027,7 +1027,10 @@ rows below the folder, where the store's commit removes the row at the
 path alone (`commitDelete`): a synced item that had left the folder lost
 its row, and the next pass read its two copies as two new files. 10 runs
 of shape 12 were that (from the held start, `rm p` on either side while
-OneDrive moved `p/f` into `X2`); they converge now. The check also counts a duplicate now (shape 12).
+OneDrive moved `p/f` into `X2`); they converge now. The check also counts a duplicate now (shape 12). And a remote folder
+create, here or on OneDrive, wrote its row at its path beside the row its
+item had elsewhere, where the store's upsert keys the row by item ID and
+moves it; the plan made the same folder again on the next pass.
 
 1. A rotation through nesting made on OneDrive (2 runs left, all held).
    One entry moves into a folder, which then takes the entry's old path
@@ -1314,6 +1317,15 @@ delete of p/f removes the local p/f, not x/f
 (`TestPlannerPairs_AFolderOneDriveDeletedGivesWayToAnItemItMovedOntoItsPath`,
 `TestRunOnce_AFolderMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere`,
 `TestRunOnce_AFolderWrittenIntoHereThatOneDriveReplacedByAMovedFileIsKeptAsAConflictCopy`).
+Nor is a conflict copy rebased so: it keeps the entry this computer holds at
+its path, and where the comparison set that entry beside OneDrive's item in
+a folder that sits elsewhere here (a file made in the new folder that took a
+held folder's name, and one OneDrive made in the held folder, which is at
+`x2` here), the download is rebased to where that folder is, which holds
+nothing to keep, and the copy is not planned. Rebased with it, the copy
+renamed nothing the first pass and the downloaded file on every pass after
+(`TestPlannerPairs_AFileOneDriveMadeInAHeldFolderIsDownloadedWithoutAConflictCopy`,
+`TestRunOnce_AFileOneDriveMadeInAFolderWhoseMoveWaitsIsDownloadedWithoutAConflictCopy`).
 Where this computer moved the item OneDrive moved onto a deleted entry's
 path, the item's own row is a local move and names no OneDrive target; the
 item ID places it at that path (`unpairedRemoteMoveOf`), so the moves compose

@@ -1644,6 +1644,50 @@ func TestRunOnce_AFileWhoseMoveWaitsKeepsItsSyncedRowAndIsNeverCopied(t *testing
 	}
 }
 
+// Validates: R-2.17.10, R-2.17.6
+//
+// Here x is renamed x2, a new x is made and f is moved into it, while X2,
+// which OneDrive takes for x2's name, is made on OneDrive, so x's move
+// waits; a file g is made in the new x here and one in the old x on
+// OneDrive. The two are in different folders: OneDrive's g is downloaded
+// into x2, where the old x sits here, and nothing is renamed to a conflict
+// copy. The copy, rebased to x2/g with the download, found nothing to keep
+// the first sync and renamed the downloaded g every sync after. Once X2 is
+// gone, the syncs finish with both files on both sides and no conflict copy.
+func TestRunOnce_AFileOneDriveMadeInAFolderWhoseMoveWaitsIsDownloadedWithoutAConflictCopy(t *testing.T) {
+	t.Parallel()
+
+	remote := newFolderPairScenarioRemote(t)
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	moveFIntoANewXHere(t, syncRoot)
+	syncfixture.WriteLocalFile(t, syncRoot, "x/g", "here\n")
+	remote.mkdirAt(t, "X2")
+	remote.addFile(t, "item-g", "item-x", "g", "online\n")
+
+	for range 2 {
+		runScenarioPass(t, eng)
+		local := harnessLocalTree(t, syncRoot)
+		assert.Equal(t, "online\n", local["x2/g"], "OneDrive's g is downloaded into the old x")
+		assert.Equal(t, "here\n", local["x/g"], "the g made here stays in the new x")
+		for p := range local {
+			assert.NotContains(t, p, ".conflict-", "nothing is kept as a conflict copy")
+		}
+	}
+
+	remote.deleteAt(t, "X2")
+	_, superseded := runScenarioUntilDone(t, eng)
+	assert.Zero(t, superseded)
+	want := map[string]string{
+		"x2": "/", "x2/keep.txt": "keep\n", "x2/g": "online\n",
+		"x": "/", "x/g": "here\n", "x/f": "/", "x/f/c.txt": "c\n",
+	}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "x2/g", remote.pathOf("item-g"), "OneDrive's g is still the item it was")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // runHeldMoveOutOfADeletedFolder syncs once while OneDrive holds
 // tc.collision and asserts that nothing is deleted, moved or made there and
 // that f stays in P. It then deletes the collision and asserts that one sync

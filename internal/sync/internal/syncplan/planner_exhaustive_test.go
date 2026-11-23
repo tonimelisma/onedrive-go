@@ -1422,7 +1422,7 @@ func (w *exWorld) exRemoteFolderCreate(a *syncdomain.Action) bool {
 		remote = pmItem{id: "item-" + strconv.Itoa(w.next()), folder: true, etag: w.next()}
 		w.remote[at] = remote
 	}
-	w.baseline[a.Path] = pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag}
+	w.recordSynced(a.Path, pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag})
 
 	return true
 }
@@ -1467,7 +1467,7 @@ func (w *exWorld) exLocalFolderCreate(a *syncdomain.Action) bool {
 		local = pmItem{folder: true, inode: uint64(w.next())}
 		w.local[a.Path] = local
 	}
-	w.baseline[a.Path] = pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag}
+	w.recordSynced(a.Path, pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag})
 
 	return true
 }
@@ -2259,4 +2259,59 @@ func TestPlannerPairs_AnItemWhoseMoveWaitsKeepsItsRowAndIsNeverCopied(t *testing
 	} {
 		requirePairKeepsEveryInvariant(t, &pair)
 	}
+}
+
+// Validates: R-2.17.10, R-2.17.6
+//
+// From the held start (x renamed x2 here while OneDrive keeps it as x, a new
+// x made here), a file g made in the new x here and one made in the old x on
+// OneDrive are in different folders: OneDrive's is downloaded into x2, where
+// the old x sits here, and no conflict copy is made. The copy, rebased to
+// x2/g with the download, renamed nothing the first pass and the downloaded
+// g every pass after. Neither that pair nor an edit of f in the new x while
+// OneDrive moved f into the old x plans any action twice, and both keep
+// every invariant.
+func TestPlannerPairs_AFileOneDriveMadeInAHeldFolderIsDownloadedWithoutAConflictCopy(t *testing.T) {
+	t.Parallel()
+
+	held := exStartNamed(t, "held")
+	for _, pair := range []exPair{
+		{start: held, local: []exEdit{{kind: exCreateFile, to: "x/g"}}, remote: []exEdit{{kind: exCreateFile, to: "x/g"}}},
+		{start: held, local: []exEdit{{kind: exEditFile, from: "x/f"}}, remote: []exEdit{{kind: exMoveFile, from: "p/f", to: "x/f"}}},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+		registerExCachingDriver(t)
+		r := newExRun(t, exQuietStore(t), &pair)
+		r.run()
+		assert.Empty(t, exActionsPlannedTwice(r.log), "%s plans an action again on a later pass:\n%s",
+			pair.id(), strings.Join(r.log, "\n"))
+	}
+}
+
+// exActionsPlannedTwice lists the action lines of a run's log that more than
+// one pass planned alike: work a pass did, or meant to do, done again.
+func exActionsPlannedTwice(log []string) []string {
+	seen := map[string]int{}
+	pass := 0
+	for _, entry := range log {
+		for _, line := range strings.Split(entry, "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case strings.HasPrefix(line, "pass "):
+				pass++
+			case pass == 0, line == "", strings.HasPrefix(line, "local "), strings.HasPrefix(line, "remote "):
+			default:
+				seen[line]++
+			}
+		}
+	}
+	var twice []string
+	for line, n := range seen {
+		if n > 1 {
+			twice = append(twice, line)
+		}
+	}
+	slices.Sort(twice)
+
+	return twice
 }
