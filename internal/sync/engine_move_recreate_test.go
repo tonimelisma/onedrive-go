@@ -397,6 +397,48 @@ func runNestingRotationMadeOnOneDrive(t *testing.T, tc *nestingRotationCase) {
 	requireScenarioQuietPlan(t, eng)
 }
 
+// Validates: R-2.17.6, R-2.17.1
+//
+// docs is moved into archive here while OneDrive moves archive into docs and
+// notes.txt onto the path archive left: a rotation through nesting split
+// across the two sides. OneDrive's moves are kept and this computer's undone
+// (R-2.17.6), so here docs leaves archive first, archive then moves into
+// docs, and notes.txt onto archive's old path, all in one plan. Before, the
+// move of docs out of archive waited for the move onto archive's path, the
+// path's own move waited for archive to leave, and archive's move waited for
+// docs: a cycle dropped on every pass. One sync converges: both sides end
+// with OneDrive's tree, nothing moved on OneDrive, uploaded or downloaded
+// again, and no plan drops a cycle.
+func TestRunOnce_ARotationThroughNestingSplitAcrossTheSidesKeepsOneDrivesNesting(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-docs", "root", "docs")
+	remote.addFile(t, "item-a", "item-docs", "a.txt", "a\n")
+	remote.addFolder("item-archive", "root", "archive")
+	remote.addFile(t, "item-notes", "root", "notes.txt", "notes\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	remote.moveAt(t, "archive", "docs/archive")
+	remote.moveAt(t, "notes.txt", "archive")
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Rename(local("docs"), local("archive/docs")))
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes the moves")
+	assert.Zero(t, superseded)
+
+	want := map[string]string{"docs": "/", "docs/a.txt": "a\n", "docs/archive": "/", "archive": "notes\n"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Empty(t, remote.moves, "nothing is moved on OneDrive")
+	assert.Zero(t, remote.uploads)
+	assert.Equal(t, downloadsBefore, remote.downloads, "the entries are moved on this computer, not downloaded again")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-2.17.6, R-2.17.9
 //
 // notes.txt is moved into docs here and renamed g.txt on OneDrive, while a

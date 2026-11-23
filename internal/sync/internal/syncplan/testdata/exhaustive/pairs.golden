@@ -3,7 +3,6 @@ synced L[] R[rm x, mv p x] :: sides-differ left-held
 synced L[mv p q] R[mv p q, mv x p] :: no-quiet-plan
 synced L[mv p x/p] R[mv p x/p, mv x p] :: no-quiet-plan
 synced L[mv p x/p] R[mv x p/x, mv p/f x] :: sides-differ left-held
-synced L[mv p x/p] R[mv x p/x, mv z x] :: sides-differ left-held
 synced L[mv p x/p] R[mv z p/z, mv x z] :: sides-differ left-held
 synced L[mv p/f p/g] R[rm p, mv x p] :: sides-differ left-held
 synced L[mv p/f p/g] R[rm p, mv x p] refuse upload p/g #1 :: sides-differ left-held
@@ -22,7 +21,6 @@ synced L[edit p/f] R[rm x, mv p x] :: sides-differ left-held
 synced L[mv x q] R[rm p, mv x p] :: no-quiet-plan sides-differ
 synced L[mv x q] R[rm p/f, mv x p/f] :: no-quiet-plan sides-differ
 synced L[mv x q] R[mv x q, mv p x] :: no-quiet-plan
-synced L[mv x p/x] R[mv p x/p, mv z p] :: sides-differ left-held
 synced L[mv x p/x] R[rm p, mv x p] :: no-quiet-plan sides-differ
 synced L[mv x p/x] R[rm p, mv z p] :: delete-undone
 synced L[mv x p/x] R[rm p, mv z p] refuse download p #1 :: delete-undone

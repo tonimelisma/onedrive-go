@@ -2283,6 +2283,36 @@ func TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt(t *testin
 
 // Validates: R-2.17.6
 //
+// Local moves are in the snapshot's coordinates, so a local move whose source
+// lies below another local move's destination moves an entry out of what
+// holds that destination now: here p moved into x while OneDrive moved x into
+// p and z onto x, and this computer follows OneDrive. p leaves x first, x
+// moves into p, and z lands where x was. On OneDrive a move's source is
+// rebased through the moves before it, so a remote move from below another
+// remote move's destination still waits for it.
+func TestBuildDependencies_ALocalMoveFromBelowAnotherLocalMovesDestinationRunsFirst(t *testing.T) {
+	t.Parallel()
+
+	folder := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFolder}}
+	file := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFile}}
+	local := []syncdomain.Action{
+		{Type: syncdomain.ActionLocalMove, OldPath: "x/p", Path: "p", View: folder},
+		{Type: syncdomain.ActionLocalMove, OldPath: "x", Path: "p/x", View: folder},
+		{Type: syncdomain.ActionLocalMove, OldPath: "z", Path: "x", View: file},
+	}
+	kept, deps, _ := isolateDependencyCycles(local, nil)
+	require.Len(t, kept, len(local), "no move is dropped as a cycle")
+	assert.Equal(t, [][]int{nil, {0}, {1}}, deps, "p leaves x, x moves into p, z lands where x was")
+
+	remote := []syncdomain.Action{
+		{Type: syncdomain.ActionRemoteMove, OldPath: "z", Path: "x", View: file},
+		{Type: syncdomain.ActionRemoteMove, OldPath: "x/a.txt", Path: "b.txt", View: file},
+	}
+	assert.Equal(t, [][]int{nil, {0}}, buildDependencies(remote), "a rebased OneDrive source below x waits for the move onto x")
+}
+
+// Validates: R-2.17.6
+//
 // A folder deleted on OneDrive while a folder is made here at its path, x
 // again, X or x/sub below a deleted x/sub, and f moved into the new folder:
 // the create waits for the delete and f's move for the create, so the move

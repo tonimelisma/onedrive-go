@@ -763,13 +763,25 @@ func belowPathKey(k, root namekey.PathKey) bool {
 }
 
 // underMoveDestination reports whether a works at or below move's
-// destination.
+// destination. A move whose source lies below the destination moves
+// something the destination will hold once move has run: on OneDrive a move
+// is rebased through the moves before it, so its source can name such a
+// path. A local move is not rebased (local_state is observation-owned), so
+// a local move's source below another local move's destination is in
+// what holds that destination now, which leaves it, children first, before
+// move can land there: here p moved into x while OneDrive moved x into p
+// and z onto x, so p leaves x first, then x moves into p, then z onto x.
+// Ordered after move, a waited for it while move waited for the path a's
+// folder leaves, a cycle dropped on every pass.
 func underMoveDestination(a, move *syncdomain.Action) bool {
 	if a.Path == move.Path && !isMoveAction(a) && !isDeleteAction(a) && a.Type != syncdomain.ActionConflictCopy {
 		return true
 	}
 	if strings.HasPrefix(a.Path, move.Path+"/") {
 		return true
+	}
+	if a.Type == syncdomain.ActionLocalMove && move.Type == syncdomain.ActionLocalMove {
+		return false
 	}
 
 	return isMoveAction(a) && strings.HasPrefix(a.OldPath, move.Path+"/")

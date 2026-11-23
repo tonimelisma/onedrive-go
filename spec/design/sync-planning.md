@@ -872,7 +872,7 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 107 runs of `pairs.golden` (83 from the synced tree, 24 from the held
+The 105 runs of `pairs.golden` (81 from the synced tree, 24 from the held
 one; a run names its start, the two histories, the refused create if any,
 and the invariants it breaks) fall into eleven shapes. Each is an open
 behaviour of the planner unless it says it is right as it is; a fix removes
@@ -911,12 +911,37 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    in the new `x`, not in the held folder, so there is no move into the
    folder to make first; and `mv x p/x, mv p x`, where `p` lands on the
    new `x` made here, shape 7's collision of two entries at one name.
-2. A rotation through nesting split across the two sides (10 runs: 9
+2. A rotation through nesting split across the two sides (8 runs: 7
    synced, 1 held): `p` moved into `x` here while OneDrive moved `x` into
-   `p` (with or without a third move onto a path they vacate, or a folder
-   made again at the old path). The two sides' moves form one cycle, held for
-   good like the shape above; it should resolve as a move conflict, one
-   nesting kept and the other's entry kept beside it.
+   `p`, with a third move onto a path they vacate or a folder made again at
+   the old path. Composition keeps OneDrive's nesting and undoes this
+   computer's (R-2.17.6, D-055), which is the move conflict resolved with
+   both entries kept. Fixed where OneDrive's third move lands on the path
+   one of the two left (`mv x p/x, mv z x` there, `mv p x/p` here): this
+   computer's move of `p` out of `x` waited for the move onto `x` by the
+   rule that work below a move's destination runs after it, which a local
+   move's source, never rebased, does not need; the three moves were a
+   cycle dropped on every pass, and run now in one plan (Dependency rules
+   below). Left: a third move that carries an entry of the folder that
+   leaves (`mv p/f x` there) is ordered before that folder's move, as
+   children leave first, while it can only land once the folder has gone,
+   which needs the source rebased a pass later; and a move onto, or a
+   folder made at, the path the folder here must take (`mv z p`,
+   `mkdir p` here), which is shape 7's collision of two entries at one
+   name. Of the same family, outside the check's tree: a folder moved into
+   different new folders at its own path on each side (`f` into a new
+   `f/a/f` here, into a new `f/b/f` on OneDrive) leaves work on every sync
+   for a reason that is not the move order. Both sides made a new `f`, and
+   composition plans the one made here as the folder made at the path the
+   moved folder left (`recreatedSourceCreates`), an OneDrive folder create
+   planned without OneDrive truth, since the moved folder no longer holds
+   the path there; but OneDrive's own new `f` does, so the worker's
+   freshness check supersedes the create on every pass ("has current remote
+   truth but was absent when planned"), and the folder's move, waiting for
+   `f/b` here, never comes. The two new folders are one folder by path,
+   which composition already takes them for; the create should adopt
+   OneDrive's folder, after the moved folder's baseline row has left the
+   path.
 3. A folder moved onto the path of a folder deleted on the same side (29
    runs: 26 synced, 3 held): `rm p, mv x p` or `rm x, mv p x` on OneDrive.
    A replacing move onto a folder's path waits while the folder is there
@@ -1055,7 +1080,12 @@ side and move it back into the folder
 (`TestDropReconciliationOfComposedMoves_HeldMoveKeepsItsBaselineRow`).
 
 `buildDependencies` (`planner_dependencies.go`) orders moves by the paths they
-carry (`addMoveDeps`): work at or below a move's destination runs after it; a
+carry (`addMoveDeps`): work at or below a move's destination runs after it,
+except a local move from below another local move's destination, which runs
+before it: a local move is never rebased, so its source is in what holds that
+destination now, which leaves it first
+(`TestBuildDependencies_ALocalMoveFromBelowAnotherLocalMovesDestinationRunsFirst`,
+`TestRunOnce_ARotationThroughNestingSplitAcrossTheSidesKeepsOneDrivesNesting`); a
 move onto a path another move of the same side vacates waits for it, and so
 does a move into a folder below that path from a source outside it, whether
 or not the plan creates that folder: what it lands in takes the path only
