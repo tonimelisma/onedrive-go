@@ -30,6 +30,14 @@ const (
 // (exit 1, it may work if run again); the daemon logs it and carries on.
 var ErrConfigLocked = errors.New("locked by another onedrive-go process")
 
+// ErrConfigLockUnsupported means the filesystem holding the config or
+// catalog directory refused the lock itself (flock answered ENOLCK,
+// EOPNOTSUPP, ENOSYS and the like: some NFS and FUSE mounts), so the change
+// was not made. A change made without the lock could lose another process's
+// change to the same file, so there is no unlocked fallback. The error that
+// carries it names the directory and flock's answer.
+var ErrConfigLockUnsupported = errors.New("its filesystem does not support file locks")
+
 // configLocker takes the advisory lock that serializes read-modify-write
 // changes of the managed files in one directory: config.toml in the config
 // directory, catalog.json in the data directory (on macOS both are the same
@@ -135,7 +143,9 @@ func (l configLocker) withMutationLock(ctx context.Context, path string, createD
 // acquire polls a non-blocking exclusive flock on fd every pollInterval until
 // it is granted or timeout has been waited out. A blocking flock would hang
 // every config change, and the daemon's reload, behind a stopped or stuck
-// holder for as long as that holder lives. A context that has ended stops the
+// holder for as long as that holder lives. A filesystem that cannot lock at
+// all fails at once with ErrConfigLockUnsupported, never by running unlocked.
+// A context that has ended stops the
 // wait at once, and stops it before the first attempt too: a canceled
 // command makes no change it would then report as failed.
 func (l configLocker) acquire(ctx context.Context, fd int, dir string) error {
@@ -146,6 +156,10 @@ func (l configLocker) acquire(ctx context.Context, fd int, dir string) error {
 		}
 		locked, err := filelock.TryLock(l.flock, fd)
 		switch {
+		case filelock.IsUnsupported(err):
+			return fmt.Errorf("cannot lock %s: %w (%w); onedrive-go changes the files there only under "+
+				"that lock, so two onedrive-go processes never change one at once: keep the directory on a "+
+				"local filesystem", dir, ErrConfigLockUnsupported, err)
 		case err != nil:
 			return fmt.Errorf("locking %s: %w", dir, err)
 		case locked:

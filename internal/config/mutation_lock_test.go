@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"syscall"
@@ -266,4 +267,59 @@ func TestUpdateCatalog_CrossProcessUpdatesAreNotLost(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, final.Accounts, holderAccount.CanonicalID, "the holder's update was lost")
 	assert.Contains(t, final.Accounts, waiterAccount.CanonicalID, "the waiting update was lost")
+}
+
+// A filesystem that cannot lock at all (flock answers ENOLCK, EOPNOTSUPP or
+// ENOSYS on some NFS and FUSE mounts) refuses the change at once, naming the
+// directory and the filesystem's limit: the config and the catalog are never
+// written without the lock, so no unlocked write can lose another process's
+// change. Neither file is touched and nothing waits.
+//
+// Validates: R-4.4.4
+func TestWithConfigMutationLock_AFilesystemWithoutLocksRefusesTheChange(t *testing.T) {
+	t.Parallel()
+
+	for _, errno := range []syscall.Errno{syscall.ENOLCK, syscall.EOPNOTSUPP, syscall.ENOSYS} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.toml")
+			const before = "# kept as it was\n"
+			require.NoError(t, os.WriteFile(cfgPath, []byte(before), 0o600))
+
+			attempts := 0
+			locker := defaultConfigLocker()
+			locker.flock = func(int, int) error {
+				attempts++
+				return errno
+			}
+			locker.sleep = func(context.Context, time.Duration) error {
+				assert.Fail(t, "a filesystem that cannot lock is not waited for")
+				return nil
+			}
+
+			cid := driveid.MustCanonicalID("personal:nolock@example.com")
+			err := locker.setDriveKey(t.Context(), cfgPath, cid, "paused", "true")
+			require.ErrorIs(t, err, ErrConfigLockUnsupported)
+			require.ErrorIs(t, err, errno, "flock's answer is kept")
+			require.NotErrorIs(t, err, ErrConfigLocked)
+			assert.Contains(t, err.Error(), dir)
+			assert.Contains(t, err.Error(), "does not support file locks")
+			assert.Contains(t, err.Error(), "local filesystem")
+			assert.Equal(t, 1, attempts)
+			written, readErr := os.ReadFile(cfgPath) //nolint:gosec // the test's own temp file
+			require.NoError(t, readErr)
+			assert.Equal(t, before, string(written), "the config is not written without the lock")
+
+			catalogRan := false
+			err = locker.updateCatalog(t.Context(), dir, func(*Catalog) error {
+				catalogRan = true
+				return nil
+			})
+			require.ErrorIs(t, err, ErrConfigLockUnsupported)
+			assert.False(t, catalogRan, "the catalog is not changed without the lock")
+			assert.NoFileExists(t, CatalogPathForDataDir(dir))
+		})
+	}
 }
