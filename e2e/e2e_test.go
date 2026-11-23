@@ -82,11 +82,11 @@ func TestMain(m *testing.M) {
 	logDir = resolveSuiteLogDir()
 
 	fmt.Fprintf(os.Stderr, "E2E debug logs: %s\n", logDir)
-	suiteTimingRecorder, err = newE2ETimingRecorder(logDir)
+	suiteTimingRecorder, err = newE2ETimingRecorder(logDir, suiteDriveRoles)
 	if err != nil {
 		abortSuitef(cleanupIsolation, tmpDir, "creating E2E timing recorder: %v", err)
 	}
-	suiteQuirkRecorder, err = newE2EQuirkRecorder(logDir)
+	suiteQuirkRecorder, err = newE2EQuirkRecorder(logDir, suiteDriveRoles)
 	if err != nil {
 		abortSuitef(cleanupIsolation, tmpDir, "creating E2E quirk recorder: %v", err)
 	}
@@ -279,11 +279,6 @@ func findModuleRoot() string {
 	return testutil.FindModuleRoot("..")
 }
 
-// sanitizeTestName replaces characters invalid in filenames.
-func sanitizeTestName(name string) string {
-	return strings.NewReplacer("/", "_", " ", "_", ":", "_").Replace(name)
-}
-
 // shouldAddDebug returns true unless args already contain a mutually exclusive
 // verbosity flag (--quiet, -q, --verbose, -v, --debug).
 func shouldAddDebug(args []string) bool {
@@ -343,35 +338,16 @@ func debugLogPath(testName string) string {
 	return filepath.Join(logDir, debugLogFileName(testName))
 }
 
-// debugLogFileName is a test's debug log file name: the test's name, any
-// configured drive in it replaced by its role first, because the file is a CI
-// artifact of a public repository and its name goes with it.
+// debugLogFileName is a test's debug log file name, through the suite's
+// roles (debugLogFileNameWith).
 func debugLogFileName(testName string) string {
-	return sanitizeTestName(suiteDriveRoles.Redact(testName)) + ".log"
+	return debugLogFileNameWith(suiteDriveRoles, testName)
 }
 
-// appendDebugLogChunk appends content to a per-test debug log through
-// suiteDriveRoles.Redact, the command line, shared --json and drive list
-// --json included: every account, drive, item and fixture of the suite named
-// by role and any other identifier masked, because the logs are uploaded as
-// CI artifacts of a public repository, where log masking does not reach.
-func appendDebugLogChunk(path string, content string) (err error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // the per-test debug log under the suite's own log dir
-	if err != nil {
-		return fmt.Errorf("opening debug log %s: %w", path, err)
-	}
-	defer func() {
-		closeErr := f.Close()
-		if err == nil {
-			err = closeErr
-		}
-	}()
-
-	if _, err = f.WriteString(suiteDriveRoles.Redact(content)); err != nil {
-		return fmt.Errorf("writing debug log %s: %w", path, err)
-	}
-
-	return nil
+// appendDebugLogChunk appends content to a per-test debug log through the
+// suite's roles (appendDebugLogChunkWith).
+func appendDebugLogChunk(path string, content string) error {
+	return appendDebugLogChunkWith(suiteDriveRoles, path, content)
 }
 
 // writeMinimalConfig writes a config file with drive but no sync_dir (uses defaults).
