@@ -124,7 +124,7 @@ func TestWatchLoop_ServicesOnlyThePhasesEnabledInputs(t *testing.T) {
 					(!tc.reads["observerErrs"] || len(errs) == 0) &&
 					(!tc.reads["log"] || len(logC) == 0)
 			}
-			require.Eventually(t, enabledRead, 10*time.Second, time.Millisecond)
+			require.Eventually(t, enabledRead, syncfixture.EventWait, time.Millisecond)
 			cancel()
 			<-stepped
 

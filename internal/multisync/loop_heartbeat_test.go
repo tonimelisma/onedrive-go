@@ -88,7 +88,7 @@ func TestRunWatch_BeatsOnEveryIterationAndWhileIdle(t *testing.T) {
 		clock.advance(loopSilenceLimit + time.Second)
 		select {
 		case beats <- clock.now():
-		case <-time.After(5 * time.Second):
+		case <-time.After(eventWait):
 			require.FailNow(t, "the watch loop did not take its heartbeat tick")
 		}
 		// The send hands the tick over; the next send can happen only
@@ -97,13 +97,13 @@ func TestRunWatch_BeatsOnEveryIterationAndWhileIdle(t *testing.T) {
 	}
 	select {
 	case beats <- clock.now():
-	case <-time.After(5 * time.Second):
+	case <-time.After(eventWait):
 		require.FailNow(t, "the watch loop did not take its heartbeat tick")
 	}
 	require.Eventually(t, func() bool {
 		ok, step, _ := orch.LoopAlive()
 		return ok && step == ""
-	}, 5*time.Second, 10*time.Millisecond)
+	}, eventWait, 10*time.Millisecond)
 	assert.Equal(t, loopHeartbeatInterval, interval)
 
 	clock.advance(loopSilenceLimit + time.Second)

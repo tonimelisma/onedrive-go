@@ -221,7 +221,7 @@ func TestSocketIOWakeSource_ConnectionClosesNormallyAndLeavesNoReader(t *testing
 	select {
 	case status := <-closeStatus:
 		assert.Equal(t, websocket.StatusNormalClosure, status, "the server saw a close frame")
-	case <-time.After(5 * time.Second):
+	case <-time.After(syncfixture.EventWait):
 		require.Fail(t, "the server never saw the connection end")
 	}
 }

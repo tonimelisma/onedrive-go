@@ -29,6 +29,7 @@ const (
 	slogLintMessage        = "pass an injected *slog.Logger instead of the package-level slog logger"
 	stdStreamLintMessage   = "write through the CLI-owned output and status writers"
 	logPrintLintMessage    = "use the CLI-owned logger"
+	fixedWaitLintMessage   = "prove an absence by waiting for the signal that the input was handled, never by a fixed wait"
 )
 
 // Validates: R-6.10.17
@@ -85,6 +86,44 @@ func TestGolangciConfig_ForbidigoRefusesWallClockSleepInTests(t *testing.T) {
 		assert.False(t, forbidigoIssueExempt(t, config, path, "time.Sleep", sleepLintMessage), path)
 	}
 	assert.True(t, forbidigoIssueExempt(t, config, "internal/retry/transport.go", "time.Sleep", sleepLintMessage))
+}
+
+// Validates: R-6.10.17
+//
+// testify's Never and Consistently pass whenever their fixed wait ends
+// before the event they rule out, so forbidigo refuses them in every file:
+// as package functions of assert and require, and as methods of their
+// Assertions, which analyze-types reads as <package>.Assertions.<method>
+// whatever name the import is given. No exclusion exempts any file, and the
+// bounded waits stay allowed.
+func TestGolangciConfig_ForbidigoRefusesFixedWaitAbsenceAssertions(t *testing.T) {
+	t.Parallel()
+
+	config := golangciConfig(t)
+	assertLintReadsEveryFile(t, config, "forbidigo")
+	assert.Equal(t, "true", yamlValue(t, config, "linters", "settings", "forbidigo", "analyze-types"))
+
+	rule := forbidigoRule(t, config, fixedWaitLintMessage)
+	assert.Equal(t, `^(assert|require)\.(Assertions\.)?(Never|Neverf|Consistently|Consistentlyf)$`, rule["pattern"])
+	assert.Equal(t, `^github\.com/stretchr/testify/(assert|require)$`, rule["pkg"])
+
+	pattern := regexp.MustCompile(rule["pattern"])
+	for _, call := range []string{
+		"assert.Never", "require.Neverf", "assert.Consistently", "require.Consistentlyf",
+		"assert.Assertions.Never", "require.Assertions.Consistently",
+	} {
+		assert.True(t, pattern.MatchString(call), call)
+	}
+	for _, call := range []string{"assert.Eventually", "require.EventuallyWithT", "assert.Assertions.Eventually", "assert.NotNil"} {
+		assert.False(t, pattern.MatchString(call), call)
+	}
+	pkg := regexp.MustCompile(rule["pkg"])
+	assert.True(t, pkg.MatchString("github.com/stretchr/testify/assert"))
+	assert.True(t, pkg.MatchString("github.com/stretchr/testify/require"))
+	assert.False(t, pkg.MatchString("github.com/stretchr/testify/mock"))
+
+	assert.Empty(t, lintExclusionsAdmitting(t, config, "forbidigo", forbidigoIssueText("assert.Never", fixedWaitLintMessage)),
+		"no exclusion exempts any file from the fixed-wait rule")
 }
 
 // Validates: R-6.10.5

@@ -134,7 +134,7 @@ func TestRunWatch_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown(t *testin
 	select {
 	case err := <-done:
 		requireRunEndedByTheTimerPanic(t, capture, err)
-	case <-time.After(30 * time.Second):
+	case <-time.After(syncfixture.EventWait):
 		require.FailNow(t, "the timer's panic did not end the watch")
 	}
 	assertNoFailureRecorded(t, eng.Engine)
