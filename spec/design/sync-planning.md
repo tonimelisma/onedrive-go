@@ -872,7 +872,7 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 133 runs of `pairs.golden` (87 from the synced tree, 46 from the held
+The 135 runs of `pairs.golden` (89 from the synced tree, 46 from the held
 one; a run names its start, the two histories, the refused create if any,
 and the invariants it breaks) fall into eleven shapes. Each is an open
 behaviour of the planner unless it says it is right as it is; a fix removes
@@ -885,6 +885,9 @@ folder away from was bound to the moved folder and nothing could be
 uploaded into it. The executor creates the folder by its parent and name
 and adopts only a folder OneDrive already has there (`createRemoteFolder`),
 and so does the model now; those runs converge with the planner as it is.
+The model also kept a downloaded or uploaded file's old baseline row beside
+the new one, while the store keys the baseline by item ID and moves the
+row; it now moves it too.
 
 1. A rotation through nesting made on OneDrive (3 runs left, all held).
    One entry moves into a folder, which then takes the entry's old path
@@ -930,7 +933,7 @@ and so does the model now; those runs converge with the planner as it is.
    (or a conflict copy) at this computer's. Nothing is lost; the check does
    not count a duplicate.
 5. A folder deleted on one side and replaced there by a file moved onto its
-   path, written into on the other side (25 runs, all synced, every one
+   path, written into on the other side (27 runs, all synced, every one
    breaking only the delete rule): `rm p, mv z p` on one side, a file made
    in `p` or a folder moved into it on the other. Right as it is: the
    written-into folder is kept whole as a conflict copy, so what the other

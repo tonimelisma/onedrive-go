@@ -28,6 +28,7 @@ synced L[mv x p/x] R[rm p, mv z p] :: delete-undone
 synced L[mv x p/x] R[rm p, mv z p] refuse download p #1 :: delete-undone
 synced L[mv x p/x] R[rm p, mv z p] refuse folder_create p.conflict-14 (remote) #1 :: delete-undone
 synced L[mv x p/x] R[rm p, mv z p] refuse upload p.conflict-14/f #1 :: delete-undone
+synced L[mv x p/x] R[rm p, mv z p] refuse upload z #1 :: delete-undone
 synced L[mv x p/x] R[rm p/f, mv x p/f] :: no-quiet-plan sides-differ
 synced L[mv x p/x] R[mv x p/x, mv p x] :: no-quiet-plan
 synced L[mv x p/x] R[mv z x/z, mv p z] :: sides-differ left-held
@@ -36,10 +37,11 @@ synced L[mv z p/z] R[rm p, mv z p] :: delete-undone
 synced L[mv z p/z] R[rm p, mv z p] refuse download p #1 :: delete-undone
 synced L[mv z p/z] R[rm p, mv z p] refuse folder_create p.conflict-14 (remote) #1 :: delete-undone
 synced L[mv z p/z] R[rm p, mv z p] refuse upload p.conflict-14/f #1 :: delete-undone
-synced L[mv z p/z] R[rm p, mv z p] refuse upload p.conflict-20 #1 :: delete-undone
+synced L[mv z p/z] R[rm p, mv z p] refuse upload p.conflict-14/z #1 :: delete-undone
 synced L[mv z p/z] R[rm x, mv p x] :: sides-differ left-held
 synced L[mv z x/z] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held delete-undone
 synced L[mv z x/z] R[rm x, mv p x] :: sides-differ left-held
+synced L[new g] R[mv z g, mv p/f z] refuse download g #1 :: removed-in-a-pass
 synced L[new p/g] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held delete-undone
 synced L[new p/g] R[rm p, mv x p] refuse upload p/g #1 :: no-quiet-plan sides-differ left-held delete-undone
 synced L[new p/g] R[rm p, mv z p] :: delete-undone
@@ -47,7 +49,7 @@ synced L[new p/g] R[rm p, mv z p] refuse download p #1 :: delete-undone
 synced L[new p/g] R[rm p, mv z p] refuse folder_create p.conflict-16 (remote) #1 :: delete-undone
 synced L[new p/g] R[rm p, mv z p] refuse upload p.conflict-16/f #1 :: delete-undone
 synced L[new p/g] R[rm p, mv z p] refuse upload p.conflict-16/g #1 :: delete-undone
-synced L[new p/g] R[mv p/f p/g, mv z p/f] refuse download p/g #1 :: removed-in-a-pass
+synced L[new p/g] R[rm p, mv z p] refuse upload z #1 :: delete-undone
 synced L[new p/g] R[rm x, mv p x] :: no-quiet-plan sides-differ left-held
 synced L[new x/g] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held delete-undone
 synced L[new x/g] R[rm p, mv x p] refuse upload x/g #1 :: no-quiet-plan sides-differ left-held delete-undone

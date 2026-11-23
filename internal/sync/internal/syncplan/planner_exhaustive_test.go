@@ -1091,9 +1091,21 @@ func (w *exWorld) exDownload(a *syncdomain.Action) bool {
 	}
 	inode := uint64(w.next())
 	w.local[a.Path] = pmItem{content: src.content, inode: inode}
-	w.baseline[a.Path] = pmSynced{id: src.id, localContent: src.content, remoteContent: src.content, inode: inode, etag: src.etag}
+	w.recordSynced(a.Path, pmSynced{id: src.id, localContent: src.content, remoteContent: src.content, inode: inode, etag: src.etag})
 
 	return true
+}
+
+// recordSynced records the item synced at p, as the executor's commit does:
+// the baseline keys a row by item ID, so a row the item had at another path
+// goes.
+func (w *exWorld) recordSynced(p string, row pmSynced) {
+	for held, synced := range w.baseline {
+		if held != p && synced.id == row.id {
+			delete(w.baseline, held)
+		}
+	}
+	w.baseline[p] = row
 }
 
 func (w *exWorld) localReplaceable(p string) bool {
@@ -1140,7 +1152,7 @@ func (w *exWorld) exUpload(a *syncdomain.Action, kept map[string]bool) bool {
 	}
 	etag := w.next()
 	w.remote[at] = pmItem{id: id, content: src.content, etag: etag}
-	w.baseline[a.Path] = pmSynced{id: id, localContent: src.content, remoteContent: src.content, inode: src.inode, etag: etag}
+	w.recordSynced(a.Path, pmSynced{id: id, localContent: src.content, remoteContent: src.content, inode: src.inode, etag: etag})
 
 	return true
 }
