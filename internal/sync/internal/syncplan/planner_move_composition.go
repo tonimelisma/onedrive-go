@@ -250,6 +250,10 @@ type moveOccupancy struct {
 	// remoteFiles holds the remote paths that are files, which nothing can
 	// be created under.
 	remoteFiles map[string]bool
+	// localFiles holds the local paths that are files: a new one at a local
+	// move's destination is renamed aside as a conflict copy
+	// (localDisplacementAt).
+	localFiles map[string]bool
 }
 
 type moveComposer struct {
@@ -1716,7 +1720,13 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 // that is no composed item may be a new file at the path of a synced file
 // OneDrive no longer has, saved there after a replacing move (D-058) freed
 // the name: that baseline item, absent here as itself, carries how the entry
-// at its path gives way (composedDisplacement).
+// at its path gives way (composedDisplacement). A new file at a path no
+// synced item had is the user's new content under the name OneDrive gave
+// the moving item (z renamed g on OneDrive while a new g was made here): it
+// is renamed to a conflict copy first and uploaded later as a new file, so
+// the move runs and neither copy is lost. Left in place, the move waited
+// for good while the reconciliation of the path downloaded the item a
+// second time beside its copy here.
 func (e *moveEmitter) localDisplacementAt(occupant string, isNode bool, p string) moveDisplacement {
 	if isNode {
 		return e.nodes[occupant].displace
@@ -1725,7 +1735,13 @@ func (e *moveEmitter) localDisplacementAt(occupant string, isNode bool, p string
 		return moveDisplaceNever
 	}
 	key, ok := e.byPath[moveCoordBaseline][p]
-	if !ok || e.nodes[key].present(moveCoordLocal) {
+	if !ok {
+		if e.occupancy.localFiles[p] {
+			return moveDisplaceConflictCopy
+		}
+		return moveDisplaceNever
+	}
+	if e.nodes[key].present(moveCoordLocal) {
 		return moveDisplaceNever
 	}
 
@@ -1852,6 +1868,7 @@ func indexMoveSnapshot(
 		local:       make(map[string]bool, len(localRows)),
 		remote:      make(map[string]bool, len(remoteRows)),
 		remoteFiles: make(map[string]bool, len(remoteRows)),
+		localFiles:  make(map[string]bool, len(localRows)),
 	}
 	for i := range remoteRows {
 		remoteByID[remoteRows[i].ItemID] = &remoteRows[i]
@@ -1862,6 +1879,9 @@ func indexMoveSnapshot(
 	}
 	for i := range localRows {
 		occupancy.local[localRows[i].Path] = true
+		if localRows[i].ItemType == syncdomain.ItemTypeFile {
+			occupancy.localFiles[localRows[i].Path] = true
+		}
 	}
 
 	return remoteByID, occupancy
@@ -1963,6 +1983,20 @@ func composedRemotePosition(
 	}
 	switch {
 	case at.ComparisonKind == syncdomain.ComparisonRemoteMoveShadowed:
+		return row.Path
+	// The move OneDrive made is shadowed by this item's local move, and a
+	// new local file took its destination here (z moved into p here and to
+	// g on OneDrive, a new g made here): the path is a create conflict, but
+	// the item ID proves the item sits there, so the moves compose and the
+	// new file is kept as a conflict copy (localDisplacementAt). Without it
+	// the item was downloaded at the path beside its moved copy here. Only
+	// a file meeting a new file: two folders at one path merge as a create
+	// conflict of folders, and a folder composed so would undo that merge.
+	// Only a shadowed move: one OneDrive made alone, SQLite reconciles as a
+	// delete here at the item's path and a create conflict at the new one,
+	// which no composed move takes back.
+	case at.RemoteMoveShadowed && !at.BaselineType.Present() &&
+		entry.ItemType == syncdomain.ItemTypeFile && at.LocalType == syncdomain.SideFile:
 		return row.Path
 	// The path is another synced item's, which OneDrive moved away (a swap
 	// or a chain): the item ID proves this item now sits there, and the

@@ -397,6 +397,48 @@ func runNestingRotationMadeOnOneDrive(t *testing.T, tc *nestingRotationCase) {
 	requireScenarioQuietPlan(t, eng)
 }
 
+// Validates: R-2.17.6, R-2.17.9
+//
+// notes.txt is moved into docs here and renamed g.txt on OneDrive, while a
+// new g.txt is made here: two different files given one name, one on each
+// side. OneDrive's name wins for the moved file, and the new file is kept
+// under a conflict name and uploaded: both sides end with the same tree,
+// each content exactly once, and the moved file is still the item OneDrive
+// renamed. Before, the moved file was downloaded at g.txt beside its copy in
+// docs, and every later sync planned the same again.
+func TestRunOnce_AFileMadeHereUnderTheNameOneDriveGaveAMovedFileIsKeptAsAConflictCopy(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-docs", "root", "docs")
+	remote.addFile(t, "item-notes", "root", "notes.txt", "notes\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	remote.moveAt(t, "notes.txt", "g.txt")
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Rename(local("notes.txt"), local("docs/notes.txt")))
+	require.NoError(t, os.WriteFile(local("g.txt"), []byte("new\n"), 0o600))
+
+	runScenarioUntilDone(t, eng)
+
+	tree := remote.tree()
+	assert.Equal(t, tree, harnessLocalTree(t, syncRoot), "both sides end with the same tree")
+	assert.Equal(t, "g.txt", remote.pathOf("item-notes"), "the moved file is the item OneDrive renamed")
+	contents := map[string]int{}
+	for p, content := range tree {
+		if content != "/" {
+			contents[content]++
+			assert.NotEqual(t, "docs/notes.txt", p, "the moved file leaves docs")
+		}
+	}
+	assert.Equal(t, map[string]int{"notes\n": 1, "new\n": 1}, contents, "each content once: the new file is kept, the moved one not copied")
+	assert.Equal(t, 1, remote.uploads, "only the new file is uploaded")
+	assert.Equal(t, downloadsBefore, remote.downloads, "the moved file is moved here, not downloaded again")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // folderMadeHereCase is one way OneDrive takes a.txt out of docs while this
 // computer moved it into a new folder docs/new.
 type folderMadeHereCase struct {

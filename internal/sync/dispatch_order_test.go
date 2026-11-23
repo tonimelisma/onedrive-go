@@ -394,6 +394,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_AnOutageOfTimeoutsIsOneConditionNotOnePerFile,
 		TestRunOnce_SubfolderMovedOnOneDriveToThePathItsMovedParentLeftConverges,
 		TestRunOnce_ARotationThroughNestingMadeOnOneDriveConverges,
+		TestRunOnce_AFileMadeHereUnderTheNameOneDriveGaveAMovedFileIsKeptAsAConflictCopy,
 		TestRunOnce_FileMovedOnOneDriveOutOfAFolderMadeHereConverges,
 		TestRunOnce_FileMovedOutOfARenamedSubfolderIntoTheRecreatedFolderConverges,
 		TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges,
