@@ -18,6 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
@@ -44,14 +45,12 @@ func newPresentedError(message string, err error) error {
 // remoteOpError names the OneDrive path a command was working on when it
 // failed, so main can say "/docs/a.txt was not found on OneDrive" instead of
 // printing the whole wrapped chain. Error() keeps the familiar
-// `<action> "<path>": <cause>` text for --verbose details and logs. noParent
-// marks a path with no parent folder a list could show, such as a shared
-// file's selector.
+// `<action> "<path>": <cause>` text for --verbose details and logs. The path
+// is a OneDrive path or a shared item's selector (sharedref.Prefix).
 type remoteOpError struct {
-	action   string
-	path     string
-	err      error
-	noParent bool
+	action string
+	path   string
+	err    error
 }
 
 func (e *remoteOpError) Error() string {
@@ -186,7 +185,9 @@ func isDroppedConnection(err error) bool {
 }
 
 // remoteFailureSubject returns the path a command recorded for its failure
-// (or "the item") and, when the path has a parent, a hint to list it.
+// (or "the item") and, when the path has a parent, a hint to list it. A
+// shared item's selector has no parent a list could show: 'ls' of what
+// path.Dir makes of it lists the user's own drive, where the item is not.
 func remoteFailureSubject(err error) (*remoteOpError, string, string) {
 	var op *remoteOpError
 	if !errors.As(err, &op) {
@@ -194,7 +195,7 @@ func remoteFailureSubject(err error) (*remoteOpError, string, string) {
 	}
 
 	hint := ""
-	if parent := path.Dir(op.path); parent != op.path && !op.noParent {
+	if parent := path.Dir(op.path); parent != op.path && !strings.HasPrefix(op.path, sharedref.Prefix) {
 		hint = " Run 'onedrive-go ls " + parent + "' to see what is there."
 	}
 
@@ -260,11 +261,12 @@ func localFailureText(err error) string {
 		return "The local disk is full (or below the min_free_space reserve). Free up space, then run the command again."
 	}
 
-	var pathErr *fs.PathError
-	if !errors.As(err, &pathErr) {
+	// The path is named as the user gave it (a relative "ro/b.txt" stays
+	// relative), as the --verbose details name it.
+	subject := localpath.FailedPath(err)
+	if subject == "" {
 		return ""
 	}
-	subject := pathErr.Path
 	if driveops.IsOwnedTransferArtifactName(filepath.Base(subject)) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return ""

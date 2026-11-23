@@ -14,7 +14,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
-	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 )
 
 func newGetCmd() *cobra.Command {
@@ -110,7 +109,7 @@ func downloadOneFile(
 			cc.Statusf("Re-run the same command to resume.\n")
 		}
 
-		return &remoteOpError{action: "downloading", path: subject, err: err, noParent: strings.HasPrefix(subject, sharedref.Prefix)}
+		return newRemoteOpError("downloading", subject, err)
 	}
 
 	cc.Logger.Debug("download complete", "local_path", localPath, "bytes", result.Size)

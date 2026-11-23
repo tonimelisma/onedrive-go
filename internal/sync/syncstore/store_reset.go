@@ -38,11 +38,13 @@ func ResetStateDB(ctx context.Context, dbPath string, logger *slog.Logger) error
 }
 
 // RemoveStateDBFiles deletes the SQLite DB family rooted at dbPath
-// (config.StateDBFamily), the database last.
+// (config.StateDBFamily), the database last. The wraps in this file keep
+// their verbs and leave the path to the error under them: a localpath
+// failure, and an *os.File's own read or close error, already names it.
 func RemoveStateDBFiles(dbPath string) error {
 	for _, candidate := range config.StateDBFamily(dbPath) {
 		if err := localpath.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove state DB file %s: %w", candidate, err)
+			return fmt.Errorf("remove state DB file: %w", err)
 		}
 	}
 
@@ -55,7 +57,7 @@ func RemoveStateDBSidecars(dbPath string) error {
 	family := config.StateDBFamily(dbPath)
 	for _, sidecar := range family[:len(family)-1] {
 		if err := localpath.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove state DB file %s: %w", sidecar, err)
+			return fmt.Errorf("remove state DB file: %w", err)
 		}
 	}
 
@@ -90,7 +92,7 @@ func MoveStateDBFamily(from, to string) error {
 				source, targets[i], source, source)
 		}
 		if renameErr := localpath.Rename(source, targets[i]); renameErr != nil {
-			return fmt.Errorf("move state DB file %s: %w", source, renameErr)
+			return fmt.Errorf("move state DB file: %w", renameErr)
 		}
 	}
 
@@ -105,7 +107,7 @@ func StateDBFileExists(path string) (bool, error) {
 	case errors.Is(err, os.ErrNotExist):
 		return false, nil
 	default:
-		return false, fmt.Errorf("check state DB file %s: %w", path, err)
+		return false, fmt.Errorf("check state DB file: %w", err)
 	}
 }
 
@@ -145,11 +147,11 @@ func FoldStateDBLog(ctx context.Context, dbPath string) error {
 func hasSQLiteHeader(dbPath string) (_ bool, err error) {
 	file, err := localpath.OpenRegular(dbPath)
 	if err != nil {
-		return false, fmt.Errorf("open state DB %s: %w", dbPath, err)
+		return false, fmt.Errorf("open state DB: %w", err)
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("close state DB %s: %w", dbPath, closeErr)
+			err = fmt.Errorf("close state DB: %w", closeErr)
 		}
 	}()
 
@@ -158,7 +160,7 @@ func hasSQLiteHeader(dbPath string) (_ bool, err error) {
 		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
 			return false, nil
 		}
-		return false, fmt.Errorf("read state DB %s: %w", dbPath, readErr)
+		return false, fmt.Errorf("read state DB: %w", readErr)
 	}
 
 	return string(header) == sqliteHeader, nil

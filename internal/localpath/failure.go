@@ -20,6 +20,11 @@ type callError struct {
 	object string
 	err    error
 	cause  error // what reads after the path: err, or the reason it holds
+	// given and reached are the one path the call worked on, as the caller
+	// gave it and as the call reached it; both "" for a rename or a step on
+	// no path of its own (FailedPath).
+	given   string
+	reached string
 }
 
 func (e *callError) Error() string {
@@ -36,7 +41,29 @@ func (e *callError) Unwrap() error { return e.err }
 // it ("<from> to <to>" for a rename). reached is the path the call reached,
 // or the two of a rename, which err names too.
 func failure(verb, object string, err error, reached ...string) error {
-	return &callError{verb: verb, object: object, err: err, cause: reasonOf(err, reached)}
+	failed := &callError{verb: verb, object: object, err: err, cause: reasonOf(err, reached)}
+	if len(reached) == 1 {
+		failed.given, failed.reached = object, reached[0]
+	}
+
+	return failed
+}
+
+// FailedPath is the path the first *fs.PathError in err's chain names, as
+// the caller gave it when a call of this package failed on that very path,
+// and the absolute path the error holds otherwise; "" when err holds no
+// *fs.PathError. A sentence for the user names the path the way the user
+// typed it ("ro/b.txt"), not the absolute path the call resolved it to.
+func FailedPath(err error) string {
+	pathErr, ok := errors.AsType[*fs.PathError](err)
+	if !ok {
+		return ""
+	}
+	if call, ok := errors.AsType[*callError](err); ok && call.given != "" && call.reached == pathErr.Path {
+		return call.given
+	}
+
+	return pathErr.Path
 }
 
 // reasonOf is the part of err that reads after the path a failure names: the

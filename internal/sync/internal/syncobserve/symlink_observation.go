@@ -21,7 +21,7 @@ import (
 func statObservedPath(fsPath string) (os.FileInfo, bool, error) {
 	linkInfo, err := localpath.Lstat(fsPath)
 	if err != nil {
-		return nil, false, fmt.Errorf("lstat observed path %s: %w", fsPath, err)
+		return nil, false, fmt.Errorf("lstat observed path: %w", err)
 	}
 
 	// The birth time completes the filesystem identity, so a watch event
@@ -33,7 +33,7 @@ func statObservedPath(fsPath string) (os.FileInfo, bool, error) {
 
 	info, err := localpath.Stat(fsPath)
 	if err != nil {
-		return nil, true, fmt.Errorf("stat observed symlink target %s: %w", fsPath, err)
+		return nil, true, fmt.Errorf("stat observed symlink target: %w", err)
 	}
 
 	return synctree.AttachBirthTime(info, fsPath), true, nil
@@ -86,7 +86,7 @@ func rootObservedDirStack(syncRoot string, logger *slog.Logger) map[string]struc
 func resolvedObservedDirPath(fsPath string) (string, error) {
 	resolved, err := localpath.EvalSymlinks(fsPath)
 	if err != nil {
-		return "", fmt.Errorf("resolve observed directory %s: %w", fsPath, err)
+		return "", fmt.Errorf("resolve observed directory: %w", err)
 	}
 
 	return filepath.Clean(resolved), nil

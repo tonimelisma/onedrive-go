@@ -178,8 +178,8 @@ func TestRunGet_AnUnwritableFileIsNamedOnce(t *testing.T) {
 	require.ErrorIs(t, run.err, os.ErrPermission)
 	plain, details, found := strings.Cut(commandErrorText(run.err, true), "\nDetails: ")
 	require.True(t, found)
-	assert.Equal(t, "Error: Permission denied for "+filepath.Join(parent, "ro")+". Check its file permissions.", plain,
-		"the sentence names the folder the hidden partial file could not be made in")
+	assert.Equal(t, "Error: Permission denied for ro. Check its file permissions.", plain,
+		"the sentence names the folder the hidden partial file could not be made in, as the user gave it")
 	assert.Regexp(t,
 		`^downloading "/b\.txt": creating the partial file: opening ro/\.onedrive-go\.b\.txt[^ ]*\.partial: permission denied$`,
 		details)

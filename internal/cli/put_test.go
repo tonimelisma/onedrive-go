@@ -176,8 +176,8 @@ func TestRunPut_FolderNamesAnUnreadableFileOnce(t *testing.T) {
 	assert.Equal(t, []string{failure}, doc.Errors)
 }
 
-// A single put of a file it cannot read says so in one sentence, and its
-// details name the file once, as the user typed it.
+// A single put of a file it cannot read says so in one sentence that names
+// the file as the user typed it, and its details name it once, the same way.
 //
 // Validates: R-6.6.26
 func TestRunPut_AnUnreadableFileIsNamedOnce(t *testing.T) {
@@ -194,7 +194,7 @@ func TestRunPut_AnUnreadableFileIsNamedOnce(t *testing.T) {
 	run := runFileCommand(t, putCommand, cc, false, "locked.txt", "/one.txt")
 
 	require.ErrorIs(t, run.err, os.ErrPermission)
-	assert.Equal(t, "Error: Permission denied for "+filepath.Join(parent, "locked.txt")+". Check its file permissions.\n"+
+	assert.Equal(t, "Error: Permission denied for locked.txt. Check its file permissions.\n"+
 		`Details: uploading "/one.txt": hashing: opening locked.txt: permission denied`,
 		commandErrorText(run.err, true))
 }

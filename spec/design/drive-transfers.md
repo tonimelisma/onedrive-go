@@ -828,14 +828,21 @@ call caused, a Graph answer or an integrity mismatch, names none
 (`TestTransferManager_DownloadError_NamesNoLocalPath`,
 `TestTransferManager_Upload_ErrorWrapping`). An os error that names another
 path than the one the call was given, a parent `MkdirAll` could not create,
-is printed whole (`TestFailures_KeepAnOSErrorThatNamesAnotherPath`). The
+is printed whole (`TestFailures_KeepAnOSErrorThatNamesAnotherPath`). A
+caller that wraps such a failure keeps its own verb and does not name the
+path again: the state database's reset, move and checks
+(`internal/sync/syncstore/store_reset.go`) read `remove state DB file:
+removing <path>: <reason>` (`TestRemoveStateDBFiles_AFileThatCannotBeRemovedIsNamedOnce`). The
 command names the file it was working on, so every failure names it once: a
 single `put` as `uploading "<remote>": …` and a single `get` as
 `downloading "<remote>": …`, by the drive path or the shared selector the
 user typed, whatever the cause (`TestDownloadOneFile_AFailureThatIsNotLocalNamesTheRemotePathOnce`,
 `TestRunGet_ASharedFileThatFailsNamesTheSelectorOnce`). A selector has no
-parent folder, so a single `get` of a shared file that OneDrive does not find
-suggests no folder to list (`TestRunGet_ASharedFileNotFoundSuggestsNoFolderToList`).
+parent folder, so a single `get` of a shared file, a `get` of a shared folder
+and a `put` to a shared file that OneDrive does not find suggest no folder to
+list: the sentence gives the `ls` hint only for a path that does not start
+with `sharedref.Prefix` (`TestRunGet_ASharedFileNotFoundSuggestsNoFolderToList`,
+`TestSharedPutAndFolderGet_NotFoundSuggestsNoFolderToList`).
 A tree event names its file or
 folder by `LocalPath`, and its error names no local path of its own. A line
 that starts with the path prints the cause through `localpath.WithoutPath`,
@@ -846,9 +853,12 @@ the walk found it below the folder the user typed, and its `--json` `errors`
 hold the same string (`TestRunPut_FolderNamesAnUnreadableFileOnce`,
 `TestRunPut_FolderWithAFailingFileUploadsTheOthers`,
 `TestRunGet_FolderNamesAnUnwritableFileOnce`). A single `put` or `get` prints
-the error itself, whose `--verbose` details name the path once
+one sentence that names the local path as the user gave it, relative when it
+was typed relative (`localpath.FailedPath`: the path of the failed call as
+given, when the os error names the path that call reached), and its
+`--verbose` details name the path once, the same way
 (`TestRunPut_AnUnreadableFileIsNamedOnce`,
-`TestRunGet_AnUnwritableFileIsNamedOnce`), and sync's activity line names the
+`TestRunGet_AnUnwritableFileIsNamedOnce`, `TestFailedPath_IsThePathAsTheCallerGaveIt`), and sync's activity line names the
 path below the sync folder and then only the innermost reason
 (`TestSyncConsole_ALocalFileFailureNamesTheFileOnce`). A log line may carry a
 `path` attribute beside the error.
