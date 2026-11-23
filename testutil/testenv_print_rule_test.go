@@ -38,7 +38,8 @@ func rawPrintArguments(t *testing.T, source string) []string {
 			return true
 		}
 		selector, isSelector := call.Fun.(*ast.SelectorExpr)
-		if !isSelector || !isIdentNamed(selector.X, "fmt") || !strings.Contains(selector.Sel.Name, "Print") ||
+		// Print, Printf, Println and their F forms; the S forms print nothing.
+		if !isSelector || !isIdentNamed(selector.X, "fmt") || !strings.Contains(strings.ToLower(selector.Sel.Name), "print") ||
 			strings.HasPrefix(selector.Sel.Name, "Sprint") {
 			return true
 		}
