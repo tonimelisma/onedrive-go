@@ -38,7 +38,7 @@ func ciRerunRun(attempt int, jobs ...githubJob) githubRun {
 func TestPlanUnstartedRerun(t *testing.T) {
 	t.Parallel()
 
-	unstarted := ciRerunJob("verify-unit (macos-latest, 3/3)", "cancelled", false)
+	unstarted := ciRerunJob("verify-unit (macos-latest, 3/3)", checkConclusionCancelled, false)
 	passed := ciRerunJob("verify-lint (linux)", "success", true)
 
 	cases := []struct {
@@ -56,7 +56,7 @@ func TestPlanUnstartedRerun(t *testing.T) {
 			wantReason: "verify-unit (ubuntu-latest, 1/3) failed",
 		},
 		{
-			name: "a job canceled while it ran, a timeout or a person", run: ciRerunRun(1, unstarted, ciRerunJob("e2e", "cancelled", true)),
+			name: "a job canceled while it ran, a timeout or a person", run: ciRerunRun(1, unstarted, ciRerunJob("e2e", checkConclusionCancelled, true)),
 			wantReason: "e2e was canceled while it ran",
 		},
 		{
@@ -66,10 +66,10 @@ func TestPlanUnstartedRerun(t *testing.T) {
 		{
 			name: "the whole run canceled: a newer push superseded it",
 			run: githubRun{
-				Status: "completed", Conclusion: "cancelled", Attempt: 1,
+				Status: "completed", Conclusion: checkConclusionCancelled, Attempt: 1,
 				Jobs: []githubJob{unstarted},
 			},
-			wantReason: "the run concluded cancelled",
+			wantReason: "the run concluded " + checkConclusionCancelled,
 		},
 		{
 			name: "still running", run: githubRun{Status: "in_progress", Attempt: 1, Jobs: []githubJob{unstarted}},
@@ -101,7 +101,7 @@ func TestRerunUnstartedCIJobsRerunsOnlyWhenThePlanSays(t *testing.T) {
 		run       githubRun
 		wantRerun bool
 	}{
-		{name: "unstarted", run: ciRerunRun(1, ciRerunJob("e2e", "cancelled", false)), wantRerun: true},
+		{name: "unstarted", run: ciRerunRun(1, ciRerunJob("e2e", checkConclusionCancelled, false)), wantRerun: true},
 		{name: "failed", run: ciRerunRun(1, ciRerunJob("e2e", "failure", true))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
