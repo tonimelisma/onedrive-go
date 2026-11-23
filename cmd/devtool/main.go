@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -22,10 +21,6 @@ type benchFunc func(context.Context, devtool.BenchOptions) error
 type cleanupAuditFunc func(context.Context, devtool.CleanupAuditOptions) error
 
 type nightlyFunc func(context.Context, devtool.NightlyOptions) error
-
-type worktreeAddFunc func(context.Context, string, string, string) error
-
-type worktreeBootstrapFunc func(string, string) error
 
 type worktreePruneFunc func(context.Context, devtool.WorktreePruneOptions) error
 
@@ -58,7 +53,7 @@ func newRootCmd() *cobra.Command {
 		newVerifyCmd(defaultCWD, defaultVerify),
 		newBenchCmd(defaultCWD, defaultBench),
 		newCleanupAuditCmd(defaultCWD, defaultCleanupAudit),
-		newWorktreeCmd(defaultCWD, defaultAddWorktree, defaultBootstrapWorktree, defaultPruneMergedWorktrees),
+		newWorktreeCmd(defaultCWD, defaultPruneMergedWorktrees),
 		newNightlyCmd(defaultCWD, defaultNightly),
 		newCICmd(defaultCWD, defaultCIRerun),
 	)
@@ -227,7 +222,6 @@ type verifyFlags struct {
 	dodPR              int
 	dodRecentMerged    int
 	dodCommentManifest string
-	dodWorktree        string
 	dodBranch          string
 	dodCITimeout       time.Duration
 	dodCIMaxReruns     int
@@ -291,7 +285,6 @@ func (f *verifyFlags) options(cmd *cobra.Command, repoRoot string, profile devto
 		DODPR:              f.dodPR,
 		DODRecentMerged:    f.dodRecentMerged,
 		DODCommentManifest: f.dodCommentManifest,
-		DODWorktree:        f.dodWorktree,
 		DODBranch:          f.dodBranch,
 		DODCITimeout:       f.dodCITimeout,
 		DODCIMaxReruns:     f.dodCIMaxReruns,
@@ -387,7 +380,6 @@ func (f *verifyFlags) registerDODFlags(cmd *cobra.Command) {
 	cmd.Flags().IntVar(&f.dodPR, "pr", 0, "GitHub pull request number for DoD PR stages")
 	cmd.Flags().IntVar(&f.dodRecentMerged, "recent-merged", devtool.DefaultDODRecentMerged, "merged PR count for DoD review-thread audits")
 	cmd.Flags().StringVar(&f.dodCommentManifest, "comment-manifest", "", "DoD PR review-thread manifest path")
-	cmd.Flags().StringVar(&f.dodWorktree, "worktree", "", "increment worktree path for DoD post-merge cleanup")
 	cmd.Flags().StringVar(&f.dodBranch, "branch", "", "increment branch name: owns nightly claims at DoD start, cleaned up at post-merge")
 	cmd.Flags().DurationVar(
 		&f.dodCITimeout,
@@ -450,22 +442,13 @@ func newBenchCmd(getwd cwdLookup, runBench benchFunc) *cobra.Command {
 	return cmd
 }
 
-func newWorktreeCmd(
-	getwd cwdLookup,
-	addWorktree worktreeAddFunc,
-	bootstrapWorktree worktreeBootstrapFunc,
-	pruneMerged worktreePruneFunc,
-) *cobra.Command {
+func newWorktreeCmd(getwd cwdLookup, pruneMerged worktreePruneFunc) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "worktree",
-		Short: "Create, bootstrap and prune repo worktrees",
+		Short: "Prune the builder worktrees whose work is in origin/main",
 	}
 
-	cmd.AddCommand(
-		newWorktreeAddCmd(getwd, addWorktree),
-		newWorktreeBootstrapCmd(getwd, bootstrapWorktree),
-		newWorktreePruneMergedCmd(getwd, pruneMerged),
-	)
+	cmd.AddCommand(newWorktreePruneMergedCmd(getwd, pruneMerged))
 
 	return cmd
 }
@@ -521,72 +504,6 @@ func newCleanupAuditCmd(getwd cwdLookup, runCleanupAudit cleanupAuditFunc) *cobr
 	return cmd
 }
 
-func newWorktreeAddCmd(getwd cwdLookup, addWorktree worktreeAddFunc) *cobra.Command {
-	var (
-		path   string
-		branch string
-	)
-
-	cmd := &cobra.Command{
-		Use:   "add",
-		Short: "Create a worktree from origin/main and apply .worktreeinclude",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			repoRoot, err := getwd()
-			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
-			}
-
-			return addWorktree(cmd.Context(), repoRoot, path, branch)
-		},
-	}
-
-	cmd.Flags().StringVar(&path, "path", "", "worktree path")
-	cmd.Flags().StringVar(&branch, "branch", "", "new branch name")
-	requireFlag(cmd, "path")
-	requireFlag(cmd, "branch")
-
-	return cmd
-}
-
-func newWorktreeBootstrapCmd(getwd cwdLookup, bootstrapWorktree worktreeBootstrapFunc) *cobra.Command {
-	var (
-		path       string
-		sourceRoot string
-	)
-
-	cmd := &cobra.Command{
-		Use:   "bootstrap",
-		Short: "Apply .worktreeinclude entries to an existing worktree",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			repoRoot := sourceRoot
-			if repoRoot == "" {
-				var err error
-				repoRoot, err = getwd()
-				if err != nil {
-					return fmt.Errorf("get working directory: %w", err)
-				}
-			}
-
-			targetPath := path
-			if targetPath == "" {
-				targetPath = repoRoot
-			}
-
-			absTarget, err := filepath.Abs(targetPath)
-			if err != nil {
-				return fmt.Errorf("resolve worktree path: %w", err)
-			}
-
-			return bootstrapWorktree(repoRoot, absTarget)
-		},
-	}
-
-	cmd.Flags().StringVar(&path, "path", "", "existing worktree path (defaults to current working tree)")
-	cmd.Flags().StringVar(&sourceRoot, "source-root", "", "source repo/worktree path that owns .worktreeinclude and local adjuncts")
-
-	return cmd
-}
-
 func requireFlag(cmd *cobra.Command, name string) {
 	if err := cmd.MarkFlagRequired(name); err != nil {
 		panic(err)
@@ -622,22 +539,6 @@ func defaultBench(ctx context.Context, opts devtool.BenchOptions) error {
 func defaultCleanupAudit(ctx context.Context, opts devtool.CleanupAuditOptions) error {
 	if err := devtool.RunCleanupAudit(ctx, devtool.ExecRunner{}, opts); err != nil {
 		return fmt.Errorf("run cleanup audit: %w", err)
-	}
-
-	return nil
-}
-
-func defaultAddWorktree(ctx context.Context, repoRoot, path, branch string) error {
-	if err := devtool.AddWorktree(ctx, devtool.ExecRunner{}, repoRoot, path, branch); err != nil {
-		return fmt.Errorf("add worktree: %w", err)
-	}
-
-	return nil
-}
-
-func defaultBootstrapWorktree(repoRoot, targetPath string) error {
-	if err := devtool.BootstrapWorktree(repoRoot, targetPath); err != nil {
-		return fmt.Errorf("bootstrap worktree: %w", err)
 	}
 
 	return nil

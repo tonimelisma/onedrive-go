@@ -8,9 +8,6 @@ const (
 	verifyGitDir = ".git"
 	// verifyTestdataDir is the local test-credential bundle, not Go test data.
 	verifyTestdataDir = ".testdata"
-	// verifyWorktreesDir holds the increment worktrees `devtool worktree add`
-	// creates under the checkout, each a whole other tree.
-	verifyWorktreesDir = ".worktrees"
 	// verifyClaudeDir holds the agent harness's local state, its worktrees
 	// (whole other trees) among it.
 	verifyClaudeDir      = ".claude"
@@ -32,7 +29,7 @@ const (
 // among them.
 func skipRepositoryRuleDir(name string) bool {
 	switch name {
-	case verifyGitDir, verifyTestdataDir, verifyWorktreesDir, verifyClaudeDir, verifyNodeModulesDir, verifyVendorDir,
+	case verifyGitDir, verifyTestdataDir, verifyClaudeDir, verifyNodeModulesDir, verifyVendorDir,
 		defaultVerifyLogDirName:
 		return true
 	default:

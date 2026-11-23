@@ -135,7 +135,6 @@ type VerifyOptions struct {
 	DODPR              int
 	DODRecentMerged    int
 	DODCommentManifest string
-	DODWorktree        string
 	DODBranch          string
 	// DODCITimeout is the hard cap on one DoD CI wait. Zero allows one stall
 	// window for the first attempt and one for every rerun.

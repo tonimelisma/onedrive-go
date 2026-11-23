@@ -86,7 +86,7 @@ type worktreePruneDecision struct {
 // nothing (`git merge-tree --write-tree` yields origin/main's own tree). Only
 // a clean worktree goes, and only through `git worktree remove` without
 // --force, so git itself refuses anything with local changes; ignored files
-// (build output, the .worktreeinclude adjuncts) go with the directory, as git
+// (build output) go with the directory, as git
 // removes them. A worktree locked by a running agent, or locked by hand, is
 // kept: the lock is someone saying "in use". Every other worktree is reported
 // with the reason it stays. A removal that fails is reported and the rest go

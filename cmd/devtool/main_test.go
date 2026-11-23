@@ -88,7 +88,6 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 		"--pr", "682",
 		"--recent-merged", "12",
 		"--comment-manifest", "/tmp/dod-comments.json",
-		"--worktree", "/tmp/wt",
 		"--branch", "feat/dod",
 		"--ci-timeout", "45m",
 		"--ci-max-reruns", "1",
@@ -115,7 +114,6 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, 682, got.DODPR)
 	assert.Equal(t, 12, got.DODRecentMerged)
 	assert.Equal(t, "/tmp/dod-comments.json", got.DODCommentManifest)
-	assert.Equal(t, "/tmp/wt", got.DODWorktree)
 	assert.Equal(t, "feat/dod", got.DODBranch)
 	assert.Equal(t, 45*time.Minute, got.DODCITimeout)
 	assert.Equal(t, 1, got.DODCIMaxReruns)
@@ -254,52 +252,6 @@ func TestNewCleanupAuditCmdPassesFlagsThrough(t *testing.T) {
 	assert.True(t, got.JSON)
 }
 
-// Validates: R-6.10.21
-func TestNewWorktreeAddCmdRequiresFlags(t *testing.T) {
-	t.Parallel()
-
-	cmd := newWorktreeAddCmd(
-		func() (string, error) { return testRepoRoot, nil },
-		func(context.Context, string, string, string) error { return nil },
-	)
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs(nil)
-
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "required flag")
-}
-
-// Validates: R-6.10.21
-func TestNewWorktreeAddCmdCallsAddWorktree(t *testing.T) {
-	t.Parallel()
-
-	var (
-		gotRepoRoot string
-		gotPath     string
-		gotBranch   string
-	)
-
-	cmd := newWorktreeAddCmd(
-		func() (string, error) { return testRepoRoot, nil },
-		func(_ context.Context, repoRoot, path, branch string) error {
-			gotRepoRoot = repoRoot
-			gotPath = path
-			gotBranch = branch
-			return nil
-		},
-	)
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"--path", "/wt", "--branch", "refactor/test"})
-
-	require.NoError(t, cmd.Execute())
-	assert.Equal(t, testRepoRoot, gotRepoRoot)
-	assert.Equal(t, "/wt", gotPath)
-	assert.Equal(t, "refactor/test", gotBranch)
-}
-
 // Validates: R-6.10.37
 func TestNewWorktreePruneMergedCmdPassesDryRun(t *testing.T) {
 	t.Parallel()
@@ -323,58 +275,6 @@ func TestNewWorktreePruneMergedCmdPassesDryRun(t *testing.T) {
 	assert.Equal(t, testRepoRoot, got.RepoRoot)
 	assert.True(t, got.DryRun)
 	assert.NotNil(t, got.Stdout)
-}
-
-// Validates: R-6.10.21
-func TestNewWorktreeBootstrapCmdDefaultsTargetPathToRepoRoot(t *testing.T) {
-	t.Parallel()
-
-	var (
-		gotRepoRoot string
-		gotTarget   string
-	)
-
-	cmd := newWorktreeBootstrapCmd(
-		func() (string, error) { return testRepoRoot, nil },
-		func(repoRoot, targetPath string) error {
-			gotRepoRoot = repoRoot
-			gotTarget = targetPath
-			return nil
-		},
-	)
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs(nil)
-
-	require.NoError(t, cmd.Execute())
-	assert.Equal(t, testRepoRoot, gotRepoRoot)
-	assert.Equal(t, testRepoRoot, gotTarget)
-}
-
-// Validates: R-6.10.21
-func TestNewWorktreeBootstrapCmdSupportsExplicitSourceRoot(t *testing.T) {
-	t.Parallel()
-
-	var (
-		gotRepoRoot string
-		gotTarget   string
-	)
-
-	cmd := newWorktreeBootstrapCmd(
-		func() (string, error) { return "/ignored", nil },
-		func(repoRoot, targetPath string) error {
-			gotRepoRoot = repoRoot
-			gotTarget = targetPath
-			return nil
-		},
-	)
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"--source-root", "/source", "--path", "/target"})
-
-	require.NoError(t, cmd.Execute())
-	assert.Equal(t, "/source", gotRepoRoot)
-	assert.Equal(t, "/target", gotTarget)
 }
 
 // Validates: R-6.10.1
@@ -439,25 +339,6 @@ func TestDefaultBenchWrapsRunBenchError(t *testing.T) {
 	assert.Contains(t, err.Error(), "run bench")
 }
 
-// Validates: R-6.10.21
-func TestDefaultBootstrapWorktreeWrapsError(t *testing.T) {
-	t.Parallel()
-
-	err := defaultBootstrapWorktree(t.TempDir(), filepath.Join(t.TempDir(), "wt"))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bootstrap worktree")
-}
-
-// Validates: R-6.10.21
-func TestDefaultAddWorktreeWrapsError(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	err := defaultAddWorktree(context.Background(), repoRoot, filepath.Join(repoRoot, "wt"), "refactor/test")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "add worktree")
-}
-
 // Validates: R-6.10.11
 func TestDefaultCleanupAuditWrapsError(t *testing.T) {
 	t.Parallel()
@@ -479,19 +360,6 @@ func TestRequireFlagPanicsForUnknownFlag(t *testing.T) {
 	assert.Panics(t, func() {
 		requireFlag(cmd, "missing")
 	})
-}
-
-// Validates: R-6.10.1
-func TestMainIntegrationHelpersUseRealFilesystemState(t *testing.T) {
-	t.Parallel()
-
-	repoRoot := t.TempDir()
-	targetRoot := t.TempDir()
-
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".worktreeinclude"), []byte(".env\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".env"), []byte("TOKEN=1\n"), 0o600))
-
-	require.NoError(t, defaultBootstrapWorktree(repoRoot, targetRoot))
 }
 
 var _ = cobra.Command{}
@@ -596,110 +464,6 @@ func TestNewVerifyCmdAcceptsTheRaceAndSeedsProfiles(t *testing.T) {
 		assert.Equal(t, tc.seedStart, got.SeedStart, tc.args)
 		assert.Contains(t, cmd.Use, "|"+string(tc.profile)+"|", "the usage line names the profile")
 	}
-}
-
-// Validates: R-6.10.21
-func TestDevtoolBinary_WorktreeBootstrapCopiesAndSymlinks(t *testing.T) {
-	binPath := buildDevtoolBinary(t)
-
-	sourceRoot := t.TempDir()
-	targetRoot := t.TempDir()
-
-	require.NoError(t, os.WriteFile(filepath.Join(sourceRoot, ".worktreeinclude"), []byte("@.testdata\n.env\n"), 0o600))
-	require.NoError(t, os.MkdirAll(filepath.Join(sourceRoot, ".testdata"), 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(sourceRoot, ".testdata", "config.toml"), []byte("x"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(sourceRoot, ".env"), []byte("TOKEN=1\n"), 0o600))
-
-	stdout, stderr, err := runBinary(t, sourceRoot, binPath, "worktree", "bootstrap", "--path", targetRoot)
-	require.NoError(t, err, stdout+stderr)
-
-	//nolint:gosec // test reads a temp file created under the test-owned target root.
-	envData, readErr := os.ReadFile(filepath.Join(targetRoot, ".env"))
-	require.NoError(t, readErr)
-	assert.Equal(t, "TOKEN=1\n", string(envData))
-
-	linkTarget, linkErr := os.Readlink(filepath.Join(targetRoot, ".testdata"))
-	require.NoError(t, linkErr)
-	assert.Equal(t, filepath.Join(sourceRoot, ".testdata"), linkTarget)
-}
-
-// Validates: R-6.10.21
-func TestDevtoolBinary_WorktreeBootstrapHonorsExplicitSourceRoot(t *testing.T) {
-	binPath := buildDevtoolBinary(t)
-
-	cwdRoot := t.TempDir()
-	sourceRoot := t.TempDir()
-	targetRoot := t.TempDir()
-
-	require.NoError(t, os.WriteFile(filepath.Join(cwdRoot, ".worktreeinclude"), []byte(".env\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(cwdRoot, ".env"), []byte("TOKEN=wrong\n"), 0o600))
-
-	require.NoError(t, os.WriteFile(filepath.Join(sourceRoot, ".worktreeinclude"), []byte("@.testdata\n.env\n"), 0o600))
-	require.NoError(t, os.MkdirAll(filepath.Join(sourceRoot, ".testdata"), 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(sourceRoot, ".testdata", "config.toml"), []byte("x"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(sourceRoot, ".env"), []byte("TOKEN=right\n"), 0o600))
-
-	stdout, stderr, err := runBinary(
-		t,
-		cwdRoot,
-		binPath,
-		"worktree",
-		"bootstrap",
-		"--source-root",
-		sourceRoot,
-		"--path",
-		targetRoot,
-	)
-	require.NoError(t, err, stdout+stderr)
-
-	//nolint:gosec // test reads a temp file created under the test-owned target root.
-	envData, readErr := os.ReadFile(filepath.Join(targetRoot, ".env"))
-	require.NoError(t, readErr)
-	assert.Equal(t, "TOKEN=right\n", string(envData))
-
-	linkTarget, linkErr := os.Readlink(filepath.Join(targetRoot, ".testdata"))
-	require.NoError(t, linkErr)
-	assert.Equal(t, filepath.Join(sourceRoot, ".testdata"), linkTarget)
-}
-
-// Validates: R-6.10.21
-func TestDevtoolBinary_WorktreeAddCreatesBootstrappedWorktree(t *testing.T) {
-	binPath := buildDevtoolBinary(t)
-
-	remoteRoot := filepath.Join(t.TempDir(), "origin.git")
-	runGit(t, "", "init", "--bare", remoteRoot)
-
-	repoRoot := filepath.Join(t.TempDir(), "repo")
-	runGit(t, "", "clone", remoteRoot, repoRoot)
-	runGit(t, repoRoot, "checkout", "-b", "main")
-	runGit(t, repoRoot, "config", "user.name", "Test User")
-	runGit(t, repoRoot, "config", "user.email", "test@example.com")
-
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".worktreeinclude"), []byte("@.testdata\n.env\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".env"), []byte("TOKEN=1\n"), 0o600))
-	require.NoError(t, os.MkdirAll(filepath.Join(repoRoot, ".testdata"), 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, ".testdata", "config.toml"), []byte("x"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("test repo\n"), 0o600))
-
-	runGit(t, repoRoot, "add", ".")
-	runGit(t, repoRoot, "commit", "-m", "initial")
-	runGit(t, repoRoot, "push", "-u", "origin", "main")
-
-	worktreePath := filepath.Join(t.TempDir(), "wt")
-	stdout, stderr, err := runBinary(t, repoRoot, binPath, "worktree", "add", "--path", worktreePath, "--branch", "refactor/test")
-	require.NoError(t, err, stdout+stderr)
-
-	branchName := strings.TrimSpace(runGit(t, worktreePath, "branch", "--show-current"))
-	assert.Equal(t, "refactor/test", branchName)
-
-	//nolint:gosec // test reads a temp file created under the test-owned worktree root.
-	envData, readErr := os.ReadFile(filepath.Join(worktreePath, ".env"))
-	require.NoError(t, readErr)
-	assert.Equal(t, "TOKEN=1\n", string(envData))
-
-	linkTarget, linkErr := os.Readlink(filepath.Join(worktreePath, ".testdata"))
-	require.NoError(t, linkErr)
-	assert.Equal(t, filepath.Join(repoRoot, ".testdata"), linkTarget)
 }
 
 // Validates: R-6.10.11

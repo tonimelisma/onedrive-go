@@ -387,64 +387,93 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 	if opts.DODPR == 0 {
 		return errors.New("dod post-merge: --pr is required")
 	}
-	if opts.DODWorktree == "" {
-		return errors.New("dod post-merge: --worktree is required")
-	}
-	if opts.DODBranch == "" {
-		return errors.New("dod post-merge: --branch is required")
-	}
 	// The wait's policy is read before the merge, so a missing workflow fails
 	// the stage while nothing has happened yet.
 	ciWait, err := newCIWaitConfig(opts, opts.RepoRoot, ciEventPush, stdout)
 	if err != nil {
 		return err
 	}
-	if branchErr := requirePRHeadBranch(ctx, gh, opts.RepoRoot, opts.DODPR, opts.DODBranch); branchErr != nil {
-		return branchErr
+	branch := opts.DODBranch
+	if branch == "" {
+		if branch, err = currentIncrementBranch(ctx, runner, opts.RepoRoot); err != nil {
+			return err
+		}
+		if branch == "" {
+			return errors.New("dod post-merge: run it on the increment's branch, or pass --branch")
+		}
+	}
+	pr, err := loadPullRequest(ctx, gh, opts.RepoRoot, opts.DODPR)
+	if err != nil {
+		return err
+	}
+	if pr.Head.Ref != branch {
+		return fmt.Errorf("dod post-merge: --branch %s is not the head branch of PR #%d, %s", branch, opts.DODPR, pr.Head.Ref)
+	}
+	// The branch is reset to main once the merge is in, so a change it does
+	// not hold yet would be lost: refuse before anything happens.
+	if err := requireCleanCheckout(ctx, runner, opts.RepoRoot); err != nil {
+		return err
 	}
 
-	prState, err := mergePR(ctx, runner, gh, opts.RepoRoot, opts.DODPR)
+	merged, err := mergePR(ctx, gh, opts.RepoRoot, opts.DODPR, pr.Head.SHA)
 	if err != nil {
 		return err
 	}
-	mainRoot, err := mainWorktreePath(ctx, runner, opts.RepoRoot)
-	if err != nil {
+	if err := markNightlyClaimsFixed(ctx, gh, opts.RepoRoot, branch, merged.MergeCommitSHA, time.Now()); err != nil {
 		return err
 	}
-	if err := markNightlyClaimsFixed(ctx, gh, mainRoot, opts.DODBranch, prState.MergeCommitSHA, time.Now()); err != nil {
+	if err := restartBranchFromMain(ctx, runner, opts.RepoRoot, branch, stderr); err != nil {
 		return err
 	}
-	if err := cleanupMergedIncrement(ctx, runner, mainRoot, opts.DODWorktree, opts.DODBranch, stderr); err != nil {
+	if err := waitForPostMergePushCI(ctx, runner, opts.RepoRoot, merged.MergeCommitSHA, ciWait); err != nil {
 		return err
 	}
-	if err := waitForPostMergePushCI(ctx, runner, mainRoot, prState.MergeCommitSHA, ciWait); err != nil {
-		return err
+	if err := PruneMergedWorktrees(ctx, runner, WorktreePruneOptions{RepoRoot: opts.RepoRoot, Stdout: stdout}); err != nil {
+		return fmt.Errorf("dod post-merge: %w", err)
 	}
 	if err := RunCleanupAudit(ctx, runner, CleanupAuditOptions{
-		RepoRoot: mainRoot,
+		RepoRoot: opts.RepoRoot,
 		Stdout:   stdout,
 		Stderr:   stderr,
 	}); err != nil {
 		return fmt.Errorf("dod post-merge cleanup audit: %w", err)
 	}
-	if err := runDODNightly(ctx, runner, gh, mainRoot, DODStagePostMerge, opts.DODBranch, time.Now, stdout); err != nil {
+	if err := runDODNightly(ctx, runner, gh, opts.RepoRoot, DODStagePostMerge, branch, time.Now, stdout); err != nil {
 		return err
 	}
-	return writeStatus(stdout, "dod post-merge: merge, cleanup, and post-merge CI interpretation passed\n")
+	return writeStatus(stdout, "dod post-merge: merge, branch restart, and post-merge CI interpretation passed\n")
 }
 
-// requirePRHeadBranch refuses a branch that is not the pull request's head:
-// post-merge marks that branch's nightly claims fixed with the merge commit
-// and removes the branch, so it is checked before anything is merged.
-func requirePRHeadBranch(ctx context.Context, gh ghClient, repoRoot string, prNumber int, branch string) error {
-	pr, err := loadPullRequest(ctx, gh, repoRoot, prNumber)
+// requireCleanCheckout refuses a checkout holding a change git tracks or a
+// file it does not: the increment's branch is about to be reset to main.
+func requireCleanCheckout(ctx context.Context, runner commandRunner, repoRoot string) error {
+	out, err := runner.Output(ctx, repoRoot, os.Environ(), "git", "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
-		return err
+		return fmt.Errorf("dod post-merge read checkout status: %w", err)
 	}
-	if pr.Head.Ref != branch {
-		return fmt.Errorf("dod post-merge: --branch %s is not the head branch of PR #%d, %s", branch, prNumber, pr.Head.Ref)
+	if changed := strings.TrimSpace(string(out)); changed != "" {
+		return fmt.Errorf("dod post-merge: the checkout holds changes the merge does not; commit or remove them first:\n%s", changed)
 	}
+	return nil
+}
 
+// restartBranchFromMain points the increment's branch at the new origin/main
+// and pushes it, the way a session's branch starts its next increment after a
+// squash merge: the squash commit is not a descendant of the branch, so the
+// branch would otherwise carry the merged commits into the next pull request.
+// The push is a force with lease, since the remote branch holds only the
+// merged commits, or nothing when the merge deleted it.
+func restartBranchFromMain(ctx context.Context, runner commandRunner, repoRoot string, branch string, stderr io.Writer) error {
+	steps := [][]string{
+		{"fetch", "--prune", "origin", mainBranchName},
+		{"checkout", "-B", branch, originMainRef},
+		{"push", "--force-with-lease", "-u", "origin", branch},
+	}
+	for _, args := range steps {
+		if err := runner.Run(ctx, repoRoot, os.Environ(), io.Discard, stderr, "git", args...); err != nil {
+			return fmt.Errorf("dod post-merge restart %s from %s: git %s: %w", branch, originMainRef, args[0], err)
+		}
+	}
 	return nil
 }
 
@@ -1233,51 +1262,23 @@ func unresolvedThreadIDs(threads []DODReviewThread) []string {
 	return unresolved
 }
 
-// mergePR merges the pull request once. A failed merge is not repeated: the
-// server's merge state, read next, decides whether it happened.
-func mergePR(ctx context.Context, runner commandRunner, gh ghClient, repoRoot string, prNumber int) (githubPullRequest, error) {
-	output, err := runner.CombinedOutput(
-		ctx,
-		repoRoot,
-		os.Environ(),
-		githubCLI,
-		"pr",
-		"merge",
-		strconv.Itoa(prNumber),
-		"--squash",
-		"--delete-branch",
-	)
-	if err == nil {
-		return requirePRMerged(ctx, gh, repoRoot, prNumber)
-	}
-	state, stateErr := requirePRMerged(ctx, gh, repoRoot, prNumber)
+// mergePR squash-merges the pull request over REST, pinned to head, the head
+// commit the stage checked: GitHub refuses the merge when the branch moved
+// since. The request is sent once; whether it merged, also when it failed
+// after GitHub carried it out or when the pull request was merged already,
+// is the server's merge state, read next.
+func mergePR(ctx context.Context, gh ghClient, repoRoot string, prNumber int, head string) (githubPullRequest, error) {
+	number := strconv.Itoa(prNumber)
+	_, mergeErr := gh.outputOnce(ctx, repoRoot, "dod merge PR #"+number+" (PUT repos/{owner}/{repo}/pulls/"+number+"/merge)",
+		"api", "-X", "PUT", githubRepoPath+"/pulls/"+number+"/merge", "-f", "merge_method=squash", "-f", "sha="+head)
+	merged, stateErr := requirePRMerged(ctx, gh, repoRoot, prNumber)
 	if stateErr == nil {
-		return state, nil
+		return merged, nil
 	}
-	if !isRecoverableMergePRError(string(output), err) {
-		return githubPullRequest{}, fmt.Errorf(
-			"dod merge PR #%d: %s: %w (server merge check: %v)",
-			prNumber,
-			strings.TrimSpace(string(output)),
-			err,
-			stateErr.Error(),
-		)
+	if mergeErr != nil {
+		return githubPullRequest{}, fmt.Errorf("dod merge PR #%d: %w (server merge check: %w)", prNumber, mergeErr, stateErr)
 	}
 	return githubPullRequest{}, stateErr
-}
-
-func isRecoverableMergePRError(output string, err error) bool {
-	return isMainWorktreeMergeQuirk(output, err) || isAlreadyMergedPRMergeOutput(output, err)
-}
-
-func isMainWorktreeMergeQuirk(output string, err error) bool {
-	text := strings.ToLower(output + " " + err.Error())
-	return strings.Contains(text, "main") && strings.Contains(text, "already used by worktree")
-}
-
-func isAlreadyMergedPRMergeOutput(output string, err error) bool {
-	text := strings.ToLower(output + " " + err.Error())
-	return strings.Contains(text, "already merged")
 }
 
 func requirePRMerged(ctx context.Context, gh ghClient, repoRoot string, prNumber int) (githubPullRequest, error) {
@@ -1289,133 +1290,4 @@ func requirePRMerged(ctx context.Context, gh ghClient, repoRoot string, prNumber
 		return githubPullRequest{}, fmt.Errorf("dod merge PR #%d: server state is not merged", prNumber)
 	}
 	return pr, nil
-}
-
-func mainWorktreePath(ctx context.Context, runner commandRunner, repoRoot string) (string, error) {
-	worktrees, err := loadWorktreeStates(ctx, runner, repoRoot)
-	if err != nil {
-		return "", fmt.Errorf("dod load worktrees: %w", err)
-	}
-	for i := range worktrees {
-		worktree := worktrees[i]
-		if worktree.Branch == mainBranchName {
-			return worktree.Path, nil
-		}
-	}
-	return "", errors.New("dod main worktree not found")
-}
-
-func cleanupMergedIncrement(
-	ctx context.Context,
-	runner commandRunner,
-	mainRoot string,
-	worktreePath string,
-	branch string,
-	stderr io.Writer,
-) error {
-	if err := fastForwardMainForDODCleanup(ctx, runner, mainRoot, stderr); err != nil {
-		return err
-	}
-	if err := removeDODWorktree(ctx, runner, mainRoot, worktreePath, stderr); err != nil {
-		return err
-	}
-	if err := deleteDODIncrementBranches(ctx, runner, mainRoot, branch); err != nil {
-		return err
-	}
-	if err := runDODCleanupGit(ctx, runner, mainRoot, stderr, "fetch", "--prune", "origin"); err != nil {
-		return fmt.Errorf("dod cleanup final fetch: %w", err)
-	}
-	return nil
-}
-
-func fastForwardMainForDODCleanup(ctx context.Context, runner commandRunner, mainRoot string, stderr io.Writer) error {
-	if err := runDODCleanupGit(ctx, runner, mainRoot, stderr, "fetch", "--prune", "origin"); err != nil {
-		return fmt.Errorf("dod cleanup fetch: %w", err)
-	}
-	if err := runDODCleanupGit(ctx, runner, mainRoot, stderr, "checkout", mainBranchName); err != nil {
-		return fmt.Errorf("dod cleanup checkout main: %w", err)
-	}
-	if err := runDODCleanupGit(ctx, runner, mainRoot, stderr, "pull", "--ff-only", "origin", mainBranchName); err != nil {
-		return fmt.Errorf("dod cleanup pull main: %w", err)
-	}
-	return nil
-}
-
-func removeDODWorktree(
-	ctx context.Context,
-	runner commandRunner,
-	mainRoot string,
-	worktreePath string,
-	stderr io.Writer,
-) error {
-	if _, err := stat(worktreePath); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("dod cleanup stat worktree: %w", err)
-	}
-	// git refuses a worktree that holds untracked files, and the bootstrap
-	// symlink is one. Only what bootstrap put there goes; anything else is left
-	// for git to refuse, so a worktree holding real work is never forced away.
-	if err := removeBootstrapEntries(defaultWorktreeFS(), mainRoot, worktreePath); err != nil {
-		return fmt.Errorf("dod cleanup remove bootstrap entries: %w", err)
-	}
-	if err := runDODCleanupGit(ctx, runner, mainRoot, stderr, "worktree", "remove", worktreePath); err != nil {
-		return fmt.Errorf("dod cleanup remove worktree: %w", err)
-	}
-	return nil
-}
-
-func deleteDODIncrementBranches(
-	ctx context.Context,
-	runner commandRunner,
-	mainRoot string,
-	branch string,
-) error {
-	if err := deleteDODLocalBranch(ctx, runner, mainRoot, branch); err != nil {
-		return err
-	}
-	if err := deleteDODRemoteBranch(ctx, runner, mainRoot, branch); err != nil {
-		return err
-	}
-	return nil
-}
-
-func deleteDODLocalBranch(ctx context.Context, runner commandRunner, mainRoot string, branch string) error {
-	output, err := runner.CombinedOutput(ctx, mainRoot, os.Environ(), "git", "branch", "-D", branch)
-	if err == nil || isMissingLocalBranchText(string(output), err) {
-		return nil
-	}
-	return fmt.Errorf("dod cleanup delete local branch: %s: %w", strings.TrimSpace(string(output)), err)
-}
-
-func deleteDODRemoteBranch(ctx context.Context, runner commandRunner, mainRoot string, branch string) error {
-	output, err := runner.CombinedOutput(ctx, mainRoot, os.Environ(), "git", "push", "origin", "--delete", branch)
-	if err == nil || isMissingRemoteBranchText(string(output), err) {
-		return nil
-	}
-	return fmt.Errorf("dod cleanup delete remote branch: %s: %w", strings.TrimSpace(string(output)), err)
-}
-
-func runDODCleanupGit(
-	ctx context.Context,
-	runner commandRunner,
-	mainRoot string,
-	stderr io.Writer,
-	args ...string,
-) error {
-	if err := runner.Run(ctx, mainRoot, os.Environ(), io.Discard, stderr, "git", args...); err != nil {
-		return fmt.Errorf("run cleanup git %v: %w", args, err)
-	}
-	return nil
-}
-
-func isMissingLocalBranchText(output string, err error) bool {
-	text := strings.ToLower(output + " " + err.Error())
-	return strings.Contains(text, "branch") && (strings.Contains(text, "not found") || strings.Contains(text, "not a branch"))
-}
-
-func isMissingRemoteBranchText(output string, err error) bool {
-	text := strings.ToLower(output + " " + err.Error())
-	return strings.Contains(text, "remote ref does not exist") ||
-		strings.Contains(text, "remote ref not found")
 }
