@@ -837,12 +837,101 @@ pass refused once: a pass removes from a side only content the user deleted
 or overwrote, or that the pass keeps as a conflict copy or a version, the
 sides converge, the last plan holds nothing, and a delete nobody else touched
 happens. The runs that still break one are listed, each with what it breaks,
-in `internal/sync/testdata/exhaustive/pairs.golden`. The check plans with the
+in `internal/sync/internal/syncplan/testdata/exhaustive/pairs.golden`. The check plans with the
 real planner and store but executes through a model, which compares content
 between passes, not between the actions of one, and fails only creates. A
 remote move whose local copy sits elsewhere in the snapshot carries
 `MovedLocalPath`, and a local move ordered before its folder's move carries
 `MovedRemotePath`, so freshness reads the snapshot where the item is.
+
+#### What the exhaustive check's broken runs show
+
+The 255 runs of `pairs.golden` (200 from the synced tree, 55 from the held
+one; a run names its start, the two histories, the refused create if any,
+and the invariants it breaks) fall into eleven shapes. Each is an open
+behaviour of the planner unless it says it is right as it is; a fix removes
+its lines from the file. The refused-create variants of a run break what
+the run itself breaks, so they belong to its shape.
+
+1. A rotation through nesting made on OneDrive (56 runs: 50 synced, 6
+   held). One entry moves into a folder, which then takes the entry's old
+   path (`mv p x/p, mv x p`, `mv z p/z, mv p z`, `mv p/f x/f, mv x p/f`),
+   whatever this side did elsewhere. Here the two moves wait on each other:
+   the entry's move lands inside the folder's new path, and the folder's move
+   waits for the entry to leave that path, so both stay held for good (sides
+   differ, work left held). The same rotation made here converges, because
+   OneDrive moves an item into its parent by ID, which the order the
+   dependencies give allows; the local side needs the entry moved into the
+   folder at the folder's current path first, or a temporary name.
+2. A rotation through nesting split across the two sides (12 runs: 11
+   synced, 1 held): `p` moved into `x` here while OneDrive moved `x` into
+   `p` (with or without a third move onto a path they vacate, or a folder
+   made again at the old path). The two sides' moves form one cycle, held for
+   good like the shape above; it should resolve as a move conflict, one
+   nesting kept and the other's entry kept beside it.
+3. A folder moved onto the path of a folder deleted on the same side (27
+   runs: 26 synced, 1 held): `rm p, mv x p` or `rm x, mv p x` on OneDrive.
+   A replacing move onto a folder's path waits while the folder is there
+   (see the replacing move above), and nothing removes the deleted folder's
+   copy here, so the move waits for good; with the other side writing into
+   the deleted folder the deleted entry also comes back. The deleted folder
+   should go, keeping what the other side wrote, and the move then run.
+4. A replacing move that meets the other side's move or delete of one of
+   its entries (60 runs, all synced): an entry deleted and another moved
+   onto its path on one side (`rm z, mv p z`, `rm x, mv p x`,
+   `rm p/f, mv x p/f`, or on OneDrive `rm p, mv x p`), while the other side
+   moved the deleted entry elsewhere (`mv z g`, `mv x q`, `mv p/f f`) or
+   moved the moving entry to another place (`mv x q`, `mv z g`). The plan
+   never empties and the sides differ: the move that names the entry should
+   win over the delete, and both moves of one entry should resolve as a move
+   conflict.
+5. A folder deleted on one side and replaced there by a file moved onto its
+   path, written into on the other side (17 runs, all synced, every one
+   breaking only the delete rule): `rm p, mv z p` on one side, a file made
+   in `p` or a folder moved into it on the other. Right as it is: the
+   written-into folder is kept whole as a conflict copy, so what the other
+   side wrote survives, and the synced file inside it that nobody touched is
+   kept with it, which is the delete the check reports as undone. Keeping a
+   whole folder the user wrote into is the data-safe outcome; the check's
+   delete rule does not yet count a conflict copy as a reason to keep a file.
+6. A move made the same on both sides, its vacated path reused on one (15
+   runs: 14 synced, 1 held): `mv p q` on both (or `mv p Q` there), and here
+   also `mv x p` or `mkdir p` at the old path. The sides end equal, but a
+   plan with nothing to do never comes: the agreed move keeps being planned
+   against the reuse of its source.
+7. Two different entries given the same new name, one on each side (18
+   runs: 16 synced, 2 held): `mv p q` here and `mv x q` on OneDrive, a file
+   made here as `g` while OneDrive renamed `z` to `g`, or, from the held
+   start, the folder made in the held one's place moved where OneDrive moved
+   the held one. The plan never empties and the sides differ; one of the
+   two should be kept under a conflict name.
+8. One entry moved to two places, or moved on one side and deleted on the
+   other (12 runs: 4 synced, 8 held): here `mv p x/p, mv x p` while OneDrive
+   renamed `p` (with the remote folder create refused once), or the held
+   folder moved or deleted here while OneDrive moved it. The plan never
+   empties and the sides differ; a move should beat a delete, and two moves
+   should resolve as a move conflict.
+9. A refused folder create of the held start (22 runs, all held, each
+   breaking only the empty-plan rule): OneDrive moves the held folder away,
+   freeing its name for the folder made here in its place, and that folder's
+   create on OneDrive is refused once. The sides end equal but the plan
+   never empties: after the refusal the work that waited for the create is
+   planned again pass after pass.
+10. A held folder moved into a folder that moves in the same pass (4 runs,
+   all held, nothing done on OneDrive): `mv p q, mv x2 q/x2` or
+   `mv x2 p/f, mv p q`. After the name collision is resolved the held move
+   is still held at the end; it should run once the collision is gone.
+11. Content removed from a side in a pass (12 runs: 2 synced, 10 held), the
+   rule that matters most. From the held start, a file renamed here onto
+   `x/g` in the folder made in the held one's place, while OneDrive made a
+   file at the same path in the held folder (7 runs, without a refusal too):
+   the two `x` folders are different items, and a pass removes one file's
+   content. And a removal that runs although the create that carries the
+   same content in that pass was refused (5 runs: a delete of the folder
+   that holds a file's only copy on OneDrive while the file's upload is
+   refused, a rename's download refused while the file it replaces goes):
+   the removal should wait with the refused create, as a delete waits for
+   held work.
 
 A remote move of a locally edited file is still applied (R-2.17.7): the local
 move source must be the same item (type and identity) but its content may
