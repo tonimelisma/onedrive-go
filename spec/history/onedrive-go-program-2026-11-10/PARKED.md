@@ -45,28 +45,28 @@ In flight: W57 has branch `test/crash-model-replacing-move` at `c6e273a6` (built
 - W114 — Three folders moved into each other's new folders converge — move planner; after F4. — still open: depends on W113
 
 ## Tests and tooling
-- W57 — The crash model draws the crash point of the replacing move — built and unreviewed; review and ship when a slot is free.
-- A22 — The nightly issue reads each red job's log, and a go test alarm keys only the test it names — CI only.
-- W45 — The chaos model runs in virtual time — after F5/F7 (R10), which give the one clock.
-- W46 — Jitter comes from a source the caller passes; a chaos seed replays identically — the jitter source lands in F5; the replay assertion is left, after W45.
-- W61 — The tree names no fixture folder and no live item ID — test hygiene.
-- W71 — An e2e assertion on what a sync did reads every attempt of its converge loop — e2e helper.
-- W72 — A seeded model of move steps holds that every plan converges — after F4 and the simulation rows.
-- W74 — The crash model checks every empty file of a converged tree against a declared allowance — after W57.
-- W75 — Each test that cites the executor-returns-results requirement tests it — test hygiene.
-- W78 — A source check holds the test wait rules — devtool check.
-- W82 — The dispatch-order record sees every pass — test record; scheduler moves in E12.
-- W83 — Test masks cover a sharer's name and any address — test hygiene.
-- W84 — The test environment prints no account path — test hygiene.
-- W85 — The e2e recorders take the roles they redact with — e2e helper.
-- W86 — The print rule follows what a suite function returns — devtool check.
-- W89 — The multisync panic-boundary tests that rerun the test binary run side by side — test speed.
-- W90 — Two sync tests that take 8 to 25 seconds are profiled and made cheap — test speed; after the split.
-- W94 — Lint reads every Go file, also one built only on another platform or with the race tag — lint config.
-- W102 — devtool links no product package, also through testutil — devtool.
-- W103 — Every repository-rule walk of devtool skips the same folders — devtool.
-- W104 — The benchmark's retries wait on an injected clock and read the CLI's server-error line — benchmark tooling.
-- W115 — Every run the exhaustive planner check records as broken has a row — after F3/F4.
+- [x] W57 — The crash model draws the crash point of the replacing move — built and unreviewed; review and ship when a slot is free. — built in #959
+- [x] A22 — The nightly issue reads each red job's log, and a go test alarm keys only the test it names — CI only. — built in #976 (a job log's read failure now names its HTTP status; the cause of the unreadable log is unknown until the next red night)
+- W45 — The chaos model runs in virtual time — after F5/F7 (R10), which give the one clock. — still open: the chaos model on virtual time needs runs of the chaos seeds to build and prove
+- W46 — Jitter comes from a source the caller passes; a chaos seed replays identically — the jitter source lands in F5; the replay assertion is left, after W45. — still open: a jitter source passed through every retry and backoff caller is too wide to build without running the tests
+- [x] W61 — The tree names no fixture folder and no live item ID — test hygiene. — built in #976 (the reference docs quote only invented IDs, held by a test; still open: removing the fixture defaults, which needs the CI fixtures secret checked by the owner)
+- [x] W71 — An e2e assertion on what a sync did reads every attempt of its converge loop — e2e helper. — built in #976
+- [x] W72 — A seeded model of move steps holds that every plan converges — after F4 and the simulation rows. — closed without code: the exhaustive check of short histories on both sides (#952) enumerates the move steps a seeded model would draw
+- [x] W74 — The crash model checks every empty file of a converged tree against a declared allowance — after W57. — built in #976
+- [x] W75 — Each test that cites the executor-returns-results requirement tests it — test hygiene. — built in #976
+- [x] W78 — A source check holds the test wait rules — devtool check. — built in #976
+- [x] W82 — The dispatch-order record sees every pass — test record; scheduler moves in E12. — built in #976
+- [x] W83 — Test masks cover a sharer's name and any address — test hygiene. — built in #976
+- [x] W84 — The test environment prints no account path — test hygiene. — built in #976
+- [x] W85 — The e2e recorders take the roles they redact with — e2e helper. — built in #976
+- W86 — The print rule follows what a suite function returns — devtool check. — still open: following function results changes which live sites the print rule flags, which needs the rule run while the list shrinks
+- [x] W89 — The multisync panic-boundary tests that rerun the test binary run side by side — test speed. — built in #976
+- [x] W90 — Two sync tests that take 8 to 25 seconds are profiled and made cheap — test speed; after the split. — closed without code: the row asks for profiling, which the closing rules allow only when a gate fails, and none did
+- [x] W94 — Lint reads every Go file, also one built only on another platform or with the race tag — lint config. — built in #976
+- [x] W102 — devtool links no product package, also through testutil — devtool. — built in #976
+- [x] W103 — Every repository-rule walk of devtool skips the same folders — devtool. — built in #976
+- [x] W104 — The benchmark's retries wait on an injected clock and read the CLI's server-error line — benchmark tooling. — built in #976
+- [x] W115 — Every run the exhaustive planner check records as broken has a row — after F3/F4. — built in #976 (each broken run's shape is written into the planning design; the behaviours it names stay open)
 
 ## Wording and lint
 - W26 — Human units are rendered by one package — wording.
