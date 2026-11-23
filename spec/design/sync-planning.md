@@ -1283,6 +1283,14 @@ folder's move, which waits for the delete of the file's old copy
 (`TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent`,
 `TestBuildDependencies_ADeleteDoesNotWaitForACreateThatWaitsForIt`).
 
+A baseline update below the path a baseline rekey moves a subtree to (a folder
+both sides moved alike) waits for the rekey (`addRekeyDestinationDep`). The
+rebind of a folder OneDrive deleted and made again below the moved folder
+(R-2.10.49) ran first, took the path a row of the subtree moves to, and the
+rekey failed on the store's unique path every pass
+(`TestBuildDependencies_AnUpdateBelowARekeyedFolderWaitsForTheRekey`, chaos
+seed 324).
+
 ### Dependency Build
 
 Every dependency rule relates an action to actions at its own path, at the

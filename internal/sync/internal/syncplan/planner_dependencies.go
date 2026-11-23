@@ -22,7 +22,8 @@ import (
 // remote delete or move-away of a sibling whose name differs only in case,
 // (7) a delete waits for the create on its side that writes the deleted
 // file's content at another path, unless that closes a cycle
-// (addContentCarrierDeps).
+// (addContentCarrierDeps), (8) a baseline update below the path a baseline
+// rekey moves a subtree to waits for the rekey (addRekeyDestinationDep).
 //
 // Every rule relates an action to actions at its own path, at the folders
 // above it, at the OneDrive name keys of its path and of those folders, or
@@ -49,6 +50,7 @@ func buildDependencyGraph(actions []syncdomain.Action) (deps [][]int, leftOut []
 		deps[i] = addMoveDeps(deps[i], i, &actions[i], actions, index)
 		deps[i] = addMoveOutOfDeletedFolderDeps(deps[i], i, &actions[i], actions, index)
 		deps[i] = addRemoteCaseVariantDeps(deps[i], i, &actions[i], actions, index)
+		deps[i] = addRekeyDestinationDep(deps[i], i, &actions[i], index.rekeysByPath)
 		// Sort dependency indices for reproducible ordering (B-154).
 		sort.Ints(deps[i])
 	}
@@ -65,6 +67,10 @@ func buildDependencyGraph(actions []syncdomain.Action) (deps [][]int, leftOut []
 // folders above the action (pathAncestors), so the lists cost the depth of
 // each path to build and hold each pair once.
 type dependencyIndex struct {
+	// rekeysByPath holds the baseline updates that move a baseline subtree
+	// (an OldPath) by the path they move it to.
+	rekeysByPath map[string][]int
+
 	folderCreateIdx map[string]int
 	conflictCopyIdx map[string]int
 	deleteIdx       map[string]int
@@ -149,9 +155,38 @@ func (index *dependencyIndex) indexByPath(i int, a *syncdomain.Action, folderDel
 			index.contentDeletes = append(index.contentDeletes, i)
 		}
 	case syncdomain.ActionBaselineUpdate:
+		if a.OldPath != "" && a.OldPath != a.Path {
+			if index.rekeysByPath == nil {
+				index.rekeysByPath = map[string][]int{}
+			}
+			index.rekeysByPath[a.Path] = append(index.rekeysByPath[a.Path], i)
+		}
 	default:
 		panic(syncdomain.OutsideTheEnum(a.Type))
 	}
+}
+
+// addRekeyDestinationDep makes a baseline update below the path a rekey
+// moves a baseline subtree to wait for it. Both items moved here and on
+// OneDrive (a folder renamed alike on both sides) are rekeyed as one subtree
+// move of their baseline rows, and a row written below the destination first
+// (the rebind of a folder OneDrive deleted and made again at its path,
+// R-2.10.49) took the path a row of the subtree moves to: the rekey failed on
+// the store's unique path every pass and sync never converged (chaos seed
+// 324). Once the rekey has run, the update below rewrites the moved row.
+func addRekeyDestinationDep(deps []int, idx int, a *syncdomain.Action, rekeysByPath map[string][]int) []int {
+	if a.Type != syncdomain.ActionBaselineUpdate || len(rekeysByPath) == 0 {
+		return deps
+	}
+	for parent := range pathAncestors(a.Path) {
+		for _, rekey := range rekeysByPath[parent] {
+			if rekey != idx {
+				deps = append(deps, rekey)
+			}
+		}
+	}
+
+	return deps
 }
 
 // linkWorkBelowFolders fills the per-action candidate lists by walking the
