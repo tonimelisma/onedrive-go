@@ -393,14 +393,9 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 	if err != nil {
 		return err
 	}
-	branch := opts.DODBranch
-	if branch == "" {
-		if branch, err = currentIncrementBranch(ctx, runner, opts.RepoRoot); err != nil {
-			return err
-		}
-		if branch == "" {
-			return errors.New("dod post-merge: run it on the increment's branch, or pass --branch")
-		}
+	branch, err := postMergeBranch(ctx, runner, opts)
+	if err != nil {
+		return err
 	}
 	pr, err := loadPullRequest(ctx, gh, opts.RepoRoot, opts.DODPR)
 	if err != nil {
@@ -411,8 +406,8 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 	}
 	// The branch is reset to main once the merge is in, so a change it does
 	// not hold yet would be lost: refuse before anything happens.
-	if err := requireCleanCheckout(ctx, runner, opts.RepoRoot); err != nil {
-		return err
+	if cleanErr := requireCleanCheckout(ctx, runner, opts.RepoRoot); cleanErr != nil {
+		return cleanErr
 	}
 
 	merged, err := mergePR(ctx, gh, opts.RepoRoot, opts.DODPR, pr.Head.SHA)
@@ -442,6 +437,22 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 		return err
 	}
 	return writeStatus(stdout, "dod post-merge: merge, branch restart, and post-merge CI interpretation passed\n")
+}
+
+// postMergeBranch is the increment's branch: --branch, else the branch the
+// checkout is on, which is the session's branch in a cloud session.
+func postMergeBranch(ctx context.Context, runner commandRunner, opts *VerifyOptions) (string, error) {
+	if opts.DODBranch != "" {
+		return opts.DODBranch, nil
+	}
+	branch, err := currentIncrementBranch(ctx, runner, opts.RepoRoot)
+	if err != nil {
+		return "", err
+	}
+	if branch == "" {
+		return "", errors.New("dod post-merge: run it on the increment's branch, or pass --branch")
+	}
+	return branch, nil
 }
 
 // requireCleanCheckout refuses a checkout holding a change git tracks or a

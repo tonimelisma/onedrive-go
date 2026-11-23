@@ -654,13 +654,13 @@ func createBenchBidirectionalRuntime(
 	configHome := filepath.Join(runtimeRoot, "config")
 	dataHome := filepath.Join(runtimeRoot, "data")
 	for _, dir := range []string{homeDir, configHome, dataHome, syncDir} {
-		if err := mkdirAll(dir, benchLiveFixtureDirPerm); err != nil {
+		if err := mkdirAll(dir); err != nil {
 			return benchBidirectionalRuntime{}, fmt.Errorf("create benchmark runtime path %s: %w", dir, err)
 		}
 	}
 
 	dataDir := filepath.Join(dataHome, "onedrive-go")
-	if err := mkdirAll(dataDir, benchLiveFixtureDirPerm); err != nil {
+	if err := mkdirAll(dataDir); err != nil {
 		return benchBidirectionalRuntime{}, fmt.Errorf("create benchmark data dir: %w", err)
 	}
 	if err := copyBenchCredentials(credentialDir, dataDir, driveID); err != nil {
@@ -800,7 +800,7 @@ func putBenchRemoteMutationFile(
 ) error {
 	localRoot := filepath.Join(runtime.rootDir, "remote-mutations")
 	localPath := filepath.Join(localRoot, filepath.FromSlash(entry.RelativePath))
-	if err := mkdirAll(filepath.Dir(localPath), benchLiveFixtureDirPerm); err != nil {
+	if err := mkdirAll(filepath.Dir(localPath)); err != nil {
 		return fmt.Errorf("create remote mutation parent for %s: %w", entry.RelativePath, err)
 	}
 	if err := writeBenchLiveFile(localPath, entry); err != nil {

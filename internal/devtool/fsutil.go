@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 )
 
+// Everything devtool writes is private to the user who runs it: verify
+// logs, summaries and benchmark results can quote environment details.
 const (
 	devtoolWriteFilePerm = 0o600
 	devtoolWriteDirPerm  = 0o700
@@ -22,30 +24,22 @@ func readFile(path string) ([]byte, error) {
 }
 
 func writeFile(path string, data []byte) error {
-	return atomicWrite(path, data, devtoolWriteFilePerm, devtoolWriteDirPerm, ".devtool-write-*.tmp")
+	return atomicWrite(path, data, ".devtool-write-*.tmp")
 }
 
-func stat(path string) (os.FileInfo, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("stat %s: %w", path, err)
+// statPath reports whether path can be stat'ed; the error wraps the cause,
+// os.ErrNotExist among them.
+func statPath(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
 	}
 
-	return info, nil
+	return nil
 }
 
-// lstat is stat that does not follow a symlink at path.
-func lstat(path string) (os.FileInfo, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("lstat %s: %w", path, err)
-	}
-
-	return info, nil
-}
-
-func mkdirAll(path string, perm os.FileMode) error {
-	if err := os.MkdirAll(path, perm); err != nil {
+// mkdirAll makes path and its parents, private to the user.
+func mkdirAll(path string) error {
+	if err := os.MkdirAll(path, devtoolWriteDirPerm); err != nil {
 		return fmt.Errorf("mkdir %s: %w", path, err)
 	}
 
@@ -104,17 +98,11 @@ func removeAll(path string) error {
 	return nil
 }
 
-func symlink(oldname string, newname string) error {
-	if err := os.Symlink(oldname, newname); err != nil {
-		return fmt.Errorf("symlink %s -> %s: %w", oldname, newname, err)
-	}
-
-	return nil
-}
-
-func atomicWrite(path string, data []byte, perm os.FileMode, dirPerm os.FileMode, tempPattern string) (retErr error) {
+// atomicWrite writes data to path through a temp file in its directory,
+// synced and renamed into place, private to the user.
+func atomicWrite(path string, data []byte, tempPattern string) (retErr error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
+	if err := os.MkdirAll(dir, devtoolWriteDirPerm); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 
@@ -136,7 +124,7 @@ func atomicWrite(path string, data []byte, perm os.FileMode, dirPerm os.FileMode
 	if _, err := tempFile.Write(data); err != nil {
 		return closeWithPrimaryError(tempFile, fmt.Errorf("write temp file %s: %w", tempPath, err))
 	}
-	if err := tempFile.Chmod(perm); err != nil {
+	if err := tempFile.Chmod(devtoolWriteFilePerm); err != nil {
 		return closeWithPrimaryError(tempFile, fmt.Errorf("chmod temp file %s: %w", tempPath, err))
 	}
 	if err := tempFile.Sync(); err != nil {

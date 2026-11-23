@@ -328,7 +328,7 @@ func parseAgentLock(lockReason string) (int, string, bool) {
 // a pid the kernel has since given to another process does not hold a dead
 // agent's lock. Without /proc (macOS) it cannot tell and says it runs.
 func procProcessRunning(pid int, startTicks string) bool {
-	if _, err := stat(filepath.Join(procRoot, "self", "stat")); err != nil {
+	if err := statPath(filepath.Join(procRoot, "self", "stat")); err != nil {
 		return true
 	}
 	data, err := readFile(filepath.Join(procRoot, strconv.Itoa(pid), "stat"))

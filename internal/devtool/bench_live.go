@@ -19,7 +19,6 @@ import (
 )
 
 const (
-	benchLiveFixtureDirPerm      = 0o700
 	benchLiveFilePerm            = 0o600
 	benchLivePatternBytes        = 4096
 	benchLivePollTimeout         = 2 * time.Minute
@@ -295,7 +294,7 @@ func validateBenchAllowlist(driveID string) error {
 
 func locateBenchCredentialDir(repoRoot string) (string, error) {
 	dir := filepath.Join(repoRoot, ".testdata")
-	if _, err := stat(dir); err != nil {
+	if err := statPath(dir); err != nil {
 		return "", fmt.Errorf("live benchmark requires %s (run scripts/bootstrap-test-credentials.sh first)", dir)
 	}
 
@@ -381,13 +380,13 @@ func copyBenchFile(src string, dst string) error {
 }
 
 func materializeBenchLiveFixture(scopeRoot string, files []benchLiveFileEntry) error {
-	if err := mkdirAll(scopeRoot, benchLiveFixtureDirPerm); err != nil {
+	if err := mkdirAll(scopeRoot); err != nil {
 		return fmt.Errorf("create fixture scope root: %w", err)
 	}
 
 	for _, entry := range files {
 		targetPath := filepath.Join(scopeRoot, filepath.FromSlash(entry.RelativePath))
-		if err := mkdirAll(filepath.Dir(targetPath), benchLiveFixtureDirPerm); err != nil {
+		if err := mkdirAll(filepath.Dir(targetPath)); err != nil {
 			return fmt.Errorf("create fixture parent for %s: %w", entry.RelativePath, err)
 		}
 		if err := writeBenchLiveFile(targetPath, entry); err != nil {

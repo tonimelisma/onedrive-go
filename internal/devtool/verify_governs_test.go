@@ -28,7 +28,7 @@ func (f governsFixture) writeGo(t *testing.T, rel string, body string) {
 	t.Helper()
 
 	path := filepath.Join(f.root, filepath.FromSlash(rel))
-	require.NoError(t, mkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, mkdirAll(filepath.Dir(path)))
 	require.NoError(t, writeFile(path, []byte(body)))
 }
 
@@ -36,7 +36,7 @@ func (f governsFixture) writeDoc(t *testing.T, name string, body string) {
 	t.Helper()
 
 	path := filepath.Join(f.root, "spec", "design", name)
-	require.NoError(t, mkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, mkdirAll(filepath.Dir(path)))
 	require.NoError(t, writeFile(path, []byte(body)))
 }
 

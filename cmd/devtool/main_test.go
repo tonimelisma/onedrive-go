@@ -404,7 +404,7 @@ func runBinary(t *testing.T, cwd, binPath string, args ...string) (string, strin
 	return stdout.String(), stderr.String(), err
 }
 
-func runGit(t *testing.T, cwd string, args ...string) string {
+func runGit(t *testing.T, cwd string, args ...string) {
 	t.Helper()
 
 	//nolint:gosec // test drives git against temporary repositories with explicit args.
@@ -415,8 +415,6 @@ func runGit(t *testing.T, cwd string, args ...string) string {
 
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
-
-	return string(output)
 }
 
 // Validates: R-6.10.1

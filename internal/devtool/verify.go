@@ -41,9 +41,6 @@ const (
 	fullE2ESerialParallel       = 1
 	fastE2EParallel             = 5
 
-	verifySummaryFilePerm = 0o600
-	verifySummaryDirPerm  = 0o700
-
 	verifySummaryStatusPass = "pass"
 	verifySummaryStatusFail = "fail"
 	// verifySummaryStatusNotRun is a step or bucket the profile did not start

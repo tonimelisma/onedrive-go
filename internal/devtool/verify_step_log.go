@@ -21,7 +21,6 @@ const (
 	verifyStepLogPrefix = "verify step log: "
 
 	verifyStepLogFilePerm = 0o600
-	verifyStepLogDirPerm  = 0o700
 )
 
 // stepLogs keeps the output of each go test step of one profile in a file of
@@ -119,7 +118,7 @@ func (l *stepLogs) copyToFile(p []byte) {
 // of the same step left. Writes append, so a run killed mid-step leaves a
 // readable partial log.
 func (l *stepLogs) open(step verifyStepName) (string, error) {
-	if err := mkdirAll(l.dir, verifyStepLogDirPerm); err != nil {
+	if err := mkdirAll(l.dir); err != nil {
 		return "", fmt.Errorf("create step log directory: %w", err)
 	}
 

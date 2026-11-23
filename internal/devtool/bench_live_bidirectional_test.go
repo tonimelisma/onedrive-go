@@ -293,7 +293,7 @@ func newScriptedBidirectionalSampleState(t *testing.T) (*benchBidirectionalScena
 
 	workRoot := t.TempDir()
 	credentialDir := filepath.Join(workRoot, ".testdata")
-	require.NoError(t, mkdirAll(credentialDir, 0o700))
+	require.NoError(t, mkdirAll(credentialDir))
 	require.NoError(t, writeFile(
 		filepath.Join(credentialDir, "token_personal_user@example.com.json"),
 		[]byte(`{"token":"x"}`),

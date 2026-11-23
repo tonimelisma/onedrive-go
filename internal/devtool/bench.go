@@ -22,9 +22,6 @@ const (
 
 	benchSchemaVersion = 2
 
-	benchResultFilePerm = 0o600
-	benchResultDirPerm  = 0o700
-
 	benchFailureExcerptLimit = 512
 	linuxMaxRSSUnitBytes     = 1024
 
@@ -704,7 +701,7 @@ func runStartupEmptyConfigSample(
 	configHome := filepath.Join(runtimeRoot, "config")
 	dataHome := filepath.Join(runtimeRoot, "data")
 	for _, path := range []string{homeDir, configHome, dataHome} {
-		if mkdirErr := mkdirAll(path, benchResultDirPerm); mkdirErr != nil {
+		if mkdirErr := mkdirAll(path); mkdirErr != nil {
 			return benchFixtureFailureSample(sample, fmt.Errorf("create runtime path %s: %w", path, mkdirErr))
 		}
 	}
@@ -1110,8 +1107,6 @@ func writeBenchResultJSON(path string, data []byte) error {
 	if err := atomicWrite(
 		path,
 		data,
-		benchResultFilePerm,
-		benchResultDirPerm,
 		".bench-result-*.tmp",
 	); err != nil {
 		return fmt.Errorf("atomic write benchmark result: %w", err)
