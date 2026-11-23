@@ -2760,6 +2760,114 @@ func giveWayFoldersReplacedOnOneDrive(
 	return kept
 }
 
+// mergeNewFoldersIntoFoldersOneDriveMovedOntoThem merges by path a folder
+// OneDrive moved onto a path where this computer made a new folder of its
+// own (`rm x, mv p x` on OneDrive, a new x made here after the synced x
+// went): the two are one folder by path, as two folders made at one path on
+// both sides are. The new folder here is bound to OneDrive's item, and the
+// item's own folder here, left at its old path, is deleted, so neither side
+// moves anything. Only when that folder holds nothing here: the delete then
+// removes no entry, and the executor's delete checks still refuse a folder
+// that gained one since the scan. Before, the move here waited for good for
+// the new folder to leave the path it lands on, and the sides never met.
+//
+// The node takes the new folder as its position here, so composition
+// re-keys its baseline row to the path, with the new folder's identity
+// (buildComposedMoveActions), and the delete of the old folder is planned
+// beside it. It returns the reconciliation actions with those deletes.
+func mergeNewFoldersIntoFoldersOneDriveMovedOntoThem(
+	inputs *moveInputs,
+	reconciled []syncdomain.Action,
+	comparisons []syncdomain.SQLiteComparisonRow,
+	views map[string]*syncdomain.PathView,
+	localRows []syncdomain.LocalStateRow,
+) []syncdomain.Action {
+	cmpByPath := make(map[string]*syncdomain.SQLiteComparisonRow, len(comparisons))
+	for i := range comparisons {
+		cmpByPath[comparisons[i].Path] = &comparisons[i]
+	}
+	heldHere := make(map[string]bool, len(inputs.nodes))
+	for i := range inputs.nodes {
+		if p := inputs.nodes[i].paths[moveCoordLocal]; p != "" {
+			heldHere[p] = true
+		}
+	}
+	for p := range inputs.identified {
+		heldHere[p] = true
+	}
+	deleted := localDeletePaths(reconciled)
+	merged := map[string]bool{}
+	var deletes []syncdomain.Action
+	for i := range inputs.nodes {
+		n := &inputs.nodes[i]
+		source, target := n.paths[moveCoordBaseline], n.paths[moveCoordRemote]
+		if !movedOnOneDriveOntoANewFolderHere(n, cmpByPath[target], heldHere, inputs.frozen) ||
+			!sameParentOnBothSides(inputs.nodes, path.Dir(target)) || holdsAnythingHere(source, localRows) ||
+			deleted[source] || views[source] == nil {
+			continue
+		}
+		n.paths[moveCoordLocal] = target
+		heldHere[target] = true
+		merged[target] = true
+		deletes = append(deletes, makeAction(syncdomain.ActionLocalDelete, views[source]))
+	}
+	if len(merged) == 0 {
+		return reconciled
+	}
+
+	// The re-key records the item at the path; the baseline update SQLite
+	// planned there, for the same item, would only record it again.
+	kept := reconciled[:0:0]
+	for i := range reconciled {
+		if !merged[reconciled[i].Path] || reconciled[i].Type != syncdomain.ActionBaselineUpdate {
+			kept = append(kept, reconciled[i])
+		}
+	}
+
+	return append(kept, deletes...)
+}
+
+// movedOnOneDriveOntoANewFolderHere reports a synced folder OneDrive moved,
+// left here at its baseline path, whose OneDrive path (at, the comparison
+// row there) holds here a folder that is no synced item's (heldHere: the
+// local positions of the synced items).
+func movedOnOneDriveOntoANewFolderHere(
+	n *moveNode, at *syncdomain.SQLiteComparisonRow, heldHere, frozen map[string]bool,
+) bool {
+	source, target := n.paths[moveCoordBaseline], n.paths[moveCoordRemote]
+	return n.itemType == syncdomain.ItemTypeFolder && !frozen[n.key] && n.paths[moveCoordLocal] == source &&
+		target != "" && target != source && !strings.HasPrefix(target, source+"/") && at != nil &&
+		at.LocalType == syncdomain.SideFolder && at.RemoteItemID == n.key && !heldHere[target]
+}
+
+// sameParentOnBothSides reports whether dir is the sync root or the path of a
+// synced folder both sides hold there, so a folder at dir/name is in the same
+// place on both.
+func sameParentOnBothSides(nodes []moveNode, dir string) bool {
+	if dir == "." || dir == "/" || dir == "" {
+		return true
+	}
+	for i := range nodes {
+		if nodes[i].paths[moveCoordLocal] == dir && nodes[i].paths[moveCoordRemote] == dir {
+			return true
+		}
+	}
+
+	return false
+}
+
+// holdsAnythingHere reports whether the local snapshot holds an entry below
+// folder.
+func holdsAnythingHere(folder string, localRows []syncdomain.LocalStateRow) bool {
+	for i := range localRows {
+		if strings.HasPrefix(localRows[i].Path, folder+"/") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // replacedOnOneDriveAndLeftHere reports a synced folder OneDrive deleted,
 // at its baseline path here, whose path OneDrive gives another synced item it
 // moved there (cmp is the comparison row of that path, synced the keys of

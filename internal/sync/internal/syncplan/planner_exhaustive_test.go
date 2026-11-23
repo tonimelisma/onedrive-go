@@ -2315,3 +2315,28 @@ func exActionsPlannedTwice(log []string) []string {
 
 	return twice
 }
+
+// Validates: R-2.17.13, R-2.17.6
+//
+// From the held start (x renamed x2 here while OneDrive keeps it as x, a new
+// x made here holding f, which left p), OneDrive moves p onto x after
+// deleting x, or into x after moving x onto p: either way p lands on the
+// path of the new x here and p is left empty here. The two are one folder
+// by path: the new x takes p's item and the empty p is deleted here, so
+// neither side moves anything, and every run, with each create refused
+// once, converges.
+func TestPlannerPairs_ANewFolderHereMergesWithTheFolderOneDriveMovedOntoItsPath(t *testing.T) {
+	t.Parallel()
+
+	held := exStartNamed(t, "held")
+	for _, pair := range []exPair{
+		{start: held, remote: []exEdit{
+			{kind: exDeleteFolder, from: "x"}, {kind: exMoveFolder, from: "p", to: "x"},
+		}},
+		{start: held, remote: []exEdit{
+			{kind: exMoveFolder, from: "x", to: "p/x"}, {kind: exMoveFolder, from: "p", to: "x"},
+		}},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}

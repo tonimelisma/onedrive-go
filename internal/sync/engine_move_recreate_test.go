@@ -1644,6 +1644,44 @@ func TestRunOnce_AFileWhoseMoveWaitsKeepsItsSyncedRowAndIsNeverCopied(t *testing
 	}
 }
 
+// Validates: R-2.17.13
+//
+// Here x is renamed x2, a new x is made and f is moved into it out of P,
+// which is left empty, while OneDrive deletes x and moves P onto its path.
+// The new x here and P, which OneDrive moved there, are one folder by path:
+// the new x takes P's item and the empty P here is deleted; x2, the synced x
+// renamed here that OneDrive deleted, is kept, as a move is over a delete,
+// and made again on OneDrive. One sync finishes it, with nothing moved or
+// uploaded on OneDrive, and P and f still the items they were. Before, P's
+// move here waited for good for the new x to leave the path.
+func TestRunOnce_ANewFolderHereMergesWithTheFolderOneDriveMovedOntoItsPath(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-x", "root", "x")
+	remote.addFolder("item-P", "root", "P")
+	remote.addFile(t, "item-f", "item-P", "f", "f\n")
+	remote.addFile(t, "item-z", "root", "z", "z\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	moveFOutOfPIntoANewX(t, scenarioLocalPath(syncRoot), "P/f")
+	remote.deleteAt(t, "x")
+	remote.moveAt(t, "P", "x")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes it")
+	assert.Zero(t, superseded)
+	want := map[string]string{"x": "/", "x/f": "f\n", "x2": "/", "z": "z\n"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "x", remote.pathOf("item-P"), "the folder is still the item OneDrive moved")
+	assert.Equal(t, "x/f", remote.pathOf("item-f"), "f is still the item it was")
+	assert.Zero(t, remote.uploads, "nothing is uploaded")
+	assert.Equal(t, []string{"x2"}, remote.folderCreates, "only the kept x2 is made on OneDrive")
+	assert.Empty(t, remote.moves, "nothing is moved on OneDrive")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-2.17.10, R-2.17.6
 //
 // Here x is renamed x2, a new x is made and f is moved into it, while X2,

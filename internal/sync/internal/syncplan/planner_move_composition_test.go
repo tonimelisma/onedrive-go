@@ -2793,3 +2793,58 @@ func TestMovedOntoAnotherItemsPath_NeedsTheIdentityAndTheSyncedContent(t *testin
 	_, ok = movedOntoAnotherItemsPath(stillHere, entry, local("p", "hash-z"), cmpByPath)
 	assert.False(t, ok, "OneDrive still holds the item at its path")
 }
+
+// Validates: R-2.17.13
+//
+// OneDrive moved the synced folder p onto x, where this computer holds a new
+// folder of its own, and p is left here at its path. With p empty here, the
+// new x takes p's item (p's position here is x, so composition re-keys) and
+// p is deleted here; the baseline update SQLite planned at x is left to the
+// re-key. With anything in p here, or with the folder at x a synced item's,
+// nothing is merged and nothing deleted.
+func TestMergeNewFoldersIntoFoldersOneDriveMovedOntoThem_OnlyAnEmptyFolderGivesWay(t *testing.T) {
+	t.Parallel()
+
+	inputsFor := func() *moveInputs {
+		node := moveNode{key: "item-p", itemType: syncdomain.ItemTypeFolder}
+		node.paths = [moveCoordCount]string{"p", "p", "x"}
+		return &moveInputs{nodes: []moveNode{node}, frozen: map[string]bool{}, identified: map[string]string{}}
+	}
+	comparisons := []syncdomain.SQLiteComparisonRow{
+		{Path: "p", BaselineItemID: "item-p", BaselineType: syncdomain.SideFolder, LocalType: syncdomain.SideFolder},
+		{
+			Path: "x", BaselineItemID: "item-x", RemoteItemID: "item-p", BaselineType: syncdomain.SideFolder,
+			LocalType: syncdomain.SideFolder, RemoteType: syncdomain.SideFolder, LocalItemReplaced: true,
+		},
+	}
+	views := map[string]*syncdomain.PathView{
+		"p": {Path: "p", Baseline: &syncdomain.BaselineEntry{ItemID: "item-p", ItemType: syncdomain.ItemTypeFolder}},
+		"x": {Path: "x", Remote: &syncdomain.RemoteState{ItemID: "item-p", ItemType: syncdomain.ItemTypeFolder}},
+	}
+	reconciled := []syncdomain.Action{makeAction(syncdomain.ActionBaselineUpdate, views["x"])}
+	folders := []syncdomain.LocalStateRow{
+		{Path: "p", ItemType: syncdomain.ItemTypeFolder},
+		{Path: "x", ItemType: syncdomain.ItemTypeFolder},
+	}
+
+	inputs := inputsFor()
+	planned := mergeNewFoldersIntoFoldersOneDriveMovedOntoThem(inputs, reconciled, comparisons, views, folders)
+	require.Len(t, planned, 1)
+	assert.Equal(t, syncdomain.ActionLocalDelete, planned[0].Type)
+	assert.Equal(t, "p", planned[0].Path, "the empty p is deleted here")
+	assert.Equal(t, "x", inputs.nodes[0].paths[moveCoordLocal], "the new x holds p's item here")
+
+	inputs = inputsFor()
+	written := append(slices.Clone(folders), syncdomain.LocalStateRow{Path: "p/new", ItemType: syncdomain.ItemTypeFile})
+	planned = mergeNewFoldersIntoFoldersOneDriveMovedOntoThem(inputs, reconciled, comparisons, views, written)
+	assert.Equal(t, reconciled, planned, "p holds a file here: nothing is deleted")
+	assert.Equal(t, "p", inputs.nodes[0].paths[moveCoordLocal])
+
+	inputs = inputsFor()
+	other := moveNode{key: "item-y", itemType: syncdomain.ItemTypeFolder}
+	other.paths = [moveCoordCount]string{"y", "x", "y"}
+	inputs.nodes = append(inputs.nodes, other)
+	planned = mergeNewFoldersIntoFoldersOneDriveMovedOntoThem(inputs, reconciled, comparisons, views, folders)
+	assert.Equal(t, reconciled, planned, "the folder at x is the synced y moved there: no merge")
+	assert.Equal(t, "p", inputs.nodes[0].paths[moveCoordLocal])
+}
