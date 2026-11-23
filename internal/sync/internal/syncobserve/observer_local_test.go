@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2022,4 +2023,30 @@ func TestFullScan_SkipsFIFOAndSocketWithoutBlocking(t *testing.T) {
 	for _, row := range result.Rows {
 		assert.Equal(t, "real.txt", row.Path)
 	}
+}
+
+// validateOneDriveName checks whether a filename is valid for OneDrive.
+// Returns ("", "") for valid names. For invalid names, returns the issue
+// type constant and a human-readable detail string. The detail never repeats
+// the name: every caller prints it next to the path ("Not syncing a/CON: the
+// name is reserved by Windows"), and %q-quoting the name again doubled any
+// backslash in it.
+//
+// Checks (ordered by specificity): empty name, trailing dot/space, leading
+// space, reserved device names, reserved patterns, invalid characters. A
+// name is never refused for its length: OneDrive limits the path, which
+// counts the name (oneDrivePathLength, R-2.11.12).
+func validateOneDriveName(name string) (reason syncdomain.IssueType, detail string) {
+	return validateOneDriveNameFor(name, false)
+}
+
+// paths lists every registered directory, for tests and diagnostics.
+func (r *watchRegistry) paths() []string {
+	out := make([]string, 0, len(r.dirs))
+	for path := range r.dirs {
+		out = append(out, path)
+	}
+	slices.Sort(out)
+
+	return out
 }

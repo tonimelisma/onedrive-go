@@ -3783,3 +3783,10 @@ func TestExecutor_ConflictCopy_DirectoryNeverReplacesAnEmptyDirectoryAtItsName(t
 	assert.Equal(t, filepath.Base(conflictCopyDirPathWithOrdinal(filepath.Join(syncRoot, "thing"), fixed, 2)), filepath.Base(o.OldPath))
 	assert.FileExists(t, filepath.Join(syncRoot, o.OldPath, "child.txt"))
 }
+
+// conflictCopyPath generates a timestamped conflict copy path beside path.
+// "file.txt" -> "file.conflict-20260101-120000.txt"
+// ".bashrc"  -> ".bashrc.conflict-20260101-120000" (dotfile: no separate ext)
+func conflictCopyPath(path string, now time.Time) string {
+	return conflictCopyPathWithOrdinal(path, now, 1)
+}

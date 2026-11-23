@@ -390,17 +390,6 @@ func (r *watchRegistry) descendants(path string) []string {
 	return out
 }
 
-// paths lists every registered directory, for tests and diagnostics.
-func (r *watchRegistry) paths() []string {
-	out := make([]string, 0, len(r.dirs))
-	for path := range r.dirs {
-		out = append(out, path)
-	}
-	slices.Sort(out)
-
-	return out
-}
-
 // FsWatcher abstracts filesystem event monitoring. Satisfied by
 // *fsnotify.Watcher; tests inject a mock implementation.
 type FsWatcher interface {

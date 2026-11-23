@@ -69,11 +69,6 @@ func ParseSideType(s string) (SideType, error) {
 	return SideTypeOf(itemType), nil
 }
 
-// AllSideTypes lists every SideType member.
-func AllSideTypes() []SideType {
-	return []SideType{SideAbsent, SideFile, SideFolder, SideRoot}
-}
-
 // DecisionState is everything the decision table reads about one path: what
 // each side holds there and the per-path facts the comparison query derives
 // from the three tables (content changes, replacements, move pairing, the

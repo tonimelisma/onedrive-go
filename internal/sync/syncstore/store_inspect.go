@@ -178,20 +178,6 @@ func countVisibleRemoteDrift(ctx context.Context, runner SqlTxRunner, filter syn
 	return count, nil
 }
 
-// readPathTruthStatus opens a read-only inspector, derives current truth
-// availability for the requested paths from durable observation issues and
-// read-boundary issue scope keys, and closes the inspector before returning.
-func readPathTruthStatus(
-	ctx context.Context,
-	dbPath string,
-	logger *slog.Logger,
-	paths []string,
-) (map[string]syncdomain.PathTruthStatus, error) {
-	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (map[string]syncdomain.PathTruthStatus, error) {
-		return inspector.ReadPathTruthStatus(ctx, paths)
-	})
-}
-
 // ReadDriveStatusSnapshot reads the raw per-mount authority snapshot from an
 // already-open sync store.
 func (s *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSnapshot, error) {

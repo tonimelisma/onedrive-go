@@ -577,3 +577,11 @@ func TestShortcutRootStatusView_SeparatesReasonFromRawDetail(t *testing.T) {
 	assert.NotEmpty(t, fallback.StatusLabel)
 	assertShortcutStatusTextIsUserVocabulary(t, "future_state", fallback.StatusLabel, fallback.Issue)
 }
+
+func shortcutChildRunModeForRoot(state ShortcutRootState) ShortcutChildRunMode {
+	metadata, ok := shortcutRootLifecycleMetadataFor(state)
+	if !ok {
+		return ""
+	}
+	return metadata.runMode
+}

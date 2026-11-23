@@ -2,6 +2,7 @@ package syncstore
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -452,4 +453,18 @@ func TestSyncStore_DiscardScope_IgnoresRowsOfOtherScopes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []syncdomain.RetryWorkKey{syncfixture.TestRetryWorkKey("mine.txt", "", syncdomain.ActionUpload)}, deleted)
 	assert.Equal(t, 1, retryWorkRowCountForStoreScopeTest(t, store, "other.txt"), "the other scope's row stays")
+}
+
+// readPathTruthStatus opens a read-only inspector, derives current truth
+// availability for the requested paths from durable observation issues and
+// read-boundary issue scope keys, and closes the inspector before returning.
+func readPathTruthStatus(
+	ctx context.Context,
+	dbPath string,
+	logger *slog.Logger,
+	paths []string,
+) (map[string]syncdomain.PathTruthStatus, error) {
+	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (map[string]syncdomain.PathTruthStatus, error) {
+		return inspector.ReadPathTruthStatus(ctx, paths)
+	})
 }

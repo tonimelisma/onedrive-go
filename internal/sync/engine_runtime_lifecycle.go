@@ -562,13 +562,6 @@ func (flow *engineFlow) clearBlockedRetryWorkForScope(
 	return flow.retryWork.clearBlocked(ctx, flow.deps.store, work, scopeKey)
 }
 
-// recordBlockedRetryWork records retry_work for an action that is currently
-// blocked by an active scope. Blocked rows have no retry timing until the
-// scope is released or trialed.
-func (flow *engineFlow) recordBlockedRetryWork(ctx context.Context, action *syncdomain.Action, scopeKey syncdomain.ScopeKey) error {
-	return flow.persistBlockedRetryWork(ctx, syncdomain.RetryWorkKeyForAction(action), scopeKey)
-}
-
 // holdActionFromPersistedRetryState holds current as the retry_work row the
 // store just wrote for it says: blocked under its scope, or waiting for its
 // retry time. The row is the one the store mutator returned, never a cache

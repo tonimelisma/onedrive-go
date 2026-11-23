@@ -518,7 +518,7 @@ bug rather than an input the store tolerates.
 
 Derived truth inspection stays read-only and authority-based. Observation-owned
 boundary issues tagged with read-scope keys suppress descendant truth through
-`readPathTruthStatus`; timed `block_scopes` for write blockers do not change
+`SyncStore.ReadPathTruthStatus`; timed `block_scopes` for write blockers do not change
 truth availability on their own.
 
 `observation_issues.issue_type` and `retry_work.condition_type` hold an
@@ -903,7 +903,7 @@ blocked descendants from those boundary facts.
 `store_inspect.go` now owns two read-side shapes:
 
 - `DriveStatusSnapshot` for raw durable authorities used by `status` and watch
-- `readPathTruthStatus` for derived truth availability over requested paths,
+- `SyncStore.ReadPathTruthStatus` for derived truth availability over requested paths,
   built from `observation_issues` plus boundary-tagged `ScopeKey` facts without
   materializing fake durable descendant rows
 

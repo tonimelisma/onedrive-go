@@ -197,11 +197,3 @@ func shortcutChildLocalRoot(parentSyncRoot string, relativeLocalPath string) str
 	}
 	return filepath.Join(parentSyncRoot, filepath.FromSlash(relativeLocalPath))
 }
-
-func shortcutChildRunModeForRoot(state ShortcutRootState) ShortcutChildRunMode {
-	metadata, ok := shortcutRootLifecycleMetadataFor(state)
-	if !ok {
-		return ""
-	}
-	return metadata.runMode
-}

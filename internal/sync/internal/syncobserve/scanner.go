@@ -9,7 +9,6 @@
 //   - computeStableHashWith:   double-stat hash for actively-written files
 //   - shouldObserveWithFilter: unified observation filter (Stage 1: name + path)
 //   - IsOversizedFile:         Stage 2 observation filter (file size > 250GB)
-//   - validateOneDriveName:    returns reason + detail for invalid names
 //
 // Related files:
 //   - observer_local.go:          LocalObserver struct and Watch() entry point
@@ -1268,21 +1267,6 @@ func dirEntryKind(d fs.DirEntry) syncdomain.ObservedKind {
 	}
 
 	return syncdomain.ObservedKindFile
-}
-
-// validateOneDriveName checks whether a filename is valid for OneDrive.
-// Returns ("", "") for valid names. For invalid names, returns the issue
-// type constant and a human-readable detail string. The detail never repeats
-// the name: every caller prints it next to the path ("Not syncing a/CON: the
-// name is reserved by Windows"), and %q-quoting the name again doubled any
-// backslash in it.
-//
-// Checks (ordered by specificity): empty name, trailing dot/space, leading
-// space, reserved device names, reserved patterns, invalid characters. A
-// name is never refused for its length: OneDrive limits the path, which
-// counts the name (oneDrivePathLength, R-2.11.12).
-func validateOneDriveName(name string) (reason syncdomain.IssueType, detail string) {
-	return validateOneDriveNameFor(name, false)
 }
 
 // validateOneDriveNameFor applies the name rules of the target drive type.

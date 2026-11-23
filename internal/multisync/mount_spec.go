@@ -177,23 +177,6 @@ func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, e
 	return mounts, nil
 }
 
-func buildRuntimeWork(
-	standaloneMounts []StandaloneMountConfig,
-	snapshots map[mountID]syncshortcut.ShortcutChildWorkSnapshot,
-	dataDir string,
-) (*runtimeWorkSet, error) {
-	parents, err := buildStandaloneMountSpecs(standaloneMounts)
-	if err != nil {
-		return nil, err
-	}
-	decisions, err := buildRuntimeWorkForParents(parents, snapshots, dataDir, nil)
-	if err != nil {
-		return nil, err
-	}
-	decisions.CleanupScopeAllParents = true
-	return decisions, nil
-}
-
 func buildRuntimeWorkForParents(
 	parents []*mountSpec,
 	snapshots map[mountID]syncshortcut.ShortcutChildWorkSnapshot,
@@ -738,13 +721,6 @@ func (m *mountSpec) childParentMountID() mountID {
 
 func (m *mountSpec) isFinalDrainChild() bool {
 	return m != nil && m.child != nil && m.child.mode == syncshortcut.ShortcutChildRunModeFinalDrain
-}
-
-func (m *mountSpec) expectedChildRootIdentity() *syncshortcut.ShortcutRootIdentity {
-	if m == nil || m.child == nil {
-		return nil
-	}
-	return m.child.engine.LocalRootIdentity
 }
 
 func (m *mountSpec) shortcutChildAckRef() syncshortcut.ShortcutChildAckRef {

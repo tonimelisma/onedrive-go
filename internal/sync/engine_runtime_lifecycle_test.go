@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"math"
 	"os"
 	"path/filepath"
@@ -704,4 +705,11 @@ func TestEngineFlow_ScopeHasBlockedRetryWork_AnswersForOneScope(t *testing.T) {
 	blocked, err = flow.scopeHasBlockedRetryWork(ctx, testThrottleScope())
 	require.NoError(t, err)
 	assert.False(t, blocked, "no row under the scope")
+}
+
+// recordBlockedRetryWork records retry_work for an action that is currently
+// blocked by an active scope. Blocked rows have no retry timing until the
+// scope is released or trialed.
+func (flow *engineFlow) recordBlockedRetryWork(ctx context.Context, action *syncdomain.Action, scopeKey syncdomain.ScopeKey) error {
+	return flow.persistBlockedRetryWork(ctx, syncdomain.RetryWorkKeyForAction(action), scopeKey)
 }
