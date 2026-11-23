@@ -456,9 +456,8 @@ func deriveSharedDisplayName(item sharedDisplayInput, existingNames map[string]b
 		)
 	}
 
-	firstName := extractFirstName(item.SharedByName)
 	candidates := []string{
-		fmt.Sprintf("%s's %s", firstName, folderName),
+		fmt.Sprintf("%s's %s", extractFirstName(item.SharedByName), folderName),
 		fmt.Sprintf("%s's %s", item.SharedByName, folderName),
 	}
 	if item.SharedByEmail != "" {

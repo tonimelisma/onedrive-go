@@ -25,8 +25,8 @@ const graphShareTokenPrefix = "u!"
 // ID column of recycle-bin list's table and the argument of recycle-bin
 // restore in a command line (internal/cli). And by its shape, wherever it
 // stands in free text, an error's included (maskIdentifierShapes): a
-// Personal item ID, a Business item ID and a Business drive ID, which also
-// masks a child mount ID through its item ID. A bare Personal drive ID
+// Personal item ID, a Business item ID, a Business drive ID, which also
+// masks a child mount ID through its item ID, and an address. A bare Personal drive ID
 // outside those positions is left alone: its shape, 16 hex digits, is that of
 // any hex or decimal word of that length, such as a file name a test makes.
 // So is, outside them, a Personal item ID whose drive part has lost more than
@@ -62,6 +62,11 @@ const (
 	// businessItemIDTailLength base32 characters.
 	businessItemIDPrefix     = "01"
 	businessItemIDTailLength = 32
+	// addressSeparator joins an address's local part to its domain; a URL
+	// spells it percentEncodedAt. minAddressTopLevelLength is the fewest
+	// letters an address's last domain label has.
+	addressSeparator         = "@"
+	minAddressTopLevelLength = 2
 )
 
 // graphIdentifierSegments are the Graph routes whose next path segment is
@@ -130,6 +135,7 @@ func maskIdentifierPositions(text string, keep func(string) bool, longestRole in
 // (isASCIIAlnum), and a percent-encoded byte before it ends the word before
 // it (startsWord), so a shape inside a longer word is left alone. Each ! may
 // be percent-encoded, as a route spells it.
+//
 //   - A Business drive ID: b! and its base64url part.
 //   - A Personal item ID: its drive part, 12 to 16 hex digits (Graph drops a
 //     drive ID's leading zeros at times), or a role Redact wrote for a
@@ -137,11 +143,22 @@ func maskIdentifierPositions(text string, keep func(string) bool, longestRole in
 //     Redact wrote inside it.
 //   - A Business item ID: 01 and 32 letters or digits (base32 as Graph sends
 //     it).
+//   - An address: a local part, @ (or its percent-encoded spelling), and a
+//     domain of dot-joined labels whose last is letters alone, two or more:
+//     a sharer outside the configured accounts, whose address shared
+//     discovery prints in a folder's display name (internal/cli's
+//     deriveSharedDisplayName), and any other. A configured account's
+//     address is a role by now, so no role is of this shape.
 //
 // A child mount ID, <parent>|binding:<item ID>, is masked through its item
 // ID. A word of such a shape that is no identifier is masked too, which
 // costs a failure message nothing it needs.
 func maskIdentifierShapes(text string, mask func(string) string, longestRole int) string {
+	for _, separator := range []string{addressSeparator, percentEncodedAt} {
+		if strings.Contains(text, separator) {
+			text = maskAddresses(text, separator, mask)
+		}
+	}
 	for _, prefix := range []string{businessDriveIDPrefix, encodedBusinessDriveIDPrefix} {
 		if strings.Contains(text, prefix) {
 			text = maskBusinessDriveIDs(text, prefix, mask)
@@ -157,6 +174,77 @@ func maskIdentifierShapes(text string, mask func(string) string, longestRole int
 	}
 
 	return text
+}
+
+// maskAddresses masks every address whose @, or its percent-encoded
+// spelling separator, joins a local part before it to a domain after it
+// (addressDomainEnd).
+func maskAddresses(text, separator string, mask func(string) string) string {
+	var edits []spanEdit
+	editedTo := 0
+	for searchFrom := 0; ; {
+		found := strings.Index(text[searchFrom:], separator)
+		if found < 0 {
+			break
+		}
+		separatorAt := searchFrom + found
+		searchFrom = separatorAt + len(separator)
+		start := separatorAt
+		for start > editedTo && isAddressLocalByte(text[start-1]) {
+			start--
+		}
+		end, isAddress := addressDomainEnd(text, separatorAt+len(separator))
+		if start == separatorAt || !isAddress {
+			continue
+		}
+		searchFrom = end
+		if value := text[start:end]; mask(value) != value {
+			edits = append(edits, spanEdit{start: start, end: end, text: maskedIdentifier})
+			editedTo = end
+		}
+	}
+
+	return applySpanEdits(text, edits)
+}
+
+// addressDomainEnd is where the domain starting at start ends, and whether
+// it is one: dot-joined labels of letters, digits and hyphens, a trailing
+// dot or hyphen left out (the end of a sentence), whose last label is at
+// least minAddressTopLevelLength letters, so a module version such as
+// tool@v1.2.3 is no address.
+func addressDomainEnd(text string, start int) (int, bool) {
+	end := start
+	for end < len(text) && (isASCIIAlnum(text[end]) || text[end] == '.' || text[end] == '-') {
+		end++
+	}
+	for end > start && (text[end-1] == '.' || text[end-1] == '-') {
+		end--
+	}
+	lastDot := strings.LastIndexByte(text[start:end], '.')
+	if lastDot <= 0 {
+		return end, false
+	}
+	topLevel := text[start+lastDot+1 : end]
+	if len(topLevel) < minAddressTopLevelLength {
+		return end, false
+	}
+	for i := range len(topLevel) {
+		if !isASCIILetter(topLevel[i]) {
+			return end, false
+		}
+	}
+
+	return end, true
+}
+
+// isAddressLocalByte reports a byte of an address's local part as the
+// product prints one: letters, digits, dot, underscore, plus and hyphen.
+func isAddressLocalByte(b byte) bool {
+	return isASCIIAlnum(b) || b == '.' || b == '_' || b == '+' || b == '-'
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // startsWord reports whether a word starts at start: at the start of text,

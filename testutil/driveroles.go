@@ -284,9 +284,9 @@ func (r DriveRoles) Role(driveID string) string {
 // every spelling of its account address with the role followed by -account,
 // and every value of an IdentityRole with its role. Then it masks, to the
 // word "masked", every identifier left where the product's output puts one
-// and every one of an item or Business drive ID's shape wherever it stands
-// (maskIdentifierPositions): the IDs of items and drives no fixture holds,
-// and the sharers no configured drive is.
+// and every one of an item or Business drive ID's shape or an address's
+// wherever it stands (maskIdentifierPositions): the IDs of items and drives
+// no fixture holds, and the sharers no configured drive is.
 func (r DriveRoles) Redact(text string) string {
 	if r.replacer == nil && len(r.nameOrder) == 0 {
 		return text
@@ -320,6 +320,35 @@ func (r DriveRoles) isRoleValue(value string) bool {
 	}
 
 	return true
+}
+
+// accountFirstNameSuffix ends the role of an account's first name, after
+// the account's role (drive-1-account-first-name).
+const accountFirstNameSuffix = "-first-name"
+
+// AccountNameIdentities names an account's display name by accountRole
+// followed by -name, and the first name shared discovery labels a folder the
+// account shares with ("<first name>'s <folder>", internal/cli's
+// deriveSharedDisplayName) by accountRole followed by -first-name. Both are
+// names: one shorter than minLearnedNameLength is reported, not learned.
+func AccountNameIdentities(displayName, accountRole string) []IdentityRole {
+	identities := []IdentityRole{{Value: displayName, Role: accountRole + "-name", IsName: true}}
+	if first := sharerFirstName(displayName); first != displayName {
+		identities = append(identities, IdentityRole{Value: first, Role: accountRole + accountFirstNameSuffix, IsName: true})
+	}
+
+	return identities
+}
+
+// sharerFirstName is the first name shared discovery takes from a sharer's
+// display name: the text before its first space, or the whole name
+// (internal/cli's extractFirstName, which a source test holds this to).
+func sharerFirstName(displayName string) string {
+	if i := strings.Index(displayName, " "); i > 0 {
+		return displayName[:i]
+	}
+
+	return displayName
 }
 
 // FixtureIdentities lists the values of fixtures by role: each shared-folder
