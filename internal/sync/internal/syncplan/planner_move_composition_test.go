@@ -275,6 +275,110 @@ func TestComposeMoves_OccupiedDestinationDefers(t *testing.T) {
 	assert.True(t, c.deferred["a"])
 }
 
+// Validates: R-2.17.9
+//
+// How the entry at the local path of a synced file gives way to a move onto
+// it, one row per kind of entry. Only a file OneDrive no longer has gives
+// way. Its own copy is replaced when it is provably the synced version and
+// kept as a conflict copy when it was edited; a new file that took the path
+// (the synced copy left it: a replacing move took it into the trash and
+// another program saved a file there before the rename) is kept as a
+// conflict copy too, so the move still lands. Nothing else gives way.
+func TestComposedDisplacement_EntryAtTheDestination(t *testing.T) {
+	t.Parallel()
+
+	const syncedHash = "synced-hash"
+	baseline := &syncdomain.BaselineEntry{ItemID: "b", ItemType: syncdomain.ItemTypeFile, Path: "b.txt", LocalHash: syncedHash}
+	file := func(hash string) *syncdomain.LocalState {
+		return &syncdomain.LocalState{Name: "b.txt", ItemType: syncdomain.ItemTypeFile, Hash: hash}
+	}
+	stillOnline := map[string]*syncdomain.RemoteStateRow{"b": {ItemID: "b", Path: "elsewhere.txt"}}
+
+	tests := []struct {
+		name string
+		// localPosition is where composition holds the synced item here: its
+		// baseline path, another path it moved to, or "" when the entry at
+		// the baseline path is not the item.
+		localPosition string
+		local         *syncdomain.LocalState
+		remoteByID    map[string]*syncdomain.RemoteStateRow
+		want          moveDisplacement
+	}{
+		{name: "the synced copy unchanged is replaced", localPosition: "b.txt", local: file(syncedHash), want: moveDisplaceReplace},
+		{name: "the synced copy edited is kept as a conflict copy", localPosition: "b.txt", local: file("edited-hash"), want: moveDisplaceConflictCopy},
+		{name: "a new file that took the path is kept as a conflict copy", local: file("new-hash"), want: moveDisplaceConflictCopy},
+		{name: "a new file of unknown content that took the path is kept as a conflict copy", local: file(""), want: moveDisplaceConflictCopy},
+		{
+			name:  "a folder that took the path makes the move wait",
+			local: &syncdomain.LocalState{Name: "b.txt", ItemType: syncdomain.ItemTypeFolder}, want: moveDisplaceNever,
+		},
+		{name: "an empty path needs no displacement", want: moveDisplaceNever},
+		{name: "the synced copy of unknown content makes the move wait", localPosition: "b.txt", local: file(""), want: moveDisplaceNever},
+		{name: "a new file at the path of a synced copy moved elsewhere here makes the move wait", localPosition: "c.txt", local: file("new-hash"), want: moveDisplaceNever},
+		{name: "a new file at the path of an item still online makes the move wait", local: file("new-hash"), remoteByID: stillOnline, want: moveDisplaceNever},
+		{name: "the synced copy of an item still online makes the move wait", localPosition: "b.txt", local: file(syncedHash), remoteByID: stillOnline, want: moveDisplaceNever},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			node := composeNode("b", syncdomain.ItemTypeFile, "b.txt", tt.localPosition, "")
+			view := &syncdomain.PathView{Path: "b.txt", Local: tt.local, Baseline: baseline}
+
+			assert.Equal(t, tt.want, composedDisplacement(&node, baseline, view, tt.remoteByID))
+		})
+	}
+}
+
+// Validates: R-2.17.9
+//
+// OneDrive moved a.txt onto b.txt, replacing b, and the file at b.txt here
+// is a new one saved after b's copy left: no composed item holds the path.
+// The move of a.txt still lands on it, with that file renamed to a conflict
+// copy first, instead of waiting while the moved item is downloaded beside
+// its old copy. An entry the deleted item does not answer for (no baseline
+// row at the path, or a displacement that never gives way) keeps the move
+// waiting.
+func TestComposeMoves_MoveOntoANewFileAtTheFreedNameKeepsItAsAConflictCopy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		displaced   moveDisplacement
+		withDeleted bool
+		wantMoves   []string
+	}{
+		{name: "a new file at the freed name", displaced: moveDisplaceConflictCopy, withDeleted: true, wantMoves: []string{"a.txt->b.txt"}},
+		{name: "an entry that never gives way", displaced: moveDisplaceNever, withDeleted: true},
+		{name: "an entry at a path no synced item had", withDeleted: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			nodes := []moveNode{composeNode("a", syncdomain.ItemTypeFile, "a.txt", "a.txt", "b.txt")}
+			if tt.withDeleted {
+				deleted := composeNode("b", syncdomain.ItemTypeFile, "b.txt", "", "")
+				deleted.displace = tt.displaced
+				nodes = append(nodes, deleted)
+			}
+			occupancy := composeOccupancy(nodes)
+			occupancy.local["b.txt"] = true
+
+			c := composeMoves(nodes, occupancy, nil)
+
+			assert.Equal(t, tt.wantMoves, composedMovesBySide(&c, moveCoordLocal))
+			if len(tt.wantMoves) == 0 {
+				assert.True(t, c.deferred["a"], "the move waits")
+				return
+			}
+			require.Len(t, c.moves, 1)
+			assert.Equal(t, moveDisplaceConflictCopy, c.moves[0].displaced, "the new file is kept as a conflict copy")
+			assert.False(t, c.deferred["a"])
+		})
+	}
+}
+
 // Validates: R-2.17.6
 func TestComposeMoves_FrozenItemsAndTheirSubtreesDoNotMove(t *testing.T) {
 	t.Parallel()

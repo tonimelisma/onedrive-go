@@ -505,3 +505,83 @@ func shortSocketPath(t *testing.T, name string) string {
 
 	return filepath.Join(dir, name)
 }
+
+// Validates: R-6.6.36
+//
+// The keepalive vouches for the watch loop: a tick while the loop's heartbeat
+// reads silent past its limit sends nothing, so systemd restarts a hung
+// watch; the silence is logged once at Error; the keepalive resumes when the
+// loop beats again, and goes out before the loop exists.
+func TestSyncNotifier_KeepaliveOnlyWhileTheLoopMakesProgress(t *testing.T) {
+	t.Parallel()
+
+	socket := newFakeNotifySocket(t)
+	capture, logger := synctest.NewLogCapture()
+	s := newSyncNotifier(socket.notifier(map[string]string{}), logger, nil)
+
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.runWatchdog(ctx, ticks)
+	}()
+	// An unbuffered tick is taken only once the one before it is handled.
+	tick := func() {
+		select {
+		case ticks <- time.Now():
+		case <-time.After(eventWait):
+			require.FailNow(t, "the keepalive loop did not take its tick")
+		}
+	}
+
+	tick()
+	assert.Equal(t, watchdogMessage, socket.next(), "no loop yet: the keepalive goes out")
+
+	var mu sync.Mutex
+	loopOK := true
+	alive := loopAliveFunc(func() (bool, string, time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		return loopOK, "reloading the config", 2 * time.Minute
+	})
+	s.loopAlive.Store(&alive)
+	setLoop := func(ok bool) {
+		mu.Lock()
+		loopOK = ok
+		mu.Unlock()
+	}
+
+	tick()
+	assert.Equal(t, watchdogMessage, socket.next())
+
+	setLoop(false)
+	tick()
+	tick()
+	setLoop(true)
+	tick()
+	// The datagram after the last vouched keepalive is the next vouched
+	// one: the silent ticks sent nothing.
+	assert.Equal(t, watchdogMessage, socket.next())
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(eventWait):
+		require.FailNow(t, "the keepalive loop did not stop")
+	}
+	require.NoError(t, socket.conn.SetReadDeadline(time.Now()))
+	_, err := socket.conn.Read(make([]byte, 64))
+	var netErr net.Error
+	require.ErrorAs(t, err, &netErr, "no keepalive is left unread")
+	assert.True(t, netErr.Timeout())
+
+	silences := 0
+	for _, record := range capture.AtLeast(slog.LevelError) {
+		if strings.Contains(record.Message, "no progress past its limit") {
+			silences++
+			assert.Equal(t, "reloading the config", record.Attrs["step"])
+		}
+	}
+	assert.Equal(t, 1, silences, "one Error per silence")
+}

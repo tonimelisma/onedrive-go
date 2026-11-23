@@ -45,7 +45,7 @@ const quiescenceLogInterval = 30 * time.Second
 // steady-state replan path.
 // Blocks until the context is canceled, returning nil on clean shutdown.
 //
-// Flow: runStartup → initWatchInfra → bootstrapSync →
+// Flow: runStartup → restoreSpellingRenameLeftovers → initWatchInfra → bootstrapSync →
 // startObservers → runWatchLoop.
 // bootstrapSync dispatches through the same dependency graph, active scope
 // working set and worker pool that the steady-state watch loop uses.
@@ -78,6 +78,7 @@ func (e *Engine) runWatch(ctx context.Context, rt *watchRuntime, mode syncdomain
 
 		return err
 	}
+	e.restoreSpellingRenameLeftovers(ctx)
 
 	// Step 1: Set up watch infrastructure (no observers yet).
 	pipe, err := rt.initWatchInfra(ctx, mode, opts)

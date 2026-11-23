@@ -104,7 +104,9 @@ type moveNode struct {
 	itemType syncdomain.ItemType
 	paths    [moveCoordCount]string
 	// displace says what a move of another item onto this node's local path
-	// may do with it once OneDrive no longer holds this item (D-058).
+	// may do with the entry there once OneDrive no longer holds this item
+	// (D-058): this item's own copy, or, when the node has no local position,
+	// the new file that took its baseline path (localDisplacementAt).
 	displace moveDisplacement
 }
 
@@ -117,8 +119,9 @@ const (
 	// moveDisplaceReplace: the item is gone online and its local copy is the
 	// synced version, verified again (and kept in the trash) when replaced.
 	moveDisplaceReplace
-	// moveDisplaceConflictCopy: gone online but edited locally; the edit is
-	// renamed to a conflict copy first and uploaded as a new file.
+	// moveDisplaceConflictCopy: gone online but edited locally, or a new
+	// file took its path; that file is renamed to a conflict copy first and
+	// uploaded as a new file.
 	moveDisplaceConflictCopy
 )
 
@@ -1534,13 +1537,34 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 			return true, moveDisplaceNever
 		}
 	}
-	if isNode && side == moveCoordLocal && snapshotPath == newPath {
-		if displace := e.nodes[occupant].displace; displace != moveDisplaceNever {
+	if side == moveCoordLocal && snapshotPath == newPath {
+		if displace := e.localDisplacementAt(occupant, isNode, snapshotPath); displace != moveDisplaceNever {
 			return true, displace
 		}
 	}
 
 	return false, moveDisplaceNever
+}
+
+// localDisplacementAt is how the local entry at p gives way to a move onto
+// it. A composed occupant gives way as its own displacement says. An entry
+// that is no composed item may be a new file at the path of a synced file
+// OneDrive no longer has, saved there after a replacing move (D-058) freed
+// the name: that baseline item, absent here as itself, carries how the entry
+// at its path gives way (composedDisplacement).
+func (e *moveEmitter) localDisplacementAt(occupant string, isNode bool, p string) moveDisplacement {
+	if isNode {
+		return e.nodes[occupant].displace
+	}
+	if !e.occupancy.local[p] {
+		return moveDisplaceNever
+	}
+	key, ok := e.byPath[moveCoordBaseline][p]
+	if !ok || e.nodes[key].present(moveCoordLocal) {
+		return moveDisplaceNever
+	}
+
+	return e.nodes[key].displace
 }
 
 // occupantAt is the composed item holding p on side, compared as OneDrive
@@ -1688,18 +1712,32 @@ func moveNodeTouchesUnavailableTruth(node *moveNode, views map[string]*syncdomai
 	return false
 }
 
-// composedDisplacement decides whether a synced file OneDrive no longer has
-// may give way to another item moved onto its local path: replaced when its
-// local copy is provably the synced version, renamed to a conflict copy when
-// it was edited, never otherwise (a folder, unknown content, or an item that
-// still exists online somewhere).
+// composedDisplacement decides whether the entry at the local path of a
+// synced file OneDrive no longer has may give way to another item moved onto
+// that path. The file's own local copy is replaced when it is provably the
+// synced version and renamed to a conflict copy when it was edited. A new
+// file that took the path (the entry there is not the baseline item, so the
+// node has no local position) is renamed to a conflict copy too: it is kept
+// and uploaded later as a new file, and the move still lands, so the moved
+// item is neither downloaded beside its old copy nor uploaded again. Never
+// otherwise: a folder at either end, unknown content, the synced copy moved
+// elsewhere here, or an item that still exists online somewhere.
 func composedDisplacement(
 	node *moveNode, entry *syncdomain.BaselineEntry, view *syncdomain.PathView, remoteByID map[string]*syncdomain.RemoteStateRow,
 ) moveDisplacement {
-	if node.paths[moveCoordLocal] != node.paths[moveCoordBaseline] || entry.ItemType != syncdomain.ItemTypeFile || view.Local == nil {
+	if entry.ItemType != syncdomain.ItemTypeFile || view.Local == nil {
 		return moveDisplaceNever
 	}
 	if _, stillOnline := remoteByID[entry.ItemID]; stillOnline {
+		return moveDisplaceNever
+	}
+	if !node.present(moveCoordLocal) {
+		if view.Local.ItemType == syncdomain.ItemTypeFile {
+			return moveDisplaceConflictCopy
+		}
+		return moveDisplaceNever
+	}
+	if node.paths[moveCoordLocal] != node.paths[moveCoordBaseline] {
 		return moveDisplaceNever
 	}
 	if view.Local.Hash == "" || entry.LocalHash == "" {

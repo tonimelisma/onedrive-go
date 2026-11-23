@@ -88,7 +88,10 @@ still kept as two files rather than resolved in the direction of the mode.
 - **On your computer, deletes go to onedrive-go's own trash.** Every file sync
   deletes on your computer, and the previous version of every file a download
   replaces, is moved to a per-drive trash in the data directory and kept for
-  30 days. `onedrive-go trash list --drive <drive>` shows it,
+  30 days. `onedrive-go trash list --drive <drive>` shows it, together with
+  what sync removed from the shared folders added to that drive as shortcuts
+  (a file whose shared folder was removed from your account is listed as
+  released: the sharer's copy still exists),
   `trash restore <id>` puts a file back where it was (never overwriting
   anything; the next sync uploads it again), and `trash empty --confirm`
   empties it. Before deleting a local file because it was deleted on OneDrive,

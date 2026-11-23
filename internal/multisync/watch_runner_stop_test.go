@@ -594,7 +594,7 @@ func TestRunWatch_StuckRunnerOnReloadEndsTheWatchWithAnError(t *testing.T) {
 	// A filter change is not restart-equivalent: the reload stops the runner
 	// before it would start a new one.
 	insertDriveConfigLine(t, w.cfgPath, w.cfg.StandaloneMounts[0].CanonicalID, `ignored_dirs = ["hidden"]`)
-	status, answer := postControlJSONAnyStatus(t, w.cfg.ControlSocketPath, synccontrol.PathReload, nil)
+	status, answer := postControlReloadAnyStatus(t, w.cfg.ControlSocketPath)
 
 	assert.Equal(t, http.StatusInternalServerError, status)
 	assert.Equal(t, synccontrol.ErrorInternal, answer.Code)

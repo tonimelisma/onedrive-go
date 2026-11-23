@@ -3,6 +3,8 @@ package multisync
 import (
 	"fmt"
 
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
+
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
@@ -20,6 +22,7 @@ func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.En
 	cfg := &syncengine.EngineMountConfig{
 		MountID:                mount.id().String(),
 		DBPath:                 mount.statePath(),
+		TrashDir:               localtrash.DirForStatePath(mount.statePath()),
 		SyncRoot:               mount.syncRoot(),
 		DataDir:                dataDir,
 		DriveID:                mount.remoteDriveID(),
@@ -41,6 +44,11 @@ func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.En
 		ContentFilter:         mount.contentFilter(),
 	}
 	if mount.projectionKind() == MountProjectionChild {
+		trash, err := shortcutChildTrashDirs(dataDir, mount.id().String())
+		if err != nil {
+			return nil, err
+		}
+		cfg.TrashDir = trash.child
 		if err := syncengine.ApplyShortcutChildRunCommandToEngineMountConfig(
 			mount.shortcutChildRunCommand(),
 			cfg,

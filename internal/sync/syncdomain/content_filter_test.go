@@ -129,3 +129,35 @@ func TestContentFilter_JunkFilesDefaultVisible(t *testing.T) {
 	assert.True(t, filter.Visible("download.partial", ItemTypeFile))
 	assert.False(t, filter.Visible(".onedrive-go.download.partial", ItemTypeFile))
 }
+
+// The name a temporary spelling-rename sibling was on its way to is read back
+// only when the sibling's name says it: a -1 to -9 suffix may be a later
+// attempt's, so such a name answers no rather than a guess.
+//
+// Validates: R-2.12.8
+func TestSpellingRenameArtifactPlainName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		plain     string
+		hasAnswer bool
+	}{
+		{name: SpellingRenameArtifactPrefix + "A.txt", plain: "A.txt", hasAnswer: true},
+		{name: SpellingRenameArtifactPrefix + "Report-2026.docx", plain: "Report-2026.docx", hasAnswer: true},
+		{name: SpellingRenameArtifactPrefix + "v-10", plain: "v-10", hasAnswer: true},
+		{name: SpellingRenameArtifactPrefix + "v-0", plain: "v-0", hasAnswer: true},
+		{name: SpellingRenameArtifactPrefix + "v-01", plain: "v-01", hasAnswer: true},
+		{name: SpellingRenameArtifactPrefix + "A.txt-1"},
+		{name: SpellingRenameArtifactPrefix + "v-9"},
+		{name: SpellingRenameArtifactPrefix},
+		{name: SpellingRenameArtifactPrefix + ".."},
+		{name: "A.txt"},
+		{name: ".onedrive-go.spelling"},
+	}
+	for _, tt := range tests {
+		plain, hasAnswer := SpellingRenameArtifactPlainName(tt.name)
+		assert.Equal(t, tt.hasAnswer, hasAnswer, "%q", tt.name)
+		assert.Equal(t, tt.plain, plain, "%q", tt.name)
+	}
+}

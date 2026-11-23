@@ -2245,3 +2245,80 @@ func runScenarioUntilDone(t *testing.T, eng *testEngine) (runs, superseded int) 
 
 	return scenarioRunLimit, superseded
 }
+
+// savedAtTheFreedName is what another program saves at b.txt while a
+// replacing move of a.txt onto it runs.
+const savedAtTheFreedName = "saved meanwhile\n"
+
+// Validates: R-2.17.9, R-6.5.2
+//
+// OneDrive moved a.txt onto b.txt, replacing b. The local replacing move took
+// the old b.txt into the trash, and before it renamed a.txt there another
+// program saved a file at b.txt: the rename refuses the taken name, the move
+// is superseded, and the run says it left work. The next pass keeps the saved
+// file as a conflict copy and finishes the move, instead of downloading the
+// moved item beside its old copy; the old b.txt stays in the trash once. The
+// pass after it uploads the conflict copy as a new file and nothing else:
+// OneDrive never holds a.txt again, nothing is deleted there, and the moved
+// item's content is unchanged.
+func TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
+	remote.addFile(t, "item-b", "root", "b.txt", "bravo\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+	moved := syncfixture.EntryIdentity(t, filepath.Join(h.syncRoot, "a.txt"))
+	remote.deleteRemotely("item-b")
+	remote.move("item-a", "root", "b.txt")
+
+	// The executor reaches the crash point on a worker: the hook reports a
+	// failed write as its error rather than failing the test from there.
+	var saved atomic.Bool
+	h.eng.armExecCrash(func(point string) error {
+		if point != syncdomain.CrashPointLocalMoveDestinationTrashed || saved.Swap(true) {
+			return nil
+		}
+
+		return os.WriteFile(filepath.Join(h.syncRoot, "b.txt"), []byte(savedAtTheFreedName), 0o600)
+	})
+	h.eng.hooks.oneShotPassLimit = 1
+
+	first, err := h.eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+	require.True(t, saved.Load(), "the replacing move reached the point between its two steps")
+	assert.Equal(t, 1, first.Superseded, "the move found its destination taken")
+	assert.True(t, first.LeftWork().Any(), "the run says it left the move: %+v", first.LeftWork())
+	assert.Equal(t, map[string]string{"a.txt": "alpha\n", "b.txt": savedAtTheFreedName, "keep.txt": "keep\n"},
+		harnessLocalTree(t, h.syncRoot))
+	syncfixture.RequireTrashHoldsOnce(t, h.eng.trash, "b.txt", "bravo\n")
+
+	h.eng.armExecCrash(func(string) error { return nil })
+	second := runScenarioPass(t, h.eng)
+
+	assert.Equal(t, 1, second.Moves, "the next pass finishes the move")
+	assert.Equal(t, 1, second.ConflictCopies, "the saved file is kept as a conflict copy")
+	assert.Zero(t, second.Downloads, "the moved item is not downloaded beside its old copy")
+	assert.Zero(t, second.Uploads)
+	assert.Zero(t, second.RemoteDeletes)
+	local := harnessLocalTree(t, h.syncRoot)
+	assert.NotContains(t, local, "a.txt", "the moved item left its old path")
+	assert.Equal(t, "alpha\n", local["b.txt"])
+	assert.Equal(t, moved, syncfixture.EntryIdentity(t, filepath.Join(h.syncRoot, "b.txt")), "b.txt is the moved file itself")
+	assert.Contains(t, slices.Collect(maps.Values(local)), savedAtTheFreedName, "the saved file's content is kept: %v", local)
+	syncfixture.RequireTrashHoldsOnce(t, h.eng.trash, "b.txt", "bravo\n")
+
+	h.eng.hooks.oneShotPassLimit = 0
+	third := runScenarioPass(t, h.eng)
+
+	assert.Equal(t, 1, third.Uploads, "only the conflict copy is uploaded")
+	tree := h.remote.tree()
+	assert.NotContains(t, tree, "a.txt", "nothing is put back at the moved item's old path on OneDrive")
+	assert.Equal(t, "alpha\n", tree["b.txt"], "the moved item's content on OneDrive is unchanged")
+	assert.Contains(t, slices.Collect(maps.Values(tree)), savedAtTheFreedName, "the saved file reaches OneDrive as a new file")
+	assert.Equal(t, harnessLocalTree(t, h.syncRoot), tree, "both sides hold the same files")
+	assert.Empty(t, h.remote.deletes, "nothing is deleted on OneDrive")
+	requireScenarioQuietPlan(t, h.eng)
+}

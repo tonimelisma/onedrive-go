@@ -214,13 +214,13 @@ func releaseRootEntries(t *testing.T, syncRoot string) []string {
 	return names
 }
 
-// Validates: R-2.4.8, R-6.4.9
+// Validates: R-2.4.8, R-6.4.9, R-6.4.13
 //
 // A clean final drain releases the tree by the rule of a folder deleted on
 // OneDrive: every synced file leaves for the trash, verified, every synced
 // folder once empty, every baseline row in the commit of its delete. The
 // alias root stays, empty, for the parent to remove; nothing is deleted on
-// OneDrive.
+// OneDrive, so every trash entry says released, not deleted.
 func TestRunOnce_FinalDrainReleasesASyncedTreeToTheTrash(t *testing.T) {
 	t.Parallel()
 
@@ -240,7 +240,7 @@ func TestRunOnce_FinalDrainReleasesASyncedTreeToTheTrash(t *testing.T) {
 	entries := listEngineTrash(t, eng)
 	paths := make([]string, 0, len(entries))
 	for i := range entries {
-		assert.Equal(t, localtrash.ReasonDeleted, entries[i].Reason)
+		assert.Equal(t, localtrash.ReasonReleased, entries[i].Reason, "a released file was not deleted on OneDrive")
 		paths = append(paths, entries[i].Path)
 	}
 	sort.Strings(paths)

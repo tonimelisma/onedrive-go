@@ -7,11 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
@@ -536,4 +538,131 @@ func assertShortcutCleanupClass(
 	got, ok := shortcutChildArtifactCleanupClass(err)
 	require.True(t, ok, "cleanup error class missing from %v", err)
 	assert.Equal(t, want, got)
+}
+
+// childTrashPurgeFixture is a shortcut child whose trash holds a committed,
+// a pending and an orphan entry, and an executor that records what it
+// removes of the child's state.
+type childTrashPurgeFixture struct {
+	dataDir      string
+	childMountID string
+	trash        shortcutChildTrash
+	executor     shortcutChildArtifactCleanupExecutor
+	removed      *[]string
+	entries      map[string]localtrash.Entry
+}
+
+func newChildTrashPurgeFixture(t *testing.T, now func() time.Time) childTrashPurgeFixture {
+	t.Helper()
+
+	dataDir := t.TempDir()
+	childMountID := config.ChildMountID("personal:parent@example.com", "binding-trash")
+	trash, err := shortcutChildTrashDirs(dataDir, childMountID)
+	require.NoError(t, err)
+
+	childTrash := localtrash.Open(trash.child, now)
+	syncRoot := filepath.Join(t.TempDir(), "Shared")
+	committed, err := childTrash.Reserve(syncRoot, "committed.txt", localtrash.ReasonReleased)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(committed.ItemPath, []byte("committed\n"), 0o600))
+	_, err = committed.Commit()
+	require.NoError(t, err)
+	pending, err := childTrash.Reserve(syncRoot, "pending.txt", localtrash.ReasonDeleted)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(pending.ItemPath, []byte("pending\n"), 0o600))
+	orphanDir := filepath.Join(trash.child, "20260901T000000.000000000Z-0badf00d")
+	require.NoError(t, os.MkdirAll(orphanDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(orphanDir, "item"), []byte("orphan\n"), 0o600))
+
+	var removed []string
+	return childTrashPurgeFixture{
+		dataDir:      dataDir,
+		childMountID: childMountID,
+		trash:        trash,
+		executor: shortcutChildArtifactCleanupExecutor{
+			dataDir: dataDir,
+			logger:  slog.New(slog.DiscardHandler),
+			remove: func(path string) error {
+				removed = append(removed, path)
+				return nil
+			},
+			deleteUploadSessions: func(string, string) error { return nil },
+		},
+		removed: &removed,
+		entries: trashEntriesByID(t, localtrash.Open(trash.child, now)),
+	}
+}
+
+// trashEntriesByID lists trash by entry ID, without where each file sits,
+// which a hand-over changes.
+func trashEntriesByID(t *testing.T, trash *localtrash.Trash) map[string]localtrash.Entry {
+	t.Helper()
+
+	listed, err := trash.List()
+	require.NoError(t, err)
+	byID := make(map[string]localtrash.Entry, len(listed))
+	for i := range listed {
+		entry := listed[i]
+		entry.ItemPath = ""
+		byID[entry.ID] = entry
+	}
+	return byID
+}
+
+// The purge of a removed shortcut child hands its trash over to its parent
+// drive's before it removes the child's state: every entry, committed,
+// pending or orphan, is in the parent's trash with its ID, time, reason and
+// state, the child's trash directory is gone, and the parent's purge expires
+// the committed entry once the retention has passed.
+//
+// Validates: R-2.4.8, R-6.4.12
+func TestShortcutChildArtifactCleanupExecutor_HandsTheChildsTrashToItsDrive(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	fixture := newChildTrashPurgeFixture(t, clock)
+	require.Len(t, fixture.entries, 3)
+
+	err := fixture.executor.purge(t.Context(), shortcutChildArtifactScope{mountID: fixture.childMountID})
+
+	require.NoError(t, err)
+	assert.NoDirExists(t, fixture.trash.child, "no trash is left that only the removed child reached")
+	parentTrash := localtrash.Open(fixture.trash.parent, clock)
+	assert.Equal(t, fixture.entries, trashEntriesByID(t, parentTrash), "every entry is the drive's now, as it was")
+	assert.Len(t, *fixture.removed, len(config.StateDBFamily(config.MountStatePathForDataDir(fixture.dataDir, fixture.childMountID))),
+		"the child's state is removed after the hand-over")
+
+	now = now.Add(localtrash.Retention + time.Hour)
+	expired, err := parentTrash.Purge()
+	require.NoError(t, err)
+	assert.Equal(t, 1, expired, "the committed entry expires with the drive's own")
+	assert.Len(t, trashEntriesByID(t, parentTrash), 2, "what was never committed is never purged")
+}
+
+// A hand-over that fails is a cleanup failure of the state kind: the child's
+// trash stays as it was, nothing of its state is removed, and the parent
+// publishes the cleanup again; the next attempt hands everything over.
+//
+// Validates: R-2.4.8, R-6.4.12
+func TestShortcutChildArtifactCleanupExecutor_KeepsTheChildWhenItsTrashCannotBeHandedOver(t *testing.T) {
+	t.Parallel()
+
+	fixture := newChildTrashPurgeFixture(t, nil)
+	require.NoError(t, os.MkdirAll(filepath.Dir(fixture.trash.parent), 0o700))
+	require.NoError(t, os.WriteFile(fixture.trash.parent, []byte("not a folder"), 0o600))
+
+	err := fixture.executor.purge(t.Context(), shortcutChildArtifactScope{mountID: fixture.childMountID})
+
+	require.Error(t, err)
+	assertShortcutCleanupClass(t, err, shortcutChildArtifactCleanupStateArtifactFailure)
+	assert.Contains(t, err.Error(), "keep its trash")
+	assert.Equal(t, fixture.entries, trashEntriesByID(t, localtrash.Open(fixture.trash.child, nil)),
+		"the child's trash is as it was")
+	assert.Empty(t, *fixture.removed, "nothing of the child's state is removed")
+
+	require.NoError(t, os.Remove(fixture.trash.parent))
+	require.NoError(t, fixture.executor.purge(t.Context(), shortcutChildArtifactScope{mountID: fixture.childMountID}))
+	assert.NoDirExists(t, fixture.trash.child)
+	assert.Equal(t, fixture.entries, trashEntriesByID(t, localtrash.Open(fixture.trash.parent, nil)))
 }

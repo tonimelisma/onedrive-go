@@ -16,6 +16,10 @@ import (
 
 const (
 	watchRunnerEventBuffer = 64
+	// reloadStep names the loop step of a config reload, whichever of the
+	// three triggers asked for it (a control command, a changed config file,
+	// an expired timed pause).
+	reloadStep = "reloading the config"
 )
 
 // RunWatch runs all configured runnable mounts in watch mode. On control-socket
@@ -34,6 +38,10 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncdomain.SyncMode, o
 	// first, the panic is logged once with its stack and returned, the CLI
 	// exits 1, and a service manager starts a fresh process (R-6.3.10).
 	defer func() { err = o.joinWatchLoopPanic(recover(), err) }()
+	// Registered second so it runs after the drain and the socket close: the
+	// drain's runner stops declare their steps, and once RunWatch returns
+	// there is no loop left for the watchdog to judge.
+	defer o.heartbeat.finish()
 
 	o.heartbeat.beatFor("starting", watchStartupStepLimit)
 	o.watchReportMemory = newWatchReportState()
@@ -94,6 +102,10 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncdomain.SyncMode, o
 	for {
 		// Every iteration beats, and the heartbeat tick wakes an idle loop
 		// to beat, so the watchdog can tell a hung loop from a quiet one.
+		// Each case that can block declares its step before it does: a
+		// reload (a control command's in handleControlCommand), a drive's
+		// event and a pass over the drive set. The others (a status or stop
+		// command, a tick, a fatal helper, the context's end) return at once.
 		o.heartbeat.beat()
 		restarts.arm()
 		pauseExpiry.arm()
@@ -109,17 +121,22 @@ func (o *Orchestrator) RunWatch(ctx context.Context, mode syncdomain.SyncMode, o
 			}
 			stuckErr = cmdErr
 		case reason := <-reloadTriggers:
+			o.heartbeat.beatFor(reloadStep, watchLoopStepLimit)
 			stuckErr = o.reloadForReason(ctx, reason, mode, opts, runners, runnerEvents, childWork)
 		case <-pauseExpiry.ch:
+			o.heartbeat.beatFor(reloadStep, watchLoopStepLimit)
 			// The reload clears the expired pause from the config and
 			// starts the drive, exactly as a `resume` would.
 			stuckErr = o.reloadForReason(ctx, "timed pause expired", mode, opts, runners, runnerEvents, childWork)
 		case event := <-runnerEvents:
+			o.heartbeat.beatFor("handling a drive's event", watchLoopStepLimit)
 			stuckErr = o.handleWatchRunnerEvent(ctx, event, mode, opts, runners, runnerEvents, childWork)
 		case <-reconcileTickCh:
+			o.heartbeat.beatFor("updating the drive set", watchLoopStepLimit)
 			o.reportUnsavedSignIns()
 			stuckErr = o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 		case <-restarts.ch:
+			o.heartbeat.beatFor("updating the drive set", watchLoopStepLimit)
 			stuckErr = o.reconcileWatchRunners(ctx, mode, opts, runners, runnerEvents, childWork)
 		case <-heartbeatTickCh:
 			// The beat is at the top of the next iteration.

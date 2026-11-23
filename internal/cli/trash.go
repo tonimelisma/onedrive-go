@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -14,7 +16,10 @@ import (
 
 // The local trash keeps what sync removed or replaced on this computer for
 // localtrash.Retention (P-4). It is per drive and lives under the data
-// directory, so these commands work without network access.
+// directory, so these commands work without network access. A drive's trash
+// commands also cover the trash of each of its shortcut children
+// (localtrash.Trash.Children): a child is a mount, not a configured drive,
+// and each entry names the sync folder it came from.
 
 func newTrashCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -24,7 +29,9 @@ func newTrashCmd() *cobra.Command {
 file a download replaces, go to a per-drive trash for 30 days instead of being
 destroyed. List them, put one back, or empty the trash.
 
-Select the drive with --drive.`,
+Select the drive with --drive. A drive's trash also holds what sync removed
+from the shared folders added to it as shortcuts, including the files it set
+aside when a shared folder was removed from the account.`,
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 	}
 
@@ -78,8 +85,80 @@ Requires --confirm.`,
 	return cmd
 }
 
-// openDriveTrash resolves --drive to a configured drive's trash.
-func openDriveTrash(cc *CLIContext, verb string) (*localtrash.Trash, string, error) {
+// driveTrash is a configured drive's trash and the trash of each of its
+// shortcut children, the drive's own first.
+type driveTrash struct {
+	drive   string
+	trashes []*localtrash.Trash
+}
+
+// openDriveTrash resolves --drive to a configured drive's trash and its
+// shortcut children's.
+func openDriveTrash(cc *CLIContext, verb string) (*driveTrash, error) {
+	own, drive, err := openConfiguredDriveTrash(cc, verb)
+	if err != nil {
+		return nil, err
+	}
+	children, err := own.Children()
+	if err != nil {
+		return nil, fmt.Errorf("open the trash of %s's shortcuts: %w", drive, err)
+	}
+
+	return &driveTrash{drive: drive, trashes: append([]*localtrash.Trash{own}, children...)}, nil
+}
+
+// list returns every entry of every trash of the drive, newest first.
+func (d *driveTrash) list() ([]localtrash.Entry, error) {
+	var entries []localtrash.Entry
+	for _, trash := range d.trashes {
+		found, err := trash.List()
+		if err != nil {
+			return nil, fmt.Errorf("list trash %s: %w", trash.Dir(), err)
+		}
+		entries = append(entries, found...)
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if !entries[i].TrashedAt.Equal(entries[j].TrashedAt) {
+			return entries[i].TrashedAt.After(entries[j].TrashedAt)
+		}
+		return entries[i].ID > entries[j].ID
+	})
+
+	return entries, nil
+}
+
+// restore restores entry id from whichever of the drive's trashes holds it.
+// It returns as localtrash.Trash.Restore does.
+func (d *driveTrash) restore(id string) (string, error) {
+	for _, trash := range d.trashes {
+		target, err := trash.Restore(id)
+		if errors.Is(err, localtrash.ErrEntryNotFound) && target == "" {
+			continue
+		}
+		return target, err //nolint:wrapcheck // reportTrashRestore names the command
+	}
+
+	return "", fmt.Errorf("%w: %s", localtrash.ErrEntryNotFound, id)
+}
+
+// empty empties every trash of the drive, going on past a failure, and
+// returns how many files it removed in all.
+func (d *driveTrash) empty() (int, error) {
+	removed := 0
+	var errs error
+	for _, trash := range d.trashes {
+		count, err := trash.Empty()
+		removed += count
+		if err != nil {
+			errs = localpath.JoinOnOneLine(errs, fmt.Errorf("empty trash %s: %w", trash.Dir(), err))
+		}
+	}
+
+	return removed, errs
+}
+
+// openConfiguredDriveTrash resolves --drive to a configured drive's own trash.
+func openConfiguredDriveTrash(cc *CLIContext, verb string) (*localtrash.Trash, string, error) {
 	driveSelector, err := cc.Flags.SingleDrive()
 	if err != nil {
 		return nil, "", err
@@ -131,17 +210,17 @@ func (out trashListJSONOutput) withEmptyLists() trashListJSONOutput {
 }
 
 func runTrashList(_ context.Context, cc *CLIContext) error {
-	trash, drive, err := openDriveTrash(cc, "list")
+	trash, err := openDriveTrash(cc, "list")
 	if err != nil {
 		return err
 	}
-	entries, err := trash.List()
+	entries, err := trash.list()
 	if err != nil {
-		return fmt.Errorf("list trash: %w", err)
+		return err
 	}
 
 	if cc.Flags.JSON {
-		out := trashListJSONOutput{Drive: drive}
+		out := trashListJSONOutput{Drive: trash.drive}
 		for i := range entries {
 			out.Entries = append(out.Entries, trashEntryJSON{
 				ID:        entries[i].ID,
@@ -176,16 +255,34 @@ func writeTrashEntryLine(cc *CLIContext, entry *localtrash.Entry) error {
 			entry.ID, entry.TrashedAt.Local().Format(time.DateTime), entry.ItemPath)
 	case localtrash.StatePending, localtrash.StateCommitted:
 	}
-	what := "deleted"
-	if entry.Reason == localtrash.ReasonReplaced {
-		what = "replaced"
-	}
+	what, why := trashReasonText(entry.Reason)
 	suffix := ""
 	if entry.State == localtrash.StatePending {
 		suffix = " [interrupted, recoverable]"
 	}
-	return writef(cc.Output(), "%s  %s  %s %s (%s)%s\n",
-		entry.ID, entry.TrashedAt.Local().Format(time.DateTime), what, entry.Path, formatSize(entry.Size), suffix)
+	return writef(cc.Output(), "%s  %s  %s %s (%s)%s%s\n",
+		entry.ID, entry.TrashedAt.Local().Format(time.DateTime), what, entry.Path, formatSize(entry.Size), why, suffix)
+}
+
+// trashReasonText is how `trash list` words why a file is in the trash: the
+// word before its path and what follows its size. The switch names every
+// reason localtrash declares (a test reads them from its source); an entry
+// with a reason outside that set, which a later version may write, is listed
+// with the word its record holds.
+func trashReasonText(reason localtrash.Reason) (string, string) {
+	switch reason {
+	case localtrash.ReasonDeleted:
+		return "deleted", ""
+	case localtrash.ReasonReplaced:
+		return "replaced", ""
+	case localtrash.ReasonReleased:
+		return "released", ": its shared folder was removed from this account"
+	}
+	if reason == "" {
+		return "removed", ""
+	}
+
+	return string(reason), ""
 }
 
 type trashRestoreJSONOutput struct {
@@ -198,13 +295,13 @@ type trashRestoreJSONOutput struct {
 }
 
 func runTrashRestore(_ context.Context, cc *CLIContext, id string) error {
-	trash, drive, err := openDriveTrash(cc, "restore from")
+	trash, err := openDriveTrash(cc, "restore from")
 	if err != nil {
 		return err
 	}
-	target, restoreErr := trash.Restore(id)
+	target, restoreErr := trash.restore(id)
 
-	return reportTrashRestore(cc, drive, id, target, restoreErr)
+	return reportTrashRestore(cc, trash.drive, id, target, restoreErr)
 }
 
 // reportTrashRestore prints what a restore did and returns its failure. A
@@ -242,17 +339,17 @@ func runTrashEmpty(_ context.Context, cc *CLIContext, confirm bool) error {
 	if !confirm {
 		return fmt.Errorf("trash empty permanently deletes every file in the local trash; rerun with --confirm")
 	}
-	trash, drive, err := openDriveTrash(cc, "empty")
+	trash, err := openDriveTrash(cc, "empty")
 	if err != nil {
 		return err
 	}
-	removed, err := trash.Empty()
+	removed, err := trash.empty()
 	if err != nil {
-		return fmt.Errorf("empty trash: %w", err)
+		return err
 	}
 
 	if cc.Flags.JSON {
-		return writeJSONDocument(cc.Output(), trashEmptyJSONOutput{Drive: drive, Removed: removed})
+		return writeJSONDocument(cc.Output(), trashEmptyJSONOutput{Drive: trash.drive, Removed: removed})
 	}
 
 	return writef(cc.Output(), "Permanently deleted %s from the local trash.\n", countOf(removed, "file"))

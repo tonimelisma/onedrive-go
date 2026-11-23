@@ -619,6 +619,7 @@ func releaseAction(row *syncdomain.BaselineEntry, local *syncdomain.LocalState) 
 			Baseline: row,
 			Local:    local,
 		},
+		ReleasesSharedFolder: true,
 	}
 }
 

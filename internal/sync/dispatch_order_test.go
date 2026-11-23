@@ -145,6 +145,10 @@ func parentTestName(name string) string {
 //nolint:funlen // one scenario per line
 func runOnceScenarios() []func(*testing.T) {
 	return []func(*testing.T){
+		TestRunOnce_DryRunLeavesSpellingRenameLeftover,
+		TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves,
+		TestRunOnce_SpellingRenameLeftoverIsPutBackBeforeThePlan,
+		TestRunOnce_SpellingRenameLeftoverWhosePlainNameIsTakenIsKeptAndReported,
 		TestRunOnce_UsesRunStateOnlyFromItsGoroutine,
 		TestRunOnce_CountsOnTheEngineCollectorWithoutAnOwnerWrap,
 		TestRunOnce_ABlockedRowWhoseScopeIsGoneIsReleasedAtStartup,

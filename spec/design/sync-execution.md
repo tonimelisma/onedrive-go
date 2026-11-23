@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/internal/syncexec/action_freshness.go, internal/sync/internal/syncexec/executor.go, internal/sync/internal/syncexec/executor_conflict.go, internal/sync/internal/syncexec/executor_delete.go, internal/sync/internal/syncexec/executor_parent_checks.go, internal/sync/internal/syncexec/executor_preconditions.go, internal/sync/internal/syncexec/executor_transfer.go, internal/sync/internal/syncexec/worker.go, internal/sync/internal/syncexec/executor_test_seams.go, internal/sync/internal/syncexec/doc.go, internal/sync/internal/syncsched/*.go
 
-Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.10.30 [verified]
+Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.4.12 [verified], R-6.4.13 [verified], R-6.10.30 [verified]
 
 ## Overview
 
@@ -321,11 +321,18 @@ spelled as the move asks, else the only entry of that OneDrive name, by
 error naming the folder, which the user sees, instead of renaming one of them
 by listing order: `TestExecutor_StoredNameSpelling_TwoKeyEqualEntriesAreAnError`), the move goes
 through a temporary sibling with two renames that never replace; the sibling
-is named `.onedrive-go.spelling.<name>`, which local observation always
-excludes and cleanup never deletes, so a crash between the two renames
-leaves nothing that syncs (R-2.12.4,
+is named `.onedrive-go.spelling.<name>` (then `<name>-1` up to `<name>-9`
+while those are taken, `syncdomain.SpellingRenameArtifactAttempts`), which
+local observation always excludes and cleanup never deletes, so a crash
+between the two renames leaves nothing that syncs (R-2.12.4,
 `TestContentFilter_SpellingRenameArtifactIsAlwaysExcluded`,
-`TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed`). Accepting it
+`TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed`). What it
+leaves is the user's entry, so the engine's next live start puts it back
+under its plain name before the first plan, through the no-replace rename,
+and keeps it, warning with both paths, where that name is taken or the
+temporary name does not say which it was (R-2.12.8, sync-engine.md,
+`TestRunOnce_SpellingRenameLeftoverIsPutBackBeforeThePlan`); the rename is
+then planned again from truth. Accepting it
 is what lets a remote case-only rename apply on macOS's case-insensitive volume.
 A failure of either step through the temporary sibling, the second finding the
 new spelling taken included, is the rename's own failure, not a superseded
@@ -367,7 +374,9 @@ when the trash is on another filesystem
 (`TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination`). A file that
 takes the freed name between the two steps is kept: the rename refuses, the
 move is superseded, and the displaced file stays in the trash
-(`TestExecutor_LocalMove_ReplacingMoveKeepsAFileThatTakesTheFreedName`). A
+(`TestExecutor_LocalMove_ReplacingMoveKeepsAFileThatTakesTheFreedName`); the
+next plan renames that file to a conflict copy and finishes the move
+(`TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves`). A
 trash that fails fails the move, with both files where they were, and never
 reads as a destination that left on its own
 (`TestExecutor_LocalMove_ATrashThatFailsFailsTheReplacingMove`). A
@@ -792,8 +801,8 @@ a writer that keeps both, such as `rsync --inplace -t` or a write through an
 mmap that does not update mtime, can still slip a change past it.
 
 The file does not vanish: it moves into the drive's local trash
-(`internal/localtrash`, P-4), a per-mount directory under the data directory
-named after the state DB. Each entry is recorded as pending before anything is
+(`internal/localtrash`, P-4), a directory under the data directory named after
+the drive's state DB (`DirForStatePath`). Each entry is recorded as pending before anything is
 moved and as committed after, so a crash in between leaves a pending entry
 that `trash list` shows and `trash restore` puts back; an entry holding a file
 but no readable record is listed as an orphan with the file's location. An
@@ -864,6 +873,44 @@ housekeeping and
 the watch maintenance tick (at most hourly) purge, and `onedrive-go trash
 list/restore/empty` exposes the trash. Without a trash (executor-only tests)
 the verified inode is removed with `RemoveVerifiedRegularFile` instead.
+
+An entry says why its file left the sync folder (`Reason`): `deleted` for a
+local delete of an item deleted on OneDrive, `replaced` for the version a
+download replaced, and `released` for a synced file the release of a removed
+shared folder took out (`Action.ReleasesSharedFolder`, set by
+`engine_shortcut_release.go`'s `releaseAction`; `localDeleteTrashReason`
+picks the reason): that file was not deleted on OneDrive, the sharer's copy
+still exists
+(`TestDeleteLocalFile_ReleaseOfASharedFolderTrashesTheFileAsReleased`,
+`TestRunOnce_FinalDrainReleasesASyncedTreeToTheTrash`).
+
+A shortcut child mount's trash belongs to its parent drive (R-6.4.12). Its
+engine writes to the parent's child trash (`ChildDir`:
+`<data>/trash/children/<parent trash name>/<child state name>`, outside the
+parent's own entries; `EngineMountConfig.TrashDir`, which multisync's
+`shortcutChildTrashDirs` derives from the child mount ID, whose parent is the
+configured drive it names), so the parent's `Trash.Children` finds every child
+trash whether or not the child still runs: the parent's `trash list`,
+`restore` and `empty` cover them (each entry names its own sync folder), and
+the parent engine's housekeeping purges them with its own
+(`purgeTrashAndChildren`,
+`TestPurgeExpiredTrash_ExpiresTheEntriesOfTheDrivesShortcutChildren`). When
+the child's state is removed, its artifact purge first hands its trash over
+(`Trash.HandOverTo`): each entry directory, committed, pending, orphan or a
+reservation without a file, moves into the parent's trash by one rename inside
+the data directory, keeping its ID, record and state, so it is in exactly one
+trash at every moment; both directories are flushed, then the child's trash
+directory is removed. An entry it cannot move, or whose ID the parent already
+holds, stays where it was, and so does the child's directory; the purge then
+removes nothing of the child and fails as a remaining state artifact, which the
+parent publishes again (`TestHandOverTo_MovesEveryEntryAsItIs`,
+`TestHandOverTo_StoppedPartWayAndRunAgainHoldsEachEntryOnce`,
+`TestHandOverTo_KeepsAnEntryWhoseIDIsTaken`,
+`TestShortcutChildArtifactCleanupExecutor_HandsTheChildsTrashToItsDrive`,
+`TestShortcutChildArtifactCleanupExecutor_KeepsTheChildWhenItsTrashCannotBeHandedOver`).
+A restore of an entry whose sync folder is gone, such as a released shared
+folder's, does not make the folder again and names where the file is in the
+trash (`TestTrashRestore_IntoASyncFolderThatIsGoneNamesWhereTheFileIs`).
 
 Both download-target checks hash the existing file and compare it with
 `expectedDownloadTargetHash`: the hash of the version the plan observed, or,

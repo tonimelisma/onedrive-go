@@ -4,6 +4,7 @@ import (
 	slashpath "path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
@@ -309,11 +310,40 @@ func isSQLiteSidecarName(lower string) bool {
 // spelling-only local rename (executor renameLocal).
 const SpellingRenameArtifactPrefix = ".onedrive-go.spelling."
 
+// SpellingRenameArtifactAttempts bounds the temporary sibling names a
+// spelling-only local rename tries: the prefix and the new name, then that
+// name with -1 up to -(SpellingRenameArtifactAttempts-1) appended
+// (synctree.Root.RenameWithTemporarySibling).
+const SpellingRenameArtifactAttempts = 10
+
+// SpellingRenameArtifactPlainName returns the name a temporary sibling of a
+// spelling-only rename was on its way to, and false when name is no such
+// sibling or does not say. A sibling whose rest ends in -1 to -9 does not
+// say: it is the first sibling of that name, or a later attempt for the name
+// without the suffix, and putting it back under either would rename the
+// user's entry by a guess.
+func SpellingRenameArtifactPlainName(name string) (string, bool) {
+	plain, isArtifact := strings.CutPrefix(name, SpellingRenameArtifactPrefix)
+	if !isArtifact || plain == "" || plain == "." || plain == ".." {
+		return "", false
+	}
+	if dash := strings.LastIndexByte(plain, '-'); dash >= 0 {
+		suffix := plain[dash+1:]
+		attempt, err := strconv.Atoi(suffix)
+		if err == nil && attempt >= 1 && attempt < SpellingRenameArtifactAttempts && strconv.Itoa(attempt) == suffix {
+			return "", false
+		}
+	}
+
+	return plain, true
+}
+
 // isSpellingRenameArtifactName reports the temporary sibling of a
 // spelling-only local rename. It is excluded whatever the filter settings,
 // like download partials, so a crash between its two renames never syncs it;
 // unlike partials it is never deleted by cleanup, because it holds a user's
-// file.
+// file: the engine's start puts it back under its plain name where that is
+// free, and otherwise keeps it and says so.
 func isSpellingRenameArtifactName(name string) bool {
 	return strings.HasPrefix(name, SpellingRenameArtifactPrefix)
 }

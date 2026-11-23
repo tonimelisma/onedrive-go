@@ -64,7 +64,7 @@ func TestRunWatch_ReportsLifecycleTransitions(t *testing.T) {
 
 	// A reload that cannot apply still finishes, with the error.
 	require.NoError(t, os.WriteFile(cfgPath, []byte("{{invalid toml"), 0o600))
-	statusCode, response := postControlJSONAnyStatus(t, cfg.ControlSocketPath, synccontrol.PathReload, nil)
+	statusCode, response := postControlReloadAnyStatus(t, cfg.ControlSocketPath)
 	require.Equal(t, http.StatusUnprocessableEntity, statusCode)
 	require.Equal(t, synccontrol.ErrorReloadFailed, response.Code)
 	assert.Equal(t, WatchReloading, nextLifecycleEvent(t, events).Phase)

@@ -9,6 +9,10 @@ import (
 
 const stateMountPrefix = stateDBPrefix + "mount_"
 
+// childBindingSeparator joins a child mount's parent mount ID and the item ID
+// of the shortcut it binds (ChildMountID).
+const childBindingSeparator = "|binding:"
+
 func MountStatePath(mountID string) string {
 	return MountStatePathForDataDir(DefaultDataDir(), mountID)
 }
@@ -52,9 +56,20 @@ func ChildMountID(parentMountID, bindingItemID string) string {
 		return ""
 	}
 
-	return parent + "|binding:" + binding
+	return parent + childBindingSeparator + binding
 }
 
 func IsChildMountID(mountID string) bool {
-	return strings.Contains(strings.TrimSpace(mountID), "|binding:")
+	return strings.Contains(strings.TrimSpace(mountID), childBindingSeparator)
+}
+
+// ChildMountParentID returns the parent mount ID that ChildMountID built
+// childMountID from, or "" when childMountID is not a child mount's.
+func ChildMountParentID(childMountID string) string {
+	parent, _, found := strings.Cut(strings.TrimSpace(childMountID), childBindingSeparator)
+	if !found {
+		return ""
+	}
+
+	return strings.TrimSpace(parent)
 }

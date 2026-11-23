@@ -68,6 +68,30 @@ func TestDeleteLocalFile_MovesTheFileToTheTrash(t *testing.T) {
 	assert.Equal(t, int64(len(syncedContent)), entries[0].Size)
 }
 
+// The release of a removed shared folder deletes its synced files by the
+// same rule, but nothing was deleted on OneDrive: the trash says released.
+//
+// Validates: R-6.4.13
+func TestDeleteLocalFile_ReleaseOfASharedFolderTrashesTheFileAsReleased(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
+	trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
+	cfg.trash = trash
+	syncfixture.WriteExecTestFile(t, syncRoot, "docs/a.txt", syncedContent)
+	action := localDeleteActionFor(t, "docs/a.txt")
+	action.ReleasesSharedFolder = true
+
+	outcome := NewExecution(cfg, syncfixture.EmptyBaseline()).ExecuteLocalDelete(t.Context(), action)
+
+	syncfixture.RequireOutcomeSuccess(t, &outcome)
+	entries, err := trash.List()
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "docs/a.txt", entries[0].Path)
+	assert.Equal(t, localtrash.ReasonReleased, entries[0].Reason)
+}
+
 // The user saves a new version (an editor's write-then-rename) while sync is
 // hashing the old one for a delete. The old shape hashed by path and then
 // removed by path, unlinking the new content (D-010).
