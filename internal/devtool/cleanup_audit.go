@@ -30,7 +30,10 @@ const (
 )
 
 const (
-	cleanupMainBranchRef          = "refs/heads/" + mainBranchName
+	// cleanupMainBranchRef is what "merged" is judged against: origin/main,
+	// which the audit fetches first. A local main is never moved in a cloud
+	// session, so it would call work merged since then unmerged.
+	cleanupMainBranchRef          = "refs/remotes/" + originMainRef
 	cleanupDirtyWorktreeDetail    = "attached worktree has local modifications"
 	cleanupRootMainWorktreeDetail = "root main worktree"
 	cleanupMainBranchDetail       = "main branch"
