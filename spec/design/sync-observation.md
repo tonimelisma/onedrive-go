@@ -802,7 +802,12 @@ subtree:
   deleted, and the planner's delete-safety hold keeps every such delete toward
   OneDrive for confirmation (sync-planning.md, "mount point gone"). A flag is
   forgotten when its folder is neither synced nor present
-  (`TestRunOnce_ADiskGoneForGoodIsForgottenOnceItsFolderIsRemoved`). Watch safety scans use the flags but
+  (`TestRunOnce_ADiskGoneForGoodIsForgottenOnceItsFolderIsRemoved`), or when
+  the user forgets it with `drive forget-mount` once the folder holds the
+  disk's content as a plain folder of the parent's device (R-6.2.18): the next
+  scan reads it as an ordinary folder and the content is compared with the
+  baseline, so nothing is transferred for what is unchanged (the same path
+  `remountDisk` takes in `TestRunOnce_ARebindKeepsEveryDiskThatIsNotMounted`). Watch safety scans use the flags but
   only one-shot and bootstrap scans record new ones.
 - `local_unsyncable_replacement`, `local_mount_boundary` and
   `local_mount_missing` are managed issue types of the local findings batch

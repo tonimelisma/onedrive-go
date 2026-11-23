@@ -195,3 +195,50 @@ func RebindSyncRoot(ctx context.Context, dbPath string, logger *slog.Logger) (er
 
 	return nil
 }
+
+// ForgetMountBoundary forgets that path, relative to the sync folder, was a
+// crossed mount point, keeping everything else, and reports whether it was
+// recorded. The next scan then reads the folder as an ordinary folder of the
+// sync folder's own disk: its content is compared with the baseline like any
+// other, so a disk's content restored into a plain folder is kept, not
+// deleted and uploaded again (R-6.2.18). The caller holds the store's
+// offline-change lock (LockDriveForOfflineChange) and has checked that the
+// folder holds content on the sync folder's disk: forgetting the record of an
+// empty folder would make a disk that is not mounted read as deletes.
+func ForgetMountBoundary(ctx context.Context, dbPath string, path string, logger *slog.Logger) (_ bool, err error) {
+	if logger != nil {
+		logger.Info("forgetting recorded mount point",
+			slog.String("db_path", dbPath),
+			slog.String("path", path),
+		)
+	}
+
+	store, err := NewSyncStore(ctx, dbPath, logger)
+	if err != nil {
+		return false, fmt.Errorf("open sync store: %w", err)
+	}
+	defer func() {
+		if closeErr := store.Close(ctx); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close sync store: %w", closeErr))
+		}
+	}()
+
+	result, err := store.db.ExecContext(ctx, `DELETE FROM mount_boundaries WHERE path = ?`, path)
+	if err != nil {
+		return false, fmt.Errorf("sync: forgetting mount boundary %s: %w", path, err)
+	}
+	removed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("sync: forgetting mount boundary %s: %w", path, err)
+	}
+
+	return removed > 0, nil
+}
+
+// ReadMountBoundaries reads, through a read-only inspector, the folders the
+// drive's sync state at dbPath records as crossed mount points.
+func ReadMountBoundaries(ctx context.Context, dbPath string, logger *slog.Logger) ([]string, error) {
+	return readWithInspector(dbPath, logger, func(inspector *storeInspector) ([]string, error) {
+		return listMountBoundariesTx(ctx, inspector.db)
+	})
+}

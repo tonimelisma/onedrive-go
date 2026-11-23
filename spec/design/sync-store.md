@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/syncstore/store_remote_twins.go, internal/sync/syncstore/store_pending_creates.go, internal/sync/syncstore/store_held_deletes.go, internal/sync/syncstore/store_delete_ledger.go, internal/sync/syncstore/store_local_hash_cache.go, internal/sync/syncstore/block_scope_rows.go, internal/sync/syncstore/blocked_retry_projection.go, internal/sync/syncstore/condition_projection.go, internal/sync/syncstore/observation_reconcile_policy.go, internal/sync/syncstore/schema.go, internal/sync/syncstore/scope_lifecycle_policy.go, internal/sync/syncstore/sqlite_compare.go, internal/sync/syncstore/store.go, internal/sync/syncstore/store_compatibility.go, internal/sync/syncstore/store_inspect.go, internal/sync/syncstore/store_local_state.go, internal/sync/syncstore/store_observation_issues.go, internal/sync/syncstore/store_observation_state.go, internal/sync/syncstore/store_planner_visible.go, internal/sync/syncstore/store_read_remote_state.go, internal/sync/syncstore/store_reset.go, internal/sync/syncstore/store_retry_work.go, internal/sync/syncstore/store_scope_admin.go, internal/sync/syncstore/store_scratch.go, internal/sync/syncstore/store_sql_encoding.go, internal/sync/syncstore/store_write_baseline.go, internal/sync/syncstore/baseline_cache.go, internal/sync/syncstore/store_write_block_scopes.go, internal/sync/syncstore/store_write_observation.go, internal/sync/syncstore/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go, internal/sync/syncstore/store_sync_root.go, internal/sync/syncstore/store_test_seams.go, internal/sync/syncstore/doc.go
 
-Implements: R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.10.50 [verified], R-2.10.49 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
+Implements: R-6.2.18 [verified], R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.10.50 [verified], R-2.10.49 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
 ## Verification Counts Only What It Compared
 
@@ -546,8 +546,10 @@ Administrative write helpers are split by authority:
 
 - store compatibility helpers diagnose incompatible DBs
 - `store_reset.go` owns explicit delete-and-recreate reset, the rebind's
-  identity clear, and the file-family move and log fold an account email
-  change uses
+  identity clear, `drive forget-mount`'s removal of one recorded mount point
+  (`ForgetMountBoundary`, with `ReadMountBoundaries` its read-only listing;
+  R-6.2.18, `TestForgetMountBoundary_ForgetsOneRecordAndNothingElse`), and the
+  file-family move and log fold an account email change uses
 
 ### Pending creates
 

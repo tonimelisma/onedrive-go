@@ -100,7 +100,7 @@ Resolution order: exact canonical ID â†’ exact display_name (case-insensitive) â
 
 ## CLI Drive Command (`drive.go`, `drive_*.go`)
 
-Implements: R-3.3.2 [verified], R-3.3.3 [verified], R-3.3.4 [verified], R-3.3.5 [verified], R-3.3.6 [verified], R-3.3.7 [verified], R-3.3.8 [verified], R-3.3.9 [verified], R-3.3.12 [verified], R-3.3.13 [verified], R-3.3.14 [verified], R-3.6.1 [verified], R-3.6.2 [verified], R-3.6.3 [verified]
+Implements: R-6.2.18 [verified], R-3.3.2 [verified], R-3.3.3 [verified], R-3.3.4 [verified], R-3.3.5 [verified], R-3.3.6 [verified], R-3.3.7 [verified], R-3.3.8 [verified], R-3.3.9 [verified], R-3.3.12 [verified], R-3.3.13 [verified], R-3.3.14 [verified], R-3.6.1 [verified], R-3.6.2 [verified], R-3.6.3 [verified]
 
 `drive list`, `drive add`, `drive remove`, `drive search`. `internal/cli/drive.go` owns Cobra wiring and flag parsing; sibling `drive_*.go` files own catalog discovery, shared-target normalization, add/remove workflows, and output rendering. Drive add enrolls the drive through `config.AddDrive`, one transaction that writes the catalog record and then the config section with its sync_dir (and a shared folder's display_name) in one write; a failure leaves config and catalog as they were (a sync directory already created stays, empty), and an existing section that lacks something is completed and reported as completed (`spec/design/config.md`, Persisted Facts And Lifecycle). `drive_add.go` keeps only the token precondition, the shared folder's display-name lookup and the output; it rolls nothing back. It accepts canonical drive IDs, shared selectors, raw shared-folder URLs, and shared-folder name search terms; raw URLs and selectors are normalized to canonical shared drive IDs before config writes. Shared-folder name search uses the same shared-discovery projection as `shared` and the shared-folder portion of `drive list`, and it honors `--account` when present. Drive list annotates available drives with state DB presence (R-3.3.3), supports `--all` to remove the SharePoint site cap (R-3.3.4). Drive remove `--purge` works on unconfigured drives with orphaned state (R-3.3.8) and only purges drive-owned state; account-owned token/profile files remain until logout. A purge removes the config section, tells a running watch, and only then deletes the state DB's whole file family (`purge.go` `deleteStateDB`) under the engine's own locks (`syncengine.LockDriveForOfflineChange`); a store an engine still has open is kept, the command fails naming `drive remove --purge --drive <id>` as the finish, and the drive's catalog record stays until then (cli.md, Control Socket; `TestDriveRemovePurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestDriveRemovePurge_NotifiesTheWatchBeforeDeleting`, `TestDeleteStateDB_RemovesTheWholeFamily`).
 
@@ -202,6 +202,18 @@ records the owner in the catalog and writes the section in the same
 transaction. A config write that fails puts back the catalog bytes the
 transaction read, so a pre-existing catalog record from an earlier session
 survives a failed add (`TestAddSharedDrive_ConfigWriteFailurePreservesPreExistingCatalogDrive`).
+
+`drive forget-mount <path>` (`drive_forget_mount.go`) follows `drive
+rebind-root`'s pattern: it resolves one `--drive`, refuses while a sync owner
+holds it, shows what it accepts and asks for a typed FORGET (or `--yes`), and
+runs its change under the engine's own locks (`changeDriveStateUnderLock`),
+with `--json` output. It forgets one recorded mount point, and only one whose
+folder is a plain folder of the sync folder's own disk that holds files, the
+whole-tree-restore case `status` would otherwise report as "Disk not mounted"
+for ever; a missing or empty folder (a disk that is not mounted) or one still
+on another device is refused, because forgetting its record would let the
+next sync delete the disk's content on OneDrive or cross the disk unseen
+(R-6.2.18, cli.md Verified By).
 
 ## Design Constraints
 

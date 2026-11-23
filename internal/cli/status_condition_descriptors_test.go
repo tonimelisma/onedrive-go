@@ -103,7 +103,9 @@ func TestBuildSyncStateInfo_AMountPointNotMountedSaysWhatClearsIt(t *testing.T) 
 	assert.Equal(t, "Mount the disk again; that clears it and loses nothing. 'onedrive-go drive rebind-root' does "+
 		"not clear it: a rebind keeps every disk listed here. If the disk is gone for good, copy what you need "+
 		"from this folder on OneDrive first, then remove the empty folder: sync holds the deletes of its "+
-		"content on OneDrive until you run 'onedrive-go sync --confirm-deletes'.",
+		"content on OneDrive until you run 'onedrive-go sync --confirm-deletes'. If the folder now holds the "+
+		"disk's content as a plain folder (a restore), 'onedrive-go drive forget-mount <path>' lets sync "+
+		"compare it with OneDrive instead; nothing is deleted.",
 		condition.Action)
 	assert.NotContains(t, condition.Reason+condition.Action, "cross_filesystems")
 	assert.Equal(t, []string{"nas"}, condition.Paths)
