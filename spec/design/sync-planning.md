@@ -1284,8 +1284,12 @@ either plan makes, at an identity two rows of one tree share (two local rows
 of one local identity, or two baseline rows of one local identity or item
 ID: the join pairs at most one, `TestExplainPlanDifferences_SharedIdentityAtTwoPaths`),
 or where both plans hold baseline updates alone, which is bookkeeping
-(`TestExplainPlanDifferences_BaselineUpdatesAloneAreBookkeeping`); any other
-difference is unexplained (`TestExplainPlanDifferences_KnownReasonsOnly`). The planner model plans every
+(`TestExplainPlanDifferences_BaselineUpdatesAloneAreBookkeeping`); then, from
+the differences those explain, the source of a move one of them makes (the
+other planner plans the item in place there) and a folder the identity
+planner only deletes above such a source or above a delete one of them
+explains (`TestExplainPlanDifferences_TheConsequencesOfAnExplainedMove`, chaos
+seeds 13, 33 and 121); any other difference is unexplained (`TestExplainPlanDifferences_KnownReasonsOnly`). The planner model plans every
 round with both planners and fails on an unexplained difference, logging every
 difference with its reason in the seed's failure context
 (`TestPlannerModel_RandomTriplesConverge`); the engine model does the same for

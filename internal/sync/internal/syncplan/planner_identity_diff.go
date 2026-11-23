@@ -1,6 +1,7 @@
 package syncplan
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -119,6 +120,10 @@ const (
 		"node by it and pairs at most one of them, where the current planner pairs by path and moves"
 	reasonBookkeeping = "baseline bookkeeping only: the current planner records new metadata over " +
 		"unchanged content, which the identity planner does not model"
+	reasonMoveSource = "the source of a move a known reason covers: one planner moves the item " +
+		"away from here and the other plans it in place, so the difference is the move's"
+	reasonEmptiedFolder = "a folder above work a known reason covers: the identity planner " +
+		"deletes the folder once it deletes or moves out what is below it, where the current planner keeps it"
 )
 
 // ExplainPlanDifferences sets each difference's reason, from the shape of
@@ -127,7 +132,8 @@ const (
 // an entry whose type differs from its baseline row's, at or below a path
 // with an observation issue, below a conflict copy either plan makes, at an
 // identity two rows of one tree share, or a difference of baseline updates
-// alone. It returns the differences no reason covers.
+// alone; then a difference that follows from a move one of those covers (its
+// source, a folder it empties). It returns the differences no reason covers.
 func ExplainPlanDifferences(in *IdentityInputs, current, shadow *syncdomain.ActionPlan, diffs []PlanDifference) []PlanDifference {
 	if in == nil || in.Baseline == nil {
 		return diffs
@@ -161,7 +167,88 @@ func ExplainPlanDifferences(in *IdentityInputs, current, shadow *syncdomain.Acti
 		}
 	}
 
-	return unexplained
+	return explainByExplainedMoves(diffs, unexplained)
+}
+
+// explainByExplainedMoves gives a reason to the differences that follow from
+// work another difference's known reason covers: a move's source path,
+// where the planner that does not move plans the item in place (a download
+// back, or nothing), and a folder the identity planner deletes, and nothing
+// else there, above a move's source or above a delete a known reason covers,
+// where the current planner keeps the folder (plans nothing, or re-creates it
+// on the side that lost it for the work it keeps below). Every such
+// difference is the explained work's consequence, not a disagreement of its
+// own. It returns the differences that stay unexplained.
+func explainByExplainedMoves(diffs, unexplained []PlanDifference) []PlanDifference {
+	if len(unexplained) == 0 {
+		return nil
+	}
+	var sources, emptied []string
+	for i := range diffs {
+		if diffs[i].Reason == "" {
+			continue
+		}
+		for _, line := range append(append([]string(nil), diffs[i].Current...), diffs[i].Shadow...) {
+			if _, old, ok := strings.Cut(line, " <- "); ok {
+				sources = append(sources, old)
+				emptied = append(emptied, old)
+			}
+		}
+		if shadowOnlyDeletes(&diffs[i]) {
+			emptied = append(emptied, diffs[i].Path)
+		}
+	}
+
+	var still []PlanDifference
+	for i := range unexplained {
+		d := &unexplained[i]
+		reason := ""
+		switch {
+		case slices.Contains(sources, d.Path):
+			reason = reasonMoveSource
+		case isAncestorOfAny(d.Path, emptied) && shadowOnlyDeletes(d):
+			reason = reasonEmptiedFolder
+		}
+		if reason == "" {
+			still = append(still, *d)
+			continue
+		}
+		for j := range diffs {
+			if diffs[j].Path == d.Path {
+				diffs[j].Reason = reason
+			}
+		}
+	}
+
+	return still
+}
+
+// isAncestorOfAny reports whether some path of paths is below p.
+func isAncestorOfAny(p string, paths []string) bool {
+	for _, other := range paths {
+		if strings.HasPrefix(other, p+"/") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// shadowOnlyDeletes reports whether the shadow plan holds actions at the
+// difference's path and every one of them deletes it.
+func shadowOnlyDeletes(d *PlanDifference) bool {
+	if len(d.Shadow) == 0 {
+		return false
+	}
+	local := syncdomain.ActionLocalDelete.String() + " "
+	remote := syncdomain.ActionRemoteDelete.String() + " "
+	for _, line := range d.Shadow {
+		if !strings.HasPrefix(line, local) && !strings.HasPrefix(line, remote) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // identityDifferenceRoots returns the paths of moved items (baseline path

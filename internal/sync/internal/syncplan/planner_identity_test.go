@@ -345,6 +345,67 @@ func TestExplainPlanDifferences_SharedIdentityAtTwoPaths(t *testing.T) {
 	assert.Equal(t, "c", unexplained[0].Path)
 }
 
+// A difference that follows from a move another difference's known reason
+// covers is explained by it: the move's source, where the other planner
+// plans the item in place (chaos seed 13: the current planner moved a file
+// with a shared local identity, the identity planner downloaded it back),
+// and a folder above the source that one planner deletes once the move took
+// its child out (chaos seed 33: the identity planner moved a file out of a
+// folder OneDrive deleted and deleted the folder, the current planner kept
+// both). A delete above a source that also plans other work, and a
+// difference no explained move touches, stay unexplained.
+//
+// Validates: R-2.3.1
+func TestExplainPlanDifferences_TheConsequencesOfAnExplainedMove(t *testing.T) {
+	t.Parallel()
+
+	old := syncdomain.BaselineEntry{Path: "docs/b.txt", ItemID: "item-1", ItemType: syncdomain.ItemTypeFile}
+	in := &IdentityInputs{
+		Baseline: syncdomain.NewBaselineSnapshot([]*syncdomain.BaselineEntry{&old}),
+		Local: []syncdomain.LocalStateRow{
+			{Path: "renamed-b.txt", ItemType: syncdomain.ItemTypeFile, LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true},
+			{Path: "hard-link.txt", ItemType: syncdomain.ItemTypeFile, LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true},
+		},
+	}
+	diffs := []PlanDifference{
+		{Path: "docs/b.txt", Shadow: []string{"download docs/b.txt"}},
+		{Path: "kept", Shadow: []string{"local_delete kept"}},
+		{Path: "kept/q", Shadow: []string{"local_delete kept/q"}},
+		{Path: "other", Shadow: []string{"upload other"}},
+		{Path: "renamed-b.txt", Current: []string{"remote_move renamed-b.txt <- docs/b.txt"}, Shadow: []string{"upload renamed-b.txt"}},
+		{Path: "hard-link.txt", Shadow: []string{"local_move hard-link.txt <- kept/q/b.txt"}},
+	}
+	unexplained := ExplainPlanDifferences(in, &syncdomain.ActionPlan{}, &syncdomain.ActionPlan{}, diffs)
+
+	assert.Equal(t, reasonSharedLocalIdentity, diffs[4].Reason)
+	assert.Equal(t, reasonMoveSource, diffs[0].Reason, "the source of the explained move")
+	assert.Equal(t, reasonEmptiedFolder, diffs[1].Reason, "a folder the explained move empties")
+	assert.Equal(t, reasonEmptiedFolder, diffs[2].Reason)
+	require.Len(t, unexplained, 1)
+	assert.Equal(t, "other", unexplained[0].Path)
+
+	// Chaos seed 121: OneDrive deleted a folder with new work below it; the
+	// current planner re-creates it there, the identity planner deletes it
+	// here with what is below, a delete a shared identity explains.
+	moved := []PlanDifference{
+		{Path: "x", Current: []string{"folder_create x (remote)"}, Shadow: []string{"local_delete x"}},
+		{Path: "x/hard-link.txt", Current: []string{"folder_create x/hard-link.txt (remote)"}, Shadow: []string{"local_delete x/hard-link.txt"}},
+	}
+	in.Local = append(in.Local,
+		syncdomain.LocalStateRow{Path: "x/hard-link.txt", ItemType: syncdomain.ItemTypeFolder, LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true})
+	unexplained = ExplainPlanDifferences(in, &syncdomain.ActionPlan{}, &syncdomain.ActionPlan{}, moved)
+	assert.Empty(t, unexplained)
+	assert.Equal(t, reasonEmptiedFolder, moved[0].Reason, "the folder above an explained delete")
+
+	busy := []PlanDifference{
+		{Path: "hard-link.txt", Shadow: []string{"local_move hard-link.txt <- kept/b.txt"}},
+		{Path: "kept", Shadow: []string{"local_delete kept", "upload kept"}},
+	}
+	unexplained = ExplainPlanDifferences(in, &syncdomain.ActionPlan{}, &syncdomain.ActionPlan{}, busy)
+	require.Len(t, unexplained, 1, "a folder with other work above the source stays unexplained")
+	assert.Equal(t, "kept", unexplained[0].Path)
+}
+
 // OneDrive deleted a synced folder and has a new one at its path (a new item
 // ID): the baseline rebinds to the new folder and the local folder stays, as
 // the current planner plans it (R-2.10.49), instead of deleting the local
