@@ -15,7 +15,8 @@ is still open.
   `gh run`), GraphQL is refused with HTTP 403, and git may push only the
   session's branch. The DoD stages read GitHub over REST alone, review threads
   through the proxy's REST thread routes when GraphQL is refused, so they run
-  here; what they cannot do is write `refs/nightly-claims` (see Open items).
+  here; the nightly claims are GitHub issues written over REST too, so a
+  session takes, renews and releases them like any checkout.
 - Builder subagents that work in their own worktrees under
   `.claude/worktrees/agent-*`, each on its own branch, whose work the session
   integrates and ships as one squash-merged pull request.
@@ -136,12 +137,4 @@ reachable.
 
 ## Open items
 
-- **Nightly claims cannot be written from a cloud session.** Claims are refs
-  under `refs/nightly-claims`, taken by compare-and-swap push, and the
-  session's git proxy takes pushes to the session's branch alone. Deleting a
-  retired claim is skipped with a note (the claim blocks no one), but taking a
-  claim on a red night fails the start stage naming the refusal. While the
-  nightly is green nothing is needed; on a red night either claim from a
-  checkout that can push refs, or move claims to a store a cloud session can
-  write (for example one GitHub issue per key over REST), which changes
-  R-6.10.23 and is the owner's call.
+None at present.
