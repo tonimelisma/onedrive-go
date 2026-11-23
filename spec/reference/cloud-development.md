@@ -46,7 +46,8 @@ next run judge it.
 
 `--as-user` switches only the go test steps, so formatting, lint and git keep
 running as root, and the test user reuses root's module cache and pinned
-toolchain while writing its own build cache (R-6.10.38). Before the first go
+toolchain while writing its own build cache, and git, as the user, trusts the
+root-owned checkout for that go test alone (R-6.10.38). Before the first go
 test it prints what the user must be able to reach.
 
 ## Recommended environment setup script
@@ -83,9 +84,6 @@ fi
 # cache's files are world-readable, so /root only needs to be traversable.
 id dev >/dev/null 2>&1 || useradd --create-home --shell /bin/bash dev
 chmod 0711 /root
-# Tests that run git in the checkout need git, as dev, to trust root's
-# checkouts and their worktrees.
-runuser -u dev -- git config --global --add safe.directory '*'
 ```
 
 With it, set the non-secret environment variable `DEVTOOL_TEST_USER=dev`, so
