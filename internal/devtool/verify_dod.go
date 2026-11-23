@@ -136,6 +136,9 @@ type githubRun struct {
 	StartedAt string
 	UpdatedAt string
 	URL       string
+	// Attempt counts the run's attempts, 1 before any rerun (`gh run view`
+	// only, when asked for).
+	Attempt int
 	// Jobs are the jobs of the run's latest attempt (`gh run view` only).
 	Jobs []githubJob
 }
