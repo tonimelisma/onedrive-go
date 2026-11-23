@@ -93,12 +93,15 @@ import (
 //     host's speed no longer moves it.
 //
 // None of these is a random draw: every jitter of the run comes from a
-// seeded source (the model clock, retry.JitterSource), and a one-shot run's
-// goroutines run in an order its virtual clock decides. So a seed replays its
-// run, not only its draws, which TestModel_ChaosSameSeedReplaysIdentically
-// holds over twenty runs of each seed; the first entry two runs differ in
-// names what is left when it fails. The `seed-replay:` line a failing chaos
-// run logs (logSeedReplayOnFailure) reruns the run.
+// seeded source (the model clock, retry.JitterSource), and a one-shot run
+// waits in virtual time. Its bubble fixes time, not scheduling: goroutines
+// that run at one virtual instant (a scan's hash workers, the store's
+// connections) can still reach a shared step in either order. So a seed
+// usually replays its run, which TestModel_ChaosSameSeedReplaysIdentically
+// holds over twenty runs of each seed the chaos tests use; the first entry
+// two runs differ in names what is left when it fails. Seed 50 does not
+// replay (one run in three fails the local wipe check). The `seed-replay:`
+// line a failing chaos run logs (logSeedReplayOnFailure) reruns the seed.
 
 const (
 	chaosFaultOdds         = 4 // one call in chaosFaultOdds fails while a storm is on

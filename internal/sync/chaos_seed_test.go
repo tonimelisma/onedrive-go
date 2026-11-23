@@ -24,11 +24,12 @@ import (
 // seed fixes the values a call draws, for a given stream, call number and
 // storm state, however the calls of different streams interleave. What the
 // calls meet in the fake and which calls a client makes in a step follow the
-// run (the header of chaos_remote_test.go lists each), and the run is
-// deterministic: it waits in virtual time and draws every jitter from a
-// seeded source, so a seed replays the whole run
-// (TestModel_ChaosSameSeedReplaysIdentically). A failing chaos run logs the
-// `seed-replay:` line that reruns it (logSeedReplayOnFailure).
+// run (the header of chaos_remote_test.go lists each). The run waits in
+// virtual time and draws every jitter from a seeded source, so a seed usually
+// replays the whole run (TestModel_ChaosSameSeedReplaysIdentically); the
+// order of goroutines at one virtual instant stays outside the seed. A
+// failing chaos run logs the `seed-replay:` line that reruns its seed
+// (logSeedReplayOnFailure).
 
 const (
 	// chaosOrderSeed is the interleaving test's seed. Its storm step splits
