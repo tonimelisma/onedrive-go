@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
@@ -43,15 +44,18 @@ func InChild(tb testing.TB) bool {
 // the parent test fails, instead of the panic ending every test of the
 // package. A test that needs a process-wide setting the package's other
 // tests must not see runs in a child for that reason too (RunUnderUmask).
-func RunInChild(tb testing.TB) ChildResult {
+// extraEnv, each "NAME=value", is added to the child's environment: a test
+// that needs a variable set passes it here instead of calling t.Setenv in
+// the child, so its parent may run in parallel with the package's other
+// tests, since the parent itself touches no process-wide state.
+func RunInChild(tb testing.TB, extraEnv ...string) ChildResult {
 	tb.Helper()
 
-	return runInChild(tb)
+	return runInChildWithin(tb, childTestTimeout, extraEnv...)
 }
 
-// runInChild is RunInChild with more variables, each "NAME=value", added to
-// the child's environment.
-func runInChild(tb testing.TB, extraEnv ...string) ChildResult {
+// runInChildWithin is RunInChild with the child bounded by bound.
+func runInChildWithin(tb testing.TB, bound time.Duration, extraEnv ...string) ChildResult {
 	tb.Helper()
 
 	exe, err := os.Executable()
@@ -62,7 +66,7 @@ func runInChild(tb testing.TB, extraEnv ...string) ChildResult {
 		parts[i] = "^" + regexp.QuoteMeta(parts[i]) + "$"
 	}
 
-	ctx, cancel := context.WithTimeout(TestContext(tb), childTestTimeout)
+	ctx, cancel := context.WithTimeout(TestContext(tb), bound)
 	defer cancel()
 
 	//nolint:gosec // The test binary runs itself with a pattern built from its own test name.
@@ -81,6 +85,12 @@ func runInChild(tb testing.TB, extraEnv ...string) ChildResult {
 	result := ChildResult{Output: output.String()}
 	if exitErr != nil {
 		result.ExitCode = exitErr.ExitCode()
+	}
+	if ctx.Err() != nil {
+		// A killed child prints no verdict, so every reader of the output
+		// would otherwise report a failure or a missing pass with no cause.
+		result.Output = fmt.Sprintf("the child test binary was killed at its %s bound (%v) before it ended; "+
+			"what it printed until then:\n%s", bound, ctx.Err(), result.Output)
 	}
 
 	return result

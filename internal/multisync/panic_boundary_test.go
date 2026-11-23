@@ -175,6 +175,9 @@ func (l panickingListener) Accept() (net.Conn, error) {
 // Validates: R-6.3.10, R-2.9.7
 func TestRunWatch_ControlServerPanicEndsTheWatch(t *testing.T) {
 	if !synctest.InChild(t) {
+		// The parent only reruns this test in a child process, which owns
+		// every hook and path the test touches, so it runs beside the others.
+		t.Parallel()
 		synctest.RequireChildPassed(t, synctest.RunInChild(t))
 		return
 	}
@@ -215,6 +218,9 @@ func TestRunWatch_ControlServerPanicEndsTheWatch(t *testing.T) {
 // Validates: R-6.3.10, R-2.9.7
 func TestRunOnce_ControlServerPanicIsLoggedAndThePassFinishes(t *testing.T) {
 	if !synctest.InChild(t) {
+		// The parent only reruns this test in a child process, which owns
+		// every hook and path the test touches, so it runs beside the others.
+		t.Parallel()
 		synctest.RequireChildPassed(t, synctest.RunInChild(t))
 		return
 	}
@@ -264,6 +270,9 @@ func TestRunOnce_ControlServerPanicIsLoggedAndThePassFinishes(t *testing.T) {
 // Validates: R-6.3.10, R-4.4.3
 func TestWatchConfigReloadTriggers_PanicIsReportedOnTheFatalChannel(t *testing.T) {
 	if !synctest.InChild(t) {
+		// The parent only reruns this test in a child process, which owns
+		// every hook and path the test touches, so it runs beside the others.
+		t.Parallel()
 		synctest.RequireChildPassed(t, synctest.RunInChild(t))
 		return
 	}
@@ -295,6 +304,9 @@ func TestWatchConfigReloadTriggers_PanicIsReportedOnTheFatalChannel(t *testing.T
 // Validates: R-6.3.10, R-6.3.9
 func TestRetireWatchRunner_APanickingEngineCloseFailsClosed(t *testing.T) {
 	if !synctest.InChild(t) {
+		// The parent only reruns this test in a child process, which owns
+		// every hook and path the test touches, so it runs beside the others.
+		t.Parallel()
 		synctest.RequireChildPassed(t, synctest.RunInChild(t))
 		return
 	}
@@ -333,6 +345,9 @@ func TestRetireWatchRunner_APanickingEngineCloseFailsClosed(t *testing.T) {
 // Validates: R-6.3.10, R-6.3.9
 func TestRunOnce_APanickingEngineCloseFailsTheRun(t *testing.T) {
 	if !synctest.InChild(t) {
+		// The parent only reruns this test in a child process, which owns
+		// every hook and path the test touches, so it runs beside the others.
+		t.Parallel()
 		synctest.RequireChildPassed(t, synctest.RunInChild(t))
 		return
 	}
@@ -368,11 +383,15 @@ func TestRunOnce_APanickingEngineCloseFailsTheRun(t *testing.T) {
 // Validates: R-6.3.8, R-2.4.8
 func TestRunOnce_AShortcutPanicIsThatShortcutsErrorAndThePassFinishes(t *testing.T) {
 	if !synctest.InChild(t) {
-		synctest.RequireChildPassed(t, synctest.RunInChild(t))
+		// The parent only reruns this test in a child process, which owns
+		// every hook and path the test touches, so it runs beside the others;
+		// the data directory comes in the child's environment, since a test
+		// that calls t.Setenv cannot run in parallel.
+		t.Parallel()
+		synctest.RequireChildPassed(t, synctest.RunInChild(t, "XDG_DATA_HOME="+t.TempDir()))
 		return
 	}
 
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	parent := testStandaloneMount(t, "personal:child-panic@example.com", "Parent")
 	child := testChildRecord(t, mountID(parent.CanonicalID.String()), "binding-panic", "Shortcuts/Panicky")
 	capture, logger := synctest.NewLogCapture()
@@ -541,11 +560,15 @@ func TestRunIndexedMountWork_APanicBeforeTheRunFillsTheDrivesReport(t *testing.T
 // Validates: R-6.3.10, R-2.4.8
 func TestRunOnce_APanicAroundADrivesShortcutsIsThatDrivesReport(t *testing.T) {
 	if !synctest.InChild(t) {
-		synctest.RequireChildPassed(t, synctest.RunInChild(t))
+		// The parent only reruns this test in a child process, which owns
+		// every hook and path the test touches, so it runs beside the others;
+		// the data directory comes in the child's environment, since a test
+		// that calls t.Setenv cannot run in parallel.
+		t.Parallel()
+		synctest.RequireChildPassed(t, synctest.RunInChild(t, "XDG_DATA_HOME="+t.TempDir()))
 		return
 	}
 
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	withShortcuts := testStandaloneMount(t, "personal:shortcut-setup-panic@example.com", "WithShortcuts")
 	plain := testStandaloneMount(t, "personal:plain-drive@example.com", "Plain")
 	child := testChildRecord(t, mountID(withShortcuts.CanonicalID.String()), "binding-setup-panic", "Shortcuts/Setup")

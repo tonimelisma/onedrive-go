@@ -41,7 +41,7 @@ func RunUnderUmask(t *testing.T, umask os.FileMode) bool {
 		return true
 	}
 
-	RequireChildPassed(t, runInChild(t, umaskChildEnv+"="+octal))
+	RequireChildPassed(t, RunInChild(t, umaskChildEnv+"="+octal))
 
 	return false
 }
