@@ -463,7 +463,9 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	assert.Empty(t, rt.currentOutbox(), "ready dependents from old graph should not be appended while replan is pending")
 	assert.Zero(t, rt.sched.QueuedCount())
 	assert.Equal(t, 1, rt.sched.InFlight(), "released child should remain uncompleted until replacement runtime is installed")
-	assert.Equal(t, int64(10), eng.collector().Snapshot().ReplanIdleWaitingDrainMS)
+	// Three of the pools' four workers sat idle for the 10ms the old graph
+	// drained.
+	assert.Equal(t, int64(3*10), eng.collector().Snapshot().ReplanIdleWaitingDrainMS)
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
 		return event.Type == syncdomain.EngineDebugEventWaitingForRunningActions &&
 			!event.At.IsZero() &&
