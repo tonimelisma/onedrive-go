@@ -2271,6 +2271,12 @@ func recreatedSourceVacated(composition *moveComposition, key string, node *move
 // item's own landing, which the item cannot move into, so the syncs stalled
 // once the move aside failed.
 //
+// A create on OneDrive below such a path whose source here does not lie in
+// the item holding it is removed too (belowAnotherItemsFolder). Here the
+// planner keeps such a create: a move of the plan into the folder it makes
+// relies on it, and the item's move carries it along, so the next pass moves
+// it where it belongs (TestRunOnce_FolderMovedOnOneDriveIntoNewFoldersWhereAFolderMovedDeeperLeftConverges).
+//
 // It also removes a create here rebased from below a folder's path on
 // OneDrive to where the folder sits here, while the folder's move on OneDrive
 // waits for a later pass (heldFolderRebases), and logs each at Debug with the
@@ -2290,6 +2296,10 @@ func dropCreatesOntoComposedItems(
 	heldBy := pathsHeldByUnmovedItems(inputs, composition)
 	vacated := pathsVacatedByPlan(actions)
 	heldRebases := heldFolderRebases(actions, inputs, composition)
+	nodeByKey := make(map[string]*moveNode, len(inputs.nodes))
+	for i := range inputs.nodes {
+		nodeByKey[inputs.nodes[i].key] = &inputs.nodes[i]
+	}
 
 	kept = actions[:0:0]
 	for i := range actions {
@@ -2300,6 +2310,11 @@ func dropCreatesOntoComposedItems(
 			continue
 		}
 		if holder, held := heldBy[side][action.Path]; held && holder != action.ItemID {
+			dropped = append(dropped, *action)
+			continue
+		}
+		if folder, below := belowAnotherItemsFolder(action, side, heldBy[side], nodeByKey); below && side == moveCoordRemote {
+			logCreateBelowAnotherItemsFolder(logger, action, folder)
 			dropped = append(dropped, *action)
 			continue
 		}
@@ -2326,6 +2341,57 @@ func dropCreatesOntoComposedItems(
 	}
 
 	return kept, dropped
+}
+
+// belowAnotherItemsFolder reports the nearest folder above a create on side
+// that a synced item still holds there this pass (held, pathsHeldByUnmovedItems)
+// when the entry the create comes from does not lie in that item on the other
+// side: the create's source path (its view's) is not below where the item sits
+// there. dropCreatesOntoComposedItems asks it for creates on OneDrive. The two are different folders at one path, told apart by the item:
+// here x renamed x2, while OneDrive keeps it at x (it made X2, which it takes
+// for x2's name), and a new x with a folder sub in it made here. The create of
+// sub on OneDrive, sent, was made inside the old x, carried to x2/sub once x
+// moved, and moved back by the next pass. It waits a pass, as a move into the
+// new folder does, and is held work, so a delete of what it writes waits too.
+// A create rebased into the folder here from below the item's path on OneDrive
+// lies in the item on both sides and is kept.
+func belowAnotherItemsFolder(
+	action *syncdomain.Action, side moveCoord, held map[string]string, nodeByKey map[string]*moveNode,
+) (string, bool) {
+	if len(held) == 0 {
+		return "", false
+	}
+	other := moveCoordLocal
+	if side == moveCoordLocal {
+		other = moveCoordRemote
+	}
+	source := syncdomain.ActionViewPath(action)
+	for dir := path.Dir(action.Path); dir != "." && dir != "/" && dir != ""; dir = path.Dir(dir) {
+		key, isHeld := held[dir]
+		if !isHeld {
+			continue
+		}
+		n := nodeByKey[key]
+		if n == nil || n.itemType != syncdomain.ItemTypeFolder || pathAtOrBelow(source, n.paths[other]) {
+			return "", false
+		}
+
+		return dir, true
+	}
+
+	return "", false
+}
+
+// logCreateBelowAnotherItemsFolder logs, at Debug, a create that waits for the
+// item holding a folder's path above it to leave (belowAnotherItemsFolder).
+func logCreateBelowAnotherItemsFolder(logger *slog.Logger, action *syncdomain.Action, folder string) {
+	if logger == nil {
+		return
+	}
+	logger.Debug("create waits for another item to leave the folder path above it",
+		slog.String("action", action.Type.String()),
+		slog.String("path", action.Path),
+		slog.String("folder", folder))
 }
 
 // atOrBelowOwnLanding reports whether p is, under OneDrive's name folding,

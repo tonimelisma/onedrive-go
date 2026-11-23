@@ -1716,6 +1716,38 @@ func TestPlannerPairs_AHeldFolderMovedIntoARenamedFolderRunsOnceItsNameIsFree(t 
 	})
 }
 
+// Validates: R-2.17.6
+//
+// From the held start, a folder sub made here in the new x and f moved into
+// it: OneDrive still keeps the old x at x, so sub is not made there until the
+// old x has moved to x2, and no pass carries sub along with the old x and
+// moves it back, on every run with each create refused once.
+func TestPlannerPairs_AFolderMadeInTheHeldFoldersPlaceWaitsForItToLeave(t *testing.T) {
+	t.Parallel()
+
+	registerExCachingDriver(t)
+	store := exQuietStore(t)
+	pair := &exPair{start: exStartNamed(t, "held"), local: []exEdit{
+		{kind: exMakeFolder, to: "x/sub"},
+		{kind: exMoveFile, from: "x/f", to: "x/sub/f"},
+	}}
+	r := newExRun(t, store, pair)
+	r.run()
+	runs := []*exRun{r}
+	for _, refusal := range r.exRefusals() {
+		refused := newExRun(t, store, pair)
+		refused.refusal = refusal
+		refused.run()
+		runs = append(runs, refused)
+	}
+	for _, run := range runs {
+		assert.Empty(t, run.broken, "%s", run.result(pair.id()).detail)
+		for _, line := range run.log {
+			assert.NotContains(t, line, "<- x2/sub", "sub was carried with the old x: %s", run.result(pair.id()).detail)
+		}
+	}
+}
+
 // exRunPairs runs every stride-th pair, and that pair again with each of its
 // refusals (exRefusals), on exWorkers stores in parallel. It returns what
 // each run found, in pair order, a pair before its refusals.

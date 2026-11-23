@@ -2569,3 +2569,55 @@ func TestComposeMoves_AFileLeavingAFolderMovedOnOneDriveMovesAfterIt(t *testing.
 	assert.Len(t, kept, len(actions))
 	assert.Empty(t, cycled)
 }
+
+// Validates: R-2.17.6
+//
+// Here x was renamed x2 while OneDrive keeps it at x (its move waits), and a
+// new x with a folder sub in it was made here. The create of sub on OneDrive
+// lies below x, which the old x still holds there, and its source here is not
+// in the old x: it waits a pass and logs the folder, rather than being made
+// inside the old x, carried to x2/sub and moved back. An upload of a file made
+// in the old x here, at x2, runs, and so does work below a folder no other
+// item holds. Here such a create is kept: a move of the plan into the folder
+// it makes relies on it.
+func TestDropCreatesOntoComposedItems_ACreateBelowAnotherItemsFolderWaits(t *testing.T) {
+	t.Parallel()
+
+	inputs := &moveInputs{nodes: []moveNode{
+		composeNode("x", syncdomain.ItemTypeFolder, "x", "x2", "x"),
+		composeNode("y", syncdomain.ItemTypeFolder, "y", "y", "y"),
+	}}
+	composition := &moveComposition{
+		deferred:      map[string]bool{"x": true},
+		deferredMoves: map[string][]syncdomain.ActionType{"x": {syncdomain.ActionRemoteMove}},
+	}
+	folderHere := &syncdomain.LocalState{ItemType: syncdomain.ItemTypeFolder}
+	actions := []syncdomain.Action{
+		{
+			Type: syncdomain.ActionFolderCreate, CreateSide: syncdomain.CreateRemote, Path: "x/sub",
+			View: &syncdomain.PathView{Path: "x/sub", Local: folderHere},
+		},
+		uploadOfIdentity("x2/g", 7),
+		{
+			Type: syncdomain.ActionFolderCreate, CreateSide: syncdomain.CreateRemote, Path: "y/sub",
+			View: &syncdomain.PathView{Path: "y/sub", Local: folderHere},
+		},
+		{Type: syncdomain.ActionFolderCreate, CreateSide: syncdomain.CreateLocal, Path: "x2/sub", View: &syncdomain.PathView{Path: "x2/sub"}},
+	}
+
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	kept, dropped := dropCreatesOntoComposedItems(logger, actions, inputs, composition)
+
+	var keptPaths, droppedPaths []string
+	for i := range kept {
+		keptPaths = append(keptPaths, kept[i].Path)
+	}
+	for i := range dropped {
+		droppedPaths = append(droppedPaths, dropped[i].Path)
+	}
+	assert.Equal(t, []string{"x2/g", "y/sub", "x2/sub"}, keptPaths)
+	assert.Equal(t, []string{"x/sub"}, droppedPaths)
+	assert.Contains(t, logs.String(),
+		`msg="create waits for another item to leave the folder path above it" action=folder_create path=x/sub folder=x`)
+}

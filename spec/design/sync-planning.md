@@ -795,7 +795,23 @@ where no move vacates plans both
 (`TestComposeMoves_FolderMovedOntoAWaitingFilesPathWaitsOnePass`). Items whose
 paths touch unavailable truth are frozen with their subtree. Creates that would
 land on a path a composed item still holds this pass are dropped until the item
-has moved, and so is a write here rebased from below a folder's OneDrive path
+has moved, and so are creates on OneDrive below such a path whose source
+here does not lie in that item (`belowAnotherItemsFolder`): two folders at one
+path, told apart by the item that holds it. Here `x` renamed `x2` while
+OneDrive keeps it at `x` (the held start), and a new `x` with a folder `sub`
+in it made here: the create of `sub` on OneDrive, sent, was made inside the
+old `x`, carried to `x2/sub` once `x` moved, and moved back by the next pass,
+and the upload of a file made here in a folder OneDrive deleted and moved
+another folder onto (`rm p, mv x p` on OneDrive, a file made in `p` here)
+went into the moved folder. Such a create waits, with a Debug line naming the folder, as the move
+into the new folder does, and is held work
+(`TestDropCreatesOntoComposedItems_ACreateBelowAnotherItemsFolderWaits`,
+`TestPlannerPairs_AFolderMadeInTheHeldFoldersPlaceWaitsForItToLeave`). The
+twin here stays as it is: composition plans a move into the folder made here
+inside the item that still holds the path, the item's move carries both, and
+the next pass moves them where they belong, in one sync
+(`TestRunOnce_FolderMovedOnOneDriveIntoNewFoldersWhereAFolderMovedDeeperLeftConverges`);
+held, the create left that move without its folder. And so is a write here rebased from below a folder's OneDrive path
 to where the folder sits here while the folder's OneDrive move waits for a
 later pass. The rebase writes into the folder as if OneDrive had moved it: a
 download that applies a move OneDrive made into the folder wrote a second copy
