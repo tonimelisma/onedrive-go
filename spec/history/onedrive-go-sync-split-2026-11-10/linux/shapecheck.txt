@@ -1,0 +1,12 @@
+# tools/shapecheck/shapecheck.go on onedrive-go 70301c0e, Linux file set, final configuration
+# (-decls <out>/rawdecls.tsv, -names = the 19 identifiers exported for tests, the 16 ...ForTest
+#  functions, the 7 new methods of the field resolutions and the 11 capitalised sentinel errors)
+typecheck errors 0
+struct conversions between different named struct types: 0, across end-state packages: 0, of those with unexported fields: 0
+  anonymous struct engine_result_classify_test.go:155 in assertClassifyResultCases (sync): unexported fields [name in want]
+anonymous struct types outside function bodies: 107, of those with unexported fields: 1
+declared identifiers or import names equal to a new package name: 0
+introduced names that already exist: 0
+
+# The one anonymous struct with unexported fields is the parameter of a test helper whose three
+# callers (engine_result_classify_test.go:178, :212, :309) stay in package sync with it: legal.

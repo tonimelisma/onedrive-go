@@ -1,0 +1,18 @@
+{
+  "owner_mode": "watch",
+  "started_at": "2026-10-31T22:28:24.536740715-07:00",
+  "completed_at": "2026-10-31T22:29:24.696031577-07:00",
+  "duration_ms": 60159,
+  "managed_drive_count": 1,
+  "aggregate": {
+    "started_at": "2026-10-31T22:05:38.602692185-07:00",
+    "updated_at": "2026-10-31T22:24:47.978441183-07:00",
+    "duration_ms": 1365934,
+    "observe_run_count": 1,
+    "observed_path_count": 143226,
+    "observe_time_ms": 123119,
+    "plan_run_count": 1,
+    "actionable_action_count": 143078,
+    "plan_time_ms": 1024393
+  }
+}

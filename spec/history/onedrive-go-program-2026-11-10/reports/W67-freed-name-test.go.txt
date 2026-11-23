@@ -1,0 +1,83 @@
+package sync
+
+// Failing test kept out of the commit (internal/sync). Copy it into
+// internal/sync as replacing_move_freed_name_test.go to run it:
+//   go test -count=1 -timeout 20m -run TestReplacingMove_ ./internal/sync/
+// On the unchanged planner it fails: the next pass makes a conflict copy of
+// the saved file and downloads item-a into b.txt beside its old copy a.txt
+// (0 moves, 1 download), and the pass after that uploads the old a.txt as a
+// new item, so OneDrive holds a.txt again after it moved it to b.txt.
+
+import (
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+)
+
+// savedAtTheFreedName is what another program saves at b.txt while a
+// replacing move of a.txt onto it runs.
+const savedAtTheFreedName = "saved meanwhile\n"
+
+// Validates: R-2.17.9, R-6.5.2
+//
+// A file saved at b.txt after a replacing local move took the old b.txt into
+// the trash and before it renamed a.txt there: the rename refuses the taken
+// name, the move is superseded, and the run says it left work. The next pass
+// keeps the saved file's content, finishes the move instead of downloading
+// the moved item beside its old copy, leaves the moved item's content on
+// OneDrive as it was, and deletes nothing there; the run after it puts
+// nothing back at a.txt on OneDrive.
+func TestReplacingMove_AFileSavedAtTheFreedNameSurvivesTheNextPass(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(engineTestDriveID))
+	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
+	remote.addFile(t, "item-b", "root", "b.txt", "bravo\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+	remote.deleteRemotely("item-b")
+	remote.move("item-a", "root", "b.txt")
+
+	h.eng.oneShotPassLimit = 1
+	saved := filepath.Join(h.syncRoot, "b.txt")
+	h.eng.execCfg.crashAt = func(point string) error {
+		if point != crashPointLocalMoveDestinationTrashed {
+			return nil
+		}
+
+		return os.WriteFile(saved, []byte(savedAtTheFreedName), 0o600)
+	}
+
+	first, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, first.Superseded, "the move found its destination taken")
+	assert.True(t, first.LeftWork().Any(), "the run says it left the move: %+v", first.LeftWork())
+	assert.Equal(t, map[string]string{"a.txt": "alpha\n", "b.txt": savedAtTheFreedName, "keep.txt": "keep\n"},
+		harnessLocalTree(t, h.syncRoot))
+	requireTrashHoldsOnce(t, h.eng.trash, "b.txt", "bravo\n")
+
+	h.eng.execCfg.crashAt = nil
+	second, err := h.eng.RunOnce(t.Context(), SyncBidirectional, RunOptions{})
+	require.NoError(t, err)
+
+	local := harnessLocalTree(t, h.syncRoot)
+	assert.Contains(t, slices.Collect(maps.Values(local)), savedAtTheFreedName, "the saved file's content is kept: %v", local)
+	assert.Equal(t, "alpha\n", h.remote.contents["item-a"], "the moved item's content on OneDrive is unchanged")
+	assert.Empty(t, h.remote.deletes, "nothing is deleted on OneDrive")
+	assert.Equal(t, 1, second.Moves, "the next pass finishes the move")
+	assert.Zero(t, second.Downloads, "the moved item is not downloaded beside its old copy")
+
+	h.eng.oneShotPassLimit = 0
+	runScenarioPass(t, h.eng)
+	assert.NotContains(t, h.remote.tree(), "a.txt", "nothing is put back at the moved item's old path on OneDrive")
+	assert.Empty(t, h.remote.deletes, "nothing is deleted on OneDrive")
+	requireScenarioQuietPlan(t, h.eng)
+}

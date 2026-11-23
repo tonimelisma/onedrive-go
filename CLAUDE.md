@@ -49,7 +49,7 @@ table above must resolve. All three are enforced by
 `go run ./cmd/devtool verify public`; when two docs claim the same file, the
 more specific pattern wins.
 
-Planned work: search `spec/` for `[planned]`. Reference docs: `spec/reference/`.
+Planned work: search `spec/` for `[planned]` (outside `spec/history/`). Reference docs: `spec/reference/`. Historical program notes, not current guidance: `spec/history/`.
 New contributors should start with `spec/reference/developer-onboarding.md`.
 
 ## Eng Philosophy

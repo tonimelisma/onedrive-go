@@ -1,0 +1,44 @@
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"use fsroot, synctree, or localpath filesystem boundaries instead of raw os\\\\.\\\\* calls\", Path: \"internal/(fsroot|synctree|localpath)/\", Linters: \"forbidigo\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"unnecessaryDefer:\", Linters: \"gocritic\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"encode command output only through writeJSONDocument\", Path: \"(_test\\\\.go|internal/cli/json_output\\\\.go|internal/cli/control_request\\\\.go)$\", Linters: \"forbidigo\"]"
+internal/sync/engine.go:124:6: Function 'newEngine' is too long (110 > 100) (funlen)
+func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
+     ^
+internal/sync/internal/syncexec/executor_test.go:851:25: string `mount-root-id` has 3 occurrences, make it a constant (goconst)
+	cfg.remoteRootItemID = "mount-root-id"
+	                       ^
+internal/sync/engine_runtime_types.go:131:20: hugeParam: in is heavy (496 bytes); consider passing it by pointer (gocritic)
+func newEngineFlow(in flowInputs) *engineFlow {
+                   ^
+internal/sync/helper_copies_test.go:95:46: hugeParam: in is heavy (280 bytes); consider passing it by pointer (gocritic)
+func mustNewTestExecutorConfig(t *testing.T, in syncexec.ExecutorInputs) *syncexec.ExecutorConfig {
+                                             ^
+internal/sync/internal/syncexec/executor.go:118:24: hugeParam: in is heavy (280 bytes); consider passing it by pointer (gocritic)
+func NewExecutorConfig(in ExecutorInputs) (*ExecutorConfig, error) {
+                       ^
+internal/sync/internal/syncexec/executor_test.go:110:42: hugeParam: in is heavy (280 bytes); consider passing it by pointer (gocritic)
+func mustNewExecutorConfig(t *testing.T, in ExecutorInputs) *ExecutorConfig {
+                                         ^
+internal/sync/engine.go:216:5: shadow: declaration of "err" shadows declaration at line 139 (govet)
+	if err := e.protectedRoots.refresh(ctx); err != nil {
+	   ^
+internal/sync/shortcut_root_state_test.go:541:28: QF1008: could remove embedded field "Engine" from selector (staticcheck)
+	flow := newEngineFlow(eng.Engine.flowInputs())
+	                          ^
+internal/sync/helper_copies_test.go:241:6: func newWorkerTestSetup is unused (unused)
+func newWorkerTestSetup(t *testing.T) (
+     ^
+internal/sync/internal/syncexec/executor_test_seams.go:45:9: error returned from external package is unwrapped: sig: func github.com/tonimelisma/onedrive-go/internal/driveops.ComputeQuickXorHashContext(ctx context.Context, fsPath string) (string, error) (wrapcheck)
+	return driveops.ComputeQuickXorHashContext(ctx, filePath)
+	       ^
+internal/sync/internal/syncexec/executor_test_seams.go:54:9: error returned from external package is unwrapped: sig: func github.com/tonimelisma/onedrive-go/internal/driveops.ComputeQuickXorHashFromReaderContext(ctx context.Context, r io.Reader) (string, error) (wrapcheck)
+	return driveops.ComputeQuickXorHashFromReaderContext(ctx, r)
+	       ^
+11 issues:
+* funlen: 1
+* goconst: 1
+* gocritic: 4
+* govet: 1
+* staticcheck: 1
+* unused: 1
+* wrapcheck: 2

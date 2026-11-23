@@ -1,0 +1,7 @@
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"unnecessaryDefer:\", Linters: \"gocritic\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Path: \"_test\\\\.go\", Linters: \"lll\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"use fsroot, synctree, or localpath filesystem boundaries instead of raw os\\\\.\\\\* calls\", Path: \"internal/devtool/\", Linters: \"forbidigo\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Path: \"internal/devtool/(fsutil|live_env)\\\\.go\", Linters: \"gosec\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Source: \"defer \", Path: \"_test\\\\.go\", Linters: \"errcheck\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"use explicit test synchronization instead of wall-clock sleep\", Path Except: \"_test\\\\.go\", Linters: \"forbidigo\"]"
+0 issues.

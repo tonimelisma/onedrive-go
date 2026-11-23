@@ -1,0 +1,10 @@
+==> golangci-lint
+0 issues.
+==> actionlint
+==> verify summary
+status: pass
+total: 4m52.134s
+lint: pass (4m51.656s)
+workflow-lint: pass (477ms)
+quirk events: 0
+classified reruns: none

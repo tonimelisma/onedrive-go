@@ -1,0 +1,3 @@
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Path: \"internal/(fsroot|synctree|localpath)/\", Linters: \"forbidigo\"]"
+level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"unnecessaryDefer:\", Linters: \"gocritic\"]"
+0 issues.

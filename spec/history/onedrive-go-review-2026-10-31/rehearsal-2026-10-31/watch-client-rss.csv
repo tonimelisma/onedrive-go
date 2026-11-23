@@ -1,0 +1,146 @@
+ts,pid,rss_kb,cpu_pct,etimes,cmd
+2026-10-31T20:35:11-07:00,1835732,33032,0.0,455,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:35:41-07:00,1835732,102904,2.5,485,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:36:11-07:00,1835732,269528,5.5,516,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:36:41-07:00,1835732,367628,8.3,546,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:37:11-07:00,1835732,352984,11.0,576,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:37:11-07:00,1862382,61076,17.7,12,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:37:42-07:00,1835732,431092,12.6,606,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:37:42-07:00,1862382,160904,26.6,42,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:38:12-07:00,1835732,476224,14.6,636,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:38:12-07:00,1862382,173576,34.4,73,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:38:42-07:00,1835732,580800,17.2,666,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:38:42-07:00,1862382,182820,39.1,103,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:39:12-07:00,1835732,580800,18.5,696,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:39:12-07:00,1862382,191652,41.7,133,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:39:42-07:00,1835732,579904,19.6,727,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:39:42-07:00,1862382,192640,43.2,163,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:40:12-07:00,1835732,580800,20.3,757,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:40:12-07:00,1862382,192980,43.3,193,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:40:42-07:00,1835732,336380,21.7,787,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:40:42-07:00,1862382,193008,44.4,223,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:41:12-07:00,1835732,336380,23.3,817,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:41:12-07:00,1862382,195896,46.4,253,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:41:43-07:00,1835732,336380,24.7,847,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:41:43-07:00,1862382,195896,47.9,284,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:42:13-07:00,1835732,372304,25.7,877,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:42:13-07:00,1862382,194424,49.6,314,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:42:43-07:00,1835732,293120,27.4,907,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:42:43-07:00,1862382,194424,50.2,344,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:43:13-07:00,1835732,576456,29.0,938,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:43:13-07:00,1862382,194392,51.1,374,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:43:43-07:00,1835732,297500,29.9,968,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:43:43-07:00,1862382,188096,51.6,404,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:44:13-07:00,1835732,535512,30.9,998,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:44:13-07:00,1862382,190016,52.3,434,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:44:44-07:00,1835732,535512,31.7,1028,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:44:44-07:00,1862382,190108,51.2,464,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:45:14-07:00,1835732,535512,32.4,1058,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:45:14-07:00,1862382,190108,50.0,495,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:45:44-07:00,1835732,535512,33.1,1088,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:45:44-07:00,1862382,190116,49.1,525,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:46:14-07:00,1835732,349680,33.6,1118,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:46:14-07:00,1862382,190116,49.3,555,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:46:44-07:00,1835732,349680,34.3,1149,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:46:44-07:00,1862382,191772,48.4,585,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:47:14-07:00,1835732,349700,35.0,1179,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:47:14-07:00,1862382,193300,47.7,615,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:47:44-07:00,1835732,495856,35.9,1209,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:47:44-07:00,1862382,196404,47.8,645,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:48:14-07:00,1835732,780448,37.1,1239,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:48:14-07:00,1862382,197392,47.3,676,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:48:45-07:00,1835732,801124,38.2,1270,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:48:45-07:00,1862382,197396,46.3,706,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:49:15-07:00,1835732,801124,39.1,1300,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:49:15-07:00,1862382,197464,45.1,736,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:49:45-07:00,1835732,801124,39.9,1330,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:49:45-07:00,1862382,197468,44.4,766,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:50:15-07:00,1835732,800584,40.3,1360,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:50:15-07:00,1862382,197820,44.0,796,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:50:45-07:00,1835732,512336,40.9,1390,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:50:45-07:00,1862382,199520,43.6,826,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:51:16-07:00,1835732,512336,41.5,1420,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:51:16-07:00,1862382,199548,42.9,856,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:51:46-07:00,1835732,512336,41.8,1450,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:51:46-07:00,1862382,201168,42.1,887,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:52:16-07:00,1835732,512336,42.2,1480,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:52:16-07:00,1862382,202388,41.9,917,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:52:46-07:00,1835732,456776,42.4,1511,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:52:46-07:00,1862382,205604,42.2,947,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:53:16-07:00,1835732,749296,42.9,1541,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:53:16-07:00,1862382,206832,41.9,977,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:53:47-07:00,1835732,797484,43.4,1571,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:53:47-07:00,1862382,206832,41.9,1008,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:54:17-07:00,1835732,836292,43.9,1602,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:54:17-07:00,1862382,207348,41.8,1038,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:54:47-07:00,1835732,851628,44.1,1632,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:54:47-07:00,1862382,209844,41.9,1068,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:55:17-07:00,1835732,851628,44.7,1662,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:55:17-07:00,1862382,209844,41.6,1098,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:55:47-07:00,1835732,851628,45.1,1692,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:55:47-07:00,1862382,211060,42.2,1128,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:56:17-07:00,1835732,851628,45.3,1722,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:56:17-07:00,1862382,211060,42.7,1158,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:56:47-07:00,1835732,633368,45.3,1752,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:56:47-07:00,1862382,193144,42.5,1189,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:57:18-07:00,1835732,564876,45.5,1783,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:57:18-07:00,1862382,193148,42.2,1219,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:57:48-07:00,1835732,649320,45.7,1813,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:57:48-07:00,1862382,193152,42.3,1249,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:58:18-07:00,1835732,797396,46.0,1843,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:58:18-07:00,1862382,194480,42.3,1279,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:58:49-07:00,1835732,829580,46.3,1873,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:58:49-07:00,1862382,194480,41.9,1310,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:59:19-07:00,1835732,911752,46.6,1904,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:59:19-07:00,1862382,195152,41.3,1340,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T20:59:49-07:00,1835732,913340,46.5,1934,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T20:59:49-07:00,1862382,195152,40.9,1370,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T21:00:20-07:00,1835732,913380,46.4,1965,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:00:20-07:00,1862382,195156,40.4,1401,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T21:00:50-07:00,1835732,913424,46.3,1995,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:00:50-07:00,1862382,195156,40.0,1431,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T21:01:20-07:00,1835732,745056,46.4,2025,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:01:20-07:00,1862382,195264,39.5,1462,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T21:01:51-07:00,1835732,676540,46.6,2056,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:01:51-07:00,1862382,195264,39.0,1492,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T21:02:21-07:00,1835732,676608,46.6,2086,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:02:21-07:00,1862382,195264,38.6,1522,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T21:02:51-07:00,1835732,827040,46.7,2116,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:02:51-07:00,1862382,195268,38.3,1552,/usr/local/bin/onedrive-go sync --dry-run --config /tmp/scratch/scratchpad/rehearsal/dryrun-config.toml --drive personal:test-account@example.com2026-10-31T21:03:22-07:00,1835732,1200148,46.8,2147,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:03:52-07:00,1835732,1109780,47.0,2177,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:04:22-07:00,1835732,1109844,47.2,2207,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:04:53-07:00,1835732,1109900,47.5,2237,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:05:23-07:00,1835732,1109976,47.8,2268,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:05:53-07:00,1835732,686780,47.8,2298,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:06:23-07:00,1835732,686852,48.0,2328,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:06:53-07:00,1835732,686960,48.1,2358,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:07:23-07:00,1835732,687088,48.4,2388,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:07:54-07:00,1835732,625900,48.8,2418,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:08:24-07:00,1835732,807092,49.4,2448,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:08:54-07:00,1835732,711352,49.9,2479,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:09:24-07:00,1835732,502912,50.5,2509,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:09:54-07:00,1835732,742300,51.0,2539,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:10:24-07:00,1835732,742356,51.4,2569,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:10:54-07:00,1835732,742364,51.6,2599,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:11:24-07:00,1835732,742380,51.9,2629,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:11:55-07:00,1835732,482920,52.2,2659,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:12:25-07:00,1835732,482964,52.4,2689,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:12:55-07:00,1835732,1007896,52.9,2719,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:13:25-07:00,1835732,1308356,53.4,2749,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:13:55-07:00,1835732,1308408,53.8,2780,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:14:25-07:00,1835732,1308408,54.2,2810,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:14:55-07:00,1835732,1308408,54.5,2840,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:15:25-07:00,1835732,705800,54.9,2870,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:15:55-07:00,1835732,705800,55.2,2900,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:16:26-07:00,1835732,705800,55.5,2930,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:16:56-07:00,1835732,705800,55.7,2960,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:17:26-07:00,1835732,468632,55.8,2990,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:17:56-07:00,1835732,1057560,56.1,3021,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T21:18:26-07:00,1835732,1306912,56.4,3051,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:06:01-07:00,2121847,170588,36.5,23,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:06:32-07:00,2121847,245540,37.7,53,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:07:02-07:00,2121847,240028,42.6,84,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:07:32-07:00,2121847,149380,49.1,114,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:08:02-07:00,2121847,471168,52.5,144,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:08:32-07:00,2121847,471168,54.3,174,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:09:02-07:00,2121847,471168,56.3,204,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:09:33-07:00,2121847,471168,58.1,234,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:10:03-07:00,2121847,266300,59.4,264,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:10:33-07:00,2121847,266300,60.6,294,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:11:03-07:00,2121847,266300,61.7,325,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:11:33-07:00,2121847,266308,62.6,355,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:12:03-07:00,2121847,207620,62.9,385,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:12:33-07:00,2121847,207672,63.6,415,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:13:03-07:00,2121847,207688,64.6,445,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:13:33-07:00,2121847,207704,65.0,475,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:14:04-07:00,2121847,207772,65.5,505,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:14:34-07:00,2121847,207820,66.0,535,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:15:04-07:00,2121847,207836,66.0,565,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:15:34-07:00,2121847,207860,66.4,596,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:16:04-07:00,2121847,207908,66.6,626,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:16:34-07:00,2121847,207968,66.7,656,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:17:04-07:00,2121847,207976,67.0,686,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:17:34-07:00,2121847,207992,67.4,716,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:18:04-07:00,2121847,208044,67.5,746,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:18:35-07:00,2121847,208068,67.6,776,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:19:05-07:00,2121847,208092,67.6,806,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:19:35-07:00,2121847,208108,67.8,836,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:20:05-07:00,2121847,208136,67.7,867,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:20:35-07:00,2121847,208152,67.7,897,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:21:05-07:00,2121847,208176,67.7,927,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:21:35-07:00,2121847,208192,67.8,957,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:22:05-07:00,2121847,208240,67.9,987,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:22:35-07:00,2121847,208256,68.0,1017,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:23:06-07:00,2121847,208288,68.1,1047,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:23:36-07:00,2121847,208304,68.2,1077,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:24:06-07:00,2121847,208380,68.5,1107,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:24:36-07:00,2121847,208420,69.0,1138,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:25:06-07:00,2121847,301508,68.4,1168,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:25:36-07:00,2121847,301740,66.8,1198,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:26:06-07:00,2121847,302896,65.2,1228,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:26:36-07:00,2121847,303060,63.7,1258,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:27:06-07:00,2121847,224432,62.4,1288,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:27:36-07:00,2121847,224560,61.1,1318,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:28:06-07:00,2121847,224584,59.9,1348,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:28:36-07:00,2121847,224984,58.8,1378,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:29:06-07:00,2121847,225036,57.7,1408,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:29:37-07:00,2121847,199300,56.7,1438,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:30:07-07:00,2121847,199544,55.7,1468,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:30:37-07:00,2121847,214660,54.8,1498,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:32:07-07:00,2212787,32316,7.6,8,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:32:37-07:00,2212787,129448,57.5,38,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:33:07-07:00,2212787,58924,53.2,68,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:33:37-07:00,2212787,68956,47.3,98,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:34:07-07:00,2212787,69104,37.3,128,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:34:37-07:00,2212787,69148,31.1,158,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:35:07-07:00,2212787,69172,26.9,188,/usr/local/bin/onedrive-go sync --watch
+2026-10-31T22:35:37-07:00,2212787,69204,23.9,218,/usr/local/bin/onedrive-go sync --watch

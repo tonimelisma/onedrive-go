@@ -1,0 +1,19 @@
+# iteration 0: families become packages as they are, shortcut as its own package.
+# Methods follow their receiver type automatically (Go requires it).
+order syncdomain syncshortcut syncstore syncplan syncobserve syncexec sync
+
+pkg domain   syncdomain
+pkg shortcut syncshortcut
+pkg store    syncstore
+pkg plan     syncplan
+pkg observe  syncobserve
+pkg exec     syncexec
+pkg engine   sync
+
+allow syncdomain
+allow syncshortcut syncdomain
+allow syncstore    syncdomain syncshortcut
+allow syncplan     syncdomain
+allow syncobserve  syncdomain syncshortcut syncstore
+allow syncexec     syncdomain syncstore
+allow sync         syncdomain syncshortcut syncstore syncplan syncobserve syncexec

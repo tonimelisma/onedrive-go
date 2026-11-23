@@ -1,0 +1,194 @@
+test_file	home	loc_by_pkg	violations	unexported_used_by_pkg
+action_freshness_test.go	syncexec	syncexec=525 sync=59		sync=11 syncexec=5
+actions_additional_test.go	sync	sync=27 syncdomain=10		syncdomain=1
+actions_test.go	syncdomain	syncdomain=37		syncdomain=1
+active_scopes_test.go	syncexec	syncexec=235		syncexec=4
+baseline_refresh_test.go	sync	syncstore=106		syncstore=1
+baseline_test.go	syncstore	syncstore=1812		syncstore=5
+blocked_retry_projection_test.go	syncstore	syncstore=23		syncstore=1
+cache_consistency_race_test.go	sync	sync=45		syncstore=1
+chaos_remote_test.go	sync	sync=488		
+comparison_hashless_test.go	syncplan	syncplan=170		syncplan=2
+condition_keys_test.go	syncdomain	syncdomain=58		
+condition_projection_test.go	syncstore	syncstore=66		
+content_filter_test.go	syncdomain	syncdomain=115		
+core_types_test.go	syncdomain	syncdomain=159		syncdomain=4
+crash_points_test.go	syncdomain	sync=405		sync=4 syncexec=1 syncstore=2
+debug_event_sink_test.go	sync	sync=23		sync=1
+dep_graph_test.go	syncexec	syncexec=314		
+dirty_buffer_test.go	syncobserve	syncobserve=196		syncobserve=5
+dispatch_order_test.go	sync	sync=300		sync=2
+engine_absence_confirmed_test.go	sync	sync=346 syncstore=10		sync=10 syncstore=1
+engine_actionable_retry_test.go	sync	sync=85		sync=2
+engine_activity_test.go	sync	sync=80		sync=1
+engine_baseline_snapshot_test.go	sync	sync=68		sync=4 syncstore=1
+engine_change_detection_test.go	sync	sync=125		sync=1 syncobserve=2 syncstore=1
+engine_cold_start_test.go	sync	sync=545		sync=24
+engine_comparison_facts_test.go	sync	sync=68		sync=1 syncstore=2
+engine_config_test.go	sync	sync=366		sync=22 syncexec=3 syncstore=1
+engine_current_plan_test.go	sync	sync=465		sync=32 syncstore=1
+engine_delete_safety_test.go	sync	sync=315		sync=3 syncdomain=1 syncstore=2
+engine_delta_expiry_test.go	sync	sync=164 syncobserve=68 syncfixture=10		sync=6 syncdomain=2 syncobserve=1
+engine_folder_rebind_test.go	sync	sync=134		sync=1 syncstore=1
+engine_housekeeping_test.go	sync	sync=211		sync=14 syncstore=1
+engine_model_based_test.go	sync	sync=827 syncfixture=44		sync=5 syncexec=1 syncstore=2
+engine_model_ops_test.go	sync	sync=503		
+engine_move_composition_test.go	sync	sync=489		sync=2
+engine_move_scenario_test.go	sync	sync=1054		sync=1 syncstore=2
+engine_observation_postprocess_test.go	sync	sync=470		sync=20
+engine_one_shot_quiescence_test.go	sync	sync=262		sync=10
+engine_pending_create_intent_test.go	sync	sync=31		sync=1
+engine_phase0_test.go	sync	sync=755		sync=35
+engine_refresh_test.go	sync	sync=1008 syncobserve=73		sync=28 syncobserve=1
+engine_release_jitter_test.go	sync	sync=193		sync=15
+engine_result_classify_test.go	sync	sync=571		sync=17
+engine_result_drain_test_helpers_test.go	sync	sync=142		sync=16
+engine_results_test.go	sync	sync=105		sync=10
+engine_retry_trial_test.go	sync	sync=174		sync=18
+engine_root_identity_test.go	sync	sync=441 syncobserve=22 syncdomain=8		sync=7 syncdomain=1 syncobserve=2 syncstore=3
+engine_root_lock_test.go	sync	sync=158		sync=8 syncstore=1
+engine_run_once_left_test.go	sync	sync=43		sync=1
+engine_run_once_results_test.go	sync	sync=367		sync=22
+engine_run_once_scope_wait_test.go	sync	sync=74		sync=3
+engine_run_once_superseded_test.go	sync	sync=39		
+engine_run_once_test.go	sync	sync=1607		sync=12 syncstore=4
+engine_runtime_architecture_test.go	sync	sync=349		sync=32
+engine_runtime_completion_test.go	sync	sync=1041		sync=34 syncexec=1
+engine_runtime_invariants_test.go	sync	sync=102		sync=3
+engine_runtime_lifecycle_test.go	sync	sync=480		sync=26
+engine_runtime_release_ramp_test.go	sync	sync=455		sync=44
+engine_runtime_retry_curve_test.go	sync	sync=20		sync=2
+engine_runtime_signals_test.go	sync	sync=64		sync=14
+engine_runtime_start_test.go	sync	sync=45		sync=6
+engine_scope_window_test.go	sync	sync=109		sync=1
+engine_supersede_streak_test.go	sync	sync=88		sync=19
+engine_test_helpers_test.go	sync	sync=603 syncfixture=524 syncstoretest=15		sync=26 syncdomain=1
+engine_throttle_ramp_test.go	sync	sync=326		sync=5
+engine_transfer_integrity_test.go	sync	sync=126		sync=3 syncexec=2
+engine_unavailable_not_absent_test.go	sync	sync=234 syncobserve=119		sync=5 syncdomain=1 syncobserve=11 syncstore=1
+engine_watch_bootstrap_test.go	sync	sync=107		sync=18
+engine_watch_drain_error_test.go	sync	sync=74		sync=4
+engine_watch_handlers_test.go	sync	sync=382		sync=23 syncexec=1
+engine_watch_local_observation_test.go	sync	sync=283		sync=16
+engine_watch_loop_completion_test.go	sync	sync=56		sync=11
+engine_watch_loop_owner_test.go	sync	sync=539		sync=57
+engine_watch_observer_exit_test.go	sync	sync=60		sync=6
+engine_watch_panic_recovery_test.go	sync	sync=173		sync=12
+engine_watch_rescan_replan_test.go	sync	sync=118		sync=19
+engine_watch_test.go	sync	sync=913		sync=52
+executor_conflict_reservation_test.go	syncexec	syncexec=95		syncexec=3
+executor_create_test.go	syncexec	syncexec=120		syncexec=1
+executor_database_guard_test.go	syncexec	syncexec=83 sync=32 syncfixture=12		sync=1 syncexec=2
+executor_delete_test.go	syncexec	syncexec=521		syncexec=4
+executor_delete_unhashed_test.go	syncexec	syncexec=98		syncexec=1
+executor_local_trash_test.go	syncexec	syncexec=207 sync=28		sync=1 syncexec=4
+executor_parent_checks_test.go	syncexec	syncexec=133		syncexec=2
+executor_remote_spelling_test.go	syncexec	syncexec=79		syncexec=1
+executor_symlink_boundary_test.go	syncexec	syncexec=359		syncexec=3
+executor_test.go	syncexec	syncexec=3448 syncfixture=80 sync=66		sync=1 syncexec=11
+executor_verify_before_destroy_test.go	syncexec	sync=320 syncexec=213 syncfixture=39		sync=6 syncexec=3
+fault_injection_test.go	sync	sync=94		
+fs_shim_scenario_test.go	sync	sync=135 syncobserve=19		sync=3 syncobserve=1
+identity_reuse_scenario_test.go	sync	sync=185		
+inotify_linux_test.go	syncobserve	syncobserve=60		syncobserve=5
+inotify_test.go	sync	syncobserve=66		syncobserve=8
+item_converter_kind_test.go	syncobserve	syncobserve=156		syncobserve=1 syncstore=1
+item_converter_window_test.go	syncobserve	syncobserve=81		syncobserve=1
+local_hash_reuse_test.go	syncobserve	syncobserve=103		syncobserve=2
+local_observation_batch_test.go	syncobserve	syncobserve=71		syncobserve=2
+mock_item_client_test.go	sync	syncfixture=102		
+move_baseline_current_test.go	sync	sync=71		
+name_length_test.go	sync	syncexec=57 syncobserve=18 sync=17		syncexec=5 syncobserve=1
+namekey_scenario_test.go	sync	sync=65		sync=1
+nfd_local_spelling_test.go	sync	sync=291 syncobserve=44 syncfixture=15		sync=5 syncexec=1 syncobserve=4
+observation_findings_test.go	sync	sync=38		sync=2
+observation_reconcile_change_test.go	syncstore	syncstore=40		syncstore=4
+observation_reconcile_policy_test.go	syncstore	syncstore=119		syncstore=11
+observer_edge_test.go	syncobserve	syncobserve=233 syncdomain=28		syncdomain=1 syncobserve=3
+observer_local_collision_spelling_test.go	syncobserve	syncobserve=109		syncobserve=1
+observer_local_collisions_test.go	syncobserve	syncobserve=647 syncfixture=23		syncobserve=3
+observer_local_create_test.go	syncobserve	syncobserve=232		
+observer_local_delete_test.go	syncobserve	syncobserve=447 syncfixture=30		syncdomain=1 syncobserve=2
+observer_local_handlers_test.go	syncobserve	syncobserve=495 syncfixture=39		syncdomain=1 syncobserve=8
+observer_local_inotify_test.go	syncobserve	syncobserve=155		syncobserve=3
+observer_local_platform_test.go	syncobserve	syncobserve=130		syncobserve=13
+observer_local_recovery_defer_test.go	syncobserve	syncobserve=118		syncobserve=1
+observer_local_test.go	syncobserve	syncobserve=1839 syncfixture=21		syncobserve=9
+observer_local_trysend_test.go	syncobserve	syncobserve=79		
+observer_local_watch_health_test.go	syncobserve	syncobserve=500 sync=147		sync=5 syncobserve=26
+observer_local_write_settle_test.go	syncobserve	syncobserve=306		syncobserve=17
+observer_local_write_test.go	syncobserve	syncobserve=464		syncdomain=1 syncobserve=10
+observer_remote_cursor_test.go	syncobserve	syncobserve=258		syncobserve=3
+observer_remote_page_retry_test.go	syncobserve	syncobserve=98		syncobserve=1
+observer_remote_test.go	syncobserve	syncobserve=2813		syncobserve=6 syncstore=1
+output_noise_test.go	sync	sync=290 syncfixture=30 syncobserve=25 syncexec=15		sync=26 syncexec=1 syncobserve=1
+panic_stack_test.go	sync	sync=67		
+pending_creates_test.go	syncstore	syncstore=322 sync=178		sync=2 syncstore=2
+permission_handler_test.go	sync	sync=210		sync=15
+permission_pipeline_contract_test.go	sync	sync=147		sync=11
+permission_probe_write_boundary_test.go	sync	sync=43		sync=3
+permissions_rdonly_linux_test.go	sync	sync=44		sync=2
+planner_actions_test.go	syncplan	syncplan=1711		syncdomain=1 syncplan=2 syncstore=1
+planner_delete_safety_test.go	syncplan	syncplan=195		syncplan=1
+planner_dependencies_bench_test.go	syncplan	syncplan=146		syncplan=1
+planner_dependencies_test.go	syncplan	syncplan=384		syncplan=12
+planner_model_test.go	syncplan	syncplan=675		syncdomain=1 syncstore=4
+planner_move_composition_test.go	syncplan	syncplan=360		syncplan=34
+planner_remote_delete_safety_test.go	syncplan	syncplan=70		syncstore=1
+race_disabled_test.go	sync	syncfixture=2		
+reconcile_matrix_test.go	syncplan	syncplan=274		
+remote_state_mirror_test.go	sync	sync=229 syncstoretest=38 syncfixture=15		syncstore=2
+remote_twins_test.go	syncstore	syncstore=122 sync=52 syncstoretest=14 syncfixture=3		sync=1 syncstore=2
+retry_work_condition_test.go	syncstore	syncstore=86		syncstore=2
+retry_work_test_helpers_test.go	sync	syncfixture=19 sync=14		
+scanner_hash_cache_test.go	syncobserve	syncobserve=182		syncobserve=2
+scanner_test.go	syncobserve	syncobserve=556		syncobserve=2
+scenario_remote_test.go	sync	sync=732		sync=1 syncdomain=1
+schema_test.go	syncstore	syncstore=127		syncstore=9
+scope_key_test.go	syncdomain	syncdomain=124		syncdomain=7
+scope_lifecycle_policy_test.go	syncstore	syncstore=54		syncstore=1
+scope_test.go	syncexec	syncexec=521 syncdomain=18		syncdomain=1
+shortcut_root_spelling_test.go	syncshortcut	sync=77		sync=4
+shortcut_root_state_test.go	syncshortcut	sync=711 syncstore=346		sync=9 syncshortcut=1
+shortcut_root_transition_test.go	syncshortcut	syncshortcut=489		syncshortcut=52
+shortcut_topology_test.go	syncshortcut	syncshortcut=200 sync=123 syncfixture=1		sync=5 syncshortcut=1
+socketio_protocol_test.go	syncobserve	syncobserve=48		syncobserve=6
+socketio_test.go	syncobserve	syncobserve=505 syncfixture=36		syncobserve=2
+sqlite_compare_bench_test.go	sync	syncstore=89		syncdomain=1 syncstore=4
+sqlite_compare_test.go	syncstore	syncstore=642 syncfixture=16		syncstore=4
+store_baseline_row_test.go	syncstore	syncstore=79		syncstore=5
+store_block_scopes_test.go	syncstore	syncstore=212		syncstore=1
+store_close_test.go	syncstore	syncstore=20		
+store_disk_full_test.go	syncstore	syncstore=33		
+store_fault_seam_test.go	syncstore	syncstore=281		syncstore=4
+store_inspect_local_drift_test.go	syncstore	syncstore=69		
+store_inspect_never_synced_test.go	syncstore	sync=20 syncstore=15		sync=1
+store_inspect_scope_test.go	syncstore	syncstore=28		syncstore=1
+store_integrity_test.go	syncstore	syncstore=36		syncstore=4
+store_local_state_diff_test.go	syncstore	syncstore=96		
+store_local_state_test.go	syncstore	syncstore=387		syncstore=2
+store_observation_issues_test.go	syncstore	syncstore=136 syncstoretest=28		
+store_observation_order_test.go	syncstore	syncstore=281		syncstore=4
+store_observation_state_helpers_test.go	syncstore	syncstore=113		syncstore=4
+store_planner_visible_bench_test.go	syncstore	syncstore=103		syncdomain=1 syncstore=3
+store_planner_visible_test.go	syncstore	syncstore=350		syncstore=13
+store_read_remote_state_list_test.go	syncstore	syncstore=135		
+store_read_remote_state_test.go	syncstore	syncstore=37		
+store_reset_test.go	syncstore	syncstore=42		syncstore=2
+store_retry_work_test.go	syncstore	syncstore=333		syncstore=4
+store_scope_admin_test.go	syncstore	syncstore=374		syncdomain=3 syncstore=3
+store_scratch_test.go	syncstore	syncstore=181		syncstore=3
+store_shape_test_helpers_test.go	syncstore	syncstore=53 syncstoretest=12		
+store_test_seams_test.go	syncstore	syncstore=17		syncstore=1
+symlink_upload_test.go	sync	sync=112		sync=5
+sync_invariants_test.go	sync	sync=241		sync=3 syncstore=1
+test_helpers_permissions_test.go	sync	sync=16 syncobserve=3		
+test_helpers_test.go	sync	syncfixture=93 sync=75 syncstoretest=70 syncobserve=51 syncexec=10		syncdomain=1 syncstore=2
+truth_status_test.go	syncdomain	syncdomain=62		syncdomain=2
+tx_test.go	syncstore	syncstore=48		syncstore=1
+virtual_clock_test.go	syncobserve	syncobserve=136 sync=51 syncfixture=10		syncdomain=1 syncobserve=3
+watch_condition_log_test.go	sync	sync=32		sync=4
+watch_summary_test.go	sync	sync=87		sync=5
+watch_test_helpers_test.go	sync	syncobserve=86		syncobserve=5
+worker_result_test.go	syncdomain	syncdomain=14		syncdomain=1
+worker_test.go	syncexec	syncexec=957 syncdomain=19		syncdomain=1 syncexec=4

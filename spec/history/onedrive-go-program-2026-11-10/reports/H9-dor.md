@@ -1,0 +1,28 @@
+# Definition of Ready: conflict copies and trash restore through a rooted descriptor
+
+1. PASS **Task intent**: every change the client makes inside a sync folder for a directory conflict copy or a `trash restore` resolves through a descriptor rooted at that folder, so a symlink swapped in below the root at any moment cannot send the rename, the restore's mkdir, temp file or final rename outside it. `synctree.Root` gains a no-replace rename on two rooted parent descriptors; `normalizeNotExist` takes fsroot's two-answer rule with a rooted lstat; one exported missing-name predicate in `localpath`.
+
+2. PASS **Non-goals**: `internal/fsroot` behaviour (it only switches to the shared predicate); CLI downloads to user-named paths; `internal/cli`, `internal/multisync`, `internal/graph`; every `internal/sync` file but `executor_conflict.go`, its tests and one new source-reading test. Local move keeps its check-then-rename (sync-execution.md records why); it is noted, not changed. The trash's own folder stays on `localpath` (managed folder under the data directory).
+
+3. PASS **Governing docs**: `spec/design/system.md` (GOVERNS synctree, localtrash, localpath, fsroot; containment bullets lines 656-669, fsroot two-answer rule lines 616-628), `spec/design/sync-execution.md` (local trash section lines 641-680, Verified-By row line 48, conflict-copy reasoning lines 263-290), `spec/design/sync-planning.md` lines 486-490 (directory conflict copy), `spec/requirements/non-functional.md` R-6.4.8 (writes confined to the sync root), R-6.4.9 (trash), R-6.4.10 (two-answer rule for managed state), `spec/requirements/sync.md` R-2.4.6, R-2.17.10. Analysis `08-outer-packages.md` lines 599-612, checked against the code.
+
+4. PASS **Authority owner**: `internal/synctree` owns every mutation inside a sync folder (new `Root.RenameNoReplace`, `Root.MoveInNoReplace`, the descriptor fallback); `internal/localtrash` owns restore policy and its trash folder; `internal/localpath` owns the missing-name errno predicate; the executor owns conflict-copy naming and outcomes; user-facing output of `trash restore` is unchanged (`internal/cli/trash.go` prints the absolute target Restore returns).
+
+5. PASS **Code scope**: `internal/synctree/{synctree.go,spelling.go,rename_noreplace_*.go,tests}`, `internal/localpath/{localpath.go,rename_noreplace*.go removed,tests}`, `internal/localtrash/{localtrash.go,filetimes_unix.go,tests}`, `internal/fsroot/fsroot.go` (predicate only), `internal/sync/executor_conflict.go`, a new `internal/sync` source-reading test and a conflict-copy containment test file, the spec files above. Must not touch other `internal/sync` files, `internal/cli`, `internal/multisync`, `internal/graph`.
+
+6. PASS **Regression plan**: tests first, each seen failing: a directory conflict copy whose source parent was swapped for a symlink out of the root; a same-filesystem restore and a cross-filesystem restore (EXDEV through the existing seam) whose target folder was swapped after the lexical check (called past it); no-replace meaning for an existing file and directory on the flagged rename and on both fallbacks; containment of the new operations; a table test for the two-answer rule; a table test for the predicate; the source-reading test over the executor's files.
+
+7. PASS **Verification plan**: `go build ./...`, `go vet ./...`, tagged vet, `GOOS=darwin go build ./...`, `GOOS=darwin go vet` of the four trees, `GOOS=freebsd go build ./...` (the package builds for other unix systems: `rootmark_other.go` is `unix && !linux && !darwin`; Windows does not build today); `go test -count=1` and `-race` of synctree, localpath, localtrash, fsroot (race behind the lock); whole `./internal/sync/...` behind the lock; `-race -run` of the changed sync tests; targeted golangci-lint last behind the lock.
+
+8. PASS **Data safety**: the change removes check-then-act windows; the no-replace contract (never replace a destination) holds on every path, the fallbacks included; a restore still removes the trash copy only after the file is durable in place; the conflict copy's name and the restore's output are unchanged. No state DB change.
+
+9. PASS **Secret and credential safety**: no tokens, `.env`, account names or logs are read or written; tests use `t.TempDir()` only.
+
+10. PASS **Live provider and destructive operations**: none. No live OneDrive calls, no e2e runs, no history rewrite, no dependency upgrade (`golang.org/x/sys` v0.49.0 already has `Renameat2`, `RenameatxNp`, `Futimes`).
+
+11. ASSUMPTION **Review carryover and nightly**: the brief states the DoD start stage has already been run in this worktree; no carryover threads or nightly claims were handed to this increment.
+
+12. ASSUMPTION **Unknowns and assumptions**:
+   - Question: is the trash ever inside a sync folder? Current assumption: no; it is `<data dir>/trash/<state name>` (`DirForStatePath`), and the package doc says it is never in the sync folder. Validation step: read `DirForStatePath` and its callers (`engine.go`, `cli/trash.go`). Owner if wrong: `internal/localtrash`, `internal/config` (no check refuses a sync_dir that contains the data dir; reported, not fixed).
+   - Question: what does today's `localpath.RenameNoReplace` do when the flag is refused? Current assumption: link then unlink, and an O_EXCL create plus copy where hard links are unsupported (not a check then a plain rename). Validation step: read `rename_noreplace*.go`. Owner if wrong: stop and report.
+   - Question: can a test reach the act past the lexical checks? Current assumption: yes, by calling the acting function (`executeDirectoryConflictCopy`, the restore's put-back step) directly. Validation step: write the tests and see them fail on the old code.
