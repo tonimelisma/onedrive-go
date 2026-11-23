@@ -303,11 +303,11 @@ func disagreeingSubject(err error) string {
 	return "the path"
 }
 
-// A read by path of a name with ':' is one sentence that names the path once
-// and the character, with a folder to list, before any request; --verbose
-// keeps the chain.
+// A name with ':' is read through its parent folder's listing, never by its
+// path, so a missing one is one sentence that names the path once, with the
+// folder to list; --verbose keeps the chain.
 //
-// Validates: R-6.6.26
+// Validates: R-6.6.26, R-6.7.38
 func TestCommandErrorText_ANameAPathCannotCarryIsOneSentence(t *testing.T) {
 	setTestDriveHome(t)
 	fake := &disagreeingDrive{t: t, answers: map[string]string{}}
@@ -315,9 +315,9 @@ func TestCommandErrorText_ANameAPathCannotCarryIsOneSentence(t *testing.T) {
 
 	run := runFileCommand(t, "onedrive-go stat", cc, false, "/a/b:c.txt")
 
-	require.ErrorIs(t, run.err, graph.ErrNameNotPathAddressable)
-	assert.Equal(t, "Error: /a/b:c.txt holds ':', which OneDrive cannot carry in a path. "+
+	require.ErrorIs(t, run.err, graph.ErrNotFound)
+	require.NotErrorIs(t, run.err, graph.ErrNameNotPathAddressable, "the name is looked up in its folder, not refused")
+	assert.Equal(t, "Error: /a/b:c.txt was not found on OneDrive. "+
 		"Run 'onedrive-go ls /a' to see what is there.", commandErrorText(run.err, false))
 	assert.Contains(t, commandErrorText(run.err, true), "\nDetails: resolving \"/a/b:c.txt\": ")
-	assert.Empty(t, fake.tried())
 }

@@ -195,10 +195,10 @@ func TestLoadValidatedState_WarnsOnceAboutASyncDirHoldingTheDataFolder(t *testin
 			case tc.dataBeside:
 				dataHome = filepath.Join(home, "data")
 			case tc.noHome:
-				// The data folder as a path relative to the working folder,
-				// the way an unexpanded default is.
-				t.Chdir(t.TempDir())
-				dataHome = filepath.Join("~", "OneDrive", "data")
+				// A relative XDG root is ignored, so the data folder is an
+				// absolute one; without a home folder the default sync_dir
+				// cannot be expanded, so nothing is compared with it.
+				dataHome = filepath.Join(t.TempDir(), "data")
 			}
 			t.Setenv("XDG_DATA_HOME", dataHome)
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))

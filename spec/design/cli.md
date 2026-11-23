@@ -610,11 +610,13 @@ recorded none), says the answers do not agree on which folder holds it and
 that this usually settles: it says nothing about whether anything changed,
 since a wait that confirms a delete, a move or a new folder meets it after the
 change landed; the folders' item IDs are only in `--verbose`'s details
-(`TestCommandErrorText_DisagreeingAnswersForAPathAreOneSentence`). A read by
-path of a name with `:` (`graph.ErrNameNotPathAddressable`, refused before
-any request) names the path once and the character, with the `ls` of its
-folder when that folder's path can be read; a name too long for a path route
-is said as such (`TestCommandErrorText_ANameAPathCannotCarryIsOneSentence`).
+(`TestCommandErrorText_DisagreeingAnswersForAPathAreOneSentence`). A name with `:`
+is read through its parent folder's listing (R-6.7.38), so a command that
+does not find it names the path once with the `ls` of its folder, as any
+missing path does (`TestCommandErrorText_ANameAPathCannotCarryIsOneSentence`);
+where `graph.ErrNameNotPathAddressable` still reaches the command, the
+sentence names the path once and the character, or says a name is too long
+for a path route.
 Command-line
 mistakes become `usageError` through cobra's flag-error hook, a wrapper on
 every command's `Args` validator, and a flag-group check that runs before

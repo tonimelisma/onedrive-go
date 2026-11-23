@@ -302,6 +302,10 @@ func runGroupMember(ctx stdcontext.Context, done chan struct{}, fn func(stdconte
 func startsMemberWithoutBoundary() { g.start(ctx, func(stdcontext.Context) { work() }) }
 
 func startsMemberWithBoundary() { g.start(ctx, s.loop) }
+
+func startsMemberThroughForwarder() { g.start(ctx, func(ctx stdcontext.Context) { s.loop(ctx) }) }
+
+func startsHelperThroughForwarder() { g.start(ctx, func(ctx stdcontext.Context) { helper(ctx) }) }
 `
 )
 
@@ -325,7 +329,7 @@ func TestBoundaryScans_RejectWhatTheyPolice(t *testing.T) {
 	used := make(map[string]bool)
 	findings := scan.goroutineFindings(exceptions, used)
 
-	assert.Len(t, findings, 12, "%v", findings)
+	assert.Len(t, findings, 13, "%v", findings)
 	assertFindingAt(t, findings, "internal/demo/demo.go:5:", "a literal with no boundary")
 	assertFindingAt(t, findings, "internal/demo/demo.go:20:", "a boundary registered after work")
 	assertFindingAt(t, findings, "internal/demo/demo.go:48:", "a named function with no boundary")
@@ -338,6 +342,7 @@ func TestBoundaryScans_RejectWhatTheyPolice(t *testing.T) {
 	assertFindingAt(t, findings, "internal/demo/timers.go:23:", "a context callback, under a renamed import, of a named function with no boundary")
 	assertFindingAt(t, findings, "internal/demo/timers.go:29:", "a clock's Go call of a literal forwarding to a function with no boundary")
 	assertFindingAt(t, findings, "internal/demo/timers.go:42:", "a starter's function argument with no boundary")
+	assertFindingAt(t, findings, "internal/demo/timers.go:48:", "a starter's literal forwarding to a function with no boundary")
 	assert.True(t, used[demoTrivial])
 	assert.False(t, used[demoNeverUsed], "an exception no go statement uses stays unused")
 
@@ -908,26 +913,32 @@ func (s *packageScan) starterArgumentFindings(starters map[string]int) []string 
 				return true
 			}
 			where := s.position(call)
-			switch arg := call.Args[index].(type) {
-			case *ast.FuncLit:
-				if problem := s.boundaryProblem(arg.Body); problem != "" {
-					findings = append(findings, where+" goroutine literal "+problem)
-				}
-			default:
-				name, finding := s.startedName(goroutineStart{at: call, fn: arg, file: file}, where)
-				if finding != "" {
-					findings = append(findings, finding)
+			arg := call.Args[index]
+			if literal, isLiteral := arg.(*ast.FuncLit); isLiteral {
+				// A literal that only forwards to one call starts that call,
+				// as a go statement of it does.
+				callee, forwards := forwardedCall(literal)
+				if !forwards {
+					if problem := s.boundaryProblem(literal.Body); problem != "" {
+						findings = append(findings, where+" goroutine literal "+problem)
+					}
 					return true
 				}
-				for _, fn := range s.funcs[name] {
-					if problem := s.boundaryProblem(fn.Body); problem != "" {
-						findings = append(findings, where+" goroutine starts "+name+", which "+problem)
-					}
+				arg = callee
+			}
+			name, finding := s.startedName(goroutineStart{at: call, fn: arg, file: file}, where)
+			if finding != "" {
+				findings = append(findings, finding)
+				return true
+			}
+			for _, fn := range s.funcs[name] {
+				if problem := s.boundaryProblem(fn.Body); problem != "" {
+					findings = append(findings, where+" goroutine starts "+name+", which "+problem)
 				}
-				if len(s.funcs[name]) == 0 {
-					findings = append(findings, where+" goroutine starts "+name+
-						", which this package does not declare; start a function of this package that has a boundary")
-				}
+			}
+			if len(s.funcs[name]) == 0 {
+				findings = append(findings, where+" goroutine starts "+name+
+					", which this package does not declare; start a function of this package that has a boundary")
 			}
 			return true
 		})
