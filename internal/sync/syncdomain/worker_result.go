@@ -17,7 +17,7 @@ type ActionCompletion struct {
 	DriveID    driveid.ID
 	ActionType ActionType
 	// ItemType is the kind of item the action touched, as its planned view
-	// says (ActionItemType): what the activity feed tells a summary.
+	// says (ResolveItemType): what the activity feed tells a summary.
 	ItemType          ItemType
 	Success           bool
 	ErrMsg            string

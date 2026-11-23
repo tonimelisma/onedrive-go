@@ -443,7 +443,7 @@ The console prints:
   removed, files and folders apart ("deleted 3 files and 1 folder locally",
   "Would delete 1 folder on OneDrive"): the engine marks an activity whose
   planned view is a folder (`Activity.Folder`, from
-  `syncdomain.ActionItemType`, which `ActionCompletion.ItemType` carries to
+  `syncdomain.ResolveItemType`, which `ActionCompletion.ItemType` carries to
   the completion), and a plan's folder deletes are counted apart for a dry
   run (`Report.LocalFolderDeletes`, `Report.RemoteFolderDeletes`). A folder
   with files is one activity per file and one for the folder, since the

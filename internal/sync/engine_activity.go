@@ -33,7 +33,7 @@ type Activity struct {
 	Size      int64
 	SizeKnown bool
 	// Folder is whether the item the action touched is a folder, as the
-	// planned action's view says (syncdomain.ActionItemType), so a summary
+	// planned action's view says (syncdomain.ResolveItemType), so a summary
 	// counts a deleted folder as a folder rather than as a file.
 	Folder  bool
 	Success bool
