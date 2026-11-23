@@ -60,7 +60,7 @@ func TestCrashRecovery_ReplacingMoveBetweenItsTwoStepsFinishesTheMove(t *testing
 	recovered := capture.reopen(t)
 
 	assert.Equal(t, map[string]string{"a.txt": "alpha\n", "keep.txt": "keep\n"}, harnessLocalTree(t, recovered.syncRoot))
-	syncfixture.RequireTrashHoldsOnce(t, recovered.eng.trash, "b.txt", "bravo\n")
+	syncfixture.RequireTrashHoldsOnce(t, recovered.eng.upkeep.trash, "b.txt", "bravo\n")
 	crashed, err := recovered.eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 	requireBaselineItemAt(t, crashed, "a.txt", aRow.ItemID, aRow.LocalHash)
@@ -78,7 +78,7 @@ func TestCrashRecovery_ReplacingMoveBetweenItsTwoStepsFinishesTheMove(t *testing
 	assert.NotContains(t, recovered.remote.deletes, "item-a")
 	assert.Equal(t, map[string]string{"b.txt": "alpha\n", "keep.txt": "keep\n"}, recovered.remote.tree())
 	assert.Equal(t, map[string]string{"b.txt": "alpha\n", "keep.txt": "keep\n"}, harnessLocalTree(t, recovered.syncRoot))
-	syncfixture.RequireTrashHoldsOnce(t, recovered.eng.trash, "b.txt", "bravo\n")
+	syncfixture.RequireTrashHoldsOnce(t, recovered.eng.upkeep.trash, "b.txt", "bravo\n")
 	after, err := recovered.eng.baseline.Load(t.Context())
 	require.NoError(t, err)
 	requireBaselineItemAt(t, after, "b.txt", aRow.ItemID, aRow.LocalHash)

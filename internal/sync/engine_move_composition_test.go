@@ -437,7 +437,7 @@ func TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting(t *testin
 	assert.Equal(t, "alpha\n", string(data))
 	assert.Zero(t, remote.uploads, "the moved file must not be uploaded again")
 	assert.Equal(t, moved, syncfixture.EntryIdentity(t, filepath.Join(syncRoot, "b.txt")), "b.txt is the moved file itself")
-	kept := syncfixture.RequireTrashHoldsOnce(t, eng.trash, "b.txt", "bravo\n")
+	kept := syncfixture.RequireTrashHoldsOnce(t, eng.upkeep.trash, "b.txt", "bravo\n")
 	assert.Equal(t, displaced, syncfixture.EntryIdentity(t, kept.ItemPath), "the trash holds the old b.txt itself, not a copy")
 	requireScenarioQuietPlan(t, eng)
 }
@@ -520,7 +520,7 @@ func TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, identity.Inode, entry.LocalInode, "the baseline records the moved file's identity")
 	assert.Equal(t, moved.Inode, identity.Inode, "b.txt is the moved file itself")
-	syncfixture.RequireTrashHoldsOnce(t, eng.trash, "b.txt", "same\n")
+	syncfixture.RequireTrashHoldsOnce(t, eng.upkeep.trash, "b.txt", "same\n")
 	requireScenarioQuietPlan(t, eng)
 	assert.Zero(t, remote.uploads)
 }

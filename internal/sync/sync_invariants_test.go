@@ -260,11 +260,11 @@ func harnessLocalTree(t *testing.T, syncRoot string) map[string]string {
 func harnessTrashContents(t *testing.T, eng *testEngine) []string {
 	t.Helper()
 
-	if eng.trash == nil {
+	if eng.upkeep.trash == nil {
 		return nil
 	}
 	var contents []string
-	for _, content := range readTreeContents(t, eng.trash.Dir(), false) {
+	for _, content := range readTreeContents(t, eng.upkeep.trash.Dir(), false) {
 		contents = append(contents, content)
 	}
 

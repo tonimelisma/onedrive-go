@@ -384,14 +384,14 @@ func (rt *watchRuntime) rescheduleReplanIntent(batch syncobserve.DirtyBatch) err
 	return nil
 }
 
+// totalWorkers is how many workers the run's pools run, the count the pool
+// itself uses (workerPoolSize), so the idle count the replan reports matches
+// the workers there are.
 func (rt *watchRuntime) totalWorkers() int {
-	if rt == nil || rt.cfg.transferWorkers < 1 {
+	if rt == nil {
 		return 0
 	}
-	if rt.hooks.serializeWorkers {
-		return 1
-	}
-	return rt.cfg.transferWorkers
+	return rt.cfg.poolSize
 }
 
 func (rt *watchRuntime) idleWorkers() int {
