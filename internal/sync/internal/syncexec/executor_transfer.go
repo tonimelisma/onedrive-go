@@ -539,6 +539,9 @@ func (e *Executor) uploadNewFile(
 	}
 	result, err := e.transferMgr.UploadFile(ctx, driveID, parentID, filepath.Base(action.Path), localPath, opts)
 	keepIntent := false
+	// A 409 is judged by resolveCreateConflict, which says whether the file
+	// holding the name is this client's; any other failure says nothing of it.
+	conflictJudged := errors.Is(err, graph.ErrConflict)
 	switch {
 	case errors.Is(err, graph.ErrCreateOutcomeUnknown):
 		// Before the conflict case: a create that was answered 2xx and whose
@@ -553,11 +556,26 @@ func (e *Executor) uploadNewFile(
 	switch {
 	case errors.As(err, &createdErr) && createdErr.Removed && createdErr.Item != nil:
 		e.forgetRemovedPlaceholder(ctx, action, createdErr.Item.ID)
-	case !created && !keepIntent:
+	case !created && !keepIntent && !keepsEarlierIntent(priorIntent, err, conflictJudged):
+		// An attempt that made nothing clears the intent, unless an earlier
+		// attempt's create may have left its empty file there: a refusal of
+		// this attempt (a 429, a 5xx before OneDrive acted) says nothing of
+		// that file, which stays this client's to claim. Cleared, the next
+		// attempt's 409 read it as someone else's file: a conflict copy of the
+		// user's file and the empty one downloaded in its place. A 409 that
+		// resolveCreateConflict found held by another file does say, and
+		// clears it.
 		e.clearPendingCreateIntent(ctx, action, err == nil)
 	}
 
 	return result, err
+}
+
+// keepsEarlierIntent reports whether a failed attempt must leave the intent
+// an earlier attempt left: there was one, this attempt failed, and the
+// failure was not a 409 that resolveCreateConflict judged.
+func keepsEarlierIntent(priorIntent bool, err error, conflictJudged bool) bool {
+	return priorIntent && err != nil && !conflictJudged
 }
 
 // priorCreateIntent reports whether an earlier attempt left an intent to

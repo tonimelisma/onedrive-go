@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -143,6 +144,51 @@ func TestUploadNewFile_ConflictOnAFileNotListedYetKeepsThePriorIntent(t *testing
 	require.NoError(t, err)
 	require.True(t, found, "the intent is kept for the file that is not visible yet")
 	assert.Empty(t, pending.ItemID)
+}
+
+// Validates: R-5.6.15
+//
+// A create whose answer was lost leaves its empty file and its intent. A
+// later attempt that OneDrive refuses before it creates anything (a 429)
+// made nothing of its own, but the empty file the earlier attempt left is
+// still this client's: its intent stays, so the attempt after it claims the
+// file and finishes the upload into it. The refused attempt cleared the
+// intent before, and the next attempt read its own empty file as someone
+// else's: the user's file became a conflict copy and the empty one was
+// downloaded in its place (watch model, chaos seed 4).
+func TestUploadNewFile_ARefusedRetryKeepsTheIntentOfAnEarlierLostCreate(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	e, store, syncRoot := newScenarioCreateExecutorOn(t, remote, remote.client(t), nil)
+	local := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
+	action := &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "doc.txt"}
+	loseCreateAnswers(remote, true)
+	_, err := e.UploadNewFileForTest(t.Context(), action, remote.driveID, syncexec.GraphRootID, "doc.txt", local)
+	require.ErrorIs(t, err, graph.ErrCreateOutcomeUnknown)
+	loseCreateAnswers(remote, false)
+	lost, ok := remote.itemAt("doc.txt")
+	require.True(t, ok)
+
+	remote.mu.Lock()
+	remote.refuseCreate = func(string, string) error {
+		return &graph.GraphError{StatusCode: http.StatusTooManyRequests, Code: "activityLimitReached", Err: graph.ErrThrottled}
+	}
+	remote.mu.Unlock()
+	_, err = e.UploadNewFileForTest(t.Context(), action, remote.driveID, syncexec.GraphRootID, "doc.txt", local)
+	require.ErrorIs(t, err, graph.ErrThrottled)
+	pending, found, err := store.PendingCreateAt(t.Context(), "doc.txt")
+	require.NoError(t, err)
+	require.True(t, found, "the refused attempt keeps the intent of the earlier lost create")
+	assert.Empty(t, pending.ItemID)
+
+	remote.mu.Lock()
+	remote.refuseCreate = nil
+	remote.mu.Unlock()
+	result, err := e.UploadNewFileForTest(t.Context(), action, remote.driveID, syncexec.GraphRootID, "doc.txt", local)
+	require.NoError(t, err, "the retry's 409 is about its own empty file")
+	assert.Equal(t, lost.ID, result.Item.ID, "the content went into the file the lost create made")
+	assert.Equal(t, map[string]string{"doc.txt": "my words\n"}, remote.tree(), "one remote file, holding the content")
 }
 
 // Validates: R-5.6.15

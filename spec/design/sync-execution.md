@@ -282,6 +282,14 @@ resolved:
   nothing (`TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate`).
   When nothing of that name is listed yet, a prior intent is kept for the
   next retry (`TestUploadNewFile_ConflictOnAFileNotListedYetKeepsThePriorIntent`).
+  So is a prior intent when a later attempt fails any other way than a 409
+  (a 429, a 5xx before OneDrive acted): that attempt made nothing, but the
+  empty file the earlier one may have left is still this client's, and the
+  attempt after it claims it. The refused attempt used to clear the intent,
+  and the next 409 read the client's own empty file as someone else's: the
+  user's file became a conflict copy and the empty one was downloaded in its
+  place (watch model, chaos seed 4,
+  `TestUploadNewFile_ARefusedRetryKeepsTheIntentOfAnEarlierLostCreate`).
   The stale precondition keeps the 409 in its error chain, and the engine
   supersedes it all the same and replans in the same run, which finds a name
   the listing did not show yet
