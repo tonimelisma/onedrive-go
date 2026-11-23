@@ -125,3 +125,4 @@ What each merged PR changed, one line per PR, oldest first. `CLAUDE.md` names on
 - #982 (the exhaustive check's broken runs fall from 41 to 17, none of them losing or copying content: a synced file is set aside on OneDrive while an upload needs its path, files moved beside renamed or rotated folders compose, a waiting item keeps its row, and a held folder's download plans no conflict copy)
 - #983 (the exhaustive planner check lists no broken run: folders at one path merge, held folders land in moving folders, rotations split across the sides converge, and a file moved and edited here stays the item OneDrive moved)
 - #984 (a failed verify go test step keeps its full output under .verify-logs/, named in the failure line and the summary)
+- #985 (the test environment names no fixture: the shortcut and shared-folder names and sentinel paths come only from the environment, CI's fixtures secret carries them, and a check keeps defaults out)

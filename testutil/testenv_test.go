@@ -3,6 +3,7 @@ package testutil
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -176,11 +177,12 @@ func TestLoadLiveTestConfig_Precedence(t *testing.T) {
 
 // Validates: R-6.10.27
 //
-// The shortcut fixtures' folder names have defaults; their parent drives do
-// not. Nothing guesses which configured drive holds a shortcut: the
-// repository names no test account, so the parent drives come only from
-// their variables, and each sharer is the other fixture's parent account.
-func TestLoadLiveTestConfig_DefaultShortcutFixtures(t *testing.T) {
+// The repository names no fixture: a run that leaves the shortcut names, the
+// sentinel paths and the standalone shared folder's name unset gets none, so
+// the tests that need one fail naming its variable. Nothing guesses which
+// configured drive holds a shortcut; each sharer is the other fixture's parent
+// account, the one fallback the loader applies and names.
+func TestLoadLiveTestConfig_ShortcutFixturesHaveNoDefaultName(t *testing.T) {
 	for _, key := range []string{
 		"ONEDRIVE_TEST_DRIVE",
 		"ONEDRIVE_TEST_DRIVE_2",
@@ -206,33 +208,39 @@ func TestLoadLiveTestConfig_DefaultShortcutFixtures(t *testing.T) {
 	cfg, err := LoadLiveTestConfig(moduleRoot)
 	require.NoError(t, err)
 
-	nameDefaults := []string{
-		writableShortcutNameEnvVar, readOnlyShortcutNameEnvVar, writableShortcutSentinelPathEnvVar,
-		readOnlyShortcutSentinelPathEnvVar, standaloneSharedFolderNameEnvVar,
-	}
-	assert.Equal(t, nameDefaults, cfg.DefaultedFixtureVariables,
-		"each unset variable whose default applied is named; a sharer with no parent drive has none")
+	assert.Empty(t, cfg.DefaultedFixtureVariables, "no fixture name or path has a default; a sharer without a parent drive has none")
+	assert.Empty(t, cfg.Fixtures.WritableShortcutName)
+	assert.Empty(t, cfg.Fixtures.WritableShortcutSentinelPath)
+	assert.Empty(t, cfg.Fixtures.ReadOnlyShortcutName)
+	assert.Empty(t, cfg.Fixtures.ReadOnlyShortcutSentinelPath)
+	assert.Empty(t, cfg.Fixtures.StandaloneSharedFolderName)
 	assert.Empty(t, cfg.Fixtures.WritableShortcutParentDrive, "no configured drive is guessed as a shortcut's parent")
 	assert.Empty(t, cfg.Fixtures.ReadOnlyShortcutParentDrive)
-	assert.Empty(t, cfg.Fixtures.WritableShortcutSharerEmail)
-	assert.Empty(t, cfg.Fixtures.ReadOnlyShortcutSharerEmail)
-	assert.Equal(t, "Kikkeli Shared Test Folder", cfg.Fixtures.WritableShortcutName)
-	assert.Equal(t, "shortcut-sentinel.txt", cfg.Fixtures.WritableShortcutSentinelPath)
-	assert.Equal(t, "Read-only Shared Folder", cfg.Fixtures.ReadOnlyShortcutName)
-	assert.Equal(t, "shortcut-sentinel.txt", cfg.Fixtures.ReadOnlyShortcutSentinelPath)
-	assert.Equal(t, "Testi2 Shared Folder", cfg.Fixtures.StandaloneSharedFolderName)
 
 	t.Setenv(ReadOnlyShortcutParentDriveEnvVar, "personal:first@example.com")
 	t.Setenv(WritableShortcutParentDriveEnvVar, "personal:second@example.com")
+	t.Setenv(writableShortcutNameEnvVar, "Invented Writable Shortcut")
 	cfg, err = LoadLiveTestConfig(moduleRoot)
 	require.NoError(t, err)
 
-	assert.Equal(t, append(nameDefaults, writableShortcutSharerEmailEnvVar, readOnlyShortcutSharerEmailEnvVar),
+	assert.Equal(t, []string{writableShortcutSharerEmailEnvVar, readOnlyShortcutSharerEmailEnvVar},
 		cfg.DefaultedFixtureVariables)
-	assert.Equal(t, "personal:second@example.com", cfg.Fixtures.WritableShortcutParentDrive)
+	assert.Equal(t, "Invented Writable Shortcut", cfg.Fixtures.WritableShortcutName, "a set variable is read as it is")
 	assert.Equal(t, "first@example.com", cfg.Fixtures.WritableShortcutSharerEmail)
-	assert.Equal(t, "personal:first@example.com", cfg.Fixtures.ReadOnlyShortcutParentDrive)
 	assert.Equal(t, "second@example.com", cfg.Fixtures.ReadOnlyShortcutSharerEmail)
+}
+
+// Validates: R-6.10.27
+//
+// The test environment's sources declare no default for a fixture name or
+// sentinel path, so the names cannot come back into the repository.
+func TestTestEnvDeclaresNoFixtureNameDefault(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("testenv.go")
+	require.NoError(t, err)
+	declared := regexp.MustCompile(`(?m)^\s*default\w*(ShortcutName|SentinelPath|SharedFolderName)\w*\s*=`)
+	assert.False(t, declared.Match(source), "testenv.go declares a default for a fixture name or path")
 }
 
 // Validates: R-6.10.27

@@ -879,7 +879,7 @@ download URL was unusable.
 Evidence:
 - The command fetched `/me`, the shared target item, and the target's children
   successfully.
-- The item metadata request for `shortcut-sentinel.txt` returned HTTP 200.
+- The item metadata request for the shortcut fixture's sentinel file returned HTTP 200.
 - The following pre-authenticated content request returned HTTP 401 with
   request ID `8aae0da2-d037-c000-f685-3ecafdebf39b`.
 Resolution / mitigation: `graph.Client.Download()` and `DownloadRange()` now
@@ -910,7 +910,7 @@ on a narrow rerun. These failures indicate provider visibility lag rather than
 broken credentials when one discovery surface is temporarily empty.
 Evidence:
 - The failed verifier run showed `shared --json` returning
-  `Kikkeli Shared Test Folder` with actionable `remoteDriveID` and
+  the writable shortcut fixture's folder with actionable `remoteDriveID` and
   `remoteItemID`.
 - The same run successfully downloaded the sentinel file through the shared
   selector.
@@ -930,7 +930,7 @@ Evidence:
   before sync startup with the same parent-root omission. The shared target was
   still discoverable, direct sentinel download by shared selector succeeded,
   and repeated parent root listings returned the other eight root items without
-  `Kikkeli Shared Test Folder` for the full two-minute shortcut fixture budget.
+  the writable shortcut fixture's folder for the full two-minute shortcut fixture budget.
 Current handling: Shortcut fixture shared-discovery and root-placeholder checks
 poll for the longer shortcut fixture propagation budget unless a decoded
 parent-root listing plus direct sentinel download proves the provider omission
@@ -1308,7 +1308,7 @@ and scheduled folder conflict/download actions on clean re-syncs.
 Evidence:
 - Focused reruns of `TestE2E_Sync_IdempotentReSync` on April 22 initially
   showed the sync engine observing and downloading unrelated top-level siblings
-  such as `benchmarks` and `Read-only Shared Folder` into the local test tree.
+  such as `benchmarks` and the read-only shortcut fixture's folder into the local test tree.
   The selected drive was already
   `shared:drive-2-account:<driveID>:<itemID>`, which isolated the
   problem to config/session resolution rather than test selection.
@@ -1439,7 +1439,7 @@ Evidence:
   30, 2026 recurred in
   `TestE2E_Shared_FolderNameDriveAdd_HonorsAccountFilter` after the status,
   sync-conflict, and nested-deletion failures had been fixed. A focused rerun
-  showed `drive add "Testi2 Shared Folder" --account
+  showed `drive add "the standalone shared folder fixture" --account
   drive-1-account` completed the Graph search with
   `search_count=7`, `ignored_count=7`, and `actionable_count=0`, then returned
   the documented `no shared folders matching ... Graph shared discovery ...`
