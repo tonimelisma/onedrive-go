@@ -563,6 +563,8 @@ func TestDODPostMergeRefusesACheckoutWithChanges(t *testing.T) {
 //
 // After the merge the branch restarts from the new origin/main, as a
 // session's branch starts its next increment, and is pushed with a lease.
+// The fetch prunes every ref: a merge that deleted the remote branch left a
+// remote-tracking ref behind, and a lease read from it would refuse the push.
 func TestRestartBranchFromMainPointsTheBranchAtMainAndPushesIt(t *testing.T) {
 	t.Parallel()
 
@@ -574,7 +576,7 @@ func TestRestartBranchFromMainPointsTheBranchAtMainAndPushesIt(t *testing.T) {
 		got = append(got, command.name+" "+strings.Join(command.args, " "))
 	}
 	assert.Equal(t, []string{
-		"git fetch --prune origin main",
+		"git fetch --prune origin",
 		"git checkout -B fix/the-head origin/main",
 		"git push --force-with-lease -u origin fix/the-head",
 	}, got)

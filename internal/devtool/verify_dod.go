@@ -476,7 +476,10 @@ func requireCleanCheckout(ctx context.Context, runner commandRunner, repoRoot st
 // merged commits, or nothing when the merge deleted it.
 func restartBranchFromMain(ctx context.Context, runner commandRunner, repoRoot string, branch string, stderr io.Writer) error {
 	steps := [][]string{
-		{"fetch", "--prune", "origin", mainBranchName},
+		// Every ref, not main alone: the merge may have deleted the remote
+		// branch, and a remote-tracking ref --prune left behind would make
+		// the lease below expect a branch that no longer exists.
+		{"fetch", "--prune", "origin"},
 		{"checkout", "-B", branch, originMainRef},
 		{"push", "--force-with-lease", "-u", "origin", branch},
 	}
