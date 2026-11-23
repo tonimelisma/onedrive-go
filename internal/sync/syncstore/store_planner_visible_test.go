@@ -75,6 +75,33 @@ func TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMi
 	assert.Equal(t, []string{"docs2/file.txt"}, localStatePaths(visible.Local))
 }
 
+// The old name a local move left (a recorded intent) is hidden from the
+// planner while it has no baseline row, so it is not uploaded as a new file;
+// one that still has its baseline row (the process died before the rename)
+// stays visible, since its absence would read as a local delete.
+//
+// Validates: R-2.12.9
+func TestReplacePlannerVisibleStateTx_HidesALocalMovesOldNameOnlyWithoutABaselineRow(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx := t.Context()
+	_, err := store.RawDBForTest().ExecContext(ctx, `
+		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash)
+		VALUES ('file-moved', 'b.txt', 'file', 'hash', 'hash'), ('file-unmoved', 'c.txt', 'file', 'hash', 'hash')`)
+	require.NoError(t, err)
+	require.NoError(t, store.RecordLocalMoveIntent(ctx, "a.txt", "b.txt"))
+	require.NoError(t, store.RecordLocalMoveIntent(ctx, "c.txt", "d.txt"))
+
+	visible := plannerVisibleRowsForTest(t, store, []syncdomain.LocalStateRow{
+		{Path: "a.txt", ItemType: syncdomain.ItemTypeFile, Hash: "hash"},
+		{Path: "b.txt", ItemType: syncdomain.ItemTypeFile, Hash: "hash"},
+		{Path: "c.txt", ItemType: syncdomain.ItemTypeFile, Hash: "hash"},
+	}, nil)
+
+	assert.Equal(t, []string{"b.txt", "c.txt"}, localStatePaths(visible.Local))
+}
+
 func plannerVisibleRowsForTest(
 	t *testing.T,
 	store *SyncStore,

@@ -178,6 +178,8 @@ func TestExecutor_LocalMove_OldNameThatCannotBeRemovedIsAMoveThatHappened(t *tes
 	capture, logger := synctest.NewLogCapture()
 	e.logger = logger
 	e.syncTree = e.syncTree.WithoutNoReplaceFlagAndUnremovableName("a.txt")
+	intents := &recordingMoveIntents{}
+	e.moveIntents = intents
 	syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", "moving\n")
 	moving := syncfixture.EntryIdentity(t, filepath.Join(syncRoot, "a.txt"))
 
@@ -194,7 +196,65 @@ func TestExecutor_LocalMove_OldNameThatCannotBeRemovedIsAMoveThatHappened(t *tes
 	assert.Equal(t, moving, syncfixture.EntryIdentity(t, filepath.Join(syncRoot, "a.txt")), "the old name is a second name of the moved file")
 	warnings := capture.AtLeast(slog.LevelWarn)
 	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0].Message, "Moved b.txt, but could not remove the name it was moved from")
+	assert.Contains(t, warnings[0].Message, "Moved b.txt, but could not remove the name a.txt it was moved from")
+	assert.Equal(t, map[string]string{"a.txt": "b.txt"}, intents.open,
+		"the move's intent outlives it, so the old name is its known leftover and never uploaded")
+}
+
+// recordingMoveIntents is the store's local move intents as the executor
+// sees them, in memory: what is recorded and not cleared.
+type recordingMoveIntents struct {
+	open     map[string]string
+	recorded int
+}
+
+func (r *recordingMoveIntents) RecordLocalMoveIntent(_ context.Context, oldPath, newPath string) error {
+	if r.open == nil {
+		r.open = make(map[string]string)
+	}
+	r.open[oldPath] = newPath
+	r.recorded++
+	return nil
+}
+
+func (r *recordingMoveIntents) ClearLocalMoveIntent(_ context.Context, oldPath string) error {
+	delete(r.open, oldPath)
+	return nil
+}
+
+// A local file move records its intent before it renames and clears it once
+// the old name is gone. A move refused before its rename records none, and
+// neither do a folder's move and a spelling-only rename: neither can leave a
+// second name.
+//
+// Validates: R-2.12.9
+func TestExecutor_LocalMove_RecordsItsIntentAroundTheRename(t *testing.T) {
+	t.Parallel()
+
+	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
+	e := NewExecution(cfg, syncfixture.EmptyBaseline())
+	intents := &recordingMoveIntents{}
+	e.moveIntents = intents
+	syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", "moving\n")
+	syncfixture.WriteExecTestFile(t, syncRoot, "taken.txt", "in the way\n")
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "Folder"), 0o700))
+
+	moved := e.ExecuteMove(t.Context(), &syncdomain.Action{
+		Type: syncdomain.ActionLocalMove, Path: "b.txt", OldPath: "a.txt", View: &syncdomain.PathView{Path: "b.txt"},
+	})
+	syncfixture.RequireOutcomeSuccess(t, &moved)
+	refused := e.ExecuteMove(t.Context(), &syncdomain.Action{
+		Type: syncdomain.ActionLocalMove, Path: "taken.txt", OldPath: "b.txt", View: &syncdomain.PathView{Path: "taken.txt"},
+	})
+	assert.False(t, refused.Success, "the destination is taken")
+	folder := e.ExecuteMove(t.Context(), &syncdomain.Action{
+		Type: syncdomain.ActionLocalMove, Path: "Moved", OldPath: "Folder",
+		View: &syncdomain.PathView{Path: "Moved", Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFolder}},
+	})
+	syncfixture.RequireOutcomeSuccess(t, &folder)
+
+	assert.Equal(t, 1, intents.recorded, "the file move recorded its intent; the refused move stopped before its rename, the folder recorded none")
+	assert.Empty(t, intents.open, "and each was cleared once nothing was left for it")
 }
 
 // Validates: R-6.3.6, R-6.4.8

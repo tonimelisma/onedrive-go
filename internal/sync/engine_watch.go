@@ -81,6 +81,7 @@ func (e *Engine) runWatch(ctx context.Context, rt *watchRuntime, mode syncdomain
 		return err
 	}
 	e.restoreSpellingRenameLeftovers(ctx)
+	e.settleLocalMoveLeftovers(ctx)
 
 	// Step 1: Set up watch infrastructure (no observers yet).
 	pipe, err := rt.initWatchInfra(ctx, mode, opts)

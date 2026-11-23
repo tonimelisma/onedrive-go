@@ -268,6 +268,7 @@ func newEngineExecutorConfig(
 		PathConvergence:  cfg.PathConvergence,
 		Trash:            trash,
 		PendingCreates:   store,
+		MoveIntents:      store,
 		Now:              now,
 		Hooks:            cfg.hooks.exec,
 	})
@@ -333,6 +334,9 @@ func openBoundSyncTree(
 	}
 	if cfg.hooks.interposeSyncTree != nil {
 		syncTree = syncTree.Interpose(cfg.hooks.interposeSyncTree)
+	}
+	if cfg.hooks.adaptSyncTree != nil {
+		syncTree = cfg.hooks.adaptSyncTree(syncTree)
 	}
 	warnAboutForeignSyncClients(cfg.SyncRoot, cfg.Logger)
 	binding, err := resolveExpectedSyncRoot(ctx, store, syncTree, cfg.ExpectedSyncRootIdentity)

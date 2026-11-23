@@ -109,7 +109,7 @@ func TestExecutor_RenameLocal_SpellingRenameOntoAnotherFileKeepsBoth(t *testing.
 	syncfixture.WriteExecTestFile(t, syncRoot, "Plan.txt", "moving\n")
 	syncfixture.WriteExecTestFile(t, syncRoot, "plan.txt", "another file\n")
 
-	err := e.renameLocal("Plan.txt", "plan.txt", true)
+	_, err := e.renameLocal("Plan.txt", "plan.txt", true)
 
 	require.ErrorIs(t, err, syncdomain.ErrActionPreconditionChanged)
 	require.ErrorIs(t, err, synctree.ErrTargetExists)

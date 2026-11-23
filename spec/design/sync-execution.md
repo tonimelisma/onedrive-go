@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/internal/syncexec/action_freshness.go, internal/sync/internal/syncexec/executor.go, internal/sync/internal/syncexec/executor_conflict.go, internal/sync/internal/syncexec/executor_delete.go, internal/sync/internal/syncexec/executor_parent_checks.go, internal/sync/internal/syncexec/executor_preconditions.go, internal/sync/internal/syncexec/executor_transfer.go, internal/sync/internal/syncexec/worker.go, internal/sync/internal/syncexec/executor_test_seams.go, internal/sync/internal/syncexec/doc.go, internal/sync/internal/syncsched/*.go
 
-Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.4.12 [verified], R-6.4.13 [verified], R-6.10.30 [verified], R-6.7.37 [verified]
+Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.4.12 [verified], R-6.4.13 [verified], R-6.10.30 [verified], R-6.7.37 [verified], R-2.12.9 [verified]
 
 ## Overview
 
@@ -371,9 +371,33 @@ something outside this program can fill: the planner chose the destination,
 the executor found it absent, and the dependency graph serializes it against
 other actions on that path. A move whose link and unlink placed the entry but
 could not remove its old name (`synctree.ErrSourceNotRemoved`) happened, and
-the name left is logged; that name is a second name of the same file, which a
-later pass sees as a new local file
-(`TestExecutor_LocalMove_OldNameThatCannotBeRemovedIsAMoveThatHappened`).
+the name left is logged (`TestExecutor_LocalMove_OldNameThatCannotBeRemovedIsAMoveThatHappened`).
+That name is a second name of the moved file (a copy, where there are no
+hard links), which a later pass would read as a new local file and upload a
+second time. So a file's local move records its intent, old and new stored
+path, before it renames (`local_move_intents`, sync-store.md) and clears it
+once the old name is gone, or once a rename that did not happen leaves the
+file where its baseline names it; a move that left its old name keeps it
+(`TestExecutor_LocalMove_RecordsItsIntentAroundTheRename`). A folder's move
+and a spelling-only rename record none: neither can leave a second name, and
+on a volume that folds case the two spellings of a spelling-only rename are
+one entry, which settling would remove. While an intent stands, its old path
+is hidden from the planner when it has no baseline row
+(`sqlHideLocalMoveLeftovers`; a path with one stays visible, since the
+process died before the rename and its absence would read as a delete), and
+the engine's next live start, after the put-back of spelling leftovers,
+settles it (`settleLocalMoveLeftovers`): the old name is removed through
+`RemoveVerifiedRegularFile` only when its open descriptor is the file the
+new name holds and that file has another name, or holds the same content
+as the new name (QuickXorHash), with the new name still the file it was
+checked as; anything else at the old name is the user's, kept with one Warn
+naming both paths, and syncs as a file of its own once the intent is
+cleared. An old name already gone, or a new name that is not there, needs
+nothing; a removal that fails keeps the intent for the next start (R-2.12.9,
+`TestLocalMoveLeftover_TheOldNameIsNeverUploadedAndTheNextStartRemovesIt`,
+`TestLocalMoveLeftover_ACrashAfterTheRenameStillRemovesTheOldName`,
+`TestSettleLocalMoveLeftovers_RemovesOnlyANameThatHoldsTheMovedFile`,
+`TestReplacePlannerVisibleStateTx_HidesALocalMovesOldNameOnlyWithoutABaselineRow`).
 
 A move that replaces its destination (D-058: OneDrive moved an item over a
 file it deleted, whose local copy is the synced version) makes way first by

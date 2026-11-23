@@ -93,6 +93,11 @@ type engineHooks struct {
 	// emulated filesystem under the engine through it: a case-insensitive
 	// volume, injected errno (D-094).
 	interposeSyncTree func(synctree.Handle) synctree.Handle
+	// adaptSyncTree replaces the sync tree with one of its test variants
+	// (synctree.Root.WithoutNoReplaceFlagAndUnremovableName), after
+	// interposeSyncTree: a system that refuses the no-replace flag and a name
+	// that cannot be unlinked.
+	adaptSyncTree func(*synctree.Root) *synctree.Root
 }
 
 // frontierStep names what the engine did with an action recordFrontier is

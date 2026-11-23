@@ -63,6 +63,11 @@ type ExecutorConfig struct {
 	// content is sent (R-5.6.15). Nil in executor-only tests.
 	pendingCreates PendingCreateStore
 
+	// moveIntents records a local file move before its rename, so an old
+	// name the move could not remove is its known leftover (R-2.12.9). Nil
+	// in executor-only tests.
+	moveIntents LocalMoveIntentStore
+
 	// parentChecks remembers the remote parents already read live for the
 	// plan being executed, so sibling creates do not read them again.
 	parentChecks *remoteParentChecks
@@ -107,6 +112,9 @@ type ExecutorInputs struct {
 	// PendingCreates records new files whose empty item exists before their
 	// content is sent (R-5.6.15).
 	PendingCreates PendingCreateStore
+	// MoveIntents records each local file move before its rename
+	// (R-2.12.9).
+	MoveIntents LocalMoveIntentStore
 	// Now is the executor's clock, the engine's run clock in production.
 	Now   func() time.Time
 	Hooks Hooks
@@ -135,6 +143,7 @@ func NewExecutorConfig(in *ExecutorInputs) (*ExecutorConfig, error) {
 		pathConvergence:  in.PathConvergence,
 		trash:            in.Trash,
 		pendingCreates:   in.PendingCreates,
+		moveIntents:      in.MoveIntents,
 		nowFunc:          in.Now,
 		hooks:            in.Hooks,
 		parentChecks:     newRemoteParentChecks(),
@@ -557,7 +566,23 @@ func (e *Executor) ExecuteLocalMove(ctx context.Context, action *syncdomain.Acti
 		)
 	}
 
-	if err := e.renameLocal(source, dest, isLocalSpellingOnlyMove(action.OldPath, action.Path)); err != nil {
+	spellingOnly := isLocalSpellingOnlyMove(action.OldPath, action.Path)
+	recordsIntent := e.moveIntents != nil && !spellingOnly && movedItemType(action) == syncdomain.ItemTypeFile
+	if recordsIntent {
+		if err := e.moveIntents.RecordLocalMoveIntent(ctx, action.OldPath, action.Path); err != nil {
+			return e.failedOutcomeWithFailure(action, syncdomain.ActionLocalMove,
+				fmt.Errorf("recording the move of %s: %w", action.OldPath, err),
+				action.OldPath, syncdomain.PermissionCapabilityUnknown)
+		}
+	}
+	oldNameLeft, err := e.renameLocal(source, dest, spellingOnly)
+	if recordsIntent && !oldNameLeft {
+		// The old name is gone, or the rename did not happen and the file is
+		// still the one its baseline names there: either way nothing is
+		// left for the intent to account for.
+		e.clearLocalMoveIntent(ctx, action.OldPath)
+	}
+	if err != nil {
 		if errors.Is(err, syncdomain.ErrActionPreconditionChanged) {
 			// The rename found the destination taken: an entry took it after
 			// the precondition checked it, or took the name a replacing move
@@ -636,26 +661,55 @@ func (e *Executor) observeMovedLocalChangeTime(o *syncdomain.ActionOutcome, dest
 // pass that check too, and the plain rename leaves both names. After a
 // spelling-only rename, respellLocal makes sure the folder holds the new
 // spelling.
-func (e *Executor) renameLocal(oldPath, newPath string, spellingOnly bool) error {
-	err := e.syncTree.RenameNoReplace(oldPath, newPath)
+//
+// oldNameLeft reports a move that happened but left its old name: the system
+// refused the no-replace flag, and the entry linked or copied to newPath
+// could not be unlinked from oldPath. The caller keeps the move's intent
+// then, so the old name is the move's known leftover and never uploaded as
+// a new file (R-2.12.9).
+func (e *Executor) renameLocal(oldPath, newPath string, spellingOnly bool) (oldNameLeft bool, err error) {
+	err = e.syncTree.RenameNoReplace(oldPath, newPath)
 	if spellingOnly && errors.Is(err, synctree.ErrTargetExists) && e.namesOneLocalEntry(oldPath, newPath) {
 		err = e.syncTree.Rename(oldPath, newPath)
 	}
 
 	switch {
 	case errors.Is(err, synctree.ErrSourceNotRemoved):
-		e.logger.Warn("Moved "+newPath+", but could not remove the name it was moved from",
-			slog.String("path", newPath), slog.Any("error", err))
-		return nil
+		e.logger.Warn("Moved "+newPath+", but could not remove the name "+oldPath+" it was moved from; "+
+			"the next sync removes that name when it still holds the same file",
+			slog.String("path", newPath), slog.String("old_path", oldPath), slog.Any("error", err))
+		return true, nil
 	case errors.Is(err, synctree.ErrTargetExists):
-		return fmt.Errorf("%w: local move destination %s was taken before the move: %w", syncdomain.ErrActionPreconditionChanged, newPath, err)
+		return false, fmt.Errorf("%w: local move destination %s was taken before the move: %w",
+			syncdomain.ErrActionPreconditionChanged, newPath, err)
 	case err != nil:
-		return err //nolint:wrapcheck // synctree names both paths
+		return false, err //nolint:wrapcheck // synctree names both paths
 	case !spellingOnly:
-		return nil
+		return false, nil
 	}
 
-	return e.respellLocal(newPath)
+	return false, e.respellLocal(newPath)
+}
+
+// clearLocalMoveIntent forgets a local move's intent once nothing is left
+// for it, on a context detached from the action's and bounded like an
+// outcome's commit: the rename already happened, or did not, whatever became
+// of the action. Best effort: an intent left behind is settled at the next
+// start, and while its old path still has a baseline row the planner sees
+// that path as always.
+func (e *Executor) clearLocalMoveIntent(ctx context.Context, oldPath string) {
+	if err := RunDetachedStoreAccess(ctx, e.detachedStoreBound(), func(clearCtx context.Context) error {
+		return e.moveIntents.ClearLocalMoveIntent(clearCtx, oldPath)
+	}); err != nil {
+		e.logger.Warn("Could not clear the record of a local move", slog.String("path", oldPath), slog.Any("error", err))
+	}
+}
+
+// LocalMoveIntentStore is the executor's narrow view of the sync store's
+// local move intents (store_local_move_intents.go).
+type LocalMoveIntentStore interface {
+	RecordLocalMoveIntent(ctx context.Context, oldPath, newPath string) error
+	ClearLocalMoveIntent(ctx context.Context, oldPath string) error
 }
 
 // namesOneLocalEntry reports whether oldPath and newPath name one entry, as

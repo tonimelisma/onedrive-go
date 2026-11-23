@@ -63,6 +63,15 @@ const (
 	// the comparison CTEs use. A correlated EXISTS over baseline with a
 	// substr() prefix test scanned baseline once per visible row instead
 	// (rows x baseline rows, 10 minutes per replan at 11k rows).
+	// sqlHideLocalMoveLeftovers hides from the planner the old name a local
+	// move left behind (local_move_intents) while it has no baseline row:
+	// the moved file's baseline is at its new name, so the planner would read
+	// the old one as a new file and upload it a second time. A path that
+	// still has a baseline row (the move had not renamed when the process
+	// died) is never hidden, since its absence would read as a local delete.
+	sqlHideLocalMoveLeftovers = `DELETE FROM planner_visible_local_state
+		WHERE path IN (SELECT old_path FROM local_move_intents)
+			AND path NOT IN (SELECT path FROM baseline)`
 	sqlPrunePlannerVisibleLocalDescendants = `WITH missing AS MATERIALIZED (
 			SELECT parent.path AS path
 			FROM baseline parent
@@ -182,6 +191,7 @@ func ReplacePlannerVisibleStateTx(
 	for _, query := range []string{
 		sqlPrunePlannerVisibleLocalDescendants,
 		sqlPrunePlannerVisibleRemoteDescendants,
+		sqlHideLocalMoveLeftovers,
 	} {
 		if _, err := tx.ExecContext(ctx, query); err != nil {
 			return plannerVisibleRows{}, fmt.Errorf("sync: pruning planner-visible state: %w", err)
