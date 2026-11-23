@@ -23,7 +23,7 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 	batches := localBatches(obs, 1)
 	ctx := t.Context()
 
-	ev := syncdomain.ChangeEvent{
+	ev := syncdomain.LocalEntry{
 		Path: "test.txt", ItemType: syncdomain.ItemTypeFile, Hash: "h", Size: 3,
 	}
 
@@ -49,11 +49,11 @@ func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 	ctx := t.Context()
 
 	// Fill the channel.
-	first := syncdomain.ChangeEvent{Path: "first.txt", ItemType: syncdomain.ItemTypeFile}
+	first := syncdomain.LocalEntry{Path: "first.txt", ItemType: syncdomain.ItemTypeFile}
 	obs.TrySend(ctx, &first)
 
 	// This should be dropped (channel full).
-	second := syncdomain.ChangeEvent{Path: "second.txt", ItemType: syncdomain.ItemTypeFile}
+	second := syncdomain.LocalEntry{Path: "second.txt", ItemType: syncdomain.ItemTypeFile}
 
 	obs.TrySend(ctx, &second)
 
@@ -80,7 +80,7 @@ func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
 	// Fill the channel so default branch would fire, but ctx is canceled.
 	batches <- LocalObservation{Rows: []syncdomain.LocalStateRow{{Path: "fill.txt"}}}
 
-	ev := syncdomain.ChangeEvent{Path: "test.txt", ItemType: syncdomain.ItemTypeFile}
+	ev := syncdomain.LocalEntry{Path: "test.txt", ItemType: syncdomain.ItemTypeFile}
 
 	obs.TrySend(ctx, &ev)
 

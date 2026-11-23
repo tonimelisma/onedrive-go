@@ -50,7 +50,7 @@ import (
 // user-actionable rejections (invalid names, path too long, file too large)
 // that the engine should record.
 type ScanResult struct {
-	Events  []syncdomain.ChangeEvent
+	Events  []syncdomain.LocalEntry
 	Rows    []syncdomain.LocalStateRow
 	Skipped []syncdomain.SkippedItem
 	// CrossedMounts are mount points this scan crossed under
@@ -134,7 +134,7 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 	defer func() { o.scanAvailability = nil }()
 
 	// Phase 1: Walk — collect observed paths, folder events, hash jobs, and skipped items.
-	var events []syncdomain.ChangeEvent
+	var events []syncdomain.LocalEntry
 	var jobs []hashJob
 	var skipped []syncdomain.SkippedItem
 	var skippedEntries atomic.Int64
@@ -244,7 +244,7 @@ func (o *LocalObserver) validateFullScanRoot(tree *synctree.Root, syncRoot strin
 //nolint:funlen // The hashing pipeline keeps local-scan concurrency and panic recovery in one explicit owner.
 func (o *LocalObserver) hashPhase(
 	ctx context.Context, jobs []hashJob,
-) ([]syncdomain.ChangeEvent, []syncdomain.LocalStateRow, []syncdomain.SkippedItem, error) {
+) ([]syncdomain.LocalEntry, []syncdomain.LocalStateRow, []syncdomain.SkippedItem, error) {
 	workers := o.resolveCheckWorkers()
 
 	o.logger.Debug("starting parallel hash phase",
@@ -263,7 +263,7 @@ func (o *LocalObserver) hashPhase(
 	// panic boundary records the file through skip, and would wait forever on
 	// a lock a panic left held.
 	var mu stdsync.Mutex
-	var events []syncdomain.ChangeEvent
+	var events []syncdomain.LocalEntry
 	var rows []syncdomain.LocalStateRow
 	var skipped []syncdomain.SkippedItem
 	skip := func(item syncdomain.SkippedItem) {
@@ -271,7 +271,7 @@ func (o *LocalObserver) hashPhase(
 		defer mu.Unlock()
 		skipped = append(skipped, item)
 	}
-	keep := func(ev *syncdomain.ChangeEvent, row *syncdomain.LocalStateRow) {
+	keep := func(ev *syncdomain.LocalEntry, row *syncdomain.LocalStateRow) {
 		mu.Lock()
 		defer mu.Unlock()
 		if ev != nil {
@@ -357,7 +357,7 @@ func (o *LocalObserver) hashPhase(
 
 			recorder.addJob(gCtx, &job, hash)
 
-			keep(&syncdomain.ChangeEvent{Path: job.dbRelPath, ItemType: syncdomain.ItemTypeFile}, &row)
+			keep(&syncdomain.LocalEntry{Path: job.dbRelPath, ItemType: syncdomain.ItemTypeFile}, &row)
 
 			return nil
 		})
@@ -376,7 +376,7 @@ func (o *LocalObserver) hashPhase(
 // rejections are appended to skipped for engine recording.
 func (o *LocalObserver) makeWalkFunc(
 	ctx context.Context, tree *synctree.Root, observed map[string]bool, currentRows map[string]syncdomain.LocalStateRow,
-	events *[]syncdomain.ChangeEvent, jobs *[]hashJob, skipped *[]syncdomain.SkippedItem,
+	events *[]syncdomain.LocalEntry, jobs *[]hashJob, skipped *[]syncdomain.SkippedItem,
 	skippedEntries *atomic.Int64, scanStartNano int64, dirStack map[string]struct{},
 ) fs.WalkDirFunc {
 	syncRoot := tree.Path()
@@ -497,7 +497,7 @@ func (o *LocalObserver) makeWalkFunc(
 func (o *LocalObserver) processEntry(
 	fsPath, dbRelPath string, d fs.DirEntry, observed map[string]bool,
 	currentRows map[string]syncdomain.LocalStateRow,
-	events *[]syncdomain.ChangeEvent, jobs *[]hashJob, skipped *[]syncdomain.SkippedItem, scanStartNano int64,
+	events *[]syncdomain.LocalEntry, jobs *[]hashJob, skipped *[]syncdomain.SkippedItem, scanStartNano int64,
 ) error {
 	info, err := d.Info()
 	if err != nil {
@@ -680,7 +680,7 @@ func (o *LocalObserver) processObservedInfo(
 	kind syncdomain.ObservedKind,
 	observed map[string]bool,
 	currentRows map[string]syncdomain.LocalStateRow,
-	events *[]syncdomain.ChangeEvent,
+	events *[]syncdomain.LocalEntry,
 	jobs *[]hashJob,
 	skipped *[]syncdomain.SkippedItem,
 	scanStartNano int64,
@@ -792,7 +792,7 @@ func (o *LocalObserver) classifyObservedInfo(
 	info fs.FileInfo,
 	kind syncdomain.ObservedKind,
 	currentRows map[string]syncdomain.LocalStateRow,
-	events *[]syncdomain.ChangeEvent,
+	events *[]syncdomain.LocalEntry,
 	jobs *[]hashJob,
 	scanStartNano int64,
 ) error {
@@ -806,11 +806,11 @@ func (o *LocalObserver) classifyObservedInfo(
 		observedRow := currentRows[dbRelPath]
 		if kind == syncdomain.ObservedKindDir {
 			// A new folder goes directly to events (no hashing needed).
-			*events = append(*events, syncdomain.ChangeEvent{Path: dbRelPath, ItemType: syncdomain.ItemTypeFolder})
+			*events = append(*events, syncdomain.LocalEntry{Path: dbRelPath, ItemType: syncdomain.ItemTypeFolder})
 		} else if hash, ok := o.cachedHashForNewFile(dbRelPath, info, &observedRow, scanStartNano); ok {
 			// A scan before this one hashed the file and recorded it; the
 			// file has not changed since by every fact the fast path checks.
-			*events = append(*events, syncdomain.ChangeEvent{Path: dbRelPath, ItemType: syncdomain.ItemTypeFile})
+			*events = append(*events, syncdomain.LocalEntry{Path: dbRelPath, ItemType: syncdomain.ItemTypeFile})
 			currentRows[dbRelPath] = syncdomain.LocalStateRow{
 				Path:             dbRelPath,
 				ItemType:         syncdomain.ItemTypeFile,
@@ -939,8 +939,8 @@ func sortedLocalStateRows(current map[string]syncdomain.LocalStateRow) []syncdom
 //
 // O(n) time, O(n) memory. Pure function, no side effects.
 func DetectCaseCollisions(
-	events []syncdomain.ChangeEvent, names ScanNames,
-) (clean []syncdomain.ChangeEvent, collisions []syncdomain.SkippedItem) {
+	events []syncdomain.LocalEntry, names ScanNames,
+) (clean []syncdomain.LocalEntry, collisions []syncdomain.SkippedItem) {
 	if len(events) == 0 {
 		return nil, nil
 	}
@@ -974,7 +974,7 @@ func DetectCaseCollisions(
 
 	collisions = buildCollisionSkippedItems(events, findings, changed, childColliderSet, collidingDirPrefixes)
 
-	clean = make([]syncdomain.ChangeEvent, 0, len(events)-len(colliderSet))
+	clean = make([]syncdomain.LocalEntry, 0, len(events)-len(colliderSet))
 	for i := range events {
 		if _, collider := colliderSet[i]; !collider {
 			clean = append(clean, events[i])
@@ -994,7 +994,7 @@ type nameCollision struct {
 // suppressDirectoryChildren marks children of colliding directories as colliders.
 // They can't be uploaded to a folder that won't exist on OneDrive.
 func suppressDirectoryChildren(
-	events []syncdomain.ChangeEvent, colliderSet map[int]struct{},
+	events []syncdomain.LocalEntry, colliderSet map[int]struct{},
 ) (childColliderSet map[int]struct{}, collidingDirPrefixes []string) {
 	childColliderSet = make(map[int]struct{})
 
@@ -1026,7 +1026,7 @@ func suppressDirectoryChildren(
 // path, with a Detail naming the other collider(s), and one per child of a
 // colliding directory.
 func buildCollisionSkippedItems(
-	events []syncdomain.ChangeEvent,
+	events []syncdomain.LocalEntry,
 	findings map[int]nameCollision,
 	changed map[string]bool,
 	childColliderSet map[int]struct{},

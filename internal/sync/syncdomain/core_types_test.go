@@ -56,7 +56,6 @@ func TestEnumStrings_AreTheStoredAndLoggedNames(t *testing.T) {
 	}
 
 	for value, name := range map[fmt.Stringer]string{
-		changeCreate: "create", ChangeModify: "modify", ChangeDelete: "delete", ChangeMove: "move",
 		SyncBidirectional: "bidirectional", SyncDownloadOnly: "download-only", SyncUploadOnly: "upload-only",
 		CreateLocal: "local", CreateRemote: "remote",
 	} {

@@ -22,8 +22,8 @@ func WriteTestFile(t *testing.T, dir, relPath, content string) string {
 	return fullPath
 }
 
-// FindEvent returns the first ChangeEvent with the given path, or nil.
-func FindEvent(events []syncdomain.ChangeEvent, path string) *syncdomain.ChangeEvent {
+// FindEvent returns the first LocalEntry with the given path, or nil.
+func FindEvent(events []syncdomain.LocalEntry, path string) *syncdomain.LocalEntry {
 	for i := range events {
 		if events[i].Path == path {
 			return &events[i]

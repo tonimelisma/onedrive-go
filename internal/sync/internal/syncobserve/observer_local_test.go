@@ -1303,8 +1303,8 @@ func TestFullScan_PermissionDenied(t *testing.T) {
 	assert.True(t, result.Skipped[0].BlocksReadBoundary)
 }
 
-// eventPaths extracts paths from a slice of ChangeEvents.
-func eventPaths(events []syncdomain.ChangeEvent) []string {
+// eventPaths extracts paths from a slice of LocalEntry values.
+func eventPaths(events []syncdomain.LocalEntry) []string {
 	paths := make([]string, len(events))
 	for i := range events {
 		paths[i] = events[i].Path

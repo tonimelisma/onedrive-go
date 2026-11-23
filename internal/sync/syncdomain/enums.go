@@ -47,31 +47,6 @@ const (
 	strCleanup        = "cleanup"
 )
 
-// changeType classifies what kind of change occurred.
-type changeType int
-
-const (
-	changeCreate changeType = iota
-	ChangeModify
-	ChangeDelete
-	ChangeMove
-)
-
-func (t changeType) String() string {
-	switch t {
-	case changeCreate:
-		return strCreate
-	case ChangeModify:
-		return strModify
-	case ChangeDelete:
-		return strDelete
-	case ChangeMove:
-		return strMove
-	default:
-		return fmt.Sprintf("ChangeType(%d)", int(t))
-	}
-}
-
 // ItemType classifies the kind of item (file, folder, or drive root).
 // Stored as TEXT in SQLite ("file"/"folder"/"root").
 type ItemType int

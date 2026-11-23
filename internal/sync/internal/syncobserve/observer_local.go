@@ -683,7 +683,7 @@ func (o *LocalObserver) SetHooks(hooks Hooks) {
 
 // TrySend hands what a watch handler observed for one path to the runtime as
 // a patch, without blocking (TrySendLocalObservationBatch).
-func (o *LocalObserver) TrySend(ctx context.Context, ev *syncdomain.ChangeEvent) {
+func (o *LocalObserver) TrySend(ctx context.Context, ev *syncdomain.LocalEntry) {
 	if ev != nil {
 		batch := localObservationBatchForEvent(ev)
 		o.TrySendLocalObservationBatch(ctx, &batch)

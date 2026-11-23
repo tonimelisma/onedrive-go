@@ -25,7 +25,7 @@ import (
 // ProjectRemoteObservations projection tests
 // ---------------------------------------------------------------------------
 
-func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
+func TestProjectRemoteObservations_MapsAllFields(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(syncfixture.TestDriveID)
@@ -344,7 +344,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.7.28
-func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
+func TestProjectRemoteObservations_SkipsEmptyItemID(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(syncfixture.TestDriveID)
