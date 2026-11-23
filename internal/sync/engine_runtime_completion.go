@@ -501,7 +501,6 @@ func (flow *engineFlow) applyFatalAuthEffects(
 		// lose it, under the one detached-wait helper and a bound past the
 		// catalog lock's own wait.
 		if err := syncexec.RunDetachedStoreAccess(ctx, authRequirementMarkTimeout, func(markCtx context.Context) error {
-			//nolint:wrapcheck // the config package names its own failure; the Warn below says what was being done.
 			return config.MarkAccountAuthRequired(markCtx, flow.cfg.dataDir, account, authstate.ReasonSyncAuthRejected)
 		}); err != nil {
 			fields := append([]any{}, logFields...)

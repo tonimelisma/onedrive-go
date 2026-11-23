@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
@@ -75,8 +76,8 @@ func confirmDeletesToRunningWatch(
 		return writef(cc.Output(), "No deletes are held for confirmation.\n")
 	}
 	if heldSet == "" {
-		if err := writeHeldSets(cc, sets); err != nil {
-			return err
+		if writeErr := writeHeldSets(cc, sets); writeErr != nil {
+			return writeErr
 		}
 		return errHeldDeletesNotConfirmed
 	}
@@ -151,7 +152,7 @@ func heldDeleteSideText(side syncdomain.DeleteSafetySide) string {
 		return "delete on this computer"
 	}
 
-	return "delete on OneDrive"
+	return activityVerb(syncengine.ActivityRemoteDelete)
 }
 
 // confirmDeletesAnswerError is the error a confirmation the running watch

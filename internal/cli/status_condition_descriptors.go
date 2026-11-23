@@ -152,6 +152,7 @@ func describeStoredStatusCondition(
 	return describeStatusCondition(group.ConditionKey)
 }
 
+//nolint:funlen // one case per condition key, held together by the exhaustive switch
 func describeStatusCondition(key syncdomain.ConditionKey) statusConditionDescriptor {
 	switch key {
 	case syncdomain.ConditionLocalUnsyncable:

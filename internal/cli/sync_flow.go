@@ -49,6 +49,30 @@ type syncRunOnceRunner func(
 	controlSocketPath string,
 ) multisync.RunOnceResult
 
+// answerOrRefuseForRunningOwner decides a one-shot sync's start against the
+// sync already running, before anything is announced: a running watch takes
+// a held-delete confirmation itself; any other running owner refuses the
+// sync; a held set named with no watch running is refused. handled reports
+// that the sync goes no further, with err its outcome.
+func answerOrRefuseForRunningOwner(
+	ctx context.Context, cc *CLIContext, drives []*config.ResolvedDrive, opts syncCommandOptions, controlSocketPath string,
+) (handled bool, err error) {
+	probe, probeErr := probeControlOwner(ctx)
+	if probeErr == nil && opts.ConfirmDeletes && probe.state == controlOwnerStateWatchOwner {
+		// The watch keeps running and takes the confirmation itself.
+		return true, confirmDeletesToRunningWatch(ctx, cc, probe.client, drives, opts.HeldSet)
+	}
+	if probeErr == nil &&
+		(probe.state == controlOwnerStateWatchOwner || probe.state == controlOwnerStateOneShotOwner) {
+		return true, &multisync.ControlSocketInUseError{Path: controlSocketPath}
+	}
+	if opts.HeldSet != "" {
+		return true, errHeldSetWithoutWatch
+	}
+
+	return false, nil
+}
+
 func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions) error {
 	logger := cc.Logger
 	rawCfg, err := loadSyncConfig(cc, logger)
@@ -105,17 +129,8 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	// Refuse before announcing: "Checking (dry run) ~/OneDrive..." followed
 	// by "another onedrive-go sync is already running" read as a run that
 	// started and then broke.
-	probe, probeErr := probeControlOwner(ctx)
-	if probeErr == nil && opts.ConfirmDeletes && probe.state == controlOwnerStateWatchOwner {
-		// The watch keeps running and takes the confirmation itself.
-		return confirmDeletesToRunningWatch(ctx, cc, probe.client, drives, opts.HeldSet)
-	}
-	if probeErr == nil &&
-		(probe.state == controlOwnerStateWatchOwner || probe.state == controlOwnerStateOneShotOwner) {
-		return &multisync.ControlSocketInUseError{Path: controlSocketPath}
-	}
-	if opts.HeldSet != "" {
-		return errHeldSetWithoutWatch
+	if handled, ownerErr := answerOrRefuseForRunningOwner(ctx, cc, drives, opts, controlSocketPath); handled {
+		return ownerErr
 	}
 
 	console := newSyncConsole(cc, false)

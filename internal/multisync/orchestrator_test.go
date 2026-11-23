@@ -2983,7 +2983,7 @@ func TestOrchestrator_ControlSocket_ConfirmDeletesReachesTheDrivesEngine(t *test
 
 	orch := NewOrchestrator(cfg)
 
-	held := syncdomain.HeldDeleteConfirmation{Count: 215, Token: "3fa9c1d2e4b5a6f7"}
+	held := syncdomain.HeldDeleteConfirmation{Count: 215, Token: "3fa9c1d2e4b5a6f7"} //nolint:gosec // a held-set token, not a credential
 	var confirmed []syncdomain.HeldDeleteConfirmation
 	var confirmedMu sync.Mutex
 	watchStarted := make(chan struct{})
