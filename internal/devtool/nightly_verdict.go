@@ -368,7 +368,8 @@ func nightlyFailureKeys(reports []nightlyJobReport) map[string][]string {
 		}
 		jobsByKey[key][job] = true
 	}
-	for i, report := range reports {
+	for i := range reports {
+		report := &reports[i]
 		if !report.result.failsTheNight() || report.result == nightlyJobNotRun || nightlyAggregateRepeats(reports, i) {
 			continue
 		}
@@ -402,7 +403,8 @@ func nightlyJobsPassed(jobs []string, reports []nightlyJobReport) bool {
 	}
 	for _, job := range jobs {
 		ran := false
-		for _, report := range reports {
+		for i := range reports {
+			report := &reports[i]
 			if report.workflowJob() != job {
 				continue
 			}
@@ -663,7 +665,9 @@ func loadNightlyRun(ctx context.Context, gh ghClient, repoRoot string, runID int
 // leaves nothing to claim.
 func writeNightlyRunVerdict(b *strings.Builder, run *githubRun, reports []nightlyJobReport) {
 	fmt.Fprintf(b, "nightly: run %d on %s concluded %s (%s)\n", run.DatabaseID, shortSHA(run.HeadSHA), run.Conclusion, run.URL)
-	for _, report := range nightlyFailedJobs(reports) {
+	failed := nightlyFailedJobs(reports)
+	for i := range failed {
+		report := &failed[i]
 		fmt.Fprintf(b, "  %s: %s", report.name, report.result)
 		switch {
 		case report.result == nightlyJobNotRun:

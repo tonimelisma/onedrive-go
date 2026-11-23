@@ -139,7 +139,6 @@ func (r *Root) RootIdentity() (RootIdentity, error) {
 	}, nil
 }
 
-
 const rootMarkRandomBytes = 16
 
 // readRootMark returns the folder's bind token, or "" when it has none or the
