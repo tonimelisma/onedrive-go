@@ -156,7 +156,7 @@ func treeListing(t *testing.T, root string) []string {
 			listing = append(listing, rel+"/")
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
+		data, readErr := os.ReadFile(path) //nolint:gosec // the test reads the files it planted
 		require.NoError(t, readErr)
 		listing = append(listing, rel+"="+string(data))
 
