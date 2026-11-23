@@ -1819,6 +1819,10 @@ type moveInputs struct {
 	// recreated maps an item's key to the baseline path it moved away from
 	// while a new local entry took that path (rename and recreate, D-056).
 	recreated map[string]string
+	// filesByContent locates each file of the snapshots by the key a delete
+	// of its synced content carries (contentKey): a file here by its local
+	// identity, an item on OneDrive by its ID (withholdDeletesOfUncarriedContent).
+	filesByContent map[contentKey]string
 }
 
 func moveCompositionInputs(
@@ -1857,7 +1861,10 @@ func moveCompositionInputs(
 		nodes = append(nodes, node)
 	}
 
-	return moveInputs{nodes: nodes, occupancy: occupancy, frozen: frozen, recreated: recreated}
+	return moveInputs{
+		nodes: nodes, occupancy: occupancy, frozen: frozen, recreated: recreated,
+		filesByContent: filesByContent(remoteRows, localRows),
+	}
 }
 
 func indexMoveSnapshot(
@@ -2394,6 +2401,9 @@ func withholdDeletesOfHeldWork(
 	kept = actions
 	for range len(actions) + 1 {
 		roots := deletesOfHeldWork(logger, kept, held, sources, mode)
+		for i := range deletesOfUncarriedContent(logger, kept, inputs.filesByContent, mode) {
+			roots[i] = true
+		}
 		var carried [][]int
 		if len(roots) > 0 || deletesContentACreateWrites(kept) {
 			deps, leftOut := buildDependencyGraph(kept)
@@ -2653,7 +2663,7 @@ func movesBySource(actions []syncdomain.Action) map[moveCoord]map[string][]int {
 // one puts the entry that does not wait for it ran first, as the move of a
 // folder whose path that earlier move takes, and carries the entry nowhere.
 func carriedPath(actions []syncdomain.Action, deps [][]int, bySource map[moveCoord]map[string][]int, deleted *syncdomain.Action) string {
-	side, _ := deleteSide(deleted)
+	side := contentRemovalSide(deleted)
 	p, last := deleted.Path, -1
 	applied := map[int]bool{}
 	for {
@@ -2916,6 +2926,17 @@ func deleteSide(action *syncdomain.Action) (moveCoord, bool) {
 	default:
 		panic(syncdomain.OutsideTheEnum(action.Type))
 	}
+}
+
+// contentRemovalSide is the side a removal of synced content
+// (deletedContentKey) acts on: a delete's, or here for a download that
+// replaces the synced file at its path with another item.
+func contentRemovalSide(action *syncdomain.Action) moveCoord {
+	if side, deletes := deleteSide(action); deletes {
+		return side
+	}
+
+	return moveCoordLocal
 }
 
 // createsOnSide reports whether an action creates an entry on side: a download

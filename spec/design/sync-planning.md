@@ -1,8 +1,8 @@
 # Sync Planning
 
-GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_composition.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go, internal/sync/internal/syncplan/planner_identity.go, internal/sync/internal/syncplan/planner_identity_diff.go
+GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_composition.go, internal/sync/internal/syncplan/planner_content_holds.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go, internal/sync/internal/syncplan/planner_identity.go, internal/sync/internal/syncplan/planner_identity_diff.go
 
-Implements: R-2.1.3 [verified], R-2.1.7 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.2.16 [verified], R-6.4.2 [verified]
+Implements: R-2.1.3 [verified], R-2.17.11 [verified], R-2.1.7 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.2.16 [verified], R-6.4.2 [verified]
 
 ## Overview
 
@@ -87,6 +87,7 @@ intent; multisync receives only that child work intent.
 | Deletes toward one side are held for confirmation when the other side is empty while the baseline holds files, or when they exceed max(50, 30% of baseline files); moves never count, non-delete work continues, and `sync --confirm-deletes` releases them. | `TestPlanner_MassRemoteDeleteIsHeldForConfirmation`, `TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld`, `TestPlanner_EmptiedLocalSideHoldsEvenFewDeletes`, `TestDeleteSafetyHold_RecentUnconfirmedDeletesCountTowardTheThreshold`, `TestDeleteSafetyHold_ConfirmedDeletesAreMarkedForTheLedger`, `TestRunOnce_SlowDeletionAcrossPassesIsHeldWithinTheWindow`, `TestRunOnce_DeletesOlderThanTheWindowStopCounting`, `TestPlanner_DeleteGuardBelowThresholdProceeds`, `TestPlanner_DeleteGuardIgnoresMoves`, `TestDeleteSafetyHold_FolderDeletesCountTowardThreshold`, `TestDeleteSafetyHold_LostAndFoundDoesNotMakeASideNonEmpty`, `TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`, `TestDeleteSafetyHold_ConfirmReleasesExactlyTheHeldSet`, `TestDeleteSafetyHold_HeldRowWithoutItemIDDoesNotApproveAKnownItem`, `TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked` |
 | A dependency cycle drops only its members and their dependents; the rest of the plan runs (R-2.17.6), and a one-shot run that ends on such a plan counts the dropped actions as work left for the next sync, so it exits 1 (R-6.6.28). A folder delete that closes a cycle through the move of a folder above it waits for the next pass instead, so the rest of that cycle runs and the next pass deletes the folder at its new path (R-2.17.2). | `TestIsolateDependencyCycles_KeepsUnrelatedWork`, `TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync`, `TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle`, `TestRunOnce_FileMovedOutOfASubfolderIntoTheRemadeFolderWithTheSubfolderRemovedConverges` |
 | A delete waits for the create on its side that writes the deleted file's content at another path, so a failed create, or a failure of what it waits for, skips the delete and the content stays on that side; an edge that would close a cycle, given the edges kept before it, is left out (R-2.17.2). | `TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent`, `TestBuildDependencies_ADeleteDoesNotWaitForACreateThatWaitsForIt`, `TestBuildDependencies_OfTwoContentEdgesThatCloseACycleOnlyTogetherTheFirstIsKept`, `TestRunOnce_AFileRenamedHereOntoAPathAWaitingMoveLeavesStaysOnOneDriveWhileACreateBeforeItsUploadFails` |
+| A removal of synced content (a delete of the file, or a download of another item over it here) waits while the other side holds the file at another path and no create of the plan writes its content on the removal's side, and a download over a synced file waits for the download of that file's item where OneDrive moved it, so a pass never leaves a side without content the user did not remove (R-2.17.11). | `TestPlanBuiltActions_ARemovalOfContentTheOtherSideMovedWaitsForItsCreate`, `TestBuildDependencies_ADownloadOverASyncedFileWaitsForTheDownloadOfItsItem`, `TestPlannerPairs_AFileRenamedIntoAFolderInAHeldFoldersPlaceKeepsItsOneDriveCopy`, `TestPlannerPairs_AFileOverwrittenHereWaitsForTheDownloadOfItsMovedContent` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/internal/syncplan/planner_actions_test.go`, `internal/sync/internal/syncplan/planner_move_composition_test.go` (`TestBuildDependencies_NestedMoveEdges`, `TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove`), `internal/sync/internal/syncplan/planner_delete_safety_test.go` (`TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`) |
 | Every single-path combination of baseline, local and remote state (absent, file A/B/C, folder), and the move combinations of one synced file, has its plan checked in as `testdata/reconcile/matrix.golden` (refresh with `-update`); with `ONEDRIVE_GO_RECONCILE_CONVERGE=1` each cell is also run to convergence on a pure model and must end at the reference planner's content set. A planner-level model test applies random edits to both sides of a pure model, plans it through the real comparison SQL and planner, applies the plan without an executor (items addressed by ID, a create onto a taken name failing as a 409), and must converge with every written content kept (D-093). | `TestReconcileMatrix_Golden`, `TestPlannerModel_RandomTriplesConverge` |
 | The decision table is Go and its kinds are typed enums; a side type the enum lacks fails the row scan naming the path. Every valid state a side holds is classified, except a drive root only one side holds (all 8,388,608 normalized states); a row outside the table, or a folder planned as a content transfer, fails the plan before the unavailable-truth suppression can plan it as nothing, naming the path; so does a built action whose type or folder create side is outside its enum, before any rule reads it, and every decision on the action type panics on such a value instead of answering it (R-6.2.16). Content proven equal on both sides never transfers, whichever side changed: a local edit equal to OneDrive's unchanged content is a baseline update that records the new local facts beside the remote ones, and the next plan is empty (R-2.2.3). | `TestPlannerKinds_ParseRoundTripsEveryMemberAndRefusesOthers`, `TestQueryPlannerRows_UnknownSideTypeFailsTheScanNamingThePath`, `TestQueryPlannerRows_GoDecidesEveryRowOfOneQuery`, `TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable`, `TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan`, `TestPlanCurrentState_FolderTransferFailsThePlan`, `TestPlanCurrentState_UnlistedActionTypeFailsThePlan`, `TestActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpdate`, `TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing`, `TestRunOnce_UnclassifiedRowFailsThePassNamingThePath`, `TestDecide_EveryValidStateHasTheTableProperties`, `TestDecide_ARootOnlyOneSideHoldsIsUnclassified`, `TestDecisionState_ValidNamesTheBrokenRule` |
@@ -856,6 +857,30 @@ with the path of the work it waits for
 `TestRunOnce_AFileRenamedHereOntoAPathAWaitingMoveLeavesStaysOnOneDriveWhileACreateBeforeItsUploadFails`,
 `TestRunOnce_AFileMovedUpOntoItsRenamedFoldersPathStaysOnOneDriveUntilItsUploadRuns`,
 `TestRunOnce_AFileRenamedHereOntoADeletedFileInAFolderMovedOnOneDriveStaysThereUntilItsUploadRuns`).
+A removal of synced content also waits, on either side, while the other side
+holds the file at another path and no create of the plan writes its content
+on the removal's side (R-2.17.11, `deletesOfUncarriedContent`,
+`planner_content_holds.go`). A removal is a delete of the synced file, or a
+download of another item over it here (OneDrive moved the file away and put
+another item at its path), which therefore takes part in the content edges
+of Dependency Build like a delete: it waits for the download that writes the
+moved file's content where the item went and is skipped when that download
+fails. Where the file is comes from the snapshots, by the key the removal
+carries (a local identity for a delete on OneDrive, an item ID here); a file
+the other side already holds at the same path with the same content is not
+counted, so a removal after that content is synced elsewhere runs. The shape
+this catches: the other side moved the file and the move did not pair, and
+the comparison set the file's new place beside an entry of another item, so
+nothing carries the content this pass: from a held folder's place, `f`
+renamed here into the new folder `x` while OneDrive made a file at the same
+path in the old `x`, which sits at `x2` here, and the delete of `f`'s old
+copy on OneDrive removed its only copy there until a later pass uploaded it.
+Held, it is planned with the upload of a later pass and waits for it. Each
+such removal is logged at Debug with the path where the content is
+(`TestPlanBuiltActions_ARemovalOfContentTheOtherSideMovedWaitsForItsCreate`,
+`TestBuildDependencies_ADownloadOverASyncedFileWaitsForTheDownloadOfItsItem`,
+`TestPlannerPairs_AFileRenamedIntoAFolderInAHeldFoldersPlaceKeepsItsOneDriveCopy`,
+`TestPlannerPairs_AFileOverwrittenHereWaitsForTheDownloadOfItsMovedContent`).
 The rule is checked over every pair of short histories on a small tree
 (`TestPlannerExhaustive_ShortHistoriesOnBothSidesKeepContentAndConverge`), and
 again, for every pair whose passes delete something, with each create of each
@@ -1014,17 +1039,24 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    all held, nothing done on OneDrive): `mv p q, mv x2 q/x2` or
    `mv x2 p/f, mv p q`. After the name collision is resolved the held move
    is still held at the end; it should run once the collision is gone.
-11. Content removed from a side in a pass (12 runs: 2 synced, 10 held), the
-   rule that matters most. From the held start, a file renamed here onto
-   `x/g` in the folder made in the held one's place, while OneDrive made a
-   file at the same path in the held folder (7 runs, without a refusal too):
-   the two `x` folders are different items, and a pass removes one file's
-   content. And a removal that runs although the create that carries the
-   same content in that pass was refused (5 runs: a delete of the folder
-   that holds a file's only copy on OneDrive while the file's upload is
-   refused, a rename's download refused while the file it replaces goes):
-   the removal should wait with the refused create, as a delete waits for
-   held work.
+11. Content removed from a side in a pass (4 runs: 1 synced, 3 held), the
+   rule that matters most: a removal whose content's create needs the path
+   the removal frees, with that create, or what it waits for, refused once.
+   A file moved up onto the path of its folder, deleted or renamed here
+   (`rm p, mv x/f p` from the held start; `mv p q, mv q/f p` here while
+   OneDrive renamed `x` to `q`), or a file moved onto another file's path
+   while a folder takes that file's name (`mv z p/f, mv x z` from the held
+   start). The upload waits for the delete of what holds its path on
+   OneDrive, so the delete cannot wait for the upload (the content edge
+   would close a cycle and is left out), and with the upload refused
+   OneDrive is without the content until the next pass uploads it from
+   here, where it stays throughout. Keeping it on OneDrive needs a
+   temporary name (move the old entry aside, create, then delete it), the
+   device the rotations of shape 1 also need; the remote move's freshness
+   reads local truth at the move's destination, which a temporary name does
+   not have, so that is an executor change too. The removals a pass ran
+   although the other side held the moved file elsewhere and nothing carried
+   it (R-2.17.11) are fixed and no longer listed.
 
 A remote move of a locally edited file is still applied (R-2.17.7): the local
 move source must be the same item (type and identity) but its content may

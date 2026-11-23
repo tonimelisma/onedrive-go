@@ -145,6 +145,9 @@ func (index *dependencyIndex) indexByPath(i int, a *syncdomain.Action, folderDel
 		if key, writes := carriedContentKey(a); writes {
 			index.contentCarriers[key] = append(index.contentCarriers[key], i)
 		}
+		if _, removes := deletedContentKey(a); removes {
+			index.contentDeletes = append(index.contentDeletes, i)
+		}
 	case syncdomain.ActionBaselineUpdate:
 	default:
 		panic(syncdomain.OutsideTheEnum(a.Type))
@@ -538,7 +541,11 @@ func carriedContentKey(create *syncdomain.Action) (contentKey, bool) {
 
 // deletedContentKey reports the synced file a delete removes from its side,
 // under the key a create of that content on the same side carries: its
-// synced local identity on OneDrive, its item ID here.
+// synced local identity on OneDrive, its item ID here. A download of another
+// item over the synced file here removes the file's content from this side
+// as a delete does (OneDrive moved the synced item away and put another at
+// its path), so it waits for the download that writes that content where
+// the item went, and is skipped with it when that download fails.
 func deletedContentKey(deleted *syncdomain.Action) (contentKey, bool) {
 	if deleted.View == nil || deleted.View.Baseline == nil || deleted.View.Baseline.ItemType != syncdomain.ItemTypeFile {
 		return contentKey{}, false
@@ -549,7 +556,12 @@ func deletedContentKey(deleted *syncdomain.Action) (contentKey, bool) {
 		return contentKey{device: synced.LocalDevice, inode: synced.LocalInode}, synced.LocalHasIdentity
 	case syncdomain.ActionLocalDelete:
 		return contentKey{itemID: synced.ItemID}, synced.ItemID != ""
-	case syncdomain.ActionDownload, syncdomain.ActionUpload, syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove,
+	case syncdomain.ActionDownload:
+		replaces := synced.ItemID != "" && deleted.ItemID != "" && synced.ItemID != deleted.ItemID &&
+			deleted.Path == syncdomain.ActionViewPath(deleted)
+
+		return contentKey{itemID: synced.ItemID}, replaces
+	case syncdomain.ActionUpload, syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove,
 		syncdomain.ActionFolderCreate,
 		syncdomain.ActionConflictCopy, syncdomain.ActionBaselineUpdate, syncdomain.ActionCleanup:
 		return contentKey{}, false
