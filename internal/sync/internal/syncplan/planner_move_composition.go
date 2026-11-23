@@ -74,8 +74,10 @@ import (
 // item; a move that waits for the item at its folder's path on OneDrive is
 // deferred at once instead (deferRefusedMove). So the pending items are
 // decided in turn unless their waits loop: the final sweep defers every item
-// on a loop, so the pass still ends. Nothing breaks the loop of a folder whose
-// target hangs off an entry that waits for it, nor that of two files each
+// on a loop, so the pass still ends. The loop of a folder whose target hangs
+// off an entry that lands below the path the folder's move vacates is broken
+// by moving the folder aside first (parkOneVacatingLoop). Nothing breaks that
+// of two files each
 // moved here into a new folder at the other's path, nor a ring of such moves
 // through a file: every later pass defers their items again, and a one-shot
 // sync ends with them unfinished, after a pass that does nothing else or at
@@ -671,7 +673,7 @@ func (c *moveComposer) emitRun(order []string, takenBack map[string]bool) *moveE
 	}
 	for range len(order) + 1 {
 		e.resolvePending(order)
-		if !e.parkOneOccupancyCycle(order) {
+		if !e.parkOneOccupancyCycle(order) && !e.parkOneVacatingLoop(order) {
 			break
 		}
 	}
@@ -778,6 +780,65 @@ func (e *moveEmitter) parkOneOccupancyCycle(order []string) bool {
 			continue
 		}
 		if e.park(key, side) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// parkOneVacatingLoop breaks one loop of a folder moved into its own former
+// child: here docs moved to tmp, a new docs made, tmp/sub moved into it and
+// tmp moved to docs/sub/docs2 (or the same on OneDrive). sub's move on the
+// other side lands below the path docs's move vacates, so it is decided after
+// docs (waitsForVacatingFolder), while docs's target hangs off sub, so docs is
+// decided after sub: both stayed pending and were deferred on every pass, as
+// no order of plain moves exists (sub's new folder takes docs's path only once
+// docs has left it, and docs's destination lies below sub). The vacating
+// folder moves to a free name beside its source on that side, as a swap's
+// parked item does (park), carrying the child, and waits; the next pass makes
+// the folder at the path it left and moves the child into it and then the
+// folder below the child. A folder that holds the path of a folder a local
+// move of the plan lands in is not parked on this computer
+// (holdsALocalLanding), as in parkOneOccupancyCycle. It reports whether it
+// parked a folder.
+func (e *moveEmitter) parkOneVacatingLoop(order []string) bool {
+	for _, key := range order {
+		if e.state[key] != moveEmitPending || e.unresolvable[key] || e.parentState(key) != moveEmitSettled {
+			continue
+		}
+		n := e.nodes[key]
+		if !e.isMoveParticipant(n) {
+			continue
+		}
+		for _, side := range []moveCoord{moveCoordLocal, moveCoordRemote} {
+			if !n.present(side) || sameLocation(e.location(n, side), e.target[key]) {
+				continue
+			}
+			folder, lands := e.vacatingFolder(n, side, e.targetPath(key))
+			if !lands || e.state[folder] != moveEmitPending || e.unresolvable[folder] || !e.targetHangsOff(folder, key) ||
+				(side == moveCoordLocal && e.holdsALocalLanding(folder)) {
+				continue
+			}
+			if e.park(folder, side) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// targetHangsOff reports whether key's target position hangs, directly or
+// through the items above it, off ancestor (targetParentNode).
+func (e *moveEmitter) targetHangsOff(key, ancestor string) bool {
+	current := key
+	for range len(e.keys) {
+		current = e.targetParentNode(current)
+		if current == "" {
+			return false
+		}
+		if current == ancestor {
 			return true
 		}
 	}

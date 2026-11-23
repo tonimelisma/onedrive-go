@@ -47,6 +47,60 @@ type recreatedFolderMoveCase struct {
 	onOneDrive bool
 }
 
+// Validates: R-2.17.6, R-2.17.1
+//
+// docs is moved into its own former child, before one sync, here or on
+// OneDrive: docs moved to tmp, a new docs made, tmp/sub moved into it and tmp
+// moved to docs/sub/docs2. No order of plain moves exists: the new docs takes
+// docs's path only once docs has left it, and docs lands below sub, which
+// lands in the new docs. Both moves waited for each other's decision and were
+// deferred on every pass. docs now moves aside first, carrying sub, and the
+// next pass makes the new docs and moves sub into it and docs below sub. One
+// sync finishes it: both sides hold the tree made, docs and sub are still the
+// items they were, nothing is uploaded or downloaded again, and no plan drops
+// an action as a dependency cycle.
+func TestRunOnce_FolderMovedIntoItsOwnFormerChildConverges(t *testing.T) {
+	t.Parallel()
+
+	for _, onOneDrive := range []bool{false, true} {
+		t.Run(fmt.Sprintf("on OneDrive: %v", onOneDrive), func(t *testing.T) {
+			t.Parallel()
+
+			remote := newSubfolderScenarioRemote(t)
+			eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+			uploads, downloads := remote.uploads, remote.downloads
+			if onOneDrive {
+				remote.moveAt(t, "docs", "tmp")
+				remote.mkdirAt(t, "docs")
+				remote.moveAt(t, "tmp/sub", "docs/sub")
+				remote.moveAt(t, "tmp", "docs/sub/docs2")
+			} else {
+				local := scenarioLocalPath(syncRoot)
+				require.NoError(t, os.Rename(local("docs"), local("tmp")))
+				require.NoError(t, os.Mkdir(local("docs"), 0o750))
+				require.NoError(t, os.Rename(local("tmp/sub"), local("docs/sub")))
+				require.NoError(t, os.Rename(local("tmp"), local("docs/sub/docs2")))
+			}
+
+			runs, _ := runScenarioUntilDone(t, eng)
+			assert.Equal(t, 1, runs, "one sync finishes it")
+			want := map[string]string{
+				"docs": "/", "docs/sub": "/", "docs/sub/inner.txt": "inner\n",
+				"docs/sub/docs2": "/", "docs/sub/docs2/kept.txt": "kept\n",
+				"photos": "/", "photos/photo.jpg": "photo\n",
+			}
+			assert.Equal(t, want, remote.tree(), "OneDrive")
+			assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+			assert.Equal(t, "docs/sub/docs2", remote.pathOf("item-docs"), "docs is still the folder it was")
+			assert.Equal(t, "docs/sub", remote.pathOf("item-sub"), "sub is still the folder it was")
+			assert.Equal(t, uploads, remote.uploads, "nothing is uploaded again")
+			assert.Equal(t, downloads, remote.downloads, "nothing is downloaded again")
+			assert.NotContains(t, logs.String(), "dependency cycle")
+			requireScenarioQuietPlan(t, eng)
+		})
+	}
+}
+
 // Validates: R-2.17.2, R-2.17.6
 //
 // docs is moved to archive, a new docs made, archive/sub/inner.txt moved into

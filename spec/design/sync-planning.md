@@ -739,9 +739,19 @@ the decision of the item waited for. An item also waits while another item
 holds its destination, whatever that item does: until a move of the plan
 vacates the destination, until one item of a swap or rotation is parked
 beside its source, or until the end of composition defers it. So the pending
-items are decided in turn unless their waits loop. Nothing breaks the loop of
-a folder whose target hangs off an entry that waits for it: every pass defers
-its items, and a one-shot sync ends with them unfinished. The loop of a
+items are decided in turn unless their waits loop. The loop of a folder
+whose target hangs off an entry that waits for it, as one that lands below
+the path the folder's move vacates (a folder moved into its own former child:
+`mv docs tmp; mkdir docs; mv tmp/sub docs/sub; mv tmp docs/sub/docs2`, here or
+on OneDrive), has no order of plain moves: the new folder takes the path only
+once the folder has left it, and the folder lands below the entry. The folder
+moves aside first, to a free `<name>.swap-N` beside its source on that side
+as a swap's parked item does, carrying the entry, and both wait; the next
+pass makes the new folder, moves the entry into it and the folder below the
+entry (`parkOneVacatingLoop`,
+`TestComposeMoves_FolderMovedIntoItsOwnFormerChildMovesAsideFirst`,
+`TestRunOnce_FolderMovedIntoItsOwnFormerChildConverges`). Before, both were
+deferred on every pass and a one-shot sync ended with them unfinished. The loop of a
 folder whose destination is held by a file that waits for it, as one of the
 folders OneDrive relocates, lasts until the move that vacates the file's
 target commits: the pass defers both, and a pass in which the file lands

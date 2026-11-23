@@ -600,6 +600,64 @@ func TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource(t *testing.T)
 	}
 }
 
+// Validates: R-2.17.6, R-2.17.1
+//
+// A folder moved into its own former child: docs moved to tmp, a new docs
+// made, tmp/sub moved into it and tmp moved to docs/sub/docs2, here or on
+// OneDrive. sub's move lands below the path docs's move vacates, so it is
+// decided after docs, while docs's target hangs off sub: both stayed pending
+// and were deferred on every pass. docs moves aside to a free name beside its
+// path on the other side, carrying sub, and both wait for the next pass,
+// which makes the new docs at the path docs left and moves sub into it and
+// docs below sub. Every action of the plan has an order.
+func TestComposeMoves_FolderMovedIntoItsOwnFormerChildMovesAsideFirst(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name                  string
+		onOneDrive            bool
+		wantLocal, wantRemote []string
+	}{
+		{name: "here", wantRemote: []string{"docs->docs.swap-1"}},
+		{name: "on OneDrive", onOneDrive: true, wantLocal: []string{"docs->docs.swap-1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			moved := func(baseline, to string) [moveCoordCount]string {
+				if tc.onOneDrive {
+					return [moveCoordCount]string{baseline, baseline, to}
+				}
+				return [moveCoordCount]string{baseline, to, baseline}
+			}
+			node := func(key string, itemType syncdomain.ItemType, paths [moveCoordCount]string) moveNode {
+				return composeNode(key, itemType, paths[moveCoordBaseline], paths[moveCoordLocal], paths[moveCoordRemote])
+			}
+			nodes := []moveNode{
+				node("docs", syncdomain.ItemTypeFolder, moved("docs", "docs/sub/docs2")),
+				node("kept", syncdomain.ItemTypeFile, moved("docs/kept.txt", "docs/sub/docs2/kept.txt")),
+				node("sub", syncdomain.ItemTypeFolder, moved("docs/sub", "docs/sub")),
+				node("inner", syncdomain.ItemTypeFile, moved("docs/sub/inner.txt", "docs/sub/inner.txt")),
+			}
+			occupancy := composeOccupancy(nodes)
+			if tc.onOneDrive {
+				occupancy.remote["docs"] = true
+			} else {
+				occupancy.local["docs"] = true
+			}
+			c := composeMoves(nodes, occupancy, nil)
+
+			assert.Equal(t, tc.wantLocal, composedMovesBySide(&c, moveCoordLocal))
+			assert.Equal(t, tc.wantRemote, composedMovesBySide(&c, moveCoordRemote))
+			assert.Equal(t, map[string]bool{"docs": true, "sub": true}, c.deferred)
+
+			actions := composedMoveActions(&c, nodes)
+			kept, _, _ := isolateDependencyCycles(actions, nil)
+			assert.Len(t, kept, len(actions), "every action of the plan has an order")
+		})
+	}
+}
+
 // Validates: R-2.17.2, R-2.17.6
 //
 // The plan of the row "deleted online" above, a cycle of docs's move, the
