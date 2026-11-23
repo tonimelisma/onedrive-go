@@ -319,7 +319,9 @@ func copyBenchCredentials(srcDir string, dstDir string, driveID string) error {
 		return err
 	}
 	if err := copyBenchFile(filepath.Join(srcDir, tokenFileName), filepath.Join(dstDir, tokenFileName)); err != nil {
-		return fmt.Errorf("copy token file: %w", err)
+		// The token file's name spells the drive's account; the error names
+		// the variable that holds the drive and what failed, never the path.
+		return fmt.Errorf("copy the token file of the drive %s names: %w", benchPrimaryDriveEnvVar, withoutPaths(err))
 	}
 
 	for _, prefix := range []string{"account_", "drive_"} {
@@ -338,14 +340,33 @@ func copyBenchCredentials(srcDir string, dstDir string, driveID string) error {
 	return nil
 }
 
+// benchTokenFileName is the token file of the live drive driveID. A drive it
+// cannot parse is named by its variable, not its value: the value is a test
+// account's drive, which no output may print.
 func benchTokenFileName(driveID string) (string, error) {
 	parts := strings.SplitN(driveID, ":", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		return "", fmt.Errorf("parse drive %q for token filename", driveID)
+		return "", fmt.Errorf("parse the drive %s names for its token file name: want <type>:<email>",
+			benchPrimaryDriveEnvVar)
 	}
 
 	return "token_" + parts[0] + "_" + parts[1] + ".json", nil
 }
+
+// withoutPaths is err with every path left out: the cause a path error
+// carries, or, for any other error, which could quote a path of its own, a
+// plain statement that the copy failed.
+func withoutPaths(err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return fmt.Errorf("%s: %w", pathErr.Op, pathErr.Err)
+	}
+
+	return errBenchCopyFailed
+}
+
+// errBenchCopyFailed stands for a copy failure whose error may quote a path.
+var errBenchCopyFailed = errors.New("the copy failed")
 
 func copyBenchFile(src string, dst string) error {
 	data, err := readFile(src)

@@ -383,3 +383,25 @@ func benchRuntimeEnvValue(env []string, key string) string {
 
 	return ""
 }
+
+// Validates: R-6.10.27
+//
+// A live drive the bench cannot use is named by the variable that holds it,
+// never by its value: a drive it cannot parse, and a token file it cannot
+// copy, whose path spells the drive's account.
+func TestCopyBenchCredentials_ErrorsNameNoDrive(t *testing.T) {
+	t.Parallel()
+
+	const unparsable = "no-colon-planted-drive"
+	_, err := benchTokenFileName(unparsable)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), unparsable)
+	assert.Contains(t, err.Error(), benchPrimaryDriveEnvVar)
+
+	const drive = "personal:planted-bench@example.com"
+	err = copyBenchCredentials(t.TempDir(), t.TempDir(), drive)
+	require.Error(t, err)
+	require.ErrorIs(t, err, os.ErrNotExist, "the cause is kept")
+	assert.NotContains(t, err.Error(), "planted-bench@example.com")
+	assert.Contains(t, err.Error(), benchPrimaryDriveEnvVar)
+}

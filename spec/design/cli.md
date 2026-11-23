@@ -629,10 +629,13 @@ change landed; the folders' item IDs are only in `--verbose`'s details
 (`TestCommandErrorText_DisagreeingAnswersForAPathAreOneSentence`). A name with `:`
 is read through its parent folder's listing (R-6.7.38), so a command that
 does not find it names the path once with the `ls` of its folder, as any
-missing path does (`TestCommandErrorText_ANameAPathCannotCarryIsOneSentence`);
-where `graph.ErrNameNotPathAddressable` still reaches the command, the
-sentence names the path once and the character, or says a name is too long
-for a path route.
+missing path does (`TestCommandErrorText_ANameAPathCannotCarryIsOneSentence`).
+`graph.ErrNameNotPathAddressable` no longer reaches a command: every path
+read that could refuse a name is preceded by `graph.NameIsPathAddressable`
+(`driveops` walks such a path by name instead), and every read of one name
+under its parent lists the parent on that refusal (`FindExistingChild`, the
+executor's `childrenHoldingName`, the listing fallback of
+`ListChildrenPages`), so the command error text has no sentence for it.
 Command-line
 mistakes become `usageError` through cobra's flag-error hook, a wrapper on
 every command's `Args` validator, and a flag-group check that runs before

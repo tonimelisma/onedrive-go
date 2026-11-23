@@ -30,9 +30,9 @@ func repoWalkSkippedDirs() []string {
 
 // plantRepoWalkSources writes into dir a production file and an
 // integration-tagged test file that break every repository rule: a
-// flattened error attribute, an undocumented mutex, a backlog ID and an
-// ungoverned file, and a test without the integration prefix whose name and
-// Validates line carry the folder's index.
+// flattened error attribute, an undocumented mutex, a backlog ID, a
+// principle label and an ungoverned file, and a test without the integration
+// prefix whose name and Validates line carry the folder's index.
 func plantRepoWalkSources(t *testing.T, root string, dir string, index int) {
 	t.Helper()
 
@@ -47,9 +47,9 @@ type guarded struct {
 	mu sync.Mutex
 }
 
-// Cites B-%03d.
+// Cites B-%03d and %s%d.
 func logIt(err error) slog.Attr { return slog.String("error", err.Error()) }
-`, repoWalkBacklogBase+index)
+`, repoWalkBacklogBase+index, principleLabelMarker, index)
 	test := fmt.Sprintf(`//go:build integration
 
 package planted
@@ -65,6 +65,11 @@ func TestPlanted%d(t *testing.T) {}
 
 // repoWalkBacklogBase numbers the fixture's backlog IDs, one per folder.
 const repoWalkBacklogBase = 100
+
+// principleLabelMarker is a principle label's prefix, spelled in two pieces
+// so the principle-label check of the real tree does not read the fixture's
+// label as one in this file.
+const principleLabelMarker = "P" + "-"
 
 // validatesMarker is the traceability marker, spelled in two pieces so the
 // requirement-traceability check of the real tree does not read the
@@ -101,6 +106,13 @@ func TestRepositoryRuleWalksSkipTheSameFolders(t *testing.T) {
 	require.NotEmpty(t, conventions)
 	for _, violation := range conventions {
 		assert.True(t, inRead(violation.Path), "test conventions read %s", violation.Path)
+	}
+
+	labels, err := findPrincipleLabelViolations(root)
+	require.NoError(t, err)
+	require.NotEmpty(t, labels)
+	for _, violation := range labels {
+		assert.True(t, inRead(violation.Location), "principle labels read %s", violation.Location)
 	}
 
 	mutexes, err := findMutexDocViolations(root)

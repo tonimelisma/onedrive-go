@@ -442,9 +442,13 @@ func implies(a, b bool) bool { return !a || b }
 
 // decisionStateChecks evaluates every line of the flag definitions for s.
 // Each line is one boolean rule, so the count of branches is the count of
-// rules, not nested logic.
+// rules' && and ||, not nested logic. gocyclo counts them as branches; a
+// table of predicate closures is counted the same (gocyclo charges a
+// function literal's branches to the function that holds it), and 22 named
+// predicates would scatter one definition over 22 functions, so the flat
+// list stays and carries the exception.
 //
-//nolint:gocyclo // one flat list of the definitions' rules
+//nolint:gocyclo // a flat list of 22 one-line rules; see above
 func decisionStateChecks(s DecisionState) [decisionStateRuleCount]decisionStateCheck {
 	return [decisionStateRuleCount]decisionStateCheck{
 		// The content-change flags.
