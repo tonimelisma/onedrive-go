@@ -178,7 +178,7 @@ func TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent(t *testi
 // Where the create that writes a deleted file's content waits for the delete
 // through the other rules, the delete does not wait for it: the edge would
 // close a cycle, and both would be dropped on every pass. The upload of
-// a1.txt, edited in a folder A renamed B here, waits for A's move, which
+// a1.txt, left unpaired in a folder A renamed B here, waits for A's move, which
 // waits for the delete of A/a1.txt below its source; the upload of x, moved
 // here up onto the path of its folder P, which is deleted, waits for P's
 // delete, which waits for the delete of P/x. In the same plan the delete of
@@ -331,15 +331,74 @@ func TestCarriedPath_FollowsTheMovesThatCarryTheDeletedEntry(t *testing.T) {
 // device 1.
 func syncedFileView(inode uint64, itemID string) *syncdomain.PathView {
 	return &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{
-		ItemType: syncdomain.ItemTypeFile, ItemID: itemID, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
+		ItemType: syncdomain.ItemTypeFile, ItemID: itemID, LocalHash: contentOfInode(inode), LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
 	}}
 }
 
 // uploadOfIdentity uploads the file here at p that has inode on device 1.
 func uploadOfIdentity(p string, inode uint64) syncdomain.Action {
 	return syncdomain.Action{Type: syncdomain.ActionUpload, Path: p, View: &syncdomain.PathView{Local: &syncdomain.LocalState{
-		ItemType: syncdomain.ItemTypeFile, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
+		ItemType: syncdomain.ItemTypeFile, Hash: contentOfInode(inode), LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
 	}}}
+}
+
+// contentOfInode is the content hash the fixtures give the file with inode,
+// so a synced file and an upload of the same identity hold the same content.
+func contentOfInode(inode uint64) string {
+	return fmt.Sprintf("content-of-%d", inode)
+}
+
+// Validates: R-2.17.2, R-2.17.11
+//
+// The kernel hands a deleted file's inode to the next file made, so an upload
+// carries a deleted file's content only when it holds that content: the same
+// local identity with the same hash. A new file that took the inode of a file
+// OneDrive deletes, with other content or with no hash known, carries none,
+// so the delete waits for no upload of it, and the snapshot does not locate
+// the deleted file's content at the new file's path.
+func TestBuildDependencies_AReusedInodeWithOtherContentCarriesNothing(t *testing.T) {
+	t.Parallel()
+
+	withHash := func(p string, inode uint64, hash string) syncdomain.Action {
+		upload := uploadOfIdentity(p, inode)
+		upload.View.Local.Hash = hash
+
+		return upload
+	}
+	for _, tc := range []struct {
+		name     string
+		upload   syncdomain.Action
+		wantDeps []int
+	}{
+		{name: "the same identity and content", upload: uploadOfIdentity("P/f", 7), wantDeps: []int{1}},
+		{name: "the inode reused for other content", upload: withHash("P/f", 7, "other-content")},
+		{name: "the inode reused with no hash known", upload: withHash("P/f", 7, "")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			actions := []syncdomain.Action{
+				{Type: syncdomain.ActionRemoteDelete, Path: "z", View: syncedFileView(7, "item-z")},
+				tc.upload,
+			}
+			deps, leftOut := buildDependencyGraph(actions)
+			assert.Equal(t, tc.wantDeps, deps[0])
+			assert.Empty(t, deps[1])
+			assert.Empty(t, leftOut)
+			assert.Equal(t, tc.wantDeps != nil, carriesContentOf(&actions[1], &actions[0]))
+		})
+	}
+
+	located := filesByContent(nil, []syncdomain.LocalStateRow{
+		{Path: "new", ItemType: syncdomain.ItemTypeFile, Hash: "other-content", LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true},
+		{Path: "unhashed", ItemType: syncdomain.ItemTypeFile, LocalDevice: 1, LocalInode: 8, LocalHasIdentity: true},
+	})
+	deletedKey, removes := deletedContentKey(&syncdomain.Action{
+		Type: syncdomain.ActionRemoteDelete, Path: "z", View: syncedFileView(7, "item-z"),
+	})
+	require.True(t, removes)
+	assert.NotContains(t, located, deletedKey, "a file with another hash does not hold the deleted content")
+	assert.Len(t, located, 1, "a file with no hash known is located under no key")
 }
 
 // Validates: R-2.17.6

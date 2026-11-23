@@ -286,6 +286,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth,
 		TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges,
 		TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges,
+		TestRunOnce_LocalRenameAndDeleteWhileOneDriveSwapsThemConverges,
 		TestRunOnce_LocalRenameKeepsTheRemoteModificationTime,
 		TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit,
 		TestRunOnce_MountRootDeltaIncapableSkipsFolderDelta,

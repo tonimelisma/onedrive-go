@@ -8,7 +8,7 @@ import (
 
 // filesByContent locates the files of the snapshots by the key a removal of
 // synced content carries (deletedContentKey): a file here by its local
-// identity, an item on OneDrive by its ID. A file the other side already
+// identity and hash, an item on OneDrive by its ID. A file the other side already
 // holds at the same path with the same content is left out: its content is
 // on both sides, so no removal elsewhere can leave a side without it.
 func filesByContent(remoteRows []syncdomain.RemoteStateRow, localRows []syncdomain.LocalStateRow) map[contentKey]string {
@@ -33,13 +33,17 @@ func filesByContent(remoteRows []syncdomain.RemoteStateRow, localRows []syncdoma
 	}
 	for i := range localRows {
 		row := &localRows[i]
-		if row.ItemType != syncdomain.ItemTypeFile || !row.LocalHasIdentity {
+		if row.ItemType != syncdomain.ItemTypeFile {
+			continue
+		}
+		key, known := localContentKey(row.LocalHasIdentity, row.LocalDevice, row.LocalInode, row.Hash)
+		if !known {
 			continue
 		}
 		if hash, online := remoteHashes[row.Path]; online && sameKnownHash(hash, row.Hash) {
 			continue
 		}
-		located[contentKey{device: row.LocalDevice, inode: row.LocalInode}] = row.Path
+		located[key] = row.Path
 	}
 
 	return located

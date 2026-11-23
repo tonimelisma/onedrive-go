@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1516,17 +1517,67 @@ func exQuietStore(t *testing.T) *syncstore.SyncStore {
 const exDriverName = "sqlite-exhaustive"
 
 // registerExCachingDriver registers exCachingDriver once per test binary.
+// Parallel tests call it together, and sql.Register panics on a second
+// registration of one name, so a check of sql.Drivers before registering
+// raced: the registration runs under exDriverRegistration, once.
 func registerExCachingDriver(t *testing.T) {
 	t.Helper()
 
-	if slices.Contains(sql.Drivers(), exDriverName) {
-		return
-	}
+	require.NoError(t, exDriverRegistration())
+}
+
+// exDriverRegistration registers exCachingDriver over SQLite's driver the
+// first time it is called and reports that first call's error on every call.
+//
+//nolint:gochecknoglobals // sql.Register is a process-wide registry, so its guard has no narrower owner than the package.
+var exDriverRegistration = sync.OnceValue(func() error {
 	db, err := sql.Open(syncstore.SqliteDriverName, ":memory:")
-	require.NoError(t, err)
+	if err != nil {
+		return fmt.Errorf("open sqlite driver: %w", err)
+	}
 	base := db.Driver()
-	require.NoError(t, db.Close())
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("close sqlite driver probe: %w", err)
+	}
 	sql.Register(exDriverName, exCachingDriver{base: base})
+
+	return nil
+})
+
+// exParallelRegistrations is how many goroutines register the driver at once
+// in TestRegisterExCachingDriver_ParallelCallsRegisterItOnce.
+const exParallelRegistrations = 16
+
+// Parallel tests register the caching driver at the same moment: every call
+// returns without error, none panics on a second registration, and the
+// driver is registered once. Run under -race, it also proves the calls share
+// no unguarded state.
+func TestRegisterExCachingDriver_ParallelCallsRegisterItOnce(t *testing.T) {
+	t.Parallel()
+
+	start := make(chan struct{})
+	errs := make([]error, exParallelRegistrations)
+	var wg sync.WaitGroup
+	for i := range exParallelRegistrations {
+		wg.Go(func() {
+			<-start
+			errs[i] = exDriverRegistration()
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "registration %d", i)
+	}
+	registered := 0
+	for _, name := range sql.Drivers() {
+		if name == exDriverName {
+			registered++
+		}
+	}
+	assert.Equal(t, 1, registered)
+	registerExCachingDriver(t)
 }
 
 // exCachingDriver is SQLite's driver keeping one prepared statement per

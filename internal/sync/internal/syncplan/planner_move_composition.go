@@ -2188,17 +2188,34 @@ func composedRemotePosition(
 	case at.RemoteMoveShadowed && !at.BaselineType.Present() &&
 		entry.ItemType == syncdomain.ItemTypeFile && at.LocalType == syncdomain.SideFile:
 		return row.Path
-	// The path is another synced item's, which OneDrive moved away (a swap
-	// or a chain): the item ID proves this item now sits there, and the
-	// path's own item is composed too. Without it a local rename of an item
-	// OneDrive swapped had no remote position and was copied, not moved.
-	case at.ComparisonKind == syncdomain.ComparisonRemoteMoveSource && at.RemoteItemID == entry.ItemID:
+	case sitsAtAnotherSyncedItemsPath(at, entry):
 		return row.Path
 	case at.ComparisonKind == syncdomain.ComparisonLocalMoveDest && row.Path == localPosition:
 		return row.Path
 	default:
 		return ""
 	}
+}
+
+// sitsAtAnotherSyncedItemsPath reports whether OneDrive holds the item of
+// entry at the path of the comparison row at, a path that is another synced
+// item's: the item ID proves this item now sits there. It does when
+// OneDrive moved the path's own item away (a swap or a chain), which is
+// composed too; without that a local rename of an item OneDrive swapped had
+// no remote position and was copied, not moved. It does when the path's own
+// item is gone here (deleted here, or moved away from a swap with this one)
+// and no entry here holds the path; without that the item was downloaded at
+// the path and its renamed copy here uploaded as a new file, one content at
+// two paths, or, where OneDrive still held the path's own item elsewhere,
+// the download waited as a removal of that item's content and sync never
+// converged (chaos seed 55).
+func sitsAtAnotherSyncedItemsPath(at *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry) bool {
+	if at.RemoteItemID != entry.ItemID {
+		return false
+	}
+
+	return at.ComparisonKind == syncdomain.ComparisonRemoteMoveSource ||
+		(at.BaselineType.Present() && !at.LocalType.Present())
 }
 
 // remoteToLocalFolderPrefixes maps each composed folder's remote path to where

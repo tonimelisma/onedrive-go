@@ -2,14 +2,14 @@
 
 GOVERNS: internal/synctree/*.go, internal/localtrash/*.go, internal/fsroot/*.go, internal/localpath/*.go, internal/perf/*.go, internal/devtool/*.go, internal/errclass/*.go, internal/sharedref/*.go, internal/authstate/*.go, internal/synctest/*.go, internal/namekey/*.go, internal/panicguard/*.go, internal/filelock/*.go, internal/humanunit/*.go, internal/sync/internal/syncfixture/*.go, internal/sync/internal/syncstoretest/*.go
 
-Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.32 [verified], R-6.10.33 [verified], R-6.10.34 [planned], R-6.10.2 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified], R-6.10.22 [verified], R-6.10.23 [verified], R-6.10.24 [verified], R-6.10.25 [verified], R-6.10.26 [verified], R-6.10.27 [verified], R-6.10.28 [verified], R-6.10.29 [verified], R-6.3.10 [verified], R-6.6.38 [verified]
+Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.32 [verified], R-6.10.33 [verified], R-6.10.34 [verified], R-6.10.2 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified], R-6.10.22 [verified], R-6.10.23 [verified], R-6.10.24 [verified], R-6.10.25 [verified], R-6.10.26 [verified], R-6.10.27 [verified], R-6.10.28 [verified], R-6.10.29 [verified], R-6.3.10 [verified], R-6.6.38 [verified]
 
 ## Verified By
 
 | Behavior | Evidence |
 | --- | --- |
 | A one-shot model seed runs in virtual time and reports its fault summary, a saved fault log and its replay line when it fails, deadlocks or nears go test's deadline (R-6.10.33). | `TestModel_ChaosRunWaitsInVirtualTime`, `TestModel_ChaosGraphConverges` |
-| The chaos tests' seeds (1, 2, 79) replay their runs: twenty runs of each meet the same faults in every stream, dispatch the same actions and wait the same virtual time (R-6.10.34, planned: seed 50 does not replay). | `TestModel_ChaosSameSeedReplaysIdentically` |
+| The chaos seeds 1, 2, 50 and 79 replay their runs: twenty runs of each meet the same faults in every stream, dispatch the same actions and wait the same virtual time (R-6.10.34). | `TestModel_ChaosSameSeedReplaysIdentically` |
 | Package boundaries and privileged-call discipline remain documented in the owning design docs and exercised by package-level behavior tests. | `cmd/devtool/main_test.go`, `spec/design/sync-control-plane.md`, `spec/design/sync-engine.md`, `spec/design/graph-client.md`, `spec/design/drive-transfers.md` |
 | The product continues to split multi-mount control, single mounted content-root sync, Graph I/O, and rooted filesystem access into explicit authority boundaries. | `spec/design/sync-control-plane.md`, `spec/design/sync-engine.md`, `spec/design/graph-client.md`, `spec/design/drive-transfers.md` |
 | The full live suite runs every bucket after one fails, lists every bucket (`not-run` after a preflight failure) and names the failed tests; `public` and `stress` run every step; every go test deadline a CI job's profile can start fits inside the job's timeout (R-6.10.26). | `TestRunVerifyE2EFullRunsEveryBucketAfterOneFails`, `TestRunVerifyE2EFullReportsEveryFailingBucket`, `TestRunVerifyE2EFullRecordsBucketsNotRunAfterPreflightFailure`, `TestRunVerifyE2EFullDoesNotMaskUnknownFastSuiteFailure`, `TestRunVerifyWritesSummaryJSONOnFailure`, `TestRunVerifyPublicRunsUnitTestsAfterLintFails`, `TestRunVerifyPublicSkipsOnlyTheCoverageGateAfterUnitTestsFail`, `TestRunVerifyStressRunsEveryStepAfterOneFails`, `TestCIJobTimeoutsCoverEveryGoTestDeadline` |
@@ -522,17 +522,18 @@ Static verification is a first-class architectural constraint, not a best-effort
   and its scans hash on one worker. What is left outside the seed is the real
   filesystem the run writes to: the kernel's inode numbers, which it reuses
   for a file made after another was deleted, and its timestamps. The planner
-  keys an upload's content by local identity (`carriedContentKey`), so a new
-  file that took a deleted file's inode is read as carrying its content, an
-  ordering edge that comes and goes run to run, and the scan's racily-clean
-  check reads the kernel's times. Measured: twenty runs of each chaos seed
-  the tests use (1, 2 and 79) meet the same faults in every stream, dispatch
-  the same actions in the same order and wait the same virtual time to the
-  nanosecond (`TestModel_ChaosSameSeedReplaysIdentically`, R-6.10.34), where
-  runs on the wall clock diverged, and so do seeds 75 and 162; seed 50 does
-  not replay (a reused inode adds a content edge in some runs). A failing
+  keyed an upload's content by local identity alone, so a new file that took
+  a deleted file's inode read as carrying its content, an ordering edge that
+  came and went run to run (seed 50); it keys it by identity and content hash
+  now (`carriedContentKey`, sync-planning.md), so a reused inode no longer
+  decides the plan. The scan's racily-clean check reads the kernel's times.
+  Measured: twenty runs of each of the chaos seeds 1, 2, 50 and 79 meet the
+  same faults in every stream, dispatch the same actions in the same order
+  and wait the same virtual time to the nanosecond
+  (`TestModel_ChaosSameSeedReplaysIdentically`, R-6.10.34), where runs on the
+  wall clock diverged, and so do seeds 75 and 162. A failing
   chaos run logs its `seed-replay:` line like the other seeded families, and
-  that command reruns its seed, usually its run
+  that command reruns its seed and its run
   (`TestLogSeedReplayOnFailure_LogsTheCommandThatRerunsTheSeed`); no seeded
   family's failure message carries a second rerun hint
   (`TestModelRun_FailureContextCarriesNoSecondRerunHint`).

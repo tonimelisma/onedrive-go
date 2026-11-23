@@ -895,6 +895,39 @@ func TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges(t *testing.T) {
 	assertSyncInvariants(t, h)
 }
 
+// Validates: R-2.17.1, R-2.17.6, R-2.3.1
+//
+// As above, but the user also deleted q.txt here. q.txt's baseline item is
+// gone here, so composition gave p.txt's item no remote position at q.txt:
+// OneDrive's copy of p.txt was downloaded at q.txt as a new item there, and
+// that download waited as a removal of q.txt's content, which OneDrive still
+// holds at p.txt, so neither file arrived on any pass (chaos seed 55). The
+// item ID proves where OneDrive holds the item, and no entry here holds the
+// path, so the renames compose: r.txt moves to q.txt and is not copied.
+func TestRunOnce_LocalRenameAndDeleteWhileOneDriveSwapsThemConverges(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFile(t, "item-p", "root", "p.txt", "P\n")
+	remote.addFile(t, "item-q", "root", "q.txt", "Q\n")
+	remote.addFile(t, "item-keep", "root", "keep.txt", "keep\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "p.txt"), filepath.Join(h.syncRoot, "r.txt")))
+	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, "q.txt")))
+	remote.moveAt(t, "p.txt", "swap.txt")
+	remote.moveAt(t, "q.txt", "p.txt")
+	remote.moveAt(t, "swap.txt", "q.txt")
+	runScenarioPass(t, h.eng)
+
+	requireScenarioLocalFile(t, h.syncRoot, "q.txt", "P\n")
+	assert.NoFileExists(t, filepath.Join(h.syncRoot, "r.txt"), "the renamed file moved, not copied")
+	assert.NotContains(t, remote.tree(), "r.txt", "the renamed file is not uploaded as a new file")
+	assertSyncInvariants(t, h)
+}
+
 // Validates: R-2.17.1, R-2.17.2
 //
 // The user renamed folder d to e while OneDrive deleted d/x.txt. x.txt only
