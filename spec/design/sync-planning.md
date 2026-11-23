@@ -896,7 +896,8 @@ again, for every pair whose passes delete something, with each create of each
 pass refused once: a pass removes from a side only content the user deleted
 or overwrote, or that the pass keeps as a conflict copy or a version, the
 sides converge, the last plan holds nothing, and a delete nobody else touched
-happens. The runs that still break one are listed, each with what it breaks,
+happens (a synced item in a folder the user deleted with it, which the other
+side wrote into, stays with that folder). The runs that still break one are listed, each with what it breaks,
 in `internal/sync/internal/syncplan/testdata/exhaustive/pairs.golden`. The check plans with the
 real planner and store but executes through a model, which compares content
 between passes, not between the actions of one, and fails only creates. A
@@ -1004,15 +1005,16 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    ends twice on each side, once at OneDrive's path and once as a new file
    (or a conflict copy) at this computer's. Nothing is lost; the check does
    not count a duplicate.
-5. A folder deleted on one side and replaced there by a file moved onto its
-   path, written into on the other side (27 runs, all synced, every one
-   breaking only the delete rule): `rm p, mv z p` on one side, a file made
-   in `p` or a folder moved into it on the other. Right as it is: the
-   written-into folder is kept whole as a conflict copy, so what the other
-   side wrote survives, and the synced file inside it that nobody touched is
-   kept with it, which is the delete the check reports as undone. Keeping a
-   whole folder the user wrote into is the data-safe outcome; the check's
-   delete rule does not yet count a conflict copy as a reason to keep a file.
+5. No longer listed, and right as it is: a folder deleted on one side, and
+   replaced there by a file moved onto its path, written into on the other
+   side (`rm p, mv z p` on one side, a file made in `p` or a folder moved
+   into it on the other). The written-into folder is kept whole, as a
+   conflict copy here or made again here as OneDrive keeps it, so what the
+   other side wrote survives, and the synced file inside it that nobody
+   touched is kept with it. The check's delete rule now leaves out a synced
+   item in a folder the user deleted with it that the other side wrote into
+   (`inAWrittenIntoDeletedFolder`), which takes the delete-undone verdict
+   off those runs and off runs of shape 3 that keep such a folder.
 6. No longer listed: a move made the same on both sides, its vacated path
    reused on one (`mv p q` on both, and here `mv x p` or `mkdir p`), kept
    being planned. The check's model ran the plan's actions in plan order,

@@ -64,7 +64,9 @@ import (
 //   - that plan defers and drops nothing;
 //   - a synced item the user deleted on one side, making nothing at its path
 //     again, while the other side left it with everything above and below it
-//     as synced, is gone from both.
+//     as synced, is gone from both, unless it lay in a folder the user
+//     deleted with it that the other side wrote into: that folder is kept
+//     whole, and the item with it.
 //
 // While a name OneDrive takes for another entry's stays on both sides, the
 // sides cannot converge; when a plan has nothing left to do or a pass changes
@@ -698,7 +700,11 @@ func (w *exWorld) basePath(local bool, item pmItem) string {
 
 // untouchedDeletes lists the synced paths the user deleted on one side,
 // making nothing there again, while the other side left the item, the folders
-// above it and everything below it as they were synced.
+// above it and everything below it as they were synced. A synced file in a
+// folder the user deleted on that side with it (another entry may have taken
+// the folder's path), which the other side wrote into, is not listed: that folder is kept whole, as a conflict copy here or
+// made again here as OneDrive keeps it, which is the data-safe outcome, and
+// the files the user did not touch in it are kept with it.
 func (r *exRun) untouchedDeletes() []string {
 	var gone []string
 	for _, local := range []bool{true, false} {
@@ -709,13 +715,28 @@ func (r *exRun) untouchedDeletes() []string {
 			presentKeys[namekey.OfPath(p)] = true
 		}
 		for _, base := range exSyncedPaths() {
-			if !present[base] && !presentKeys[namekey.OfPath(base)] && r.leftAsSynced(!local, base) {
+			if !present[base] && !presentKeys[namekey.OfPath(base)] && r.leftAsSynced(!local, base) &&
+				!r.inAWrittenIntoDeletedFolder(local, base, present) {
 				gone = append(gone, base)
 			}
 		}
 	}
 
 	return gone
+}
+
+// inAWrittenIntoDeletedFolder reports whether a synced folder above base is
+// gone from the side local names (present holds the synced paths of the
+// items it still has; another entry may hold the folder's path), while the
+// other side did not leave the folder as it was synced.
+func (r *exRun) inAWrittenIntoDeletedFolder(local bool, base string, present map[string]bool) bool {
+	for dir := path.Dir(base); dir != "."; dir = path.Dir(dir) {
+		if !present[dir] && !r.leftAsSynced(!local, dir) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // leftAsSynced reports whether a side holds base, the folders above it and
