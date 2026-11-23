@@ -789,6 +789,14 @@ func underMoveDestination(a, move *syncdomain.Action) bool {
 	if a.Path == move.Path && !isMoveAction(a) && !isDeleteAction(a) && a.Type != syncdomain.ActionConflictCopy {
 		return true
 	}
+	if (a.Type == syncdomain.ActionLocalDelete || a.Type == syncdomain.ActionCleanup) && move.Type == syncdomain.ActionLocalMove {
+		// A local delete is in snapshot coordinates too, and a cleanup in
+		// the baseline's, which the move re-paths only once it commits:
+		// below the destination either removes what holds the destination
+		// now, the folder the move waits to see deleted
+		// (moveDisplaceDeleteFirst), whose delete waits for them.
+		return false
+	}
 	if strings.HasPrefix(a.Path, move.Path+"/") {
 		return true
 	}

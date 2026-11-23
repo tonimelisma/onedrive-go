@@ -1,16 +1,8 @@
 synced L[] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held delete-undone
-synced L[] R[rm p, mv z p] :: duplicated
-synced L[] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[] R[rm x, mv p x] :: sides-differ left-held
-synced L[] R[rm x, mv p/f x] :: duplicated
-synced L[] R[rm x, mv p/f x] refuse upload p/f #1 :: duplicated
-synced L[] R[rm x, mv z x] :: duplicated
-synced L[] R[rm x, mv z x] refuse upload z #1 :: duplicated
 synced L[mv p q] R[mv x q, mv p/f x] :: duplicated
 synced L[mv p q] R[mv x q, mv p/f x] refuse download x #1 :: duplicated
 synced L[mv p q] R[mv x q, mv p/f x] refuse upload q/f #1 :: duplicated
-synced L[mv p q] R[mv x q, mv z x] :: duplicated
-synced L[mv p q] R[mv x q, mv z x] refuse upload z #1 :: duplicated
 synced L[mv p q] R[rm x, mv p/f x] :: duplicated
 synced L[mv p q] R[rm x, mv p/f x] refuse upload q/f #1 :: duplicated
 synced L[mv p q] R[rm z, mv p/f z] :: duplicated
@@ -29,9 +21,6 @@ synced L[mv p/f p/g] R[rm x, mv p/f x] refuse upload p/g #1 :: duplicated
 synced L[mv p/f p/g] R[rm z, mv p/f z] :: duplicated
 synced L[mv p/f f] R[rm p, mv x p] :: sides-differ left-held
 synced L[mv p/f f] R[rm p, mv x p] refuse upload f #1 :: sides-differ left-held
-synced L[mv p/f f] R[rm p, mv z p] :: duplicated
-synced L[mv p/f f] R[rm p, mv z p] refuse upload f #1 :: duplicated
-synced L[mv p/f f] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[mv p/f f] R[rm x, mv p x] :: sides-differ left-held
 synced L[mv p/f f] R[rm x, mv p/f x] :: duplicated
 synced L[mv p/f f] R[rm x, mv p/f x] refuse upload f #1 :: duplicated
@@ -39,15 +28,10 @@ synced L[mv p/f f] R[rm z, mv p/f z] :: duplicated
 synced L[mv p/f x/f] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held
 synced L[mv p/f x/f] R[rm p, mv x p] refuse upload x/f #1 :: no-quiet-plan sides-differ left-held
 synced L[mv p/f x/f] R[rm p, mv x p] refuse upload x/f #2 :: no-quiet-plan sides-differ left-held
-synced L[mv p/f x/f] R[rm p, mv z p] :: duplicated
-synced L[mv p/f x/f] R[rm p, mv z p] refuse upload x/f #1 :: duplicated
-synced L[mv p/f x/f] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[mv p/f x/f] R[rm x, mv p x] :: sides-differ left-held
 synced L[mv p/f x/f] R[rm x, mv z x] :: duplicated
 synced L[mv p/f x/f] R[rm z, mv p/f z] :: duplicated
 synced L[rm p/f] R[rm p, mv x p] :: sides-differ left-held
-synced L[rm p/f] R[rm p, mv z p] :: duplicated
-synced L[rm p/f] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[rm p/f] R[rm x, mv p x] :: sides-differ left-held
 synced L[edit p/f] R[rm p, mv x p] :: sides-differ left-held
 synced L[edit p/f] R[rm p, mv z p] :: duplicated
@@ -55,8 +39,6 @@ synced L[edit p/f] R[rm p, mv z p] refuse folder_create p.conflict-15 (remote) #
 synced L[edit p/f] R[rm p, mv z p] refuse upload p.conflict-15/f #1 :: duplicated
 synced L[edit p/f] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[edit p/f] R[rm x, mv p x] :: sides-differ left-held
-synced L[mv x q] R[mv p q, mv z p] :: duplicated
-synced L[mv x q] R[mv p q, mv z p] refuse upload z #1 :: duplicated
 synced L[mv x p/x] R[rm p, mv z p] :: duplicated
 synced L[mv x p/x] R[rm p, mv z p] refuse folder_create p.conflict-14 (remote) #1 :: duplicated
 synced L[mv x p/x] R[rm p, mv z p] refuse upload p.conflict-14/f #1 :: duplicated
@@ -341,11 +323,6 @@ synced L[rm z, mv p/f z] R[mv p/f f] refuse upload z #1 :: duplicated
 synced L[rm z, mv p/f z] R[mv p/f x/f] :: duplicated
 synced L[rm z, mv p/f z] R[mv p/f x/f] refuse download x/f #1 :: duplicated
 synced L[rm z, mv p/f z] R[mv p/f x/f] refuse upload z #1 :: duplicated
-held L[] R[rm p, mv z p] :: duplicated
-held L[] R[rm p, mv z p] refuse folder_create X2 (local) #1 :: duplicated
-held L[] R[rm p, mv z p] refuse upload z #1 :: duplicated
-held L[] R[rm p, mv z p] refuse folder_create x (remote) #1 :: duplicated
-held L[] R[rm p, mv z p] refuse upload x/f #1 :: duplicated
 held L[] R[mv p/f X2/f, mv X2 p/f] :: no-quiet-plan sides-differ
 held L[] R[mv p/f X2/f, rm p] :: duplicated
 held L[] R[mv p/f X2/f, rm p] refuse folder_create X2 (local) #1 :: duplicated

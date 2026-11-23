@@ -2,6 +2,7 @@ package syncplan
 
 import (
 	"log/slog"
+	"maps"
 	"path"
 	"slices"
 	"sort"
@@ -128,6 +129,11 @@ const (
 	// file took its path; that file is renamed to a conflict copy first and
 	// uploaded as a new file.
 	moveDisplaceConflictCopy
+	// moveDisplaceDeleteFirst: a synced folder OneDrive deleted, which the
+	// plan deletes here too (deletedHereByThePlan): the move waits for that
+	// delete, whose own checks keep the folder when it holds anything not as
+	// synced, and the move then lands on the freed path.
+	moveDisplaceDeleteFirst
 )
 
 func (n *moveNode) present(coord moveCoord) bool { return n.paths[coord] != "" }
@@ -717,12 +723,18 @@ func (c *moveComposer) emitRun(order []string, takenBack, parkedFirst map[string
 // run.
 func (e *moveEmitter) takeBackHeldLandings() bool {
 	changed := false
-	for key, holder := range e.landings {
-		if e.movedOnOneDrive(holder) || e.isLoopPartner(key, holder) {
+	// Decided in key order, and a holder parked by this round keeps every
+	// move landing in its path, so the outcome does not hang on the order
+	// the map gives.
+	parkedNow := map[string]bool{}
+	for _, key := range slices.Sorted(maps.Keys(e.landings)) {
+		holder := e.landings[key]
+		if e.movedOnOneDrive(holder) || e.isLoopPartner(key, holder) || parkedNow[holder] {
 			continue
 		}
 		if !e.parkedFirst[holder] && e.mustLeaveBeforeItsLanding(holder, key) {
 			e.parkedFirst[holder] = true
+			parkedNow[holder] = true
 			changed = true
 			continue
 		}
@@ -2196,6 +2208,11 @@ func composedLocalMoveActions(
 	action.MovedRemotePath = move.remotePath
 
 	switch move.displaced {
+	case moveDisplaceDeleteFirst:
+		// The move waits for the delete at its destination
+		// (moveOrderDependency) and lands where nothing is any more; its
+		// view keeps the folder there as planned, which the worker's
+		// freshness check reads in the snapshot.
 	case moveDisplaceReplace:
 		action.ReplaceLocalTarget = true
 	case moveDisplaceConflictCopy:
@@ -2322,6 +2339,23 @@ func movedAwayOnOneDrive(composition *moveComposition, key, source string) bool 
 	}
 
 	return false
+}
+
+// displaceFoldersDeletedHere marks a synced folder OneDrive deleted as giving
+// way to a move onto its path when the plan deletes it here (localDeletes,
+// the paths SQLite reconciles as a local delete): the folder is unmoved
+// here and gone online. Before, such a folder made the move wait, while the
+// moved item was downloaded at the folder's path and its copy here uploaded
+// again: OneDrive replacing a deleted folder by a moved file (`rm x, mv z
+// x`) left the file twice on both sides.
+func displaceFoldersDeletedHere(inputs *moveInputs, localDeletes map[string]bool) {
+	for i := range inputs.nodes {
+		n := &inputs.nodes[i]
+		if n.itemType == syncdomain.ItemTypeFolder && n.displace == moveDisplaceNever && !n.present(moveCoordRemote) &&
+			n.paths[moveCoordLocal] == n.paths[moveCoordBaseline] && localDeletes[n.paths[moveCoordBaseline]] {
+			n.displace = moveDisplaceDeleteFirst
+		}
+	}
 }
 
 // recreatedSourceVacated reports whether OneDrive no longer holds key at

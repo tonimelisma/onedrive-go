@@ -439,6 +439,43 @@ func TestRunOnce_ARotationThroughNestingSplitAcrossTheSidesKeepsOneDrivesNesting
 	requireScenarioQuietPlan(t, eng)
 }
 
+// Validates: R-2.17.9, R-2.17.2
+//
+// OneDrive deleted the folder archive, which held a synced file, and moved
+// notes.txt onto its path. The folder is unchanged here, so the plan deletes
+// it here too, and the move of notes.txt onto archive waits for that delete
+// and then runs here. Before, a folder at a move's destination made the move
+// wait, while notes.txt was downloaded at archive and its copy here uploaded
+// again: the file twice on both sides. One sync converges with notes.txt
+// once, at archive, the folder's file in the recycle bin as OneDrive left it,
+// and nothing uploaded or downloaded.
+func TestRunOnce_AFileMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-archive", "root", "archive")
+	remote.addFile(t, "item-old", "item-archive", "old.txt", "old\n")
+	remote.addFile(t, "item-notes", "root", "notes.txt", "notes\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	remote.deleteAt(t, "archive")
+	remote.moveAt(t, "notes.txt", "archive")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes")
+	assert.Zero(t, superseded)
+
+	want := map[string]string{"archive": "notes\n"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "archive", remote.pathOf("item-notes"), "notes.txt is the item OneDrive moved")
+	assert.Zero(t, remote.uploads, "nothing is uploaded again")
+	assert.Equal(t, downloadsBefore, remote.downloads, "notes.txt is moved here, not downloaded")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-2.17.6, R-2.1.7
 //
 // Three folders moved into each other's new folders here: H moved aside,

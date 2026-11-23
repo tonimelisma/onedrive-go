@@ -684,6 +684,18 @@ func (r *exRun) failf(invariant, format string, args ...any) {
 // (conflictModelPath).
 const exConflictInfix = ".conflict-"
 
+// checkNoDuplicates fails the run when a side ends with one file content at
+// two plain paths (filesByContent).
+func (r *exRun) checkNoDuplicates() {
+	for _, local := range []bool{true, false} {
+		for content, paths := range r.filesByContent(local) {
+			if len(paths) > 1 {
+				r.failf(exDuplicated, "%s holds %q at %v", exSideName(local), content, paths)
+			}
+		}
+	}
+}
+
 // filesByContent lists, per file content a side holds outside conflict
 // copies, the paths it holds it at, sorted. A conflict copy keeps both on
 // purpose, under a name that tells the user; the same content at two plain
@@ -810,13 +822,7 @@ func (r *exRun) run() {
 			r.failf(exWrittenLost, "written %q is lost", content)
 		}
 	}
-	for _, local := range []bool{true, false} {
-		for content, paths := range r.filesByContent(local) {
-			if len(paths) > 1 {
-				r.failf(exDuplicated, "%s holds %q at %v", exSideName(local), content, paths)
-			}
-		}
-	}
+	r.checkNoDuplicates()
 	for _, base := range r.mustGo {
 		if r.stillHolds(true, base) || r.stillHolds(false, base) {
 			r.failf(exDeleteUndone, "the delete of %s did not happen", base)
@@ -1772,6 +1778,45 @@ func TestPlannerPairs_AHeldFolderMovedIntoARenamedFolderRunsOnceItsNameIsFree(t 
 			{kind: exMoveFolder, from: "x2", to: "q/x2"},
 		},
 	})
+}
+
+// Validates: R-2.17.9, R-2.17.2
+//
+// OneDrive deleted a folder and moved a file onto its path: z onto p, which
+// held the synced f, or onto the empty x, with this computer leaving the
+// folder as synced or deleting f in it. The plan deletes the folder here and
+// the move of z onto its path waits for that delete, so z ends once on each
+// side, on every run with each create refused once. Before, the folder made
+// the move wait, and z was downloaded at the folder's path while its copy
+// here went back to OneDrive as a new file.
+func TestPlannerPairs_AFileMovedOnOneDriveOntoAFolderItDeletedEndsOnce(t *testing.T) {
+	t.Parallel()
+
+	// Registered before the subtests run in parallel: registering checks,
+	// then registers, and two at once would both register.
+	registerExCachingDriver(t)
+	for _, tc := range []struct {
+		name   string
+		folder string
+		local  []exEdit
+	}{
+		{name: "onto a folder with a file", folder: "p"},
+		{name: "onto an empty folder", folder: "x"},
+		{name: "onto a folder emptied here", folder: "p", local: []exEdit{{kind: exDeleteFile, from: "p/f"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			requirePairKeepsEveryInvariant(t, &exPair{
+				start: exStartNamed(t, "synced"),
+				local: tc.local,
+				remote: []exEdit{
+					{kind: exDeleteFolder, from: tc.folder},
+					{kind: exMoveFile, from: "z", to: tc.folder},
+				},
+			})
+		})
+	}
 }
 
 // Validates: R-2.17.6, R-2.1.7

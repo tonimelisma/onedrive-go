@@ -2319,6 +2319,37 @@ func TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt(t *testin
 	}
 }
 
+// Validates: R-2.17.9, R-2.17.2
+//
+// OneDrive deleted archive and moved notes.txt onto its path, and the plan
+// deletes archive here: the local move of notes.txt onto archive waits for
+// that delete, which waits for the deletes and the cleanup below it, and
+// those do not wait for the move. Below a local move's destination a local
+// delete, in snapshot coordinates, and a cleanup, in the baseline's, remove
+// what holds the destination now; ordered after the move they closed a cycle
+// through the folder's delete, dropped on every pass.
+func TestBuildDependencies_ALocalMoveOntoAFolderDeletedHereWaitsForItsDelete(t *testing.T) {
+	t.Parallel()
+
+	folder := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFolder}}
+	file := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFile}}
+	actions := []syncdomain.Action{
+		{Type: syncdomain.ActionLocalDelete, Path: "archive/old.txt", View: file},
+		{Type: syncdomain.ActionCleanup, Path: "archive/gone.txt", View: file},
+		{Type: syncdomain.ActionLocalDelete, Path: "archive", View: folder},
+		{Type: syncdomain.ActionLocalMove, OldPath: "notes.txt", Path: "archive", View: file},
+	}
+	kept, deps, _ := isolateDependencyCycles(actions, nil)
+	require.Len(t, kept, len(actions), "no action is dropped as a cycle")
+	assert.Equal(t, [][]int{nil, nil, {0, 1}, {2}}, deps)
+
+	remote := []syncdomain.Action{
+		{Type: syncdomain.ActionRemoteDelete, Path: "archive/old.txt", View: file},
+		{Type: syncdomain.ActionRemoteMove, OldPath: "notes.txt", Path: "archive", View: file},
+	}
+	assert.Equal(t, [][]int{{1}, nil}, buildDependencies(remote), "a delete on OneDrive below a move's destination still waits for it")
+}
+
 // Validates: R-2.17.6
 //
 // Local moves are in the snapshot's coordinates, so a local move whose source
