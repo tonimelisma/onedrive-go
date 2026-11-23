@@ -566,6 +566,13 @@ Every profile, as `go run ./cmd/devtool verify --help` lists them:
 - `seeds`: the nightly search of new seeds of the seeded model tests
 - `failed-test`: reruns the last failed test of a CI log (`--failed-log`)
 
+Working in a Claude Code cloud session (a root container, one assigned
+branch, GitHub only through connector tools)? Read
+[cloud-development.md](cloud-development.md) for how the process differs
+there: `verify --as-user` runs the tests as a non-root user, and
+`devtool worktree prune-merged` removes builder worktrees whose work is in
+`origin/main`.
+
 If you are new here, it is worth opening `internal/devtool/verify.go`,
 `verify_e2e.go`, `verify_stress.go`, and `verify_summary.go`. Those files
 explain the repo-owned verification flow without hiding it behind external
@@ -587,7 +594,7 @@ mistake it for optional contributor convenience.
 `cmd/devtool` and `internal/devtool` own:
 
 - `verify`: repo-owned verification profiles
-- `worktree`: worktree creation/bootstrap rooted at `origin/main`; callers must fetch first
+- `worktree`: worktree creation from a freshly fetched `origin/main` and its bootstrap, and `prune-merged`, which removes builder worktrees whose work is already in `origin/main`
 - `bench`: benchmark scenarios and result bundles
 - `cleanup-audit`: read-only git cleanup classification
 
@@ -601,7 +608,8 @@ The file-family split inside `internal/devtool` is also worth knowing:
 | `verify_failed.go`, `go_test_log.go` | The failed-test profile; the one reader of go test logs, raw or `-json` |
 | `nightly.go`, `nightly_verdict.go`, `nightly_report.go`, `nightly_seed_issues.go` | The nightly claims and check; the verdict rule of a scheduled run; the nightly's commit status and issue; the failing seeds' issues |
 | `verify_dod.go`, `verify_dod_ci_wait.go` | The DoD stages and their CI waits |
-| `worktree.go` | Worktree creation and bootstrap rooted at `origin/main`; callers must fetch first |
+| `worktree.go`, `worktree_prune.go` | Worktree creation from a freshly fetched `origin/main` and its bootstrap; removal of the builder worktrees whose work is in `origin/main` |
+| `verify_as_user.go` | Running verify's go test steps as a non-root user when verify runs as root |
 | `bench.go`, `bench_live.go` | Benchmark scenarios, result recording, and live benchmark runs against real accounts |
 | `cleanup_audit.go` | Read-only git cleanup classification |
 | `runner.go` | Shared subprocess execution helpers for repo tooling |

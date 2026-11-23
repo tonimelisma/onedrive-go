@@ -151,9 +151,17 @@ type VerifyOptions struct {
 	// derives it from the UTC date of Now.
 	SeedStart uint64
 	// Now is the clock of the seeds profile's date; nil is the real clock.
-	Now    func() time.Time
+	Now func() time.Time
+	// AsUser names the user the go test steps run as when verify runs as
+	// root on Linux (`--as-user`, default from DEVTOOL_TEST_USER). Empty
+	// runs them as root, after one warning.
+	AsUser string
 	Stdout io.Writer
 	Stderr io.Writer
+
+	// testUserHost stands in for the host's user database, tools and
+	// effective uid in tests; nil reads the real host.
+	testUserHost *testUserHost
 }
 
 type VerifySummary struct {
@@ -273,6 +281,19 @@ func (p *verifyPlan) setCheckFormat(checkFormat bool) error {
 }
 
 func RunVerify(ctx context.Context, runner commandRunner, opts *VerifyOptions) (runErr error) {
+	if opts != nil {
+		host := defaultTestUserHost()
+		if opts.testUserHost != nil {
+			host = *opts.testUserHost
+		}
+		_, stderr := resolveVerifyWriters(opts)
+		switched, err := withTestUser(runner, opts.AsUser, host, stderr)
+		if err != nil {
+			return fmt.Errorf("choose test user: %w", err)
+		}
+		runner = switched
+	}
+
 	if opts != nil && opts.DOD {
 		if err := RunVerifyDOD(ctx, runner, opts); err != nil {
 			return fmt.Errorf("run dod verify: %w", err)

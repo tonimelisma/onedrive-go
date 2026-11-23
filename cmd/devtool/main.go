@@ -27,6 +27,8 @@ type worktreeAddFunc func(context.Context, string, string, string) error
 
 type worktreeBootstrapFunc func(string, string) error
 
+type worktreePruneFunc func(context.Context, devtool.WorktreePruneOptions) error
+
 func main() {
 	os.Exit(execute(context.Background(), newRootCmd(), os.Stderr))
 }
@@ -54,7 +56,7 @@ func newRootCmd() *cobra.Command {
 		newVerifyCmd(defaultCWD, defaultVerify),
 		newBenchCmd(defaultCWD, defaultBench),
 		newCleanupAuditCmd(defaultCWD, defaultCleanupAudit),
-		newWorktreeCmd(defaultCWD, defaultAddWorktree, defaultBootstrapWorktree),
+		newWorktreeCmd(defaultCWD, defaultAddWorktree, defaultBootstrapWorktree, defaultPruneMergedWorktrees),
 		newNightlyCmd(defaultCWD, defaultNightly),
 	)
 	silenceRunErrorUsage(cmd)
@@ -197,6 +199,7 @@ type verifyFlags struct {
 	failedTestLog      string
 	checkFormat        bool
 	seedStart          uint64
+	asUser             string
 }
 
 func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
@@ -257,6 +260,7 @@ func (f *verifyFlags) options(cmd *cobra.Command, repoRoot string, profile devto
 		FailedTestLog:      f.failedTestLog,
 		CheckFormat:        f.checkFormat,
 		SeedStart:          f.seedStart,
+		AsUser:             f.asUser,
 		Stdout:             cmd.OutOrStdout(),
 		Stderr:             cmd.ErrOrStderr(),
 	}
@@ -323,6 +327,12 @@ func (f *verifyFlags) registerProfileFlags(cmd *cobra.Command) {
 		"check-format",
 		false,
 		"list the files the formatters would change and fail when there are any, instead of rewriting them",
+	)
+	cmd.Flags().StringVar(
+		&f.asUser,
+		"as-user",
+		os.Getenv(devtool.TestUserEnv),
+		"run the go test steps as this user when verify runs as root on Linux (default from "+devtool.TestUserEnv+")",
 	)
 	cmd.Flags().BoolVar(
 		&f.classifyLiveQuirks,
@@ -402,16 +412,47 @@ func newBenchCmd(getwd cwdLookup, runBench benchFunc) *cobra.Command {
 	return cmd
 }
 
-func newWorktreeCmd(getwd cwdLookup, addWorktree worktreeAddFunc, bootstrapWorktree worktreeBootstrapFunc) *cobra.Command {
+func newWorktreeCmd(
+	getwd cwdLookup,
+	addWorktree worktreeAddFunc,
+	bootstrapWorktree worktreeBootstrapFunc,
+	pruneMerged worktreePruneFunc,
+) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "worktree",
-		Short: "Create and bootstrap repo worktrees",
+		Short: "Create, bootstrap and prune repo worktrees",
 	}
 
 	cmd.AddCommand(
 		newWorktreeAddCmd(getwd, addWorktree),
 		newWorktreeBootstrapCmd(getwd, bootstrapWorktree),
+		newWorktreePruneMergedCmd(getwd, pruneMerged),
 	)
+
+	return cmd
+}
+
+func newWorktreePruneMergedCmd(getwd cwdLookup, pruneMerged worktreePruneFunc) *cobra.Command {
+	var dryRun bool
+
+	cmd := &cobra.Command{
+		Use:   "prune-merged",
+		Short: "Remove the clean builder worktrees under .claude/worktrees whose work is already in origin/main",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repoRoot, err := getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+
+			return pruneMerged(cmd.Context(), devtool.WorktreePruneOptions{
+				RepoRoot: repoRoot,
+				DryRun:   dryRun,
+				Stdout:   cmd.OutOrStdout(),
+			})
+		},
+	}
+
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "list what would be removed and remove nothing")
 
 	return cmd
 }
@@ -559,6 +600,14 @@ func defaultAddWorktree(ctx context.Context, repoRoot, path, branch string) erro
 func defaultBootstrapWorktree(repoRoot, targetPath string) error {
 	if err := devtool.BootstrapWorktree(repoRoot, targetPath); err != nil {
 		return fmt.Errorf("bootstrap worktree: %w", err)
+	}
+
+	return nil
+}
+
+func defaultPruneMergedWorktrees(ctx context.Context, opts devtool.WorktreePruneOptions) error {
+	if err := devtool.PruneMergedWorktrees(ctx, devtool.ExecRunner{}, opts); err != nil {
+		return fmt.Errorf("prune merged worktrees: %w", err)
 	}
 
 	return nil

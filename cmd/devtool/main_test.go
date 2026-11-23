@@ -97,6 +97,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 		"--race-timeout", "70m",
 		"--failed-log", "/tmp/ci.log",
 		"--check-format",
+		"--as-user", "dev",
 	})
 
 	require.NoError(t, cmd.Execute())
@@ -123,6 +124,37 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.Equal(t, 70*time.Minute, got.RaceTimeout)
 	assert.Equal(t, "/tmp/ci.log", got.FailedTestLog)
 	assert.True(t, got.CheckFormat)
+	assert.Equal(t, "dev", got.AsUser)
+}
+
+// Validates: R-6.10.38
+//
+// A cloud environment sets the test user once, for every session, through
+// the environment; the flag still overrides it.
+func TestNewVerifyCmdTakesTheTestUserFromTheEnvironment(t *testing.T) {
+	t.Setenv(devtool.TestUserEnv, "builder")
+
+	var got devtool.VerifyOptions
+	newCmd := func(args ...string) error {
+		cmd := newVerifyCmd(
+			func() (string, error) { return testRepoRoot, nil },
+			func(_ context.Context, opts *devtool.VerifyOptions) error {
+				got = *opts
+				return nil
+			},
+		)
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		cmd.SetArgs(args)
+
+		return cmd.Execute()
+	}
+
+	require.NoError(t, newCmd("quick"))
+	assert.Equal(t, "builder", got.AsUser)
+
+	require.NoError(t, newCmd("quick", "--as-user", "dev"))
+	assert.Equal(t, "dev", got.AsUser)
 }
 
 // Validates: R-6.10.14
@@ -266,6 +298,31 @@ func TestNewWorktreeAddCmdCallsAddWorktree(t *testing.T) {
 	assert.Equal(t, testRepoRoot, gotRepoRoot)
 	assert.Equal(t, "/wt", gotPath)
 	assert.Equal(t, "refactor/test", gotBranch)
+}
+
+// Validates: R-6.10.37
+func TestNewWorktreePruneMergedCmdPassesDryRun(t *testing.T) {
+	t.Parallel()
+
+	var got devtool.WorktreePruneOptions
+	calls := 0
+	cmd := newWorktreePruneMergedCmd(
+		func() (string, error) { return testRepoRoot, nil },
+		func(_ context.Context, opts devtool.WorktreePruneOptions) error {
+			calls++
+			got = opts
+			return nil
+		},
+	)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--dry-run"})
+
+	require.NoError(t, cmd.Execute())
+	require.Equal(t, 1, calls)
+	assert.Equal(t, testRepoRoot, got.RepoRoot)
+	assert.True(t, got.DryRun)
+	assert.NotNil(t, got.Stdout)
 }
 
 // Validates: R-6.10.21
