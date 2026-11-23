@@ -812,21 +812,31 @@ func (e *moveEmitter) parkOneVacatingLoop(order []string) bool {
 			continue
 		}
 		for _, side := range []moveCoord{moveCoordLocal, moveCoordRemote} {
-			if !n.present(side) || sameLocation(e.location(n, side), e.target[key]) {
-				continue
-			}
-			folder, lands := e.vacatingFolder(n, side, e.targetPath(key))
-			if !lands || e.state[folder] != moveEmitPending || e.unresolvable[folder] || !e.targetHangsOff(folder, key) ||
-				(side == moveCoordLocal && e.holdsALocalLanding(folder)) {
-				continue
-			}
-			if e.park(folder, side) {
+			if folder, ok := e.vacatingLoopFolder(key, n, side); ok && e.park(folder, side) {
 				return true
 			}
 		}
 	}
 
 	return false
+}
+
+// vacatingLoopFolder is the folder parkOneVacatingLoop parks for key on side:
+// the pending folder whose move vacates the path key lands below, when that
+// folder's own target hangs off key.
+func (e *moveEmitter) vacatingLoopFolder(key string, n *moveNode, side moveCoord) (string, bool) {
+	if !n.present(side) || sameLocation(e.location(n, side), e.target[key]) {
+		return "", false
+	}
+	folder, lands := e.vacatingFolder(n, side, e.targetPath(key))
+	if !lands || e.state[folder] != moveEmitPending || e.unresolvable[folder] || !e.targetHangsOff(folder, key) {
+		return "", false
+	}
+	if side == moveCoordLocal && e.holdsALocalLanding(folder) {
+		return "", false
+	}
+
+	return folder, true
 }
 
 // targetHangsOff reports whether key's target position hangs, directly or

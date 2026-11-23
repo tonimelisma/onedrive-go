@@ -939,7 +939,7 @@ paused_until = "`+expired+`"
 		if err == nil && how == syscall.LOCK_EX|syscall.LOCK_NB {
 			acquisitions++
 		}
-		return err
+		return err //nolint:wrapcheck // the seam returns flock's errno as flock does
 	}
 
 	clearExpiredPauses(t.Context(), locker, cfgPath, cfg, now, testLogger(t))

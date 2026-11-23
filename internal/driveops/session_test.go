@@ -1604,6 +1604,8 @@ func (d *quirkDrive) listing(node *quirkNode, path string) map[string]any {
 }
 
 func (d *quirkDrive) serve(t *testing.T) http.HandlerFunc {
+	t.Helper()
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		d.requests.Add(1)
 		route := strings.TrimPrefix(r.URL.Path, quirkDrivePrefix)

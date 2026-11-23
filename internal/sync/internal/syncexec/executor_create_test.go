@@ -315,8 +315,8 @@ func (f *pagedConflictFolder) itemClient() *syncfixture.ExecutorMockItemClient {
 }
 
 // answers returns a read that answers item, for any name.
-func answers(item graph.Item) func(string) (*graph.Item, error) {
-	return func(string) (*graph.Item, error) { return &item, nil }
+func answers(item *graph.Item) func(string) (*graph.Item, error) {
+	return func(string) (*graph.Item, error) { return item, nil }
 }
 
 // misses returns a read that fails with err, for any name.
@@ -345,12 +345,12 @@ func TestExecutor_CreateRemoteFolder_ConflictReadsTheNameBeforeListing(t *testin
 		wantTaken bool
 		wantStale bool
 	}{
-		{label: "the read answers the folder", read: answers(folder), wantItem: "existing-folder"},
+		{label: "the read answers the folder", read: answers(&folder), wantItem: "existing-folder"},
 		{
-			label: "the read answers another spelling", read: answers(graph.Item{ID: "other", Name: "Photos", IsFolder: true}),
+			label: "the read answers another spelling", read: answers(&graph.Item{ID: "other", Name: "Photos", IsFolder: true}),
 			wantTaken: true,
 		},
-		{label: "the read answers a file", read: answers(graph.Item{ID: "file", Name: "photos"}), wantStale: true},
+		{label: "the read answers a file", read: answers(&graph.Item{ID: "file", Name: "photos"}), wantStale: true},
 		{label: "the read finds nothing yet", read: misses(notFound), wantPages: conflictNamePage, wantItem: "existing-folder"},
 		{
 			label: "the read answers 400", read: misses(&graph.GraphError{StatusCode: http.StatusBadRequest, Err: graph.ErrBadRequest}),
@@ -407,9 +407,9 @@ func TestExecutor_Upload_CreateConflictReadsTheNameBeforeListing(t *testing.T) {
 		wantTaken bool
 		wantStale bool
 	}{
-		{label: "the read answers the same spelling", read: answers(theirs), wantStale: true},
-		{label: "the read answers another spelling", read: answers(graph.Item{ID: "other", Name: "X.DOCX"}), wantTaken: true},
-		{label: "the read answers a folder", read: answers(graph.Item{ID: "dir", Name: "x.docx", IsFolder: true}), wantStale: true},
+		{label: "the read answers the same spelling", read: answers(&theirs), wantStale: true},
+		{label: "the read answers another spelling", read: answers(&graph.Item{ID: "other", Name: "X.DOCX"}), wantTaken: true},
+		{label: "the read answers a folder", read: answers(&graph.Item{ID: "dir", Name: "x.docx", IsFolder: true}), wantStale: true},
 		{label: "the read finds nothing yet", read: misses(notFound), wantPages: conflictNamePage, wantStale: true},
 		{label: "the read fails otherwise", read: misses(&graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError})},
 	} {

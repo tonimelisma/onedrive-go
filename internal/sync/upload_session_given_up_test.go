@@ -85,7 +85,7 @@ func TestRunOnce_ConflictOverAnInterruptedLargeUploadDropsItsSession(t *testing.
 		}
 	}
 	assert.Equal(t, 1, copies, "the conflict copy holds the local content on OneDrive")
-	got, err := os.ReadFile(filepath.Join(syncRoot, "big.bin"))
+	got, err := os.ReadFile(filepath.Join(syncRoot, "big.bin")) //nolint:gosec // the test reads its own sync folder
 	require.NoError(t, err)
 	assert.Equal(t, theirs, string(got))
 	requireScenarioQuietPlan(t, eng)

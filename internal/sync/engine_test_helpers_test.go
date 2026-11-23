@@ -207,7 +207,7 @@ func newTestEngineInDirWith(
 		flow:   flow,
 		crash:  crash,
 	}
-	seedTestEngineAccount(t, inputs.DataDir, inputs.AccountCanonicalID)
+	seedTestEngineAccount(t, ctx, inputs.DataDir, inputs.AccountCanonicalID)
 
 	t.Cleanup(func() {
 		assert.NoError(t, testEng.Close(context.WithoutCancel(ctx)), "Engine.Close")
@@ -225,13 +225,13 @@ func testEngineAccountCanonicalID() driveid.CanonicalID {
 // seedTestEngineAccount records the test engine's account in the catalog of
 // dataDir, without a sign-in requirement; an engine with no account records
 // none.
-func seedTestEngineAccount(t *testing.T, dataDir string, account driveid.CanonicalID) {
+func seedTestEngineAccount(t *testing.T, ctx context.Context, dataDir string, account driveid.CanonicalID) {
 	t.Helper()
 
 	if account.IsZero() {
 		return
 	}
-	require.NoError(t, config.UpdateCatalogForDataDir(t.Context(), dataDir, func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalogForDataDir(ctx, dataDir, func(catalog *config.Catalog) error {
 		record := config.CatalogAccount{
 			CanonicalID: account.String(),
 			Email:       account.Email(),

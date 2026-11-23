@@ -167,7 +167,7 @@ func TestRunOnce_TheSignInRequirementIsTheSyncedAccountsAloneOfTwoAtOneAddress(t
 				inputs.AccountCanonicalID = synced
 				inputs.DriveVerifier = mock
 			})
-			seedTestEngineAccount(t, eng.dataDir, other)
+			seedTestEngineAccount(t, t.Context(), eng.dataDir, other)
 			syncfixture.WriteLocalFile(t, syncRoot, "local.txt", "local content\n")
 
 			_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})

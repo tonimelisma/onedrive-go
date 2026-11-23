@@ -106,7 +106,7 @@ func TestWithConfigMutationLock_CanceledContextEndsTheWait(t *testing.T) {
 	})
 
 	require.ErrorIs(t, err, context.Canceled)
-	assert.NotErrorIs(t, err, ErrConfigLocked, "the wait ended on the context, not on the timeout")
+	require.NotErrorIs(t, err, ErrConfigLocked, "the wait ended on the context, not on the timeout")
 	assert.Contains(t, err.Error(), dir)
 	assert.False(t, ran, "the change must not run without the lock")
 	assert.Equal(t, 1, attempts, "no attempt after the context ended")

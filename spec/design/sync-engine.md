@@ -1220,7 +1220,7 @@ publication path hands the engine's filter to the snapshot, the store's
 `ShortcutChildWorkSnapshot` included: until 2026-11-23 that one passed an
 empty filter, so the snapshot published after a child acknowledgement started
 a child for a shortcut the user excluded, with nothing below it hidden
-(`TestEngine_ShortcutTheFiltersExcludeLeavesNoFolderAndNoWork`,
+(`TestEngine_ShortcutTheFiltersExcludeLeavesNoFolderAndNoWork`, `TestEngine_ShortcutTheFiltersExcludeLeavesAFolderAlreadyThereAlone`, `TestEngine_ShortcutTheFiltersExcludeIsNotReadAsTheAliasDeleted`,
 `TestSyncStore_ShortcutChildWorkSnapshotProjectsTheParentsFilter`). The
 record itself stays as the remote observation keeps it, so removing the
 filter picks the shortcut up on the next pass.

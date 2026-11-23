@@ -693,8 +693,10 @@ func TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle(
 	assert.Empty(t, cycled, "every action left has an order")
 
 	unmoved := []syncdomain.Action{
-		{Type: syncdomain.ActionRemoteMove, Path: "inner.txt", OldPath: "sub/inner.txt", ItemID: "inner",
-			View: &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFile}}},
+		{
+			Type: syncdomain.ActionRemoteMove, Path: "inner.txt", OldPath: "sub/inner.txt", ItemID: "inner",
+			View: &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFile}},
+		},
 		{Type: syncdomain.ActionRemoteDelete, Path: "sub", View: folder},
 	}
 	kept, withheld = withholdDeletesInsideFolderMoveCycles(nil, unmoved, syncdomain.SyncBidirectional)
