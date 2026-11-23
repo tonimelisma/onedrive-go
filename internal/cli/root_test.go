@@ -686,6 +686,41 @@ func TestMustCLIContext_Returns(t *testing.T) {
 	assert.Equal(t, "/must-test", cc.Cfg.SyncDir)
 }
 
+// A data command's setup builds one session runtime, over its resolved
+// config, so the command holds one token source per sign-in file; a command
+// that resolves no config builds none until it needs one.
+//
+// Validates: R-6.8.27
+func TestPersistentPreRunE_ADataCommandBuildsOneSessionRuntime(t *testing.T) {
+	setTestDriveHome(t)
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:one-runtime@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+
+	cmd := newRootCmdWithWriters(io.Discard, io.Discard)
+	require.NoError(t, cmd.PersistentFlags().Set("config", cfgPath))
+
+	ls, _, err := cmd.Find([]string{"ls"})
+	require.NoError(t, err)
+	ls.SetContext(t.Context())
+	require.NoError(t, cmd.PersistentPreRunE(ls, nil))
+
+	cc := cliContextFrom(ls.Context())
+	require.NotNil(t, cc)
+	require.NotNil(t, cc.Cfg, "ls resolves its drive")
+	require.Len(t, cc.runtimes, 1, "one runtime for the command")
+	assert.Same(t, cc.runtimes[0], cc.Runtime)
+
+	status, _, err := cmd.Find([]string{"status"})
+	require.NoError(t, err)
+	status.SetContext(t.Context())
+	require.NoError(t, cmd.PersistentPreRunE(status, nil))
+
+	statusContext := cliContextFrom(status.Context())
+	require.NotNil(t, statusContext)
+	assert.Empty(t, statusContext.runtimes, "built when the command first needs it")
+}
+
 // --- CLIFlags tests ---
 
 func TestCLIFlags_PopulatedByPersistentPreRunE(t *testing.T) {

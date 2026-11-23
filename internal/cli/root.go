@@ -597,7 +597,10 @@ func initializeCLIContext(
 		return err
 	}
 	bootstrapLog.replayInto(ctx, cc.Logger.Handler())
-	cc.Runtime = cc.newSessionRuntime(nil, cc.Logger)
+	// The command's one session runtime is built when it is first needed
+	// (cc.runtime, syncSessionRuntime, initializeResolvedCLIContext), never
+	// here: a data command would otherwise hold this one and the one its
+	// resolved config builds, two token sources for one sign-in file.
 
 	perfSession, perfCtx := newCommandPerfSession(ctx, cmd, cc.Logger)
 	cc.PerfSession = perfSession
@@ -647,8 +650,15 @@ func initializeResolvedCLIContext(cmd *cobra.Command, cc *CLIContext) error {
 	if err := cc.useLoggingConfig(resolved.LoggingConfig); err != nil {
 		return err
 	}
+	// One runtime per command: a runtime a setup step already built through
+	// cc.runtime gets the resolved holder instead of a second runtime beside
+	// it, which would load its own token source for the same sign-in file.
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
-	cc.Runtime = cc.newSessionRuntime(holder, cc.Logger)
+	if cc.Runtime == nil {
+		cc.Runtime = cc.newSessionRuntime(holder, cc.Logger)
+	} else {
+		cc.Runtime.UseHolder(holder)
+	}
 
 	return nil
 }
