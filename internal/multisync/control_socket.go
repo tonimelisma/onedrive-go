@@ -751,6 +751,7 @@ func (o *Orchestrator) handleControlCommand(
 	case controlCommandStatus:
 		cmd.response <- controlResponse{Body: o.controlStatus(synccontrol.OwnerModeWatch)}
 	case controlCommandReload:
+		o.heartbeat.beatFor(reloadStep, watchLoopStepLimit)
 		reloadErr := o.reload(ctx, mode, opts, runners, runnerEvents, childWork)
 		switch {
 		case errors.Is(reloadErr, ErrSyncStuck):

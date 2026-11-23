@@ -57,7 +57,8 @@ func (o *Orchestrator) retireWatchRunner(ctx context.Context, runners map[mountI
 	}
 	// One mount's stop is held by the runner's stop bound and then the
 	// engine's close bound.
-	o.heartbeat.beatFor("stopping a drive", watchRunnerStopTimeout+engineCloseTimeout)
+	endStep := o.heartbeat.beatFor("stopping a drive", watchRunnerStopTimeout+engineCloseTimeout)
+	defer endStep()
 	if wr.stuckErr != nil {
 		return wr.stuckErr
 	}

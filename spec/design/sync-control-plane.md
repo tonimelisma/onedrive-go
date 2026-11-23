@@ -63,6 +63,7 @@ runtime package that implements it.
 | Behavior | Evidence |
 | --- | --- |
 | `RunWatch` reports ready, reload and stop transitions through `WatchLifecycle`, and a watch that never started reports none. | `TestRunWatch_ReportsLifecycleTransitions`, `TestRunWatch_StartupFailureIsNotReady` |
+| The watch loop's heartbeat beats on every iteration and while idle, and every loop case that can block (a reload a client asked for, a pass over the drive set, a drive's event) is a declared step that reads alive past the ordinary silence limit and hung past its own; a step inside another ends back in the outer step, and a finished loop is never hung (R-6.6.36). | `TestLoopHeartbeat_DeclaredStepExtendsTheLimit`, `TestLoopHeartbeat_AnInnerStepEndsBackInTheOuterStep`, `TestLoopHeartbeat_AFinishedLoopIsNeverHung`, `TestRunWatch_BeatsOnEveryIterationAndWhileIdle`, `TestRunWatch_ABlockingCaseIsADeclaredStep` |
 | `RunWatch` starts the runnable runtime mount set, skips incompatible-store mounts with immediate warnings, refuses a start in which no drive could start, and with every drive paused starts, reports ready with the paused drives and idles until a reload resumes one (R-3.4.2). | `TestOrchestrator_RunWatch_SingleMount`, `TestOrchestrator_RunWatch_MultiMount`, `TestOrchestrator_RunWatch_SkipsIncompatibleStoreMountWhenAnotherMountStarts`, `TestOrchestrator_RunWatch_ReturnsStartupFailureWhenNoMountStarts`, `TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed` |
 | The Unix control socket is the single owner lock for one-shot and watch sync, is acquired before parent engines start, reports owner mode/status, rejects unsupported one-shot control requests with typed `foreground_sync_running`, and keeps reload/stop serialized through the watch control loop. Dry-run one-shot sync uses the same owner lock as live one-shot sync. | `TestRunOnce_ControlSocketBlocksWatchOwner`, `TestRunOnce_BindsControlSocketBeforeEngineStartup`, `TestRunOnce_DryRunBindsControlSocketBeforeEngineStartup`, `TestRunWatch_BindsControlSocketBeforeEngineStartup`, `TestOrchestrator_OneShotControlSocket_StatusAndRejectsNonStatus`, `TestOrchestrator_ControlSocket_StatusAndStop`, `TestE2E_SyncWatch_OwnerSocketBlocksCompetingOwners` |
 | The control socket also exposes live perf snapshots and explicit capture bundles for both one-shot and watch owners without creating a second network surface or durable metrics store. | `TestOrchestrator_OneShotControlSocket_PerfStatusAndCapture`, `TestOrchestrator_OneShotControlSocket_PerfCaptureRejectsInvalidDuration`, `internal/cli/perf_test.go` (`TestMainWithWriters_PerfCaptureJSON_ForOneShotOwner`, `TestMainWithWriters_PerfCaptureFailsWhenNoOwnerIsRunning`) |
@@ -472,6 +473,23 @@ files is a `WatchSignInSaveChanged` lifecycle event, which the CLI's status
 line follows; the drives keep syncing, and the sources retry the write at
 their next token use
 (`TestRunWatch_UnsavedSignInIsLoggedOncePerDistinctFailure`).
+
+The RunWatch loop keeps a heartbeat (`loop_heartbeat.go`) that the CLI's
+systemd keepalive reads through `Orchestrator.LoopAlive` (R-6.6.36). The loop
+beats at the top of every iteration, and an idle heartbeat tick every 15 s
+wakes it to beat. A case that can block declares its step first with
+`beatFor`: a config reload (`reloading the config`, whichever trigger asked),
+a drive's event (`handling a drive's event`) and a pass over the drive set
+(`updating the drive set`, on the reconcile tick and the restart timer), each
+with `watchLoopStepLimit` (5 min), and inside them a drive's start and stop
+(`starting a drive`, `stopping a drive`), which end back in the outer step.
+The status and stop commands, the ticks, a fatal helper and the context's
+end return at once. Outside a step the loop may be silent for 60 s
+(`loopSilenceLimit`); inside one, until the step's deadline. Once `RunWatch`
+has returned the heartbeat reads finished, so the process's exit is judged by
+the service manager's stop timeout, not by the watchdog. The step limits are
+the limits the heartbeat observes, not deadlines anything enforces: a step
+past its limit is treated as hung, and the keepalive stops.
 
 A runner that exits with an error is not restarted in the same pass. Its
 restart waits 5 s, doubling per consecutive failure up to 5 min; a runner that

@@ -135,8 +135,13 @@ func (s *syncNotifier) failed(err error) {
 }
 
 // runWatchdog sends WATCHDOG=1 at the interval systemd asked for until ctx
-// ends. The keepalive proves the process is scheduling goroutines; the watch
-// loop's own health is reported through STATUS= and the exit status.
+// ends, while the watch loop's heartbeat says it is making progress
+// (R-6.6.36). A loop silent past its limit gets no keepalive, so systemd
+// kills the process at its next deadline and Restart= starts a fresh one: a
+// hung watch is restarted instead of sitting there with drives unsynced. A
+// false alarm costs a restart, not data: a restart is the same stop and
+// start any crash or reboot causes, which every store write already
+// survives.
 func (s *syncNotifier) runWatchdog(ctx context.Context, ticks <-chan time.Time) {
 	silenceLogged := false
 	for {
@@ -144,7 +149,11 @@ func (s *syncNotifier) runWatchdog(ctx context.Context, ticks <-chan time.Time) 
 		case <-ctx.Done():
 			return
 		case <-ticks:
-			silenceLogged = s.observeLoopSilence(silenceLogged)
+			var alive bool
+			alive, silenceLogged = s.loopProgress(silenceLogged)
+			if !alive {
+				continue
+			}
 			if err := s.notifier.Watchdog(); err != nil {
 				s.logger.Debug("systemd watchdog keepalive failed", slog.Any("error", err))
 			}
@@ -152,28 +161,29 @@ func (s *syncNotifier) runWatchdog(ctx context.Context, ticks <-chan time.Time) 
 	}
 }
 
-// observeLoopSilence logs one Error when the watch loop has been silent past
-// its limit, and returns whether that silence has been logged. The keepalive
-// is still sent: the heartbeat only observes until a long soak has shown it
-// raises no false alarm.
-func (s *syncNotifier) observeLoopSilence(logged bool) bool {
-	alive := s.loopAlive.Load()
-	if alive == nil {
-		return logged
+// loopProgress reports whether the keepalive may be sent: the watch loop
+// beat within its limit, or there is no loop to read yet. It logs one Error
+// when a silence past the limit starts, and returns whether that silence has
+// been logged.
+func (s *syncNotifier) loopProgress(logged bool) (alive bool, silenceLogged bool) {
+	loopAlive := s.loopAlive.Load()
+	if loopAlive == nil {
+		return true, logged
 	}
-	ok, step, silent := (*alive)()
+	ok, step, silent := (*loopAlive)()
 	if ok {
-		return false
+		return true, false
 	}
 	if !logged {
 		attrs := []any{slog.Duration("silent", silent)}
 		if step != "" {
 			attrs = append(attrs, slog.String("step", step))
 		}
-		s.logger.Error("the sync loop has made no progress past its limit", attrs...)
+		s.logger.Error("the sync loop has made no progress past its limit; "+
+			"stopping the watchdog keepalive so the service manager restarts the sync", attrs...)
 	}
 
-	return true
+	return false, true
 }
 
 func (s *syncNotifier) report(err error) {
