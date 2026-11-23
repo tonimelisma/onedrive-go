@@ -228,7 +228,7 @@ func runLogoutWithContext(ctx context.Context, cc *CLIContext, purge bool) error
 		return logoutAndReport(ctx, cc, validated.Config, validated.Catalog, account, purge)
 	}
 
-	cfg, catalog := loadLogoutRecoveryState(cc.CfgPath, logger, warnings, err)
+	cfg, catalog := loadLogoutRecoveryState(cc.CfgPath, logger, err)
 	account, autoErr := resolveLogoutAccountWithCatalog(
 		ctx,
 		cfg,
@@ -267,15 +267,15 @@ func logoutAndReport(
 	return nil
 }
 
+// loadLogoutRecoveryState loads the config and the catalog for a logout whose
+// validated load failed (validatedErr), each as best it can. The config's
+// warnings are those of its own lenient load, logged once: the failed
+// validated load read the same file, and its warnings are the same ones.
 func loadLogoutRecoveryState(
 	cfgPath string,
 	logger *slog.Logger,
-	validatedWarnings []config.ConfigWarning,
 	validatedErr error,
 ) (*config.Config, *config.Catalog) {
-	if len(validatedWarnings) > 0 {
-		config.LogWarnings(cfgPath, validatedWarnings, logger)
-	}
 	if validatedErr != nil {
 		logger.Warn("validated logout state unavailable, falling back to best-effort recovery",
 			"error", validatedErr,

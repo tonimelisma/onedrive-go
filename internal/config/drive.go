@@ -305,8 +305,8 @@ func otherSyncDirs(cfg *Config, catalog *Catalog, excludeID driveid.CanonicalID)
 
 		dir := cfg.Drives[id].SyncDir
 		if dir == "" {
-			orgName, _ := accountNames(catalog, id)
-			dir = baseSyncDir(id, orgName, cfg.Drives[id].DisplayName)
+			orgName, displayName := syncDirNames(cfg, catalog, id)
+			dir = baseSyncDir(id, orgName, displayName)
 		}
 
 		if dir != "" {
@@ -360,9 +360,24 @@ func EffectiveSyncDir(
 // EffectiveSyncDir reads the catalog for it; LoadValidatedState passes the one
 // it has validated.
 func defaultSyncDir(cfg *Config, catalog *Catalog, canonicalID driveid.CanonicalID) string {
-	orgName, displayName := accountNames(catalog, canonicalID)
+	orgName, displayName := syncDirNames(cfg, catalog, canonicalID)
 
 	return expandTilde(DefaultSyncDir(canonicalID, orgName, displayName, otherSyncDirs(cfg, catalog, canonicalID)))
+}
+
+// syncDirNames are the names a drive's default folder is computed from, the
+// one place both its own default (defaultSyncDir) and the other drives'
+// collision list (otherSyncDirs) read them, so the two can never name two
+// folders for one drive. A drive with an account reads its account's names
+// in the catalog. A shared drive has no account record of its own: its name
+// is its section's display_name, which drive add writes with the shared
+// folder's name.
+func syncDirNames(cfg *Config, catalog *Catalog, cid driveid.CanonicalID) (orgName, displayName string) {
+	if cid.IsShared() {
+		return "", cfg.Drives[cid].DisplayName
+	}
+
+	return accountNames(catalog, cid)
 }
 
 // ResolveAccountNames returns org_name and display_name for a drive's parent

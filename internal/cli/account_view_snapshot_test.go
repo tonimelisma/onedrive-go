@@ -183,7 +183,7 @@ func TestAccountViewSnapshot_Load_RejectsConfiguredDriveMissingCatalogEntry(t *t
 		CfgPath:      cfgPath,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "is in config.toml")
+	assert.Contains(t, err.Error(), "is in "+cfgPath)
 	assert.Contains(t, err.Error(), "not in onedrive-go's drive inventory")
 }
 

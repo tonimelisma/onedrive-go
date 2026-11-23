@@ -1231,7 +1231,9 @@ alive and about to apply the change.
 damaged. The CLI first tries validated state, but if that fails it falls back
 to best-effort config and catalog loads, logs warnings, resolves the selected
 account from the recoverable durable facts, and continues the purge instead of
-refusing all cleanup.
+refusing all cleanup. The config's warnings are those of the recovery's own
+lenient load, logged once: the failed validated load read the same file
+(`TestLogout_AnUnreadableCatalogWarnsOfTheConfigOnce`).
 
 ## State DB Handling
 

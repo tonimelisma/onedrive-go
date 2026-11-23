@@ -52,10 +52,29 @@ func TestLoadValidatedState_RejectsConfiguredDriveMissingCatalogEntry(t *testing
 
 	_, _, err := LoadValidatedState(cfgPath, testConfigLogger())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "is in config.toml")
+	assert.Contains(t, err.Error(), "is in "+cfgPath)
 	assert.Contains(t, err.Error(), "not in onedrive-go's drive inventory")
 	assert.Contains(t, err.Error(), "run 'onedrive-go drive add personal:user@example.com'",
 		"drive add completes a section the inventory lacks, for every kind of drive")
+}
+
+// Validates: R-3.1.5
+//
+// A config given by --config under another name than config.toml is the
+// file the refusal names, both where the drive is and where to remove it.
+func TestLoadValidatedState_TheMissingDriveRefusalNamesTheConfigGiven(t *testing.T) {
+	setConfigTestHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "work.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	require.NoError(t, AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+
+	_, _, err := LoadValidatedState(cfgPath, testConfigLogger())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "drive personal:user@example.com is in "+cfgPath+" but not")
+	assert.Contains(t, err.Error(), "remove its section from "+cfgPath)
+	assert.NotContains(t, err.Error(), "config.toml")
 }
 
 // Validates: R-3.1.5
@@ -71,7 +90,7 @@ func TestLoadValidatedState_NamesTheFirstConfiguredDriveMissingFromTheCatalog(t 
 	}
 
 	_, _, err := LoadValidatedState(cfgPath, testConfigLogger())
-	require.ErrorContains(t, err, "drive personal:a@example.com is in config.toml")
+	require.ErrorContains(t, err, "drive personal:a@example.com is in "+cfgPath)
 }
 
 // Validates: R-3.1.5

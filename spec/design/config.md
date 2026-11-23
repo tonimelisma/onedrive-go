@@ -105,7 +105,7 @@ Only two environment variables: `ONEDRIVE_GO_CONFIG` (config path override) and 
 
 ## File Locations
 
-Platform-specific paths following XDG (Linux) and Application Support (macOS) conventions. Config and data may share the same directory on macOS.
+Platform-specific paths following XDG (Linux) and Application Support (macOS) conventions. Config and data may share the same directory on macOS. A relative `XDG_DATA_HOME` or `XDG_CONFIG_HOME` is ignored like an unset one, as the XDG Base Directory specification asks ("relative paths are invalid and should be ignored"): the client never keeps its data below whatever folder a command runs in, and a development build counts such a root as missing (`TestDefaultDirs_IgnoreARelativeXDGRoot`).
 
 Dev builds (`version == "dev"`) require full XDG isolation before any command
 bootstrap can proceed: `XDG_DATA_HOME` and `XDG_CONFIG_HOME`, the two roots the
@@ -390,7 +390,7 @@ the fallback poll cadence even when websocket is enabled.
 
 `ClearExpiredPauses(ctx, cfgPath, cfg, now, logger)` is config-level housekeeping: removes stale `paused`/`paused_until` keys from config for drives whose timed pause has expired. Updates both in-memory config and on-disk file. Called by the control-plane reload path before resolving drives, with the watch's context. Both keys of a drive go in one locked write (`DeleteDriveKeys`, which `resume` uses too), so a stuck holder delays a reload by one bounded wait per expired drive, not two; the wait ends early when the watch stops; when it fails, including with `ErrConfigLocked`, the pause still ends in memory, a Warn names the file that still lists it, and the next reload tries the delete again.
 
-Default sync directories are computed deterministically from the canonical ID + cached metadata using a two-level collision scheme: base name → + display_name → + email. `DefaultSyncDir()` is the single entry point.
+Default sync directories are computed deterministically from the canonical ID + cached metadata using a two-level collision scheme: base name → + display_name → + email. `DefaultSyncDir()` is the single entry point. The names it is given come from one place, `syncDirNames`, for a drive's own default (`defaultSyncDir`) and for the other drives' collision list (`otherSyncDirs`) alike: the account's org and display names from the catalog, and for a shared drive, which has no account record of its own, its section's `display_name` (what `drive add` writes), so a shared drive with a `display_name` and no `sync_dir` is `~/OneDrive-Shared/<display_name>` both for itself and for the others (`TestDefaultSyncDir_ASharedDriveIsOneFolderForItselfAndForTheOthers`). The refusal of a configured drive missing from the catalog names the config file the load was given, which `--config` can make any file (`TestLoadValidatedState_TheMissingDriveRefusalNamesTheConfigGiven`).
 
 ## Token Resolution
 
