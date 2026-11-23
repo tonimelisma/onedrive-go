@@ -231,7 +231,7 @@ func seedTestEngineAccount(t *testing.T, dataDir string, account driveid.Canonic
 	if account.IsZero() {
 		return
 	}
-	require.NoError(t, config.UpdateCatalogForDataDir(dataDir, func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalogForDataDir(t.Context(), dataDir, func(catalog *config.Catalog) error {
 		record := config.CatalogAccount{
 			CanonicalID: account.String(),
 			Email:       account.Email(),

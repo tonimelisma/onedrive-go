@@ -196,7 +196,7 @@ func runWatchThatWarnsAtStart(t *testing.T, ctx context.Context, logger *slog.Lo
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:watch@example.com")
 	syncDir := t.TempDir()
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
 	holder := loadSyncTestHolder(t, cfgPath)
 
 	return runSyncDaemonWithFactory(

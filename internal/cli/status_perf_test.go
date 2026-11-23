@@ -300,7 +300,7 @@ func writeStatusPerfConfig(t *testing.T, cid driveid.CanonicalID) string {
 	t.Helper()
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = "Perf User"
 	})

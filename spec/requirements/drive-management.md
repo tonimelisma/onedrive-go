@@ -21,6 +21,7 @@ The system shall support all four drive types:
 - R-3.2.2: OneDrive Business (Microsoft 365 / Azure AD work accounts). [verified]
 - R-3.2.3: SharePoint Document Libraries (via `drive add`). [verified]
 - R-3.2.4: Shared Folders (folders shared by other users, synced as separate drives). [verified]
+- R-3.2.5: A drive ID is accepted only as onedrive-go writes it: every accepted spelling renders back unchanged, and a SharePoint ID with an empty site or library (`sharepoint:a@example.com::Docs`, `sharepoint:a@example.com:site:`, a trailing colon) is refused with an error that names it, wherever it is read (command line, `config.toml` section, catalog). [verified]
 
 ## R-3.3 Drive Management Commands [verified]
 

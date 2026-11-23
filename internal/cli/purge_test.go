@@ -61,7 +61,7 @@ func seedPurgeDrive(t *testing.T, cid driveid.CanonicalID) (cfgPath, statePath s
 	t.Helper()
 
 	cfgPath = filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_"+cid.DriveType()+"_"+cid.Email()+".json")
 	statePath = config.DriveStatePath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))

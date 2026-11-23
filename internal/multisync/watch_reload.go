@@ -26,7 +26,7 @@ func (o *Orchestrator) reload(
 ) error {
 	o.emitWatchLifecycle(WatchLifecycleEvent{Phase: WatchReloading}, nil, nil)
 
-	newCfg, newSelection, err := o.loadReloadSelection()
+	newCfg, newSelection, err := o.loadReloadSelection(ctx)
 	if err != nil {
 		o.logger.Warn("Couldn't reload the config; keeping the previous settings",
 			slog.Any("error", err),
@@ -88,13 +88,13 @@ func (o *Orchestrator) reload(
 
 // loadReloadSelection reads the config file, clears expired timed pauses in
 // it, and compiles the drive selection it describes.
-func (o *Orchestrator) loadReloadSelection() (*config.Config, StandaloneMountSelection, error) {
+func (o *Orchestrator) loadReloadSelection(ctx context.Context) (*config.Config, StandaloneMountSelection, error) {
 	newCfg, err := config.LoadOrDefault(o.cfg.Holder.Path(), o.logger)
 	if err != nil {
 		return nil, StandaloneMountSelection{}, fmt.Errorf("loading config for reload: %w", err)
 	}
 
-	config.ClearExpiredPauses(o.cfg.Holder.Path(), newCfg, o.clockNow(), o.logger)
+	config.ClearExpiredPauses(ctx, o.cfg.Holder.Path(), newCfg, o.clockNow(), o.logger)
 
 	if o.cfg.ReloadStandaloneMounts == nil {
 		return nil, StandaloneMountSelection{}, fmt.Errorf("standalone mount reload compiler is required")

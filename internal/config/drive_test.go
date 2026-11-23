@@ -227,7 +227,7 @@ func TestBuildResolvedDrive_SharedCanonicalSetsRootItem(t *testing.T) {
 func TestBuildResolvedDrive_SharedCatalogDrivePreservesRootItem(t *testing.T) {
 	dataDir := setTestDataDir(t)
 	sharedCID := driveid.MustCanonicalID("shared:user@example.com:b!drive123:item456")
-	require.NoError(t, UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
+	require.NoError(t, UpdateCatalogForDataDir(t.Context(), dataDir, func(catalog *Catalog) error {
 		catalog.UpsertDrive(&CatalogDrive{
 			CanonicalID:           sharedCID.String(),
 			OwnerAccountCanonical: "personal:user@example.com",
@@ -253,7 +253,7 @@ func assertRemoteRootDeltaCapabilityForOwner(t *testing.T, ownerCanonical string
 
 	dataDir := setTestDataDir(t)
 	sharedCID := driveid.MustCanonicalID("shared:user@example.com:b!drive123:item456")
-	require.NoError(t, UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
+	require.NoError(t, UpdateCatalogForDataDir(t.Context(), dataDir, func(catalog *Catalog) error {
 		catalog.UpsertDrive(&CatalogDrive{
 			CanonicalID:           sharedCID.String(),
 			OwnerAccountCanonical: ownerCanonical,

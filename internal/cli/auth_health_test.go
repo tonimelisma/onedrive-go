@@ -36,7 +36,7 @@ func seedAuthScope(t *testing.T, cid driveid.CanonicalID) {
 	if cid.IsSharePoint() {
 		accountCID = driveid.MustCanonicalID("business:" + cid.Email())
 	}
-	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalog(t.Context(), func(catalog *config.Catalog) error {
 		account := config.CatalogAccount{
 			CanonicalID:           accountCID.String(),
 			Email:                 accountCID.Email(),
@@ -68,13 +68,13 @@ func TestClearAccountAuthScopes_ClearsPersistedAuthScope(t *testing.T) {
 			seedAuthScope(t, proved)
 			seedAuthScope(t, other)
 
-			cleared, err := clearAccountAuthRequirementWithCount(proved, config.AuthClearSourceCLIProof, testDriveLogger(t))
+			cleared, err := clearAccountAuthRequirementWithCount(t.Context(), proved, config.AuthClearSourceCLIProof, testDriveLogger(t))
 			require.NoError(t, err)
 			assert.Equal(t, 1, cleared)
 			assert.False(t, hasPersistedAccountAuthRequirement(t, proved))
 			assert.True(t, hasPersistedAccountAuthRequirement(t, other), "the other account at the address still needs its sign-in")
 
-			cleared, err = clearAccountAuthRequirementWithCount(proved, config.AuthClearSourceCLIProof, testDriveLogger(t))
+			cleared, err = clearAccountAuthRequirementWithCount(t.Context(), proved, config.AuthClearSourceCLIProof, testDriveLogger(t))
 			require.NoError(t, err)
 			assert.Zero(t, cleared, "a second proof finds nothing to end")
 		})
@@ -150,7 +150,7 @@ func TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 	seedAuthScope(t, cid)
 
@@ -179,7 +179,7 @@ func TestStatusCommand_DoesNotClearPersistedAuthScope(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 	seedAuthScope(t, cid)
 

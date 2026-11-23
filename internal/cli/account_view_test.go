@@ -169,7 +169,7 @@ func TestBuildAccountViews_TwoAccountsAtOneAddressShowTheFirstOnesRequirement(t 
 					record.DisplayName = account.DriveType() + " user"
 				})
 			}
-			require.NoError(t, config.MarkAccountAuthRequired(config.DefaultDataDir(), marked, authstate.ReasonSyncAuthRejected))
+			require.NoError(t, config.MarkAccountAuthRequired(t.Context(), config.DefaultDataDir(), marked, authstate.ReasonSyncAuthRejected))
 			stored, err := config.LoadCatalog()
 			require.NoError(t, err)
 

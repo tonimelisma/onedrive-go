@@ -39,8 +39,8 @@ func TestResumeAllDrives_ContinuesPastAFailingDrive(t *testing.T) {
 	present := driveid.MustCanonicalID("personal:zzz-present@example.com")
 	missing := driveid.MustCanonicalID("personal:aaa-missing@example.com")
 
-	require.NoError(t, config.AppendDriveSection(cfgPath, present, "~/OneDrive"))
-	require.NoError(t, config.SetDriveKey(cfgPath, present, "paused", "true"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, present, "~/OneDrive"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, present, "paused", "true"))
 
 	cfg := &config.Config{Drives: map[driveid.CanonicalID]config.Drive{
 		present: pausedDrive(),

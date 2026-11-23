@@ -115,7 +115,7 @@ func newIdentityTestRun(t *testing.T, graphURL string, dueAt string) *identityTe
 
 	cid := driveid.MustCanonicalID("personal:" + identityTestEmail)
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(configPath, cid, identityTestSyncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), configPath, cid, identityTestSyncDir))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.UserID = identityTestUserID
 		account.PrimaryDriveID = identityTestDriveID

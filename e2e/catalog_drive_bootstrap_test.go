@@ -43,7 +43,7 @@ func TestEnsureCatalogDriveRecords_SkipsExistingRecord(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	cid := driveid.MustCanonicalID("business:user@example.com")
-	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalog(t.Context(), func(catalog *config.Catalog) error {
 		catalog.UpsertDrive(&config.CatalogDrive{
 			CanonicalID:           cid.String(),
 			OwnerAccountCanonical: cid.String(),

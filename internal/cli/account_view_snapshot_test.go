@@ -47,7 +47,7 @@ func TestAccountViewSnapshot_LoadWithBestEffortIdentityRefresh_ProbesEachTokenOn
 	oldCID := driveid.MustCanonicalID("personal:old@example.com")
 	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
 
-	require.NoError(t, config.AppendDriveSection(configPath, oldCID, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), configPath, oldCID, "~/OneDrive"))
 	seedCatalogAccount(t, oldCID, func(account *config.CatalogAccount) {
 		account.UserID = "user-old"
 		account.DisplayName = "Old User"
@@ -170,7 +170,7 @@ func TestAccountViewSnapshot_Load_RejectsConfiguredDriveMissingCatalogEntry(t *t
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.UserID = snapshotTestUserID123
 		account.DisplayName = "Test User"
@@ -212,7 +212,7 @@ func TestAccountViewSnapshot_Load_RejectsDriveOwnerMissingCatalogAccount(t *test
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("shared:user@example.com:drv123:item456")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/Shared"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/Shared"))
 	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
 		drive.OwnerAccountCanonical = "business:owner@example.com"
 	})
@@ -243,7 +243,7 @@ func TestAccountViewSnapshot_Load_RejectsPrimaryDriveOwnedByDifferentAccount(t *
 		account.UserID = "user-other"
 		account.DisplayName = "Other"
 	})
-	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalog(t.Context(), func(catalog *config.Catalog) error {
 		account, found := catalog.AccountByCanonicalID(accountCID)
 		require.True(t, found)
 		account.PrimaryDriveCanonical = accountCID.String()

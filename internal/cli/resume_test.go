@@ -32,11 +32,11 @@ func TestClearPausedKeys_RemovesBothKeys(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:test@example.com")
 
 	// Create config with paused drive.
-	err := config.AppendDriveSection(cfgPath, cid, "~/OneDrive")
+	err := config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused_until", "2026-03-01T00:00:00Z"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "paused_until", "2026-03-01T00:00:00Z"))
 
 	// Verify keys exist before clearing.
 	data, err := localpath.ReadFile(cfgPath)
@@ -45,7 +45,7 @@ func TestClearPausedKeys_RemovesBothKeys(t *testing.T) {
 	assert.Contains(t, string(data), "paused_until")
 
 	// Clear the keys.
-	require.NoError(t, clearPausedKeys(cfgPath, cid))
+	require.NoError(t, clearPausedKeys(t.Context(), cfgPath, cid))
 
 	// Verify keys are removed.
 	data, err = localpath.ReadFile(cfgPath)
@@ -63,10 +63,10 @@ func TestClearPausedKeys_ExpiredTimedPause_ClearedByResume(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:expired@example.com")
 
 	// Create config with an expired timed pause (paused=true + past paused_until).
-	err := config.AppendDriveSection(cfgPath, cid, "~/OneDrive")
+	err := config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive")
 	require.NoError(t, err)
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused_until", "2000-01-01T00:00:00Z"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "paused_until", "2000-01-01T00:00:00Z"))
 
 	// Verify IsPaused returns false (expired), but raw keys are present.
 	cfg, err := config.LoadOrDefault(cfgPath, slog.Default())
@@ -103,9 +103,9 @@ func TestClearPausedKeys_IdempotentWhenNoKeys(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.toml")
 	cid := driveid.MustCanonicalID("personal:test@example.com")
 
-	err := config.AppendDriveSection(cfgPath, cid, "~/OneDrive")
+	err := config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive")
 	require.NoError(t, err)
 
 	// Clearing on an unpaused drive should succeed (keys don't exist).
-	require.NoError(t, clearPausedKeys(cfgPath, cid))
+	require.NoError(t, clearPausedKeys(t.Context(), cfgPath, cid))
 }

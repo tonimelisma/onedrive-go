@@ -37,7 +37,7 @@ func TestExecutePlainLogout_ClearsPersistedAuthRequirement(t *testing.T) {
 
 			for _, account := range []driveid.CanonicalID{loggedOut, other} {
 				seedCatalogAccount(t, account, nil)
-				require.NoError(t, config.MarkAccountAuthRequired(
+				require.NoError(t, config.MarkAccountAuthRequired(t.Context(),
 					config.DefaultDataDir(), account, authstate.ReasonSyncAuthRejected))
 				require.True(t, hasPersistedAccountAuthRequirement(t, account),
 					"fixture must start with a persisted auth requirement")
@@ -45,7 +45,7 @@ func TestExecutePlainLogout_ClearsPersistedAuthRequirement(t *testing.T) {
 
 			var out bytes.Buffer
 
-			require.NoError(t, executePlainLogout(&out, loggedOut, slog.New(slog.DiscardHandler)))
+			require.NoError(t, executePlainLogout(t.Context(), &out, loggedOut, slog.New(slog.DiscardHandler)))
 
 			assert.False(t, hasPersistedAccountAuthRequirement(t, loggedOut), "logout must clear the persisted auth requirement")
 			assert.True(t, hasPersistedAccountAuthRequirement(t, other), "of the account it logged out only")
@@ -71,8 +71,8 @@ func TestLogout_EndsTheSignInRequirementOfTheAccountWhoseTokenItDeleted(t *testi
 			cfgPath := filepath.Join(t.TempDir(), "config.toml")
 			syncDir := filepath.Join(t.TempDir(), "sync")
 			require.NoError(t, os.MkdirAll(syncDir, 0o700))
-			require.NoError(t, config.AppendDriveSection(cfgPath, configured, syncDir))
-			require.NoError(t, config.SetDriveKey(cfgPath, configured, "sync_dir", syncDir))
+			require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, configured, syncDir))
+			require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, configured, "sync_dir", syncDir))
 			for _, account := range []driveid.CanonicalID{personal, business} {
 				seedCatalogAccount(t, account, nil)
 				writeTestTokenFile(t, config.DefaultDataDir(),

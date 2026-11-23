@@ -827,7 +827,7 @@ sync_dir = "~/OneDrive"
 `), 0o600))
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	err := removeDrive(io.Discard, cfgPath, cid, "~/OneDrive", testDriveLogger(t))
+	err := removeDrive(t.Context(), io.Discard, cfgPath, cid, "~/OneDrive", testDriveLogger(t))
 	require.NoError(t, err)
 
 	// Verify the drive section was deleted.
@@ -847,7 +847,7 @@ sync_dir = "~/OneDrive"
 `), 0o600))
 
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
-	err := removeDrive(io.Discard, cfgPath, cid, "~/Work", testDriveLogger(t))
+	err := removeDrive(t.Context(), io.Discard, cfgPath, cid, "~/Work", testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "removing drive")
 }
@@ -919,7 +919,7 @@ sync_dir = "~/Marketing"
 		driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents"),
 	}
 
-	removed, err := removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
+	removed, err := removeAccountDriveConfigs(t.Context(), cfgPath, affected, testDriveLogger(t))
 	require.NoError(t, err)
 	assert.Equal(t, affected, removed)
 
@@ -948,7 +948,7 @@ sync_dir = "~/OneDrive"
 	// Continues past the missing one, returns error for it, and names only
 	// the drive it removed: the caller purges no state of a drive still in
 	// the config.
-	removed, err := removeAccountDriveConfigs(cfgPath, affected, testDriveLogger(t))
+	removed, err := removeAccountDriveConfigs(t.Context(), cfgPath, affected, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "business:nobody@example.com")
 	assert.Equal(t, []driveid.CanonicalID{driveid.MustCanonicalID("personal:user@example.com")}, removed)
@@ -970,7 +970,7 @@ func TestAddOwnDrive_NoToken(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:nobody@example.com")
 
-	_, err := addOwnDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addOwnDrive(t.Context(), io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no token file")
 }
@@ -988,7 +988,7 @@ func TestAddOwnDrive_WithToken(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 
-	_, err := addOwnDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addOwnDrive(t.Context(), io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.NoError(t, err)
 
 	// Verify config was updated with canonical ID and sync_dir.
@@ -1018,7 +1018,7 @@ func TestAddOwnDrive_SyncDirCreateFailureLeavesConfigAndCatalogUnchanged(t *test
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	_, err := addOwnDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addOwnDrive(t.Context(), io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating sync directory")
 
@@ -1043,7 +1043,7 @@ func TestAddOwnDrive_SyncDirCreateFailureLeavesASectionWithoutSyncDirAsItWas(t *
 	require.NoError(t, os.WriteFile(cfgPath, []byte(`["personal:user@example.com"]
 `), 0o600))
 
-	_, err := addOwnDrive(io.Discard, cfgPath, cid, testDriveLogger(t))
+	_, err := addOwnDrive(t.Context(), io.Discard, cfgPath, cid, testDriveLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "creating sync directory")
 
@@ -1342,7 +1342,7 @@ func TestAddSharedDrive_ConfigWriteFailurePreservesPreExistingCatalogDrive(t *te
 	sharedCID := driveid.MustCanonicalID("shared:owner@example.com:driveX:itemY")
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_owner@example.com.json")
 
-	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalog(t.Context(), func(catalog *config.Catalog) error {
 		catalog.UpsertDrive(&config.CatalogDrive{
 			CanonicalID:           sharedCID.String(),
 			OwnerAccountCanonical: ownerCID.String(),
@@ -1454,7 +1454,7 @@ func writeTestTokenFile(t *testing.T, dir, name string) {
 	cid, err := driveid.Construct(parts[0], parts[1])
 	require.NoError(t, err)
 
-	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalog(t.Context(), func(catalog *config.Catalog) error {
 		account := config.CatalogAccount{
 			CanonicalID: cid.String(),
 			Email:       cid.Email(),

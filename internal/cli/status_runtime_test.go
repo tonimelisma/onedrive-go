@@ -24,7 +24,7 @@ func TestStatusRuntime_SummaryJSONWithActiveOwner(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:runtime@example.com")
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = "Runtime User"
 	})
@@ -65,7 +65,7 @@ func busyRuntimeStatusCommand(t *testing.T) (*CLIContext, *bytes.Buffer, *bytes.
 
 	cid := driveid.MustCanonicalID("personal:busy-runtime@example.com")
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = "Busy Runtime User"
 	})

@@ -37,7 +37,7 @@ func runDriveRemoveWithContext(ctx context.Context, cc *CLIContext, purge bool) 
 		if err := purgeOrphanedDriveState(ctx, cc.resultWriter(), cid, logger); err != nil {
 			return err
 		}
-		if err := config.PruneDriveAfterPurge(config.DefaultDataDir(), cid); err != nil {
+		if err := config.PruneDriveAfterPurge(ctx, config.DefaultDataDir(), cid); err != nil {
 			return fmt.Errorf("pruning catalog drive after purge: %w", err)
 		}
 		return reportDriveRemove(cc, driveRemoveJSONOutput{Drive: cid.String(), Purged: true})
@@ -51,7 +51,7 @@ func runDriveRemoveWithContext(ctx context.Context, cc *CLIContext, purge bool) 
 		if err := purgeConfiguredDrive(ctx, cc, cid, driveSyncDir(cfg, cid, logger)); err != nil {
 			return err
 		}
-		if err := config.PruneDriveAfterPurge(config.DefaultDataDir(), cid); err != nil {
+		if err := config.PruneDriveAfterPurge(ctx, config.DefaultDataDir(), cid); err != nil {
 			return fmt.Errorf("pruning catalog drive after purge: %w", err)
 		}
 		return reportDriveRemove(cc, driveRemoveJSONOutput{Drive: cid.String(), RemovedFromConfig: true, Purged: true})
@@ -59,7 +59,7 @@ func runDriveRemoveWithContext(ctx context.Context, cc *CLIContext, purge bool) 
 
 	// The folder named is the one the drive synced: the configured sync_dir
 	// is empty for a drive on its default folder.
-	if err := removeDrive(cc.resultWriter(), cc.CfgPath, cid, driveSyncDir(cfg, cid, logger), logger); err != nil {
+	if err := removeDrive(ctx, cc.resultWriter(), cc.CfgPath, cid, driveSyncDir(cfg, cid, logger), logger); err != nil {
 		return err
 	}
 	notifyDaemonIfRunning(ctx, cc)

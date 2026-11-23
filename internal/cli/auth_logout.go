@@ -129,7 +129,7 @@ func executeLogout(
 		return result, err
 	}
 
-	removedDrives, configErr := removeAccountDriveConfigs(cc.CfgPath, affected, logger)
+	removedDrives, configErr := removeAccountDriveConfigs(ctx, cc.CfgPath, affected, logger)
 	if len(removedDrives) > 0 || result.TokenRemoved {
 		// The reload retires the drives' runners, which closes their stores
 		// before a purge deletes them, and drops the running watch's token
@@ -144,7 +144,7 @@ func executeLogout(
 		return result, fmt.Errorf("removing drive configs: %w", configErr)
 	}
 
-	return result, executePlainLogout(w, removedToken, logger)
+	return result, executePlainLogout(ctx, w, removedToken, logger)
 }
 
 // logoutPurgeCommand is the command that finishes a purge logout whose
@@ -231,7 +231,7 @@ func executePurgeLogout(
 	if err := purgeOrphanedFiles(ctx, w, account, handled, logger); err != nil {
 		errs = append(errs, fmt.Errorf("purging orphaned files: %w", err))
 	}
-	if err := config.ApplyPurgeLogout(config.DefaultDataDir(), account); err != nil {
+	if err := config.ApplyPurgeLogout(ctx, config.DefaultDataDir(), account); err != nil {
 		errs = append(errs, fmt.Errorf("updating catalog after purge logout: %w", err))
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -244,7 +244,7 @@ func executePurgeLogout(
 // executePlainLogout finishes a logout without --purge, after the drives'
 // config sections were removed: their state databases are kept. removedToken
 // is what removeLogoutToken found the deleted token by.
-func executePlainLogout(w io.Writer, removedToken driveid.CanonicalID, logger *slog.Logger) error {
+func executePlainLogout(ctx context.Context, w io.Writer, removedToken driveid.CanonicalID, logger *slog.Logger) error {
 	if err := writeln(w, "\nState databases kept. Run 'onedrive-go login' to re-authenticate."); err != nil {
 		return err
 	}
@@ -257,7 +257,7 @@ func executePlainLogout(w io.Writer, removedToken driveid.CanonicalID, logger *s
 	if err != nil {
 		return fmt.Errorf("updating catalog after logout: %w", err)
 	}
-	if err := clearAccountAuthRequirementForSource(account, config.AuthClearSourceLogout, logger); err != nil {
+	if err := clearAccountAuthRequirementForSource(ctx, account, config.AuthClearSourceLogout, logger); err != nil {
 		return fmt.Errorf("updating catalog after logout: %w", err)
 	}
 

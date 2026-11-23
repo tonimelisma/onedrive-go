@@ -146,7 +146,8 @@ Commands that change `config.toml` or the drive inventory (`catalog.json`)
 take a short lock on its folder so two of them cannot overwrite each other.
 A command waits up to 10 seconds for another one to finish; if the lock is
 still held, it gives up without changing anything and names the folder. Let
-the other command finish and run yours again. If nothing else is running,
+the other command finish and run yours again; Ctrl-C ends the wait at once.
+If nothing else is running,
 look for a stopped onedrive-go process (one suspended with Ctrl-Z, or paused
 in a debugger) and end it. A running `sync --watch` that meets the lock
 reports it and keeps running.

@@ -38,7 +38,7 @@ func runPauseCommand(ctx context.Context, cc *CLIContext, now func() time.Time, 
 		return fmt.Errorf("choosing the drive to pause: %w", err)
 	}
 
-	if err := config.SetDriveKey(cc.CfgPath, cid, "paused", "true"); err != nil {
+	if err := config.SetDriveKey(ctx, cc.CfgPath, cid, "paused", "true"); err != nil {
 		return fmt.Errorf("setting paused flag: %w", err)
 	}
 
@@ -46,7 +46,7 @@ func runPauseCommand(ctx context.Context, cc *CLIContext, now func() time.Time, 
 
 	if duration > 0 {
 		until := now().Add(duration)
-		if err := config.SetDriveKey(cc.CfgPath, cid, "paused_until", until.Format(time.RFC3339)); err != nil {
+		if err := config.SetDriveKey(ctx, cc.CfgPath, cid, "paused_until", until.Format(time.RFC3339)); err != nil {
 			return fmt.Errorf("setting paused_until: %w", err)
 		}
 
@@ -131,7 +131,7 @@ func resumeSingleDriveWithNow(ctx context.Context, cc *CLIContext, now func() ti
 		return fmt.Errorf("choosing the drive to resume: %w", err)
 	}
 
-	outcome, err := resumeOneDrive(cc, now, cid, &d)
+	outcome, err := resumeOneDrive(ctx, cc, now, cid, &d)
 	if err != nil {
 		return err
 	}
@@ -177,7 +177,7 @@ func resumeAllDrivesWithNow(ctx context.Context, cc *CLIContext, now func() time
 	for _, cid := range sortedDriveCanonicalIDs(cfg.Drives) {
 		drive := cfg.Drives[cid]
 
-		outcome, err := resumeOneDrive(cc, now, cid, &drive)
+		outcome, err := resumeOneDrive(ctx, cc, now, cid, &drive)
 		if err != nil {
 			errs = append(errs, err)
 			report.Drives = append(report.Drives, resumeJSONDrive{
@@ -232,6 +232,7 @@ func sortedDriveCanonicalIDs(drives map[driveid.CanonicalID]config.Drive) []driv
 // The human confirmation is printed here; under --json the caller's document
 // carries the outcome instead.
 func resumeOneDrive(
+	ctx context.Context,
 	cc *CLIContext,
 	now func() time.Time,
 	cid driveid.CanonicalID,
@@ -242,7 +243,7 @@ func resumeOneDrive(
 			return resumeOutcomeNotPaused, nil
 		}
 
-		if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
+		if err := clearPausedKeys(ctx, cc.CfgPath, cid); err != nil {
 			return resumeOutcomeResumeFailed, fmt.Errorf("clearing expired pause for %s: %w", cid.String(), err)
 		}
 
@@ -253,7 +254,7 @@ func resumeOneDrive(
 		return resumeOutcomeExpiredPause, nil
 	}
 
-	if err := clearPausedKeys(cc.CfgPath, cid); err != nil {
+	if err := clearPausedKeys(ctx, cc.CfgPath, cid); err != nil {
 		return resumeOutcomeResumeFailed, fmt.Errorf("resuming %s: %w", cid.String(), err)
 	}
 

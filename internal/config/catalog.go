@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -231,14 +232,11 @@ func checkCatalogReference(path, table, key, field, value string) error {
 }
 
 // checkRenderedCanonicalID accepts s only if it parses as a canonical drive
-// ID and is exactly that ID's rendering.
+// ID. Every string the parse accepts renders back unchanged
+// (driveid.NewCanonicalID), so a parsed key is also the ID's rendering.
 func checkRenderedCanonicalID(s string) error {
-	cid, err := driveid.NewCanonicalID(s)
-	if err != nil {
+	if _, err := driveid.NewCanonicalID(s); err != nil {
 		return fmt.Errorf("is not a drive ID (%w)", err)
-	}
-	if rendered := cid.String(); rendered != s {
-		return fmt.Errorf("is not a drive ID as onedrive-go writes it (%q)", rendered)
 	}
 
 	return nil
@@ -287,15 +285,16 @@ func encodeCatalog(path string, catalog *Catalog) ([]byte, error) {
 	return data, nil
 }
 
-func UpdateCatalog(update func(*Catalog) error) error {
-	return UpdateCatalogForDataDir(DefaultDataDir(), update)
+// UpdateCatalog is UpdateCatalogForDataDir on the default data directory.
+func UpdateCatalog(ctx context.Context, update func(*Catalog) error) error {
+	return UpdateCatalogForDataDir(ctx, DefaultDataDir(), update)
 }
 
 // UpdateCatalogForDataDir is the catalog's read-modify-write under the
 // catalog lock (see configLocker.updateCatalog). update must not take a config
-// or catalog lock itself.
-func UpdateCatalogForDataDir(dataDir string, update func(*Catalog) error) error {
-	return defaultConfigLocker().updateCatalog(dataDir, update)
+// or catalog lock itself. The wait for the lock ends when ctx does.
+func UpdateCatalogForDataDir(ctx context.Context, dataDir string, update func(*Catalog) error) error {
+	return defaultConfigLocker().updateCatalog(ctx, dataDir, update)
 }
 
 func (c *Catalog) normalize() {

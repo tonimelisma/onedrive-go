@@ -478,6 +478,7 @@ func (e *Engine) hasPersistedAccountAuthRequirement() (bool, error) {
 }
 
 func (e *Engine) normalizePersistedAccountAuthRequirement(
+	ctx context.Context,
 	required bool,
 	proof driveIdentityProof,
 	proofErr error,
@@ -498,7 +499,7 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 	if clearRequirement == nil {
 		clearRequirement = config.ClearAccountAuthRequirement
 	}
-	if err := clearRequirement(e.dataDir, e.accountCanonicalID); err != nil {
+	if err := clearRequirement(ctx, e.dataDir, e.accountCanonicalID); err != nil {
 		if !errors.Is(err, config.ErrConfigLocked) {
 			return fmt.Errorf("sync: clearing catalog auth requirement: %w", err)
 		}

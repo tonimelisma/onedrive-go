@@ -227,7 +227,7 @@ func TestStandaloneMountSelectionFromResolvedDrives_PrefersTokenOwnerAccountEmai
 	setTestDriveHome(t)
 
 	sharedCID := driveid.MustCanonicalID("shared:shared@example.com:remote-drive:remote-root")
-	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalog(t.Context(), func(catalog *config.Catalog) error {
 		catalog.UpsertDrive(&config.CatalogDrive{
 			CanonicalID:           sharedCID.String(),
 			OwnerAccountCanonical: "personal:owner@example.com",
@@ -422,8 +422,8 @@ func TestRunSyncDaemonWithFactory_CallsOrchestrator(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:watch@example.com")
 	syncDir := t.TempDir()
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "sync_dir", syncDir))
 	holder := loadSyncTestHolder(t, cfgPath)
 
 	orch := &testSyncDaemonOrchestrator{}
@@ -467,8 +467,8 @@ func TestRunSyncDaemonWithFactory_PassesMissingSyncDirToOrchestrator(t *testing.
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:watch@example.com")
 	syncDir := filepath.Join(t.TempDir(), "missing", "watch-sync-root")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "sync_dir", syncDir))
 	holder := loadSyncTestHolder(t, cfgPath)
 
 	called := false
@@ -504,8 +504,8 @@ func TestRunSyncDaemonWithFactory_FormatsResetGuidanceWhenNoMountStarts(t *testi
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:watch@example.com")
 	syncDir := t.TempDir()
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "sync_dir", syncDir))
 	holder := loadSyncTestHolder(t, cfgPath)
 
 	err := runSyncDaemonWithFactory(
@@ -545,8 +545,8 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:watch@example.com")
 	syncDir := t.TempDir()
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "sync_dir", syncDir))
 	holder := loadSyncTestHolder(t, cfgPath)
 
 	status := &bytes.Buffer{}

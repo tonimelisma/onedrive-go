@@ -20,7 +20,7 @@ func setupConfiguredInvalidSavedLogin(t *testing.T) (string, driveid.CanonicalID
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("business:blocked@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive - Contoso"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive - Contoso"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = "Blocked User"
 	})
@@ -74,7 +74,7 @@ func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive - Contoso"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive - Contoso"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = "Alice Smith"
 		account.OrgName = "Contoso"
@@ -88,7 +88,7 @@ func TestLogoutCommand_PreservesOfflineState(t *testing.T) {
 
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "sync_dir", syncDir))
 
 	var out bytes.Buffer
 	cc := newCommandContext(&out, cfgPath)
@@ -180,7 +180,7 @@ func TestRunStatusCommand_InvalidDriveSelectorReturnsMatchError(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:ready@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = "Ready User"
 	})

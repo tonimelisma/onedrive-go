@@ -670,7 +670,7 @@ func TestRunStatusCommand_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedPr
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 	seedAuthScope(t, cid)
 

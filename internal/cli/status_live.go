@@ -236,7 +236,7 @@ func statusConfiguredDriveOverlay(
 	if err != nil {
 		if errors.Is(err, graph.ErrUnauthorized) {
 			return statusAccountLiveOverlay{
-				AuthHealth: markStatusAccountSignInRequired(entry.RepresentativeTokenID, err, logger),
+				AuthHealth: markStatusAccountSignInRequired(ctx, entry.RepresentativeTokenID, err, logger),
 			}, nil
 		}
 
@@ -254,7 +254,7 @@ func statusConfiguredDriveOverlay(
 		drive, found, err := fetchConfiguredStatusDrive(ctx, client, snapshot.Stored, cid)
 		if err != nil {
 			if errors.Is(err, graph.ErrUnauthorized) {
-				overlay.AuthHealth = markStatusAccountSignInRequired(entry.RepresentativeTokenID, err, logger)
+				overlay.AuthHealth = markStatusAccountSignInRequired(ctx, entry.RepresentativeTokenID, err, logger)
 				return overlay, nil
 			}
 			if ctx.Err() != nil {
@@ -282,9 +282,9 @@ func statusConfiguredDriveOverlay(
 // markStatusAccountSignInRequired records that OneDrive rejected the saved
 // login of account, the owner of the token status asked with, and returns the
 // health status shows for it.
-func markStatusAccountSignInRequired(account driveid.CanonicalID, err error, logger *slog.Logger) accountAuthHealth {
+func markStatusAccountSignInRequired(ctx context.Context, account driveid.CanonicalID, err error, logger *slog.Logger) accountAuthHealth {
 	reason := unauthorizedAuthReason(err)
-	if markErr := config.MarkAccountAuthRequired(config.DefaultDataDir(), account, reason); markErr != nil {
+	if markErr := config.MarkAccountAuthRequired(ctx, config.DefaultDataDir(), account, reason); markErr != nil {
 		logger.Warn("status: persisting account auth requirement", "account", account.String(), "error", markErr)
 	}
 

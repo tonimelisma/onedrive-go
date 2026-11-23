@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -33,7 +34,9 @@ var ErrConfigLocked = errors.New("locked by another onedrive-go process")
 // changes of the managed files in one directory: config.toml in the config
 // directory, catalog.json in the data directory (on macOS both are the same
 // directory, and so the same lock). The fields are the seams of the bounded
-// wait; production uses defaultConfigLocker.
+// wait; production uses defaultConfigLocker. The wait also ends when the
+// caller's context ends, so Ctrl-C or a daemon shutdown does not sit out the
+// timeout behind a stuck holder.
 //
 // flock locks belong to an open file description, and every acquisition here
 // opens the directory afresh, so a function that holds a lock must never take
@@ -47,24 +50,40 @@ var ErrConfigLocked = errors.New("locked by another onedrive-go process")
 // lock one after the other. Nothing takes the catalog lock and then the
 // config lock, and nothing that holds either takes the email change lock.
 type configLocker struct {
-	flock        filelock.Flock
-	sleep        func(time.Duration)
+	flock filelock.Flock
+	// sleep pauses between attempts for d, or returns an error wrapping
+	// ctx's as soon as ctx ends.
+	sleep        func(ctx context.Context, d time.Duration) error
 	timeout      time.Duration
 	pollInterval time.Duration
 }
 
 func defaultConfigLocker() configLocker {
 	return configLocker{
-		sleep:        time.Sleep,
+		sleep:        sleepOrDone,
 		timeout:      configLockTimeout,
 		pollInterval: configLockPollInterval,
 	}
 }
 
+// sleepOrDone waits d, or less when ctx ends first, and then reports ctx's
+// error, if any.
+func sleepOrDone(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("wait for config lock: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
 // withConfigMutationLock serializes config read-modify-write entrypoints that
 // participate in this package, with the default bounded wait.
-func withConfigMutationLock(path string, createDir bool, fn func() error) error {
-	return defaultConfigLocker().withMutationLock(path, createDir, fn)
+func withConfigMutationLock(ctx context.Context, path string, createDir bool, fn func() error) error {
+	return defaultConfigLocker().withMutationLock(ctx, path, createDir, fn)
 }
 
 // withMutationLock runs fn while holding the lock on path's parent directory.
@@ -73,7 +92,7 @@ func withConfigMutationLock(path string, createDir bool, fn func() error) error 
 // createDir is false, there is nothing to lock or protect: fn runs unlocked
 // and meets the missing file itself, rather than directories being created
 // just to lock. In every other case fn never runs when the lock was not taken.
-func (l configLocker) withMutationLock(path string, createDir bool, fn func() error) (err error) {
+func (l configLocker) withMutationLock(ctx context.Context, path string, createDir bool, fn func() error) (err error) {
 	root, _, err := fsroot.OpenPath(path)
 	if err != nil {
 		return fmt.Errorf("opening lock root: %w", err)
@@ -100,7 +119,7 @@ func (l configLocker) withMutationLock(path string, createDir bool, fn func() er
 	}()
 
 	fd := int(lockFile.Fd())
-	if lockErr := l.acquire(fd, dir); lockErr != nil {
+	if lockErr := l.acquire(ctx, fd, dir); lockErr != nil {
 		return lockErr
 	}
 	defer func() {
@@ -116,10 +135,15 @@ func (l configLocker) withMutationLock(path string, createDir bool, fn func() er
 // acquire polls a non-blocking exclusive flock on fd every pollInterval until
 // it is granted or timeout has been waited out. A blocking flock would hang
 // every config change, and the daemon's reload, behind a stopped or stuck
-// holder for as long as that holder lives.
-func (l configLocker) acquire(fd int, dir string) error {
+// holder for as long as that holder lives. A context that has ended stops the
+// wait at once, and stops it before the first attempt too: a canceled
+// command makes no change it would then report as failed.
+func (l configLocker) acquire(ctx context.Context, fd int, dir string) error {
 	maxWaits := int(l.timeout / l.pollInterval)
 	for waits := 0; ; waits++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("lock %s: %w", dir, ctxErr)
+		}
 		locked, err := filelock.TryLock(l.flock, fd)
 		switch {
 		case err != nil:
@@ -131,12 +155,19 @@ func (l configLocker) acquire(fd int, dir string) error {
 				dir, ErrConfigLocked, l.timeout)
 		}
 
-		l.sleep(l.pollInterval)
+		if sleepErr := l.sleep(ctx, l.pollInterval); sleepErr != nil {
+			return fmt.Errorf("lock %s: %w", dir, sleepErr)
+		}
 	}
 }
 
-func (l configLocker) setDriveKey(path string, canonicalID driveid.CanonicalID, key, value string) error {
-	return l.withMutationLock(path, false, func() error {
+func (l configLocker) setDriveKey(
+	ctx context.Context,
+	path string,
+	canonicalID driveid.CanonicalID,
+	key, value string,
+) error {
+	return l.withMutationLock(ctx, path, false, func() error {
 		return setDriveKeySnapshot(path, canonicalID, key, value)
 	})
 }
@@ -145,7 +176,7 @@ func (l configLocker) setDriveKey(path string, canonicalID driveid.CanonicalID, 
 // under the lock on the catalog's directory, so two processes (or two
 // goroutines) updating the catalog together cannot lose either update. update
 // must not take a config or catalog lock itself (see configLocker).
-func (l configLocker) updateCatalog(dataDir string, update func(*Catalog) error) error {
+func (l configLocker) updateCatalog(ctx context.Context, dataDir string, update func(*Catalog) error) error {
 	path := CatalogPathForDataDir(dataDir)
 	if path == "" {
 		// No data directory: there is no file to protect, and the save below
@@ -153,7 +184,7 @@ func (l configLocker) updateCatalog(dataDir string, update func(*Catalog) error)
 		return loadUpdateSaveCatalog(dataDir, update)
 	}
 
-	return l.withMutationLock(path, true, func() error {
+	return l.withMutationLock(ctx, path, true, func() error {
 		return loadUpdateSaveCatalog(dataDir, update)
 	})
 }
@@ -177,8 +208,12 @@ func loadUpdateSaveCatalog(dataDir string, update func(*Catalog) error) error {
 // and fail after the timeout. Both directories are created first, so the
 // comparison is between two existing directories, by identity rather than by
 // name.
-func (l configLocker) withConfigAndCatalogLocks(configPath, catalogPath string, fn func() error) error {
-	return l.withMutationLock(configPath, true, func() error {
+func (l configLocker) withConfigAndCatalogLocks(
+	ctx context.Context,
+	configPath, catalogPath string,
+	fn func() error,
+) error {
+	return l.withMutationLock(ctx, configPath, true, func() error {
 		catalogRoot, _, err := fsroot.OpenPath(catalogPath)
 		if err != nil {
 			return fmt.Errorf("opening catalog lock root: %w", err)
@@ -195,7 +230,7 @@ func (l configLocker) withConfigAndCatalogLocks(configPath, catalogPath string, 
 			return fn()
 		}
 
-		return l.withMutationLock(catalogPath, true, fn)
+		return l.withMutationLock(ctx, catalogPath, true, fn)
 	})
 }
 

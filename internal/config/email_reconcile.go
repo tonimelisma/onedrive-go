@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -86,6 +87,7 @@ func (r *EmailReconcileResult) RemapCanonicalID(cid driveid.CanonicalID) (drivei
 // refuses the whole change before anything is renamed or recorded. A change
 // an earlier command left unfinished is finished first.
 func ReconcileAccountEmail(
+	ctx context.Context,
 	configPath string,
 	currentAccount driveid.CanonicalID,
 	userID string,
@@ -93,10 +95,11 @@ func ReconcileAccountEmail(
 	moveStateDBs StateDBMover,
 	logger *slog.Logger,
 ) (EmailReconcileResult, error) {
-	return newEmailChanger(moveStateDBs, logger).reconcile(configPath, currentAccount, userID, currentEmail)
+	return newEmailChanger(moveStateDBs, logger).reconcile(ctx, configPath, currentAccount, userID, currentEmail)
 }
 
 func (c *emailChanger) reconcile(
+	ctx context.Context,
 	configPath string,
 	currentAccount driveid.CanonicalID,
 	userID string,
@@ -122,12 +125,12 @@ func (c *emailChanger) reconcile(
 	}
 
 	var result EmailReconcileResult
-	err = c.withLock(func() error {
-		finished, finishErr := c.finishLocked()
+	err = c.withLock(ctx, func() error {
+		finished, finishErr := c.finishLocked(ctx)
 		if finishErr != nil {
 			return finishErr
 		}
-		started, startErr := c.startLocked(configPath, currentAccount, userID, currentEmail)
+		started, startErr := c.startLocked(ctx, configPath, currentAccount, userID, currentEmail)
 		if startErr != nil {
 			return startErr
 		}
@@ -146,6 +149,7 @@ func (c *emailChanger) reconcile(
 // while any new name is taken, and runs it. The caller holds the email
 // change lock and has finished any change a journal records.
 func (c *emailChanger) startLocked(
+	ctx context.Context,
 	configPath string,
 	currentAccount driveid.CanonicalID,
 	userID string,
@@ -175,7 +179,7 @@ func (c *emailChanger) startLocked(
 
 		return c.reached(emailChangeStepRecorded)
 	}
-	if applyErr := c.apply(journal, begin); applyErr != nil {
+	if applyErr := c.apply(ctx, journal, begin); applyErr != nil {
 		return EmailReconcileResult{}, applyErr
 	}
 
@@ -465,8 +469,8 @@ func collectStateRenames(
 // address with another account type. The step is idempotent: an account
 // already at its new key, whose drives already name it as their owner, is
 // left as it is.
-func renameCatalogAccounts(dataDir string, accountRenames []CanonicalIDRename) error {
-	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
+func renameCatalogAccounts(ctx context.Context, dataDir string, accountRenames []CanonicalIDRename) error {
+	return UpdateCatalogForDataDir(ctx, dataDir, func(catalog *Catalog) error {
 		for i := range accountRenames {
 			if err := renameCatalogAccount(catalog, &accountRenames[i]); err != nil {
 				return err

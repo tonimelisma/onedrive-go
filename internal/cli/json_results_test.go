@@ -36,7 +36,7 @@ func TestPauseCommand_JSONReportsDriveAndEndTime(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:pause@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 
 	cc, stdout, stderr := newJSONCommandContext(cfgPath)
 	now := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
@@ -62,11 +62,11 @@ func TestResumeCommand_JSONReportsEveryDriveOutcome(t *testing.T) {
 	expired := driveid.MustCanonicalID("personal:b@example.com")
 	running := driveid.MustCanonicalID("personal:c@example.com")
 	for _, cid := range []driveid.CanonicalID{paused, expired, running} {
-		require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/"+cid.Email()))
+		require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/"+cid.Email()))
 	}
-	require.NoError(t, config.SetDriveKey(cfgPath, paused, "paused", "true"))
-	require.NoError(t, config.SetDriveKey(cfgPath, expired, "paused", "true"))
-	require.NoError(t, config.SetDriveKey(cfgPath, expired, "paused_until", "2000-01-01T00:00:00Z"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, paused, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, expired, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, expired, "paused_until", "2000-01-01T00:00:00Z"))
 
 	cc, stdout, stderr := newJSONCommandContext(cfgPath)
 	require.NoError(t, runResumeCommand(t.Context(), cc, time.Now))
@@ -87,7 +87,7 @@ func TestDriveRemove_JSONReportsWhatWasRemoved(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:remove@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 
 	cc, stdout, _ := newJSONCommandContext(cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
@@ -133,7 +133,7 @@ func TestLogoutCommand_JSONNamesAccountAndDrives(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:logout@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_logout@example.com.json")
 	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) { drive.RemoteDriveID = "drive-1" })
 

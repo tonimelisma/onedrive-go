@@ -191,7 +191,7 @@ func TestReconcileAccountEmail_RenamesOwnedArtifacts(t *testing.T) {
 	fixture := seedEmailReconcileFixture(t)
 
 	var moved []StateDBMove
-	result, err := ReconcileAccountEmail(
+	result, err := ReconcileAccountEmail(t.Context(),
 		fixture.configPath,
 		fixture.newBusiness,
 		emailReconcileTestUser123,
@@ -229,7 +229,7 @@ func TestReconcileAccountEmail_CatalogDefaultDriveNameFollowsTheAddress(t *testi
 	})
 
 	var moved []StateDBMove
-	_, err := ReconcileAccountEmail(
+	_, err := ReconcileAccountEmail(t.Context(),
 		fixture.configPath,
 		fixture.newBusiness,
 		emailReconcileTestUser123,
@@ -265,7 +265,7 @@ func TestReconcileAccountEmail_AStateDBInUseChangesNothing(t *testing.T) {
 	fixture := seedEmailReconcileFixture(t)
 	inUse := errors.New("another onedrive-go sync is already using this sync state")
 
-	_, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+	_, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
 		"renamed@example.com", func([]StateDBMove, func() error) error { return inUse }, logger)
 	require.ErrorIs(t, err, inUse)
 
@@ -300,7 +300,7 @@ sync_dir = "~/Business"
 `))
 
 	var moved []StateDBMove
-	result, err := ReconcileAccountEmail(configPath, current, emailReconcileTestUser123, "user@example.com",
+	result, err := ReconcileAccountEmail(t.Context(), configPath, current, emailReconcileTestUser123, "user@example.com",
 		stateDBMoverForTest(t, &moved), logger)
 	require.NoError(t, err)
 	assert.False(t, result.Changed())
@@ -329,11 +329,11 @@ sync_dir = "~/Business"
 
 	var moved []StateDBMove
 	mover := stateDBMoverForTest(t, &moved)
-	first, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", mover, logger)
+	first, err := ReconcileAccountEmail(t.Context(), configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", mover, logger)
 	require.NoError(t, err)
 	require.True(t, first.Changed())
 
-	second, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", mover, logger)
+	second, err := ReconcileAccountEmail(t.Context(), configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", mover, logger)
 	require.NoError(t, err)
 	assert.False(t, second.Changed())
 }
@@ -364,7 +364,7 @@ sync_dir = "~/Business"
 `))
 
 	var moved []StateDBMove
-	_, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com",
+	_, err := ReconcileAccountEmail(t.Context(), configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com",
 		stateDBMoverForTest(t, &moved), logger)
 	require.ErrorContains(t, err, "target already exists: "+DriveTokenPath(newBusiness))
 	require.ErrorContains(t, err, "remove "+DriveTokenPath(newBusiness))

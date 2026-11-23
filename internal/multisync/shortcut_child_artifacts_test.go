@@ -37,7 +37,7 @@ func TestPurgeShortcutChildArtifacts_IgnoresExplicitMountID(t *testing.T) {
 	statePath := config.MountStatePath(mountID)
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
 	require.NoError(t, os.WriteFile(statePath, []byte("state"), 0o600))
-	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalog(t.Context(), func(catalog *config.Catalog) error {
 		catalog.Drives[mountID] = config.CatalogDrive{CanonicalID: mountID, DisplayName: "Explicit shared drive"}
 		return nil
 	}))

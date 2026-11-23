@@ -60,7 +60,7 @@ func interruptEmailChange(t *testing.T, fixture *emailReconcileFixture, stop ema
 	var moved []StateDBMove
 	changer := newEmailChanger(stateDBMoverForTest(t, &moved), testLogger(t))
 	stop(changer, interrupted)
-	_, err := changer.reconcile(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123, emailChangeTestNewEmail)
+	_, err := changer.reconcile(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123, emailChangeTestNewEmail)
 	require.ErrorIs(t, err, interrupted)
 	require.FileExists(t, emailChangeJournalPath(DefaultDataDir()), "the change stays on record until its last step is done")
 }
@@ -80,7 +80,7 @@ func finishEmailChange(t *testing.T) (EmailReconcileResult, error) {
 
 	var moved []StateDBMove
 
-	return CompleteEmailChange(stateDBMoverForTest(t, &moved), testLogger(t))
+	return CompleteEmailChange(t.Context(), stateDBMoverForTest(t, &moved), testLogger(t))
 }
 
 func readEmailChangeTestFile(t *testing.T, path string) string {
@@ -184,7 +184,7 @@ func TestReconcileAccountEmail_AChangeStoppedBeforeItWasRecordedStartsAfresh(t *
 	fixture := seedEmailReconcileFixture(t)
 
 	unrecorded := errors.New("no room for the journal")
-	_, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+	_, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
 		emailChangeTestNewEmail, func([]StateDBMove, func() error) error { return unrecorded }, logger)
 	require.ErrorIs(t, err, unrecorded)
 	assert.NoFileExists(t, emailChangeJournalPath(dataDir))
@@ -194,7 +194,7 @@ func TestReconcileAccountEmail_AChangeStoppedBeforeItWasRecordedStartsAfresh(t *
 	assert.False(t, finished.Changed(), "nothing was recorded, so nothing is finished")
 
 	var moved []StateDBMove
-	result, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+	result, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
 		emailChangeTestNewEmail, stateDBMoverForTest(t, &moved), logger)
 	require.NoError(t, err)
 	assertEmailReconcileFixtureRenamed(t, logger, &fixture, &result)
@@ -224,7 +224,7 @@ func TestReconcileAccountEmail_FinishesAnInterruptedChangeItFinds(t *testing.T) 
 			interruptEmailChangeAfter(t, &fixture, tc.step)
 
 			var moved []StateDBMove
-			result, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+			result, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
 				emailChangeTestNewEmail, stateDBMoverForTest(t, &moved), logger)
 			require.NoError(t, err)
 			assertEmailReconcileFixtureRenamed(t, logger, &fixture, &result)
@@ -243,7 +243,7 @@ func TestReconcileAccountEmail_RefusesAMoverThatDidNotRecordTheChange(t *testing
 	dataDir := setTestDataDir(t)
 	fixture := seedEmailReconcileFixture(t)
 
-	_, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+	_, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
 		emailChangeTestNewEmail, func([]StateDBMove, func() error) error { return nil }, testLogger(t))
 	require.ErrorContains(t, err, "did not record")
 
@@ -260,7 +260,7 @@ func TestCompleteEmailChange_WithNoJournalTouchesNothing(t *testing.T) {
 	setConfigTestHome(t)
 	dataDir := DefaultDataDir()
 
-	result, err := CompleteEmailChange(func([]StateDBMove, func() error) error {
+	result, err := CompleteEmailChange(t.Context(), func([]StateDBMove, func() error) error {
 		return errors.New("the mover must not run")
 	}, testLogger(t))
 	require.NoError(t, err)
@@ -506,7 +506,7 @@ func TestReconcileAccountEmail_LeavesAnotherAccountsCatalogDrivesAlone(t *testin
 	})
 
 	var moved []StateDBMove
-	result, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+	result, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
 		emailChangeTestNewEmail, stateDBMoverForTest(t, &moved), logger)
 	require.NoError(t, err)
 	assertEmailReconcileFixtureRenamed(t, logger, &fixture, &result)
@@ -535,7 +535,7 @@ func TestReconcileAccountEmail_ConfigSectionsAtBothNamesRefuseTheChange(t *testi
 	writeConfigFixture(t, fixture.configPath, []byte(withNewSection))
 
 	var moved []StateDBMove
-	_, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+	_, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
 		emailChangeTestNewEmail, stateDBMoverForTest(t, &moved), testLogger(t))
 	require.ErrorContains(t, err, `"business:user@example.com" and "business:renamed@example.com" both exist in `+
 		fixture.configPath)
@@ -564,7 +564,7 @@ func TestReconcileAccountEmail_RefusesTwoAccountsRenamedToOne(t *testing.T) {
 	writeManagedFixture(t, DriveTokenPath(second), []byte(`{"token":"earlier"}`))
 
 	var moved []StateDBMove
-	_, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+	_, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
 		emailChangeTestNewEmail, stateDBMoverForTest(t, &moved), testLogger(t))
 	require.ErrorContains(t, err, "two renames lead to "+fixture.newBusiness.String())
 
@@ -597,7 +597,7 @@ func TestReconcileAccountEmail_RecordsTheWholeChangeBeforeTheFirstRename(t *test
 		}
 		return errors.New("stop after recording")
 	}
-	_, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+	_, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
 		emailChangeTestNewEmail, mover, testLogger(t))
 	require.ErrorContains(t, err, "stop after recording")
 

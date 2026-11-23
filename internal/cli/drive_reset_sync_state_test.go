@@ -47,7 +47,7 @@ func TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutY
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:reset@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 
 	cc := &CLIContext{
 		Flags:        CLIFlags{Drive: []string{cid.String()}},
@@ -67,7 +67,7 @@ func TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB(t *testing.T)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:reset@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 
 	statePath := config.DriveStatePath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
@@ -157,7 +157,7 @@ func TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheDrive(t *testing.T) {
 				cfgPath := filepath.Join(t.TempDir(), "config.toml")
 				cid := driveid.MustCanonicalID("personal:offline-change@example.com")
 				syncDir := t.TempDir()
-				require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+				require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
 
 				statePath := config.DriveStatePath(cid)
 				require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
@@ -276,7 +276,7 @@ func TestNewDriveResetSyncStateCmd_RunE_UsesYesFlag(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:reset@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 
 	var output bytes.Buffer
 	cc := &CLIContext{
@@ -307,7 +307,7 @@ func liveSyncOwnerContext(t *testing.T, canonicalID string) *CLIContext {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID(canonicalID)
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 
 	startCLIControlSocket(t, synccontrol.StatusResponse{
 		OwnerMode: synccontrol.OwnerModeWatch,

@@ -53,6 +53,67 @@ func TestNewCanonicalID(t *testing.T) {
 	})
 }
 
+// Validates: R-3.2.5
+func TestNewCanonicalID_RendersEveryAcceptedStringUnchanged(t *testing.T) {
+	t.Parallel()
+
+	accepted := []string{
+		"personal:user@example.com",
+		"business:alice@contoso.com",
+		"sharepoint:alice@contoso.com",
+		"sharepoint:alice@contoso.com:marketing",
+		"sharepoint:alice@contoso.com:marketing:Docs",
+		"sharepoint:alice@contoso.com:marketing:Docs:Archive",
+		"shared:alice@contoso.com:b!drive:item-1",
+		"shared:alice@contoso.com:b!drive:item:with:colons",
+	}
+	for _, raw := range accepted {
+		cid, err := NewCanonicalID(raw)
+		require.NoError(t, err, raw)
+		assert.Equal(t, raw, cid.String(), "parse then render is the identity")
+	}
+
+	// Every placement of colons after a SharePoint address: whatever the
+	// parse accepts renders back to the same string.
+	const parts = 3
+	pieces := []string{"", "s", "d"}
+	var spellings []string
+	var build func(prefix string, left int)
+	build = func(prefix string, left int) {
+		spellings = append(spellings, prefix)
+		if left == 0 {
+			return
+		}
+		for _, piece := range pieces {
+			build(prefix+":"+piece, left-1)
+		}
+	}
+	build("sharepoint:a@example.com", parts)
+	for _, raw := range spellings {
+		cid, err := NewCanonicalID(raw)
+		if err != nil {
+			continue
+		}
+		assert.Equal(t, raw, cid.String(), "accepted %q must render unchanged", raw)
+	}
+}
+
+// Validates: R-3.2.5
+func TestNewCanonicalID_RefusesAnEmptySharePointPart(t *testing.T) {
+	t.Parallel()
+
+	for _, raw := range []string{
+		"sharepoint:a@example.com:",
+		"sharepoint:a@example.com::Docs",
+		"sharepoint:a@example.com:site:",
+		"sharepoint:a@example.com::",
+	} {
+		_, err := NewCanonicalID(raw)
+		require.Error(t, err, raw)
+		assert.Contains(t, err.Error(), raw, "the error names the ID")
+	}
+}
+
 func TestNewCanonicalID_ParseOnceFields(t *testing.T) {
 	cid, err := NewCanonicalID("sharepoint:alice@contoso.com:marketing:Docs")
 	require.NoError(t, err)

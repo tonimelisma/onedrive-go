@@ -139,7 +139,7 @@ func (cc *CLIContext) askAccountIdentityIfDue(
 	default:
 		cc.Logger.Debug("account identity check failed; keeping the stored identity",
 			"account", accountCID.String(), "error", err, "cause", context.Cause(askCtx))
-		cc.recordIdentityCheck(accountCID, false)
+		cc.recordIdentityCheck(ctx, accountCID, false)
 		return nil, false, nil
 	}
 }
@@ -186,7 +186,7 @@ func (cc *CLIContext) applyAccountIdentity(
 	if err != nil {
 		return config.EmailReconcileResult{}, err
 	}
-	cc.recordIdentityCheck(remapCanonicalIDWithResult(accountCID, &result), true)
+	cc.recordIdentityCheck(ctx, remapCanonicalIDWithResult(accountCID, &result), true)
 
 	return result, nil
 }
@@ -194,8 +194,8 @@ func (cc *CLIContext) applyAccountIdentity(
 // recordIdentityCheck records when the account's next identity check is due.
 // A write that fails is logged and fails nothing: the next command asks
 // again.
-func (cc *CLIContext) recordIdentityCheck(accountCID driveid.CanonicalID, answered bool) {
-	if err := config.RecordAccountIdentityCheck(accountCID, cc.now(), answered); err != nil {
+func (cc *CLIContext) recordIdentityCheck(ctx context.Context, accountCID driveid.CanonicalID, answered bool) {
+	if err := config.RecordAccountIdentityCheck(ctx, accountCID, cc.now(), answered); err != nil {
 		cc.Logger.Debug("could not record the account identity check",
 			"account", accountCID.String(), "error", err)
 	}
@@ -228,7 +228,7 @@ func (cc *CLIContext) stateDBMover(ctx context.Context) config.StateDBMover {
 // It fails the command when the change cannot be finished: every name the
 // command would resolve may be half renamed.
 func (cc *CLIContext) finishInterruptedEmailChange(ctx context.Context) error {
-	result, err := config.CompleteEmailChange(cc.stateDBMover(ctx), cc.Logger)
+	result, err := config.CompleteEmailChange(ctx, cc.stateDBMover(ctx), cc.Logger)
 	if err != nil {
 		return fmt.Errorf("finish an interrupted account email change: %w", err)
 	}
@@ -250,7 +250,7 @@ func (cc *CLIContext) reconcileGraphUser(
 		return config.EmailReconcileResult{}, nil
 	}
 
-	result, err := config.ReconcileAccountEmail(
+	result, err := config.ReconcileAccountEmail(ctx,
 		cc.CfgPath, accountCID, user.ID, user.Email, cc.stateDBMover(ctx), cc.Logger)
 	switch {
 	case isSyncInUse(err):

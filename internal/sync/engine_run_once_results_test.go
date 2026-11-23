@@ -175,7 +175,7 @@ func TestRunOnce_TheSignInRequirementIsTheSyncedAccountsAloneOfTwoAtOneAddress(t
 			assert.Equal(t, authstate.ReasonSyncAuthRejected, signInRequirementOf(t, eng, synced), "the 401 marks the synced account")
 			assert.Empty(t, signInRequirementOf(t, eng, other), "and not the other account at its address")
 
-			require.NoError(t, config.MarkAccountAuthRequired(eng.dataDir, other, authstate.ReasonSyncAuthRejected))
+			require.NoError(t, config.MarkAccountAuthRequired(t.Context(), eng.dataDir, other, authstate.ReasonSyncAuthRejected))
 			mock.UploadFn = upload
 			_, err = eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 			require.NoError(t, err, "the startup proof revalidates the synced account")

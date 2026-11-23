@@ -51,7 +51,7 @@ func setupXDGIsolation(t *testing.T, cids ...driveid.CanonicalID) {
 	t.Setenv("XDG_DATA_HOME", xdgDir)
 
 	for _, cid := range cids {
-		require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+		require.NoError(t, config.UpdateCatalog(t.Context(), func(catalog *config.Catalog) error {
 			catalog.UpsertDrive(&config.CatalogDrive{
 				CanonicalID:           cid.String(),
 				OwnerAccountCanonical: cid.String(),
@@ -2836,7 +2836,7 @@ func TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed(t *test
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	lifecycle := make(chan WatchLifecycleEvent, 16)
 	cfg.WatchLifecycle = func(event WatchLifecycleEvent) { lifecycle <- event }
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused", "true"))
 
 	orch := NewOrchestrator(cfg)
 	var started atomic.Int32
@@ -2861,7 +2861,7 @@ func TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed(t *test
 	assert.Zero(t, started.Load(), "a paused drive is not started")
 
 	// A resume reaches the running watch through the ordinary reload.
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "false"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused", "false"))
 	postControlReload(t, cfg.ControlSocketPath)
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
@@ -3206,7 +3206,7 @@ func TestOrchestrator_Reload_PausedMount(t *testing.T) {
 	}, eventWait, 10*time.Millisecond, "the drive starts")
 
 	// Pause the mount and request a control-socket reload.
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused", "true"))
 	postControlReload(t, cfg.ControlSocketPath)
 
 	// The mount runner should stop.
@@ -3363,8 +3363,8 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	}, eventWait, 10*time.Millisecond, "the drive starts")
 
 	// Set an already-expired timed pause and request a control-socket reload.
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused_until", "2000-01-01T00:00:00Z"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused_until", "2000-01-01T00:00:00Z"))
 	postControlReload(t, cfg.ControlSocketPath)
 
 	require.Eventually(t, func() bool {
@@ -3413,7 +3413,7 @@ func writeTestConfig(t *testing.T, cids ...driveid.CanonicalID) string {
 	require.NotEmpty(t, cids, "writeTestConfig requires at least one CID")
 
 	for _, cid := range cids {
-		require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+		require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 	}
 
 	return cfgPath
@@ -3441,7 +3441,7 @@ func writeTestConfigSingle(t *testing.T, cfgPath string, cid driveid.CanonicalID
 	t.Helper()
 
 	require.NoError(t, os.Remove(cfgPath))
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
 }
 
 // writeTestConfigMulti overwrites a config file with two drives.
@@ -3450,8 +3450,8 @@ func writeTestConfigMulti(t *testing.T, cfgPath string, cid1 driveid.CanonicalID
 	t.Helper()
 
 	require.NoError(t, os.Remove(cfgPath))
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid1, dir1))
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid2, dir2))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid1, dir1))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid2, dir2))
 }
 
 // Validates: R-6.6.28

@@ -85,7 +85,7 @@ func newLoginFixtureFor(t *testing.T, account driveid.CanonicalID, withPreviousT
 	fixture.tokenPath = config.DriveTokenPath(fixture.cid)
 
 	other := driveid.MustCanonicalID("business:other@contoso.com")
-	require.NoError(t, config.AppendDriveSection(fixture.cfgPath, other, filepath.Join(t.TempDir(), "Other")))
+	require.NoError(t, config.AppendDriveSection(t.Context(), fixture.cfgPath, other, filepath.Join(t.TempDir(), "Other")))
 	seedCatalogAccount(t, fixture.cid, func(account *config.CatalogAccount) {
 		account.UserID = loginTestUserID
 		account.DisplayName = loginTestDisplayName
@@ -198,7 +198,7 @@ func TestLogin_EndsTheSignInRequirementOfTheAccountItSignedIn(t *testing.T) {
 			}
 			seedCatalogAccount(t, other, nil)
 			writeAccessTokenFile(t, other, "other-token")
-			require.NoError(t, config.MarkAccountAuthRequired(config.DefaultDataDir(), tc.marked, authReasonSyncAuthRejected))
+			require.NoError(t, config.MarkAccountAuthRequired(t.Context(), config.DefaultDataDir(), tc.marked, authReasonSyncAuthRejected))
 
 			require.NoError(t, f.runLogin(t))
 

@@ -31,7 +31,7 @@ func TestClearAccountAuthRequirement_ClearsAuthRequirementAndPreservesInventory(
 		drive.PrimaryForAccount = true
 	})
 
-	require.NoError(t, ClearAccountAuthRequirement(DefaultDataDir(), accountCID))
+	require.NoError(t, ClearAccountAuthRequirement(t.Context(), DefaultDataDir(), accountCID))
 
 	account, found := loadCatalogAccount(t, accountCID)
 	require.True(t, found)
@@ -63,7 +63,7 @@ func TestApplyPurgeLogout_RemovesAccountAndOwnedDrives(t *testing.T) {
 		drive.OwnerAccountCanonical = otherCID.String()
 	})
 
-	require.NoError(t, ApplyPurgeLogout(DefaultDataDir(), accountCID.Email()))
+	require.NoError(t, ApplyPurgeLogout(t.Context(), DefaultDataDir(), accountCID.Email()))
 
 	_, found := loadCatalogAccount(t, accountCID)
 	assert.False(t, found)
@@ -99,8 +99,8 @@ func TestPruneDriveAfterPurge_KeepsPrimaryDriveButDeletesNonPrimaryDrive(t *test
 		drive.OwnerAccountCanonical = accountCID.String()
 	})
 
-	require.NoError(t, PruneDriveAfterPurge(DefaultDataDir(), primaryCID))
-	require.NoError(t, PruneDriveAfterPurge(DefaultDataDir(), secondaryCID))
+	require.NoError(t, PruneDriveAfterPurge(t.Context(), DefaultDataDir(), primaryCID))
+	require.NoError(t, PruneDriveAfterPurge(t.Context(), DefaultDataDir(), secondaryCID))
 
 	primaryDrive, found := loadCatalogDrive(t, primaryCID)
 	require.True(t, found, "the primary drive stays as the account's inventory anchor")

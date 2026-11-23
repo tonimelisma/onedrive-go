@@ -27,7 +27,7 @@ func TestDriveAdd_RerunCompletesASectionWithoutItsCatalogRecord(t *testing.T) {
 	syncDir := filepath.Join(t.TempDir(), "Business")
 	// A section with no catalog record: written by hand, or by an earlier
 	// version of the client that wrote the config before the catalog.
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
 
 	cc, stdout, _ := newJSONCommandContext(cfgPath)
 	require.NoError(t, runDriveAddWithContext(t.Context(), cc, []string{cid.String()}))
@@ -62,7 +62,7 @@ func TestDriveAdd_SharedRerunWritesTheMissingDisplayName(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	// A shared section without display_name: written by hand, or by an
 	// earlier version of the client that wrote the name in a second step.
-	require.NoError(t, config.AppendDriveSection(cfgPath, sharedCID, "~/OneDrive-Shared/"+driveAddTestSharedName))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, sharedCID, "~/OneDrive-Shared/"+driveAddTestSharedName))
 	seedCatalogDrive(t, sharedCID, func(drive *config.CatalogDrive) {
 		drive.OwnerAccountCanonical = ownerCID.String()
 		drive.DisplayName = driveAddTestSharedName
