@@ -112,6 +112,7 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 ) error {
 	work := syncdomain.RetryWorkKeyForCompletion(r)
 
+	var row *syncdomain.RetryWorkRow
 	switch evidence.Kind {
 	case permissionEvidenceNone:
 		return fmt.Errorf("apply permission failure for %s: missing permission evidence", work.Path)
@@ -121,14 +122,18 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 		}
 		return nil
 	case permissionEvidenceFileDenied:
-		if err := flow.recordPermissionRetryWork(ctx, work, syncdomain.ScopeKey{}, evidence.IssueType, r.ErrMsg); err != nil {
+		recorded, err := flow.recordPermissionRetryWork(ctx, work, syncdomain.ScopeKey{}, evidence.IssueType, r.ErrMsg)
+		if err != nil {
 			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
+		row = recorded
 	case permissionEvidenceBoundaryDenied:
 		scopeKey := scopeKeyForPermissionEvidence(evidence)
-		if err := flow.recordPermissionBoundaryDenied(ctx, work, scopeKey); err != nil {
+		recorded, err := flow.recordPermissionBoundaryDenied(ctx, work, scopeKey)
+		if err != nil {
 			return err
 		}
+		row = recorded
 		if remote {
 			flow.logRemotePermissionBoundary(scopeKey, evidence)
 		} else {
@@ -138,50 +143,48 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 		panic(fmt.Sprintf("unknown permission evidence kind %d", evidence.Kind))
 	}
 
-	if evidence.Kind != permissionEvidenceKnownActiveBoundary {
-		if err := flow.holdActionFromPersistedRetryState(current, work); err != nil {
-			return err
-		}
-	}
+	flow.holdActionFromPersistedRetryState(current, row)
 
 	return nil
 }
 
 // applyTrialPermissionReclassification hands a scope trial's failure to the
-// permission probes when its error is a permission answer, and reports
-// whether the probes' evidence decided it. A stopping run probes nothing for a
-// trial either (isStoppingRun): the trial falls back to the retry work it is.
+// permission probes when its error is a permission answer, and returns the
+// retry_work row the store wrote when the probes' evidence decided
+// it, or nil when it did not. A stopping run probes nothing for a trial either
+// (isStoppingRun): the trial falls back to the retry work it is.
 func (flow *engineFlow) applyTrialPermissionReclassification(
 	ctx context.Context,
 	r *syncdomain.ActionCompletion,
 	bl syncdomain.BaselineView,
-) (bool, error) {
+) (*syncdomain.RetryWorkRow, error) {
 	if isStoppingRun(ctx) {
-		return false, nil
+		return nil, nil
 	}
 
 	evidence, handled, err := flow.permissionEvidenceForCompletion(ctx, r, bl)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if !handled {
-		return false, nil
+		return nil, nil
 	}
 	if evidence.Kind == permissionEvidenceNone {
-		return false, nil
+		return nil, nil
 	}
 
 	work := syncdomain.RetryWorkKeyForCompletion(r)
 	if err := flow.clearBlockedRetryWorkForScope(ctx, work, r.TrialScopeKey); err != nil {
-		return false, err
+		return nil, err
 	}
 
-	if err := flow.applyTrialPermissionEvidence(ctx, work, r.TrialScopeKey, evidence); err != nil {
-		return false, err
+	row, err := flow.applyTrialPermissionEvidence(ctx, work, r.TrialScopeKey, evidence)
+	if err != nil {
+		return nil, err
 	}
 	flow.signals.armHeldTimers()
 
-	return true, nil
+	return row, nil
 }
 
 func (flow *engineFlow) permissionEvidenceForCompletion(
@@ -211,32 +214,32 @@ func (flow *engineFlow) applyTrialPermissionEvidence(
 	work syncdomain.RetryWorkKey,
 	trialScopeKey syncdomain.ScopeKey,
 	evidence permissionEvidence,
-) error {
+) (*syncdomain.RetryWorkRow, error) {
 	switch evidence.Kind {
 	case permissionEvidenceNone:
-		return fmt.Errorf("apply trial permission failure for %s: missing permission evidence", work.Path)
+		return nil, fmt.Errorf("apply trial permission failure for %s: missing permission evidence", work.Path)
 	case permissionEvidenceKnownActiveBoundary:
 		scopeKey := scopeKeyForPermissionEvidence(evidence)
 		if scopeKey.IsZero() {
 			scopeKey = trialScopeKey
 		}
-		if err := flow.recordPermissionBlockedRetry(ctx, work, scopeKey, nil); err != nil {
-			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
+		row, err := flow.recordPermissionBlockedRetry(ctx, work, scopeKey, nil)
+		if err != nil {
+			return nil, fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
+		return row, nil
 	case permissionEvidenceFileDenied:
-		if err := flow.recordPermissionRetryWork(ctx, work, syncdomain.ScopeKey{}, evidence.IssueType, evidence.LastError); err != nil {
-			return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
+		row, err := flow.recordPermissionRetryWork(ctx, work, syncdomain.ScopeKey{}, evidence.IssueType, evidence.LastError)
+		if err != nil {
+			return nil, fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 		}
+		return row, nil
 	case permissionEvidenceBoundaryDenied:
 		scopeKey := scopeKeyForPermissionEvidence(evidence)
-		if err := flow.recordPermissionBoundaryDenied(ctx, work, scopeKey); err != nil {
-			return err
-		}
+		return flow.recordPermissionBoundaryDenied(ctx, work, scopeKey)
 	default:
 		panic(fmt.Sprintf("unknown permission evidence kind %d", evidence.Kind))
 	}
-
-	return nil
 }
 
 // scopeKeyForPermissionEvidence is the boundary scope a permission probe's
@@ -340,14 +343,14 @@ func (flow *engineFlow) recordPermissionRetryWork(
 	scopeKey syncdomain.ScopeKey,
 	conditionType syncdomain.IssueType,
 	errMsg string,
-) error {
+) (*syncdomain.RetryWorkRow, error) {
 	row, err := flow.retryWork.recordFailure(ctx, flow.deps.store, &syncdomain.RetryWorkFailure{
 		Work:          work,
 		ScopeKey:      scopeKey,
 		ConditionType: conditionType,
 	}, durableRecheckRetryDelay)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if row.AttemptCount == 1 {
 		flow.deps.logger.Warn("Not syncing "+work.Path+": "+errMsg,
@@ -363,7 +366,7 @@ func (flow *engineFlow) recordPermissionRetryWork(
 		slog.String("condition_type", string(conditionType)),
 	)
 	flow.deps.logger.Debug("retry_work permission failure recorded", fields...)
-	return nil
+	return row, nil
 }
 
 // recordPermissionBoundaryDenied records work blocked under the boundary a
@@ -375,7 +378,7 @@ func (flow *engineFlow) recordPermissionBoundaryDenied(
 	ctx context.Context,
 	work syncdomain.RetryWorkKey,
 	scopeKey syncdomain.ScopeKey,
-) error {
+) (*syncdomain.RetryWorkRow, error) {
 	var activation *blockActivation
 	if scopeKey.PersistsInBlockScopes() {
 		prepared, err := flow.prepareBlockActivation(syncdomain.ScopeUpdateResult{
@@ -384,18 +387,22 @@ func (flow *engineFlow) recordPermissionBoundaryDenied(
 			ConditionType: scopeKey.ConditionType(),
 		})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		activation = prepared
 	}
-	if err := flow.recordPermissionBlockedRetry(ctx, work, scopeKey, activation); err != nil {
-		return fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
+	row, err := flow.recordPermissionBlockedRetry(ctx, work, scopeKey, activation)
+	if err != nil {
+		return nil, fmt.Errorf("record permission retry_work for %s: %w", work.Path, err)
 	}
 	if activation == nil {
-		return nil
+		return row, nil
+	}
+	if err := flow.applyBlockActivation(ctx, activation); err != nil {
+		return nil, err
 	}
 
-	return flow.applyBlockActivation(ctx, activation)
+	return row, nil
 }
 
 func (flow *engineFlow) recordPermissionBlockedRetry(
@@ -403,9 +410,10 @@ func (flow *engineFlow) recordPermissionBlockedRetry(
 	work syncdomain.RetryWorkKey,
 	scopeKey syncdomain.ScopeKey,
 	activation *blockActivation,
-) error {
-	if _, err := flow.retryWork.recordBlocked(ctx, flow.deps.store, work, scopeKey, activation.storeRow()); err != nil {
-		return err
+) (*syncdomain.RetryWorkRow, error) {
+	row, err := flow.retryWork.recordBlocked(ctx, flow.deps.store, work, scopeKey, activation.storeRow())
+	if err != nil {
+		return nil, err
 	}
 	fields := append(flow.summaryLogFields(
 		errclass.ClassScopeBlockingTransient,
@@ -416,5 +424,5 @@ func (flow *engineFlow) recordPermissionBlockedRetry(
 		slog.String("condition_type", string(scopeKey.ConditionType())),
 	)
 	flow.deps.logger.Debug("retry_work permission failure recorded", fields...)
-	return nil
+	return row, nil
 }

@@ -85,7 +85,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 
 	switch decision.Class {
 	case errclass.ClassInvalid:
-		if err := flow.applyResultPersistence(ctx, decision, r, nil); err != nil {
+		if _, err := flow.applyResultPersistence(ctx, decision, r, nil); err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
 		}
 		flow.sched.Finished(current)
@@ -317,12 +317,11 @@ func (flow *engineFlow) persistAndHoldFailure(
 	if decision.Persistence != syncdomain.PersistRetryWork {
 		return false, nil
 	}
-	if err := flow.applyResultPersistence(ctx, decision, r, activation); err != nil {
+	row, err := flow.applyResultPersistence(ctx, decision, r, activation)
+	if err != nil {
 		return false, err
 	}
-	if err := flow.holdActionFromPersistedRetryState(current, syncdomain.RetryWorkKeyForCompletion(r)); err != nil {
-		return false, err
-	}
+	flow.holdActionFromPersistedRetryState(current, row)
 
 	return true, nil
 }
@@ -615,20 +614,21 @@ func (flow *engineFlow) runPublicationDrainStage(
 	return concrete, nil
 }
 
-// recordRetryWork records a failure's retry_work. activation, when not nil,
-// is the block scope the failure activates; the failure must then be blocked
-// under that scope, and its row is written with the scope row.
+// recordRetryWork records a failure's retry_work and returns the row the
+// store wrote. activation, when not nil, is the block scope the failure
+// activates; the failure must then be blocked under that scope, and its row is
+// written with the scope row.
 func (flow *engineFlow) recordRetryWork(
 	ctx context.Context,
 	decision *syncdomain.ResultDecision,
 	r *syncdomain.ActionCompletion,
 	delayFn func(int) time.Duration,
 	activation *blockActivation,
-) error {
+) (*syncdomain.RetryWorkRow, error) {
 	scopeKey := decision.RetryWorkScope()
 	blocked := flow.retryWorkShouldBeBlocked(decision.Class, scopeKey)
 	if activation != nil && (!blocked || activation.update.ScopeKey != scopeKey) {
-		return fmt.Errorf("record retry_work for %s: activating scope %s, but the work is not blocked under it",
+		return nil, fmt.Errorf("record retry_work for %s: activating scope %s, but the work is not blocked under it",
 			r.Path, activation.update.ScopeKey.String())
 	}
 
@@ -665,7 +665,7 @@ func (flow *engineFlow) recordRetryWork(
 		row, recErr = flow.retryWork.recordFailure(ctx, flow.deps.store, failure, delayFn)
 	}
 	if recErr != nil {
-		return fmt.Errorf("record retry_work for %s: %w", r.Path, recErr)
+		return nil, fmt.Errorf("record retry_work for %s: %w", r.Path, recErr)
 	}
 	if actionable && !blocked && row.AttemptCount == 1 {
 		// Said once, when the condition starts (R-6.6.30): the retries that
@@ -692,7 +692,7 @@ func (flow *engineFlow) recordRetryWork(
 	fields = append(fields, slog.Int("attempt_count", row.AttemptCount))
 	flow.deps.logger.Debug("retry_work recorded", fields...)
 
-	return nil
+	return row, nil
 }
 
 func (flow *engineFlow) retryWorkShouldBeBlocked(
@@ -717,10 +717,10 @@ func (flow *engineFlow) applyResultPersistence(
 	decision *syncdomain.ResultDecision,
 	r *syncdomain.ActionCompletion,
 	activation *blockActivation,
-) error {
+) (*syncdomain.RetryWorkRow, error) {
 	switch decision.Persistence {
 	case syncdomain.PersistNone:
-		return nil
+		return nil, nil
 	case syncdomain.PersistRetryWork:
 		return flow.recordRetryWork(ctx, decision, r, retryDelayForDecision(decision), activation)
 	default:

@@ -568,21 +568,20 @@ func (flow *engineFlow) recordBlockedRetryWork(ctx context.Context, action *sync
 	return flow.persistBlockedRetryWork(ctx, syncdomain.RetryWorkKeyForAction(action), scopeKey)
 }
 
+// holdActionFromPersistedRetryState holds current as the retry_work row the
+// store just wrote for it says: blocked under its scope, or waiting for its
+// retry time. The row is the one the store mutator returned, never a cache
+// read, so the hold cannot disagree with what was persisted.
 func (flow *engineFlow) holdActionFromPersistedRetryState(
 	current *syncdomain.TrackedAction,
-	work syncdomain.RetryWorkKey,
-) error {
+	row *syncdomain.RetryWorkRow,
+) {
 	if current == nil {
-		return nil
-	}
-
-	row, ok := flow.retryWork.row(work)
-	if !ok {
-		return fmt.Errorf("hold action %s from persisted retry state: missing retry_work row", work.Path)
+		return
 	}
 	if row.Blocked {
 		flow.sched.Hold(current, syncsched.HeldScope, row.ScopeKey, time.Time{})
-		return nil
+		return
 	}
 
 	nextRetry := time.Time{}
@@ -590,7 +589,6 @@ func (flow *engineFlow) holdActionFromPersistedRetryState(
 		nextRetry = time.Unix(0, row.NextRetryAt)
 	}
 	flow.sched.Hold(current, syncsched.HeldRetry, syncdomain.ScopeKey{}, nextRetry)
-	return nil
 }
 
 func (flow *engineFlow) holdActionUnderScope(

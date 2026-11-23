@@ -317,7 +317,12 @@ the store, holding a cache of the table that it writes only from what a store
 call returned (R-2.10.33). The table is the one authority; the cache is
 compared with it after every completion when invariant checks are on, and a
 test holds the sources to the one write path
-(`TestRetryWork_IsTheOnlyEngineWriterOfRetryWork`).
+(`TestRetryWork_IsTheOnlyEngineWriterOfRetryWork`). A failure's action is
+held from the row the store mutator returned for it (the failure's own
+recording, a trial's reclassification, a permission probe's evidence), never
+from a cache read after the write, so a hold cannot disagree with what was
+persisted and there is no "missing row" path
+(`TestEngineFlow_HoldFromPersistedRetryState_UsesTheReturnedRowNotTheCache`).
 
 One goroutine, the one running `RunOnce` or `RunWatch`, owns all of them, and
 none has a lock -- the scheduler's scopes, the watch timers and the dependency
