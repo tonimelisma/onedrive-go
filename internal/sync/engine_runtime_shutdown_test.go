@@ -660,7 +660,7 @@ func TestRunDetachedStoreAccess_AfterTheRunEndedSharesTheStopsDeadline(t *testin
 	stopDeadline := time.Now().Add(time.Minute)
 	run, cancelRun := context.WithCancel(t.Context())
 	defer cancelRun()
-	marked := syncexec.WithRunStop(run, func() time.Time { return stopDeadline })
+	marked := syncexec.WithRunStop(run, func() time.Time { return stopDeadline }, syncfixture.TestLogger(t))
 	worker, stopWorker := context.WithCancel(marked)
 	defer stopWorker()
 
@@ -688,7 +688,7 @@ func TestDetachedAtStopContext_EndsAtTheStopsDeadlineOnceTheRunEnded(t *testing.
 
 	run, cancelRun := context.WithCancel(t.Context())
 	defer cancelRun()
-	marked := syncexec.WithRunStop(run, func() time.Time { return time.Now().Add(workerTestCommitBound) })
+	marked := syncexec.WithRunStop(run, func() time.Time { return time.Now().Add(workerTestCommitBound) }, syncfixture.TestLogger(t))
 	completionCtx, release := syncexec.DetachedAtStopContext(marked)
 	defer release()
 

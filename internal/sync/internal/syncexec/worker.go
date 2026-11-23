@@ -287,19 +287,35 @@ type runStop struct {
 	ended    func() bool
 	onEnd    func(func()) func() bool
 	deadline func() time.Time
+	logger   *slog.Logger
 }
 
 // WithRunStop returns ctx carrying the stop of the run ctx is: once ctx has
 // ended, every detached store access under it, its own or a context derived
 // from it (the workers', a completion's), ends at deadline() when that comes
 // before its own bound. deadline is called from any goroutine once ctx ended,
-// so it reads only what is safe to read there.
-func WithRunStop(ctx context.Context, deadline func() time.Time) context.Context {
+// so it reads only what is safe to read there. A panic in a callback the
+// run's end starts is logged through logger and ends that callback only.
+func WithRunStop(ctx context.Context, deadline func() time.Time, logger *slog.Logger) context.Context {
 	return context.WithValue(ctx, runStopKey{}, runStop{
-		ended:    func() bool { return ctx.Err() != nil },
-		onEnd:    func(f func()) func() bool { return context.AfterFunc(ctx, f) },
+		ended: func() bool { return ctx.Err() != nil },
+		onEnd: func(f func()) func() bool {
+			return context.AfterFunc(ctx, func() {
+				defer recoverRunStopCallback(logger)
+				f()
+			})
+		},
 		deadline: deadline,
+		logger:   logger,
 	})
+}
+
+// recoverRunStopCallback is the panic boundary of a goroutine the run's end
+// starts: the panic is a bug, logged with its stack, and the callback ends.
+func recoverRunStopCallback(logger *slog.Logger) {
+	if r := recover(); r != nil {
+		_ = panicguard.Recovered(logger, "in the run stop's deadline watch", r)
+	}
 }
 
 // RunHasEnded reports that ctx belongs to a run (WithRunStop) whose context
@@ -354,7 +370,10 @@ func DetachedAtStopContext(ctx context.Context) (context.Context, context.Cancel
 		// runs on.
 		bounded, cancel := context.WithDeadlineCause(detached, stop.deadline(), syncdomain.ErrStoreAccessTimedOut)
 		cancelDeadline = cancel
-		context.AfterFunc(bounded, func() { cancelCause(context.Cause(bounded)) })
+		context.AfterFunc(bounded, func() {
+			defer recoverRunStopCallback(stop.logger)
+			cancelCause(context.Cause(bounded))
+		})
 	})
 
 	return detached, func() {

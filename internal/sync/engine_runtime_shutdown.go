@@ -56,7 +56,7 @@ func isStoppingRun(ctx context.Context) bool {
 // ends, every detached store wait under it, a worker's or an executor's
 // included, ends at the stop's one deadline when that comes first.
 func (flow *engineFlow) withRunStop(ctx context.Context) context.Context {
-	return syncexec.WithRunStop(ctx, flow.stopDeadlineAfterCancel)
+	return syncexec.WithRunStop(ctx, flow.stopDeadlineAfterCancel, flow.deps.logger)
 }
 
 // stopDeadlineAfterCancel is the stop's one deadline as any goroutine reads it
