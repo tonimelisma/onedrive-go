@@ -1709,9 +1709,20 @@ cancellation, because a shutdown must not drop the record of work that
 already happened or skip a cleanup. Every one of them goes through the one
 helper, `syncexec.RunDetachedStoreAccess` (a bound from now) or
 `RunDetachedStoreAccessUntil` (a deadline the caller holds), both on
-`DetachedStoreContext`; only that helper and `SyncStore.Close` detach by hand
+`DetachedStoreContext`; only that helper, `DetachedAtStopContext` (below) and
+`SyncStore.Close` detach by hand
 (`TestDetachedContexts_TheSyncTreeDetachesOnlyThroughTheOneHelper`,
-`TestHandMadeDetaches_NamesTheFunctionOfEachDetach`):
+`TestHandMadeDetaches_NamesTheFunctionOfEachDetach`). Once the run's context
+ended, every one of them ends at the stop's one deadline when that comes
+before its own bound: the run marks its context (`withRunStop`,
+`syncexec.WithRunStop`, on the watch's context and on a one-shot pass's, which
+the workers run under), and `RunDetachedStoreAccess` reads the stop's deadline
+from it (`stopBound` after the cancel, `canceledAt`, which any goroutine may
+read). A worker's outcome commit or an executor write that starts after the
+cancel therefore takes what remains of the stop's bound, not a whole bound of
+its own; one that started before the cancel ends within its own bound, which
+is the stop's bound and so ends no later
+(`TestRunDetachedStoreAccess_AfterTheRunEndedSharesTheStopsDeadline`):
 
 | Access | Where | Bound |
 | --- | --- | --- |
@@ -1742,7 +1753,8 @@ plane's stop and close bounds are derived from them
 `TestDetachedContexts_AlwaysCarryADeadline` fails on any
 `context.WithoutCancel` in `internal/sync` or `internal/multisync` production
 code that is not the first argument of `context.WithTimeout`,
-`context.WithDeadline` or their `Cause` forms (R-6.3.9).
+`context.WithDeadline` or their `Cause` forms, except `DetachedAtStopContext`,
+whose deadline is armed at the run's end (R-6.3.9).
 
 The commit of an outcome and the record of a created item fail the action
 they belong to, so both run through `RunDetachedStoreAccess`: its bound
@@ -1766,12 +1778,28 @@ a scan is observation, not the record of work done, and the next sync scans
 the tree again. Until 2026-11-23 the commit took its own 30 s bound and a
 timeout there was read as the stop's echo and dropped without a word
 (`TestWatchRuntime_AScanCommitTheStopsDeadlineCutsIsSaidNotAnError`,
-`TestWatchRuntime_AScanAfterTheStopIsStillCommitted`). The executor's
-best-effort pending-create writes and the release's row restores keep their
-own bound when they run on a live context, and the outer deadline when they
-run inside a stopping run's detached one; a completion in flight on the live
-context at the instant the cancel lands is still cut by the cancel, not
-finished under the stop's deadline.
+`TestWatchRuntime_AScanAfterTheStopIsStillCommitted`).
+
+A completion the run applies while it goes on (`applyLiveCompletion`, in the
+watch loop and in a one-shot pass's results loop) runs on
+`syncexec.DetachedAtStopContext`: a context the run's cancel does not cut,
+with no deadline while the run goes on, which from the cancel ends at the
+stop's one deadline with `ErrStoreAccessTimedOut` as its cause. A cancel that
+lands while the completion is being applied lets it finish its records, as a
+completion that reaches the drain after the cancel does, and from that moment
+it starts nothing (`isStoppingRun` reads `syncexec.RunHasEnded`: no probe, no
+admission, no release of held work). A record the deadline cuts short is
+counted in the stop's one warning (`endStopDrain`), not returned as the run's
+failure. A probe of OneDrive already under way at the cancel runs to its end
+or to the stop's deadline, whichever comes first. Its deadline is armed when
+the run's context ends, not in the same expression, so
+`TestDetachedContexts_AlwaysCarryADeadline` names it as its one exception
+(`TestWatchRuntime_ACompletionAppliedAtTheCancelIsRecorded`,
+`TestWatchRuntime_ACompletionAppliedAtTheCancelIsCountedWhenTheStopsTimeRunsOut`,
+`TestEngineFlow_ALiveCompletionAppliedAtTheCancelIsRecorded`,
+`TestDetachedAtStopContext_EndsAtTheStopsDeadlineOnceTheRunEnded`). Before
+2026-11-23 such a completion ran on the live context and the cancel cut its
+records.
 
 ### Permission recovery
 

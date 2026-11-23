@@ -568,7 +568,7 @@ func (rt *watchRuntime) handleWatchActionCompletion(
 ) error {
 	rt.loop.createAttempts.completed(completion, rt.deps.now())
 	hadPendingReplan := rt.hasPendingReplan()
-	ready, err := rt.applyRuntimeCompletionStage(ctx, completion, p.bl)
+	ready, err := rt.applyLiveCompletion(ctx, completion, p.bl)
 	if hadPendingReplan {
 		rt.advancePendingReplanDrainIdleTracking()
 	}

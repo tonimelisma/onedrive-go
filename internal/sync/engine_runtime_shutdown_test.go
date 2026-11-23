@@ -26,12 +26,12 @@ import (
 const goneItemID = "gone-item"
 
 // failedUploads registers an upload for each path in actions, numbered from
-// firstID, and returns what each reported as its run stopped: a 502 from
+// 1, and returns what each reported as its run stopped: a 502 from
 // OneDrive, a result that already happened.
-func failedUploads(actions *syncsched.Scheduler, firstID int64, paths ...string) []syncdomain.ActionCompletion {
+func failedUploads(actions *syncsched.Scheduler, paths ...string) []syncdomain.ActionCompletion {
 	completions := make([]syncdomain.ActionCompletion, 0, len(paths))
 	for i, path := range paths {
-		id := firstID + int64(i)
+		id := int64(i + 1)
 		actions.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: path, View: &syncdomain.PathView{Path: path}}, id, nil)
 		completions = append(completions, syncdomain.ActionCompletion{
 			ActionID: id, Path: path, ActionType: syncdomain.ActionUpload, RunEnded: true,
@@ -60,7 +60,7 @@ func stoppingRunCompletions(t *testing.T, eng *testEngine, actions *syncsched.Sc
 		ETag:     "etag-gone",
 	}}, "delta-1", eng.driveID))
 
-	completions := failedUploads(actions, 1, "report.txt")
+	completions := failedUploads(actions, "report.txt")
 	actions.AddForTest(&syncdomain.Action{
 		Type: syncdomain.ActionDownload, Path: "gone.txt", ItemID: goneItemID, DriveID: eng.driveID, View: &syncdomain.PathView{Path: "gone.txt"},
 	}, 2, nil)
@@ -230,7 +230,7 @@ func TestWatchRuntime_AStoreThatDoesNotAnswerEndsTheDrainAtItsBound(t *testing.T
 	t.Parallel()
 
 	eng, rt, logs := stoppingWatchRuntime(t)
-	p := &watchPipeline{completions: closedCompletions(failedUploads(rt.sched, 1, "a.txt", "b.txt"))}
+	p := &watchPipeline{completions: closedCompletions(failedUploads(rt.sched, "a.txt", "b.txt"))}
 	stopped := stoppedContext(t)
 	rt.beginWatchDrain(stopped)
 
@@ -561,7 +561,7 @@ func TestEngineFlow_AStoppingRunReleasesNoHeldWork(t *testing.T) {
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
-	completions := failedUploads(flow.sched, 1, "report.txt")
+	completions := failedUploads(flow.sched, "report.txt")
 	held := flow.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "held.txt", View: &syncdomain.PathView{Path: "held.txt"}}, 2, nil)
 	require.NotNil(t, held)
 	flow.sched.Hold(held, syncsched.HeldRetry, syncdomain.ScopeKey{}, flow.deps.now().Add(-time.Minute))
@@ -570,4 +570,131 @@ func TestEngineFlow_AStoppingRunReleasesNoHeldWork(t *testing.T) {
 	require.NoError(t, flow.endStopDrain())
 
 	assert.True(t, flow.sched.IsHeld(syncdomain.RetryWorkKeyForAction(&held.Action)), "the due action stays held")
+}
+
+// runStoppedAt returns the context of a run that stopped, as the run marks it
+// (withRunStop), so what runs under it after the cancel shares the stop's one
+// deadline.
+func runStoppedAt(t *testing.T, flow *engineFlow) context.Context {
+	t.Helper()
+
+	run, cancelRun := context.WithCancel(t.Context())
+	stopNoting := flow.noteRunCancel(run)
+	t.Cleanup(func() { stopNoting() })
+	marked := flow.withRunStop(run)
+	cancelRun()
+
+	return marked
+}
+
+// A completion the watch was applying when its cancel landed is not cut by
+// the cancel: its records are written under the stop's one deadline, as a
+// completion that reaches the drain after the cancel is.
+//
+// Validates: R-2.8.3
+func TestWatchRuntime_ACompletionAppliedAtTheCancelIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	eng, rt, _ := stoppingWatchRuntime(t)
+	rt.stopBound = time.Hour
+	completions := failedUploads(rt.sched, "report.txt")
+	p := &watchPipeline{bl: syncdomain.NewBaselineSnapshot(nil)}
+
+	require.NoError(t, rt.handleWatchActionCompletion(runStoppedAt(t, rt.engineFlow), p, &completions[0]))
+	require.NoError(t, rt.endStopDrain())
+
+	assert.Equal(t, []string{"report.txt"}, retryWorkPaths(t, eng.baseline), "the failure is recorded as retry work")
+}
+
+// A completion applied at the cancel whose records the stop's deadline cuts
+// short is counted in the stop's one warning, not returned as the run's
+// failure and not lost silently.
+//
+// Validates: R-6.3.9, R-2.8.3
+func TestWatchRuntime_ACompletionAppliedAtTheCancelIsCountedWhenTheStopsTimeRunsOut(t *testing.T) {
+	t.Parallel()
+
+	eng, rt, logs := stoppingWatchRuntime(t)
+	completions := failedUploads(rt.sched, "report.txt")
+	p := &watchPipeline{bl: syncdomain.NewBaselineSnapshot(nil)}
+	stopped := runStoppedAt(t, rt.engineFlow)
+
+	release := holdStoreConnection(t, eng.baseline)
+	err := syncfixture.RunWithin(t, t.Context(), "the completion to end at the stop's deadline", func(context.Context) error {
+		return rt.handleWatchActionCompletion(stopped, p, &completions[0])
+	})
+	release()
+
+	require.NoError(t, err, "a record the stop's deadline cut is counted, not the run's failure")
+	require.ErrorIs(t, rt.endStopDrain(), syncdomain.ErrStoreAccessTimedOut)
+	assert.Contains(t, logs.String(), "The stop's time ran out before 1 result was recorded")
+	assert.Empty(t, retryWorkPaths(t, eng.baseline))
+}
+
+// A one-shot pass's completion applied at the cancel is recorded the same way.
+//
+// Validates: R-2.8.3
+func TestEngineFlow_ALiveCompletionAppliedAtTheCancelIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
+	runner := newOneShotRunner(eng.Engine)
+	runner.sched.NewGraph()
+	completions := failedUploads(runner.sched, "report.txt")
+
+	_, err := runner.applyLiveCompletion(runStoppedAt(t, runner.engineFlow), &completions[0], syncdomain.NewBaselineSnapshot(nil))
+	require.NoError(t, err)
+	require.NoError(t, runner.endStopDrain())
+
+	assert.Equal(t, []string{"report.txt"}, retryWorkPaths(t, eng.baseline), "the failure is recorded as retry work")
+}
+
+// A worker's or an executor's detached store write that starts after the
+// run's context ended ends at the stop's one deadline when that comes before
+// its own bound; while the run goes on it keeps its own bound.
+//
+// Validates: R-6.3.9
+func TestRunDetachedStoreAccess_AfterTheRunEndedSharesTheStopsDeadline(t *testing.T) {
+	t.Parallel()
+
+	stopDeadline := time.Now().Add(time.Minute)
+	run, cancelRun := context.WithCancel(t.Context())
+	defer cancelRun()
+	marked := syncexec.WithRunStop(run, func() time.Time { return stopDeadline })
+	worker, stopWorker := context.WithCancel(marked)
+	defer stopWorker()
+
+	deadlineOf := func() time.Time {
+		var deadline time.Time
+		require.NoError(t, syncexec.RunDetachedStoreAccess(worker, time.Hour, func(ctx context.Context) error {
+			deadline, _ = ctx.Deadline()
+			return nil
+		}))
+
+		return deadline
+	}
+
+	assert.True(t, deadlineOf().After(stopDeadline), "a live run's write keeps its own bound")
+	cancelRun()
+	assert.True(t, deadlineOf().Equal(stopDeadline), "after the cancel the write ends at the stop's deadline")
+}
+
+// The context a live completion is applied on outlives the run's cancel and
+// ends at the stop's deadline from it, with the store-timeout cause.
+//
+// Validates: R-6.3.9
+func TestDetachedAtStopContext_EndsAtTheStopsDeadlineOnceTheRunEnded(t *testing.T) {
+	t.Parallel()
+
+	run, cancelRun := context.WithCancel(t.Context())
+	defer cancelRun()
+	marked := syncexec.WithRunStop(run, func() time.Time { return time.Now().Add(workerTestCommitBound) })
+	completionCtx, release := syncexec.DetachedAtStopContext(marked)
+	defer release()
+
+	cancelRun()
+	require.NoError(t, completionCtx.Err(), "the cancel does not cut the completion")
+	assert.True(t, syncexec.RunHasEnded(completionCtx), "the completion knows its run stopped")
+	<-completionCtx.Done()
+	require.ErrorIs(t, context.Cause(completionCtx), syncdomain.ErrStoreAccessTimedOut)
 }

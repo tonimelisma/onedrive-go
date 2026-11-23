@@ -104,12 +104,37 @@ func TestDetachedContexts_AlwaysCarryADeadline(t *testing.T) {
 			require.NoError(t, parseErr)
 			scanned++
 			for _, pos := range unboundedDetachedContexts(file) {
+				if stopArmedDetaches()[filepath.Clean(path)+":"+enclosingFunction(file, pos)] {
+					continue
+				}
 				assert.Failf(t, "detached context without a deadline",
 					"%s: wrap context.WithoutCancel in context.WithTimeout or context.WithDeadline", fset.Position(pos))
 			}
 		}
 	}
 	assert.Positive(t, scanned, "the scan found the production files")
+}
+
+// stopArmedDetaches names, by file and function, the detaches whose deadline
+// is armed when the run's context ends rather than in the same expression:
+// the context a live completion is applied on, which the run's cancel does
+// not cut and which ends at the stop's one deadline from that cancel on.
+func stopArmedDetaches() map[string]bool {
+	return map[string]bool{
+		filepath.Join("internal", "syncexec", "worker.go") + ":DetachedAtStopContext": true,
+	}
+}
+
+// enclosingFunction is the name of the function declaration of file that
+// holds pos, or "" outside every one.
+func enclosingFunction(file *ast.File, pos token.Pos) string {
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Pos() <= pos && pos < fn.End() {
+			return fn.Name.Name
+		}
+	}
+
+	return ""
 }
 
 // The rule above accepts only the bounded form.
@@ -158,8 +183,9 @@ func f(ctx context.Context) {
 // takes the helper, so a stopping run's waits share the stop's one deadline.
 func detachSiteAllowed() map[string]bool {
 	return map[string]bool{
-		filepath.Join("internal", "syncexec", "worker.go") + ":DetachedStoreContext": true,
-		filepath.Join("syncstore", "store.go") + ":Close":                            true,
+		filepath.Join("internal", "syncexec", "worker.go") + ":DetachedStoreContext":  true,
+		filepath.Join("internal", "syncexec", "worker.go") + ":DetachedAtStopContext": true,
+		filepath.Join("syncstore", "store.go") + ":Close":                             true,
 	}
 }
 

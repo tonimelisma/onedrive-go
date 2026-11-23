@@ -244,7 +244,7 @@ func (r *oneShotRunner) handleOneShotCompletion(
 		return fatalErr
 	}
 
-	ready, completionErr := r.applyRuntimeCompletionStage(ctx, completion, bl)
+	ready, completionErr := r.applyLiveCompletion(ctx, completion, bl)
 	r.outbox = append(r.outbox, ready...)
 	if completionErr == nil {
 		return nil

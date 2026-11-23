@@ -462,8 +462,11 @@ func (r *oneShotRunner) executePreparedPlan(
 	})
 	// The pass's context is the workers' run: a fatal completion ends it, and
 	// with it the run, so what it interrupts completes as a shutdown.
+	// Its stop has one deadline (withRunStop), which the workers' detached
+	// store writes after the cancel share.
 	runCtx, cancelPass := context.WithCancelCause(ctx)
 	defer cancelPass(syncdomain.ErrOneShotPassEnded)
+	runCtx = r.withRunStop(runCtx)
 	pool.Start(runCtx, r.cfg.transferWorkers)
 
 	// Process completions until the engine-owned runtime settles. Held retry/scope
