@@ -1188,7 +1188,14 @@ in the same way and the move is still composed (`localDisplacementAt` reads
 the displacement from the deleted item whose baseline path the file holds),
 so the moved item is neither downloaded beside its old copy nor its old copy
 uploaded again as a new item
-(`TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves`). A
+(`TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves`). So is
+a new file at the path of a synced file whose copy moved elsewhere here,
+whatever OneDrive holds (`composedDisplacement`, `movedAwayHere`): it is not
+the item either, and waiting for it to leave held two moves on each other's
+destinations for good, the item moved here and swapped on OneDrive with a
+file whose copy had to move onto the new file's path
+(`TestRunOnce_ANewFileAtAMovedFilesOldPathGivesWayToASwapOnOneDrive`, chaos
+seeds 162 and 385). The item's own copy at its new path never gives way. A
 folder at that path still makes the move wait. A new file at a path no synced item had
 gives way the same way: a file moved here and renamed on OneDrive onto the
 name of a file made here (`mv z p/z, new g` here, `mv z g` there) is a create

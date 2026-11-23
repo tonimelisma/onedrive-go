@@ -283,7 +283,10 @@ func TestComposeMoves_OccupiedDestinationDefers(t *testing.T) {
 // kept as a conflict copy when it was edited; a new file that took the path
 // (the synced copy left it: a replacing move took it into the trash and
 // another program saved a file there before the rename) is kept as a
-// conflict copy too, so the move still lands. Nothing else gives way.
+// conflict copy too, so the move still lands, and so is a new file at the
+// path of a synced copy moved elsewhere here, whatever OneDrive holds: it is
+// not the item, and waiting for it left two moves waiting on each other's
+// destinations for good (chaos seeds 162 and 385). Nothing else gives way.
 func TestComposedDisplacement_EntryAtTheDestination(t *testing.T) {
 	t.Parallel()
 
@@ -314,7 +317,15 @@ func TestComposedDisplacement_EntryAtTheDestination(t *testing.T) {
 		},
 		{name: "an empty path needs no displacement", want: moveDisplaceNever},
 		{name: "the synced copy of unknown content makes the move wait", localPosition: "b.txt", local: file(""), want: moveDisplaceNever},
-		{name: "a new file at the path of a synced copy moved elsewhere here makes the move wait", localPosition: "c.txt", local: file("new-hash"), want: moveDisplaceNever},
+		{name: "a new file at the path of a synced copy moved elsewhere here is kept as a conflict copy", localPosition: "c.txt", local: file("new-hash"), want: moveDisplaceConflictCopy},
+		{
+			name:          "a new file at the path of a synced copy moved elsewhere here is kept as a conflict copy while the item is online",
+			localPosition: "c.txt", local: file("new-hash"), remoteByID: stillOnline, want: moveDisplaceConflictCopy,
+		},
+		{
+			name: "a folder at the path of a synced copy moved elsewhere here makes the move wait", localPosition: "c.txt",
+			local: &syncdomain.LocalState{Name: "b.txt", ItemType: syncdomain.ItemTypeFolder}, want: moveDisplaceNever,
+		},
 		{name: "a new file at the path of an item still online makes the move wait", local: file("new-hash"), remoteByID: stillOnline, want: moveDisplaceNever},
 		{name: "the synced copy of an item still online makes the move wait", localPosition: "b.txt", local: file(syncedHash), remoteByID: stillOnline, want: moveDisplaceNever},
 	}
