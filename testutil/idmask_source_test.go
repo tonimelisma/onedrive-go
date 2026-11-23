@@ -371,7 +371,7 @@ func TestIdentifierKeysFollowTheProductsKeys(t *testing.T) {
 		}
 	}
 	assert.Equal(t, map[string]int{
-		"id": 26, "email": 6, "etag": 1, "remote_drive": 1, "owner_name": 1, "shared_by_name": 1,
+		"id": 27, "email": 6, "etag": 1, "remote_drive": 1, "owner_name": 1, "shared_by_name": 1,
 		"shared_owner_name": 1, "org_name": 2, "site_name": 4, "library_name": 3,
 	}, writers, "the JSON tags and log attributes that write a masked key changed: mask the key a renamed "+
 		"writer writes now, then give the key its new count here")

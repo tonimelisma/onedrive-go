@@ -259,7 +259,7 @@ func TestSpecGoverns_ChecksOnlyTheRoutingTableRows(t *testing.T) {
 	f.writeRoutingTable(t, "| `internal/thing/*.go` | `spec/design/thing.md` |\n\n"+
 		"Prose under the table naming `internal/gone/` and `spec/gone.md`.\n\n"+
 		"## Dev Process\n\n"+
-		"Claims live under `refs/nightly-claims/`.\n"+
+		"Release tags live under `refs/tags/`.\n"+
 		"| `internal/elsewhere/gone.go` | a table in another section |\n")
 
 	require.NoError(t, f.run(t))

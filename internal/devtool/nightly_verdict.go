@@ -424,7 +424,7 @@ func nightlyJobsPassed(jobs []string, reports []nightlyJobReport) bool {
 // nightlyFailedTestKey is the claim key of a failed test: its package as go
 // test names it, relative to the module (internal/sync), a dot and its
 // top-level name. The key keeps the package's separators, so two packages
-// never share one; nightlyClaimRefName makes a ref name of it.
+// never share one; nightlyClaimName makes a claim name of it.
 func nightlyFailedTestKey(failure goTestFailure) string {
 	qualifier := strings.TrimPrefix(failure.pkg, "./")
 	switch failure.pkg {
@@ -457,7 +457,7 @@ func sanitizeNightlyKey(name string) string {
 // nightlyStepKey is the claim key of a failed step of a job: step-, the job
 // and the step, each through sanitizeNightlyKey, so the key of the lint step
 // of `verify-full (macos-latest)` is step-verify-full--macos-latest-lint. It
-// is its own claim ref name (TestNightlyCheckClaimsAFailedStepUnderItsOwnKey).
+// is its own claim name (TestNightlyCheckClaimsAFailedStepUnderItsOwnKey).
 func nightlyStepKey(job string, step verifyStepName) string {
 	return nightlyStepKeyPrefix + sanitizeNightlyKey(job) + "-" + sanitizeNightlyKey(string(step))
 }

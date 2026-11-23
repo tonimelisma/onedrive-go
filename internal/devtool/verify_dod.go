@@ -278,7 +278,7 @@ func runDODNightly(
 		fmt.Fprintf(&b, "dod %s: warning: %s\n", stage, plainGitHubFailure(err))
 	}
 	if owner != "" && stage != DODStagePostMerge {
-		renewed, err := renewNightlyClaims(ctx, runner, repoRoot, owner, now())
+		renewed, err := renewNightlyClaims(ctx, gh, repoRoot, owner, now())
 		for _, key := range renewed {
 			fmt.Fprintf(&b, "nightly: renewed %s's claim on %s\n", owner, key)
 		}
@@ -375,7 +375,7 @@ func runDODPreMergeNightly(
 	now func() time.Time,
 	stdout io.Writer,
 ) error {
-	head, err := requireNightlyClaimsInPR(ctx, runner, gh, repoRoot, prNumber)
+	head, err := requireNightlyClaimsInPR(ctx, gh, repoRoot, prNumber)
 	if err != nil {
 		return plainGitHubFailure(err)
 	}
@@ -411,7 +411,7 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 	if err != nil {
 		return err
 	}
-	if err := markNightlyClaimsFixed(ctx, runner, mainRoot, opts.DODBranch, prState.MergeCommitSHA, time.Now()); err != nil {
+	if err := markNightlyClaimsFixed(ctx, gh, mainRoot, opts.DODBranch, prState.MergeCommitSHA, time.Now()); err != nil {
 		return err
 	}
 	if err := cleanupMergedIncrement(ctx, runner, mainRoot, opts.DODWorktree, opts.DODBranch, stderr); err != nil {
