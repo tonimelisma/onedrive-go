@@ -25,7 +25,8 @@ PR 2 note: built E5, B10, E9, F5, G9, G11; G10 closed without code (an unchanged
 
 ## Last
 - [ ] PR 4: every row of `PARKED.md` still open, plus R12 below; work moved to cloud sessions on 2026-11-23 (no installs, no host soak).
-- [ ] 3. R12 (B11) if D14's soak has run; otherwise say so to the owner
+- [x] 3. R12 (B11) if D14's soak has run; otherwise say so to the owner
+  - 2026-11-23: shipped in #974 with deterministic tests in place of the soak (owner decision below).
   - 2026-11-23 (owner decision): the 72-hour soak is replaced by deterministic tests. Prove that the multisync watch loop never blocks outside a step it declares to the heartbeat (`internal/multisync/loop_heartbeat.go`), then ship R12: the systemd keepalive is sent only while `LoopAlive` reports progress. A false alarm costs a restart, not data. Ship it with the parked polish in PR 4.
   - 2026-11-22: the heartbeat (B10) was first installed with #966 at 00:32 on 11-22; D14 needs 72 h of watch on the test drive without a false "no progress" line, so R12 can start no earlier than 2026-11-25 00:32. Told the owner.
   - PR 3 (3a) was stopped by the owner over Remote Control on 11-21; its branch `refactor/finish-3` holds partial work; not restarted.
