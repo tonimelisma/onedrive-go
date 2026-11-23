@@ -66,9 +66,16 @@ type persistedUpload struct {
 	sent uploadedContent
 }
 
+// The overwrite key's parts: existingItemSessionKeyPrefix, the item ID,
+// existingItemSessionKeySeparator, the absolute local path.
+const (
+	existingItemSessionKeyPrefix    = "item::"
+	existingItemSessionKeySeparator = "::"
+)
+
 // existingItemSessionKey is the session-store key of an overwrite by item ID.
 func existingItemSessionKey(localPath, itemID string) string {
-	return "item::" + itemID + "::" + localPath
+	return existingItemSessionKeyPrefix + itemID + existingItemSessionKeySeparator + localPath
 }
 
 // placeholderRemovalTimeout bounds the best-effort removal of the empty item a
@@ -498,6 +505,36 @@ func (tm *TransferManager) removePlaceholder(ctx context.Context, driveID drivei
 	}
 
 	return removed
+}
+
+// DropUploadSessions ends the uploads of localPaths (absolute paths) that the
+// caller gave up: sync no longer wants them (a conflict took the path, the
+// file moved or was deleted). Every record either key of such an upload holds
+// is deleted and its server session canceled best-effort (dropSession), so no
+// session outlives its upload and a later upload of the path starts fresh
+// (R-5.6.13). A failed cancel still drops the record: the session expires on
+// its own. It returns how many records it dropped and the failures to read the
+// store. It performs Graph calls, one bounded cancel per record, so it must
+// never run under a store transaction.
+func (tm *TransferManager) DropUploadSessions(ctx context.Context, localPaths []string) (int, error) {
+	if tm.sessionStore == nil || len(localPaths) == 0 {
+		return 0, nil
+	}
+	wanted := make(map[string]struct{}, len(localPaths))
+	for _, localPath := range localPaths {
+		wanted[localPath] = struct{}{}
+	}
+
+	records, err := tm.sessionStore.RecordsForLocalPaths(wanted)
+	for i := range records {
+		rec := &records[i]
+		tm.dropSession(ctx, rec.DriveID, rec.LocalPath, graph.UploadURL(rec.SessionURL))
+	}
+	if err != nil {
+		return len(records), fmt.Errorf("read upload sessions to drop: %w", err)
+	}
+
+	return len(records), nil
 }
 
 // dropSession cancels a server session best-effort, on a context detached

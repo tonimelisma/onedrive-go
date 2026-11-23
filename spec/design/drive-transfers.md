@@ -446,7 +446,31 @@ shape, so sync engine construction receives mount-root scope from
 ## Session Lifecycle
 
 `persistedSessionUpload` (`transfer_session.go`) owns one resumable upload
-for create and overwrite alike. A record for other content is canceled on
+for create and overwrite alike.
+
+An interrupted upload keeps its record so that its next attempt resumes.
+When sync gives the upload up instead (a conflict takes the path, the file
+moves or is deleted), the record has nothing left to resume, so sync ends it
+in the step in which it ends the upload's retry work: the prune of retry rows
+no current action names returns the keys it deleted
+(`SyncStore.PruneRetryWorkToCurrentActions`), and after that transaction, never
+under it, the engine hands the paths of the pruned uploads to
+`TransferManager.DropUploadSessions` (through `ExecutorConfig`, which tries
+the stored path, its spelling on disk and its parent's spelling). That reads
+every record of the path under either key an upload holds, the create key
+(the absolute path) and the overwrite key (`item::<id>::<path>`), and drops
+each with `dropSession`: the record goes first, then the server session is
+canceled best-effort on a detached, bounded context, so a failed cancel still
+drops the record (`TestTransferManager_DropUploadSessions_DropsBothKeysAndCancelsEachOnce`,
+`TestTransferManager_DropUploadSessions_AFailedCancelStillDropsTheRecord`,
+`TestRunOnce_ConflictOverAnInterruptedLargeUploadDropsItsSession`). An upload
+still in the plan keeps its row and its record
+(`TestChaosGraph_FragmentFaultLeavesAPartUploadedSessionToResume`), and a
+plan that deferred uploads by its mode (download-only) drops nothing, since
+the next run in both directions still wants them. A replan runs only while no
+action runs, so no record of an upload in flight is dropped. Before
+2026-11-23 such a record stayed until `CleanStale` removed it after 7 days,
+and its server session was never canceled. A record for other content is canceled on
 the server before it is dropped, and so is one whose resume fails for any
 reason but shutdown (D-037, R-5.6.13); records carry the session's
 `ExpiresAt`. A failed final fragment (`graph.FinalFragmentError`), a resume

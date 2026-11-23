@@ -193,7 +193,7 @@ func TestFault_RetryWorkPruneThatFailsMidwayDeletesNothing(t *testing.T) {
 	}
 
 	fault.ArmAfter(sqlDeleteRetryWorkByPathType, 1, syncfixture.ErrInjectedFault)
-	err := store.PruneRetryWorkToCurrentActions(ctx, nil)
+	_, err := store.PruneRetryWorkToCurrentActions(ctx, nil)
 	require.ErrorIs(t, err, syncfixture.ErrInjectedFault)
 	require.Equal(t, 1, fault.Fired(), "the second delete failed")
 
@@ -201,7 +201,8 @@ func TestFault_RetryWorkPruneThatFailsMidwayDeletesNothing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, rows, 3, "no row is gone")
 
-	require.NoError(t, store.PruneRetryWorkToCurrentActions(ctx, nil))
+	_, err = store.PruneRetryWorkToCurrentActions(ctx, nil)
+	require.NoError(t, err)
 	rows, err = store.ListRetryWork(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, rows, "the prune completes once the fault is gone")

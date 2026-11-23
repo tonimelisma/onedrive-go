@@ -201,6 +201,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown,
 		TestRunOnce_AHelperPanicOfTheCommandEndsTheActionInFlightAsAShutdown,
 		TestRunOnce_TheSignInRequirementIsTheSyncedAccountsAloneOfTwoAtOneAddress,
+		TestRunOnce_ConflictOverAnInterruptedLargeUploadDropsItsSession,
 		TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth,
 		TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth,
 		TestRunOnce_CreateIntentOfAFileRenamedAwayIsDropped,

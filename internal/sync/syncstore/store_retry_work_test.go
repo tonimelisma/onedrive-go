@@ -21,9 +21,12 @@ func TestUpsertRetryWorkAndPruneToCurrentActions(t *testing.T) {
 	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("keep.txt", "", syncdomain.ActionUpload, 2, 10)))
 	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("drop.txt", "", syncdomain.ActionDownload, 1, 20)))
 
-	require.NoError(t, store.PruneRetryWorkToCurrentActions(ctx, []syncdomain.RetryWorkKey{
+	pruned, err := store.PruneRetryWorkToCurrentActions(ctx, []syncdomain.RetryWorkKey{
 		{Path: "keep.txt", ActionType: syncdomain.ActionUpload},
-	}))
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []syncdomain.RetryWorkKey{{Path: "drop.txt", ActionType: syncdomain.ActionDownload}}, pruned,
+		"the prune names the work it deleted")
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)
@@ -42,9 +45,10 @@ func TestRetryWorkPruneDistinguishesOldPathSemanticWork(t *testing.T) {
 	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("dest.txt", "src-a.txt", syncdomain.ActionRemoteMove, 1, 1)))
 	require.NoError(t, store.UpsertRetryWork(ctx, syncfixture.TestDelayedRetryWorkRow("dest.txt", "src-b.txt", syncdomain.ActionRemoteMove, 1, 1)))
 
-	require.NoError(t, store.PruneRetryWorkToCurrentActions(ctx, []syncdomain.RetryWorkKey{
+	_, err := store.PruneRetryWorkToCurrentActions(ctx, []syncdomain.RetryWorkKey{
 		{Path: "dest.txt", OldPath: "src-b.txt", ActionType: syncdomain.ActionRemoteMove},
-	}))
+	})
+	require.NoError(t, err)
 
 	rows, err := store.ListRetryWork(ctx)
 	require.NoError(t, err)

@@ -158,10 +158,13 @@ func (w *retryWork) discardScope(
 }
 
 // prune deletes the rows of work no current action names, in the store and
-// then in the cache.
-func (w *retryWork) prune(ctx context.Context, store *syncstore.SyncStore, keep []syncdomain.RetryWorkKey) error {
-	if err := store.PruneRetryWorkToCurrentActions(ctx, keep); err != nil {
-		return fmt.Errorf("prune retry_work to current actions: %w", err)
+// then in the cache, and returns the paths of the uploads the store deleted:
+// work sync gave up, whose upload sessions the caller ends. The store's answer
+// decides, not the cache: a one-shot run prunes before any plan installed it.
+func (w *retryWork) prune(ctx context.Context, store *syncstore.SyncStore, keep []syncdomain.RetryWorkKey) ([]string, error) {
+	pruned, err := store.PruneRetryWorkToCurrentActions(ctx, keep)
+	if err != nil {
+		return nil, fmt.Errorf("prune retry_work to current actions: %w", err)
 	}
 	kept := make(map[syncdomain.RetryWorkKey]struct{}, len(keep))
 	for _, key := range keep {
@@ -172,8 +175,14 @@ func (w *retryWork) prune(ctx context.Context, store *syncstore.SyncStore, keep 
 			delete(w.rows, key)
 		}
 	}
+	var prunedUploads []string
+	for _, key := range pruned {
+		if key.ActionType == syncdomain.ActionUpload {
+			prunedUploads = append(prunedUploads, key.Path)
+		}
+	}
 
-	return nil
+	return prunedUploads, nil
 }
 
 // matchesStore reports the first difference between the cache and rows, the

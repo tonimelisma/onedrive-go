@@ -412,10 +412,12 @@ Static verification is a first-class architectural constraint, not a best-effort
   (`TestScenarioSession_ResumeSendsOnlyTheMissingRanges`), and a storm can
   fail a fragment in the middle of a session
   (`TestChaosGraph_FragmentFaultLeavesAPartUploadedSessionToResume`). The
-  model writes no file above the 4 MiB session threshold: with large writes,
-  an upload a fault interrupted mid-session whose path a conflict then took
-  leaves its persisted session record behind, which the no-stray-artifacts
-  invariant refuses. Which create failures carry
+  model writes no file above the 4 MiB session threshold yet. An upload a
+  fault interrupts mid-session whose path a conflict then takes no longer
+  leaves its persisted session record behind: sync drops the record of an
+  upload it gave up and cancels its session (drive-transfers.md, Session
+  Lifecycle; `TestRunOnce_ConflictOverAnInterruptedLargeUploadDropsItsSession`),
+  so large writes can join the model. Which create failures carry
   `graph.ErrCreateOutcomeUnknown` is written once, beside the fault answers
   (`chaosAnswer`), a create that never left the client among them, and every
   answer is played to `graph.CreateFile` to hold the marks to graph's own
