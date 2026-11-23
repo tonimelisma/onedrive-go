@@ -22,8 +22,9 @@ func OutsideTheEnum(value fmt.Stringer) string {
 }
 
 // string constants for enum serialization (shared by String() and Parse*).
-// Unexported: only used within this file for typed constant definitions
-// and String()/Parse* methods.
+// Most are used only in this file; StrFile, StrFolder and StrRoot are
+// exported for the packages that spell item types, and StrDownload with them
+// so the action-type group reads as one set.
 const (
 	strRemote         = "remote"
 	strLocal          = "local"

@@ -184,7 +184,7 @@ func TestAsideNameFor_FitsTheNameLimit(t *testing.T) {
 
 	long := strings.Repeat("é", 200) // 400 bytes
 	name := asideNameFor(long, time.Unix(1, 0))
-	assert.LessOrEqual(t, len(name), maxRemoteNameBytes)
+	assert.LessOrEqual(t, len(name), maxAsideNameBytes)
 	assert.True(t, strings.HasPrefix(name, asideNamePrefix))
 	assert.True(t, strings.HasSuffix(name, "é"), "trimmed on a rune boundary")
 }

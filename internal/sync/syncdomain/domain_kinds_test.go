@@ -33,4 +33,8 @@ func TestPlannerKinds_ParseRoundTripsEveryMemberAndRefusesOthers(t *testing.T) {
 	}
 	_, err = ParseReconciliationKind("bogus")
 	require.Error(t, err)
+
+	// A value outside either enum prints under the exported type's name.
+	assert.Equal(t, "ComparisonKind(200)", ComparisonKind(200).String())
+	assert.Equal(t, "ReconciliationKind(200)", ReconciliationKind(200).String())
 }

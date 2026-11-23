@@ -80,15 +80,16 @@ type RemoteObserver struct {
 	// after a 410 with the engine's full refresh, the only path that also
 	// finds the deletes the expired window lost (R-2.15.3). It returns the
 	// batch to emit; the batch's cursor token becomes the watch token.
-	recoverExpiredDelta deltaExpiredRecovery
+	recoverExpiredDelta DeltaExpiredRecovery
 
 	// debugEvents is the engine's debug event sink, set by the watch runtime
 	// before Watch; nil reports nothing.
 	debugEvents func(syncdomain.EngineDebugEvent)
 }
 
-// deltaExpiredRecovery runs a full refresh for an expired delta token.
-type deltaExpiredRecovery func(ctx context.Context, kind syncdomain.ResyncKind) (RemoteObservationBatch, error)
+// DeltaExpiredRecovery is the full refresh the engine hands the observer to
+// run for an expired delta token.
+type DeltaExpiredRecovery func(ctx context.Context, kind syncdomain.ResyncKind) (RemoteObservationBatch, error)
 
 // SetClock replaces the observer's time capability. Must be called before
 // the observer fetches.
@@ -103,7 +104,7 @@ func (o *RemoteObserver) SetDebugEvents(emit func(syncdomain.EngineDebugEvent)) 
 }
 
 // SetDeltaExpiredRecovery wires the full refresh Watch runs after a 410.
-func (o *RemoteObserver) SetDeltaExpiredRecovery(recovery deltaExpiredRecovery) {
+func (o *RemoteObserver) SetDeltaExpiredRecovery(recovery DeltaExpiredRecovery) {
 	o.recoverExpiredDelta = recovery
 }
 

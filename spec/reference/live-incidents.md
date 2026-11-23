@@ -1248,7 +1248,7 @@ Evidence:
 - After preserving `RemoteRootItemID`, the same focused re-sync still failed with
   two conflict copies plus two download actions targeted at folders. A new
   regression test,
-  [`TestQueryReconciliationState_FolderMetadataChurnIsNoop`](../../internal/sync/sqlite_compare_test.go),
+  [`TestQueryReconciliationState_FolderMetadataChurnIsNoop`](../../internal/sync/syncstore/sqlite_compare_test.go),
   reproduced that `baseline + local_state + remote_state` folder rows with only
   size/mtime/ETag churn were classified as `diverged` / `conflict_edit_edit`
   instead of `unchanged` / `noop`.
@@ -1299,7 +1299,7 @@ Evidence:
   `drive add`, then invoked sync immediately. The live failure happened before
   any shared-folder write or watch assertion, which isolated the bug to sync
   startup rather than the shared fixture logic.
-- [`internal/sync/scanner.go`](../../internal/sync/scanner.go) intentionally
+- [`internal/sync/internal/syncobserve/scanner.go`](../../internal/sync/internal/syncobserve/scanner.go) intentionally
   treats a missing root directory as `errSyncRootMissing`, so once startup
   reached the scanner without creating the directory first the failure was
   deterministic.
@@ -1626,8 +1626,8 @@ Evidence:
   divergent local edit and end clean.
 - Repository inspection showed
   [`spec/design/sync-planning.md`](../design/sync-planning.md),
-  [`internal/sync/planner.go`](../../internal/sync/planner.go), and
-  [`internal/sync/executor_conflict.go`](../../internal/sync/executor_conflict.go)
+  [`internal/sync/internal/syncplan/planner.go`](../../internal/sync/internal/syncplan/planner.go), and
+  [`internal/sync/internal/syncexec/executor_conflict.go`](../../internal/sync/internal/syncexec/executor_conflict.go)
   already treating EF5 edit/edit, EF9 edit/delete, and EF12 create/create as
   conflict flows regardless of directional mode.
 - The stale tests were

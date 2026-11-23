@@ -19,9 +19,10 @@ import (
 // with "~$", which work and school drives reject.
 const asideNamePrefix = ".onedrive-go-replacing-"
 
-// maxRemoteNameBytes keeps the aside name within the 255-byte name limit the
-// local side shares with OneDrive's practical limit.
-const maxRemoteNameBytes = 255
+// maxAsideNameBytes keeps the aside name within the local filesystem's
+// 255-byte name limit. OneDrive sets no single-name limit of its own, only
+// the 400-unit path limit (R-2.11.12), so the local limit is the binding one.
+const maxAsideNameBytes = 255
 
 // replaceDestination runs perform, which writes the source to dest's name,
 // with any existing destination file renamed aside first. On success the
@@ -132,7 +133,7 @@ func isAsideNameFor(name, target string) bool {
 
 	// asideNameFor trims long names on a rune boundary to fit 255 bytes, so
 	// a trimmed one ends within a rune's width of the limit.
-	trimmed := len(name) > maxRemoteNameBytes-utf8.UTFMax && strings.HasPrefix(target, original)
+	trimmed := len(name) > maxAsideNameBytes-utf8.UTFMax && strings.HasPrefix(target, original)
 	return original == target || trimmed
 }
 
@@ -140,7 +141,7 @@ func isAsideNameFor(name, target string) bool {
 // limit, trimming the original name on a rune boundary when needed.
 func asideNameFor(name string, now time.Time) string {
 	prefix := asideNamePrefix + strconv.FormatInt(now.UnixNano(), 10) + "-"
-	budget := maxRemoteNameBytes - len(prefix)
+	budget := maxAsideNameBytes - len(prefix)
 	for len(name) > budget {
 		_, size := utf8.DecodeLastRuneInString(name)
 		name = name[:len(name)-size]
