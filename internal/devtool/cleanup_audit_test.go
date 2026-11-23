@@ -42,13 +42,13 @@ func TestRunCleanupAuditClassifiesRepoState(t *testing.T) {
 				"origin/merged|refs/remotes/origin/merged",
 				"origin/topic|refs/remotes/origin/topic",
 			)),
-			"git rev-list --count refs/heads/main --not refs/heads/main":              []byte("0\n"),
-			"git rev-list --count refs/heads/refactor/merged --not refs/heads/main":   []byte("0\n"),
-			"git rev-list --count refs/heads/refactor/dirty --not refs/heads/main":    []byte("1\n"),
-			"git rev-list --count refs/heads/refactor/unmerged --not refs/heads/main": []byte("2\n"),
-			"git rev-list --count refs/remotes/origin/main --not refs/heads/main":     []byte("0\n"),
-			"git rev-list --count refs/remotes/origin/merged --not refs/heads/main":   []byte("0\n"),
-			"git rev-list --count refs/remotes/origin/topic --not refs/heads/main":    []byte("3\n"),
+			"git rev-list --count refs/heads/main --not refs/remotes/origin/main":              []byte("0\n"),
+			"git rev-list --count refs/heads/refactor/merged --not refs/remotes/origin/main":   []byte("0\n"),
+			"git rev-list --count refs/heads/refactor/dirty --not refs/remotes/origin/main":    []byte("1\n"),
+			"git rev-list --count refs/heads/refactor/unmerged --not refs/remotes/origin/main": []byte("2\n"),
+			"git rev-list --count refs/remotes/origin/main --not refs/remotes/origin/main":     []byte("0\n"),
+			"git rev-list --count refs/remotes/origin/merged --not refs/remotes/origin/main":   []byte("0\n"),
+			"git rev-list --count refs/remotes/origin/topic --not refs/remotes/origin/main":    []byte("3\n"),
 		},
 		outputsByCWD: map[string]map[string][]byte{
 			dirtyWorktreePath: {
@@ -99,8 +99,8 @@ func TestRunCleanupAuditJSONOutput(t *testing.T) {
 			"git for-each-ref --format=%(refname:short)|%(refname) refs/remotes/origin": []byte(
 				"origin/main|refs/remotes/origin/main\n",
 			),
-			"git rev-list --count refs/heads/main --not refs/heads/main":          []byte("0\n"),
-			"git rev-list --count refs/remotes/origin/main --not refs/heads/main": []byte("0\n"),
+			"git rev-list --count refs/heads/main --not refs/remotes/origin/main":          []byte("0\n"),
+			"git rev-list --count refs/remotes/origin/main --not refs/remotes/origin/main": []byte("0\n"),
 		},
 	}
 
