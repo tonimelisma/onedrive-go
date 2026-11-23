@@ -1341,6 +1341,12 @@ func (w *exWorld) exRemoteFolderCreate(a *syncdomain.Action) bool {
 	if !localOK || !local.folder {
 		return false
 	}
+	// A create planned without OneDrive truth at its path finds OneDrive
+	// holding one there, and the worker's freshness check supersedes it
+	// before it reaches OneDrive (evaluateRemoteActionFreshness).
+	if _, held := w.remote[a.Path]; held && (a.View == nil || a.View.Remote == nil || a.View.Remote.IsDeleted) {
+		return false
+	}
 	// The executor creates the folder by its parent and name and adopts a
 	// folder OneDrive already has there (createRemoteFolder): the item ID the
 	// action carries from the baseline names nothing it creates.
@@ -1714,6 +1720,31 @@ func TestPlannerPairs_AHeldFolderMovedIntoARenamedFolderRunsOnceItsNameIsFree(t 
 			{kind: exMoveFolder, from: "x2", to: "q/x2"},
 		},
 	})
+}
+
+// Validates: R-2.17.6, R-2.1.7
+//
+// p moved into a new folder at its own path on each side, into p/a/p here
+// and into p/b/p on OneDrive: OneDrive's place wins, so p moves to p/b/p here
+// and the two new folders p are one folder by path. The folder made here is
+// planned at the path p left with OneDrive's own new p as its OneDrive truth,
+// so the freshness check, which supersedes a create planned without OneDrive
+// truth at a path OneDrive holds, lets it through and it adopts that folder;
+// p/a is then made on OneDrive and p/b here. Before, the create was planned
+// without OneDrive truth and superseded on every pass, and p's move, waiting
+// for p/b, never came.
+func TestPlannerPairs_AFolderMovedIntoDifferentNewFoldersAtItsOwnPathOnEachSideConverges(t *testing.T) {
+	t.Parallel()
+
+	moveInto := func(newFolder string) []exEdit {
+		return []exEdit{
+			{kind: exMoveFolder, from: "p", to: "q"},
+			{kind: exMakeFolder, to: "p"},
+			{kind: exMakeFolder, to: "p/" + newFolder},
+			{kind: exMoveFolder, from: "q", to: "p/" + newFolder + "/p"},
+		}
+	}
+	requirePairKeepsEveryInvariant(t, &exPair{start: exStartNamed(t, "synced"), local: moveInto("a"), remote: moveInto("b")})
 }
 
 // Validates: R-2.17.6

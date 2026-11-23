@@ -2230,6 +2230,7 @@ func recreatedSourceCreates(
 		createView := &syncdomain.PathView{Path: source, Local: sourceView.Local, TruthStatus: sourceView.TruthStatus}
 		create := makeCreateUploadAction(createView)
 		if sourceView.Local.ItemType == syncdomain.ItemTypeFolder {
+			createView.Remote = remoteFolderOfAnotherItem(sourceView.Remote, key)
 			create = makeFolderCreate(createView, syncdomain.CreateRemote)
 		}
 		if inputs.frozen[key] || composition.deferred[key] || !recreatedSourceVacated(composition, key, node, source) {
@@ -2240,6 +2241,26 @@ func recreatedSourceCreates(
 	}
 
 	return creates, waiting
+}
+
+// remoteFolderOfAnotherItem is the folder OneDrive holds at a recreated
+// source when it is not the moved item key: both sides moved the item away
+// and each made a new folder at its path, which are one folder by path. The
+// folder create made here carries it as its OneDrive truth, so the worker's
+// freshness check reads that folder by item ID instead of superseding the
+// create on every pass because the path is no longer free, and the executor
+// adopts it by name (adoptExistingRemoteFolder). Whichever of the create and
+// the moved item's move commits first, the baseline ends right: run first,
+// the create's row replaces the moved item's at the path and the move
+// records the item where it went; run second, the move carries the rows
+// below the path with it, and the next pass re-keys the new folder's back.
+// A file there, or the moved item itself, is no such folder.
+func remoteFolderOfAnotherItem(remote *syncdomain.RemoteState, key string) *syncdomain.RemoteState {
+	if remote == nil || remote.IsDeleted || remote.ItemType != syncdomain.ItemTypeFolder || remote.ItemID == key {
+		return nil
+	}
+
+	return remote
 }
 
 // recreatedSourceVacated reports whether OneDrive no longer holds key at
