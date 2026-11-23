@@ -102,7 +102,7 @@ func ActionCompletionFromTrackedAction(
 		ItemID:               ta.Action.ItemID,
 		DriveID:              driveID,
 		ActionType:           ta.Action.Type,
-		ItemType:             ActionItemType(&ta.Action),
+		ItemType:             ResolveItemType(ta.Action.View),
 		Err:                  actionErr,
 		ErrMsg:               "",
 		HTTPStatus:           ExtractHTTPStatus(actionErr),

@@ -518,11 +518,11 @@ func (r *oneShotRunner) dispatchInitialReadyActions(
 }
 
 // countFolderDeletes counts the local and the remote deletes among actions
-// that remove a folder (syncdomain.ActionItemType).
+// that remove a folder (syncdomain.DeletedItemType).
 func countFolderDeletes(actions []syncdomain.Action) (local, remote int) {
 	for i := range actions {
 		action := &actions[i]
-		if syncdomain.ActionItemType(action) != syncdomain.ItemTypeFolder {
+		if syncdomain.DeletedItemType(action) != syncdomain.ItemTypeFolder {
 			continue
 		}
 		switch action.Type {

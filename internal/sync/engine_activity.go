@@ -207,7 +207,7 @@ func (e *Engine) emitPlannedActivity(plan *syncdomain.ActionPlan) {
 			Kind:    kind,
 			Path:    action.Path,
 			OldPath: action.OldPath,
-			Folder:  syncdomain.ActionItemType(action) == syncdomain.ItemTypeFolder,
+			Folder:  syncdomain.ResolveItemType(action.View) == syncdomain.ItemTypeFolder,
 			Planned: true,
 		})
 	}
