@@ -261,7 +261,16 @@ func (wp *WorkerPool) commitOutcome(ctx context.Context, mutation *syncdomain.Ba
 // innermost error of the last error a chain joins, so a user reads that the
 // sync database did not answer, not the deadline the store gave up at.
 func RunDetachedStoreAccess(ctx context.Context, bound time.Duration, access func(context.Context) error) error {
-	accessCtx, cancel := DetachedStoreContext(ctx, syncdomain.WallNow().Add(bound))
+	return RunDetachedStoreAccessUntil(ctx, syncdomain.WallNow().Add(bound), access)
+}
+
+// RunDetachedStoreAccessUntil is RunDetachedStoreAccess under a deadline the
+// caller already holds: a stopping run's one deadline, which every store wait
+// after the run's context ended shares. It is the one way sync product code
+// detaches a store wait from a cancellation; a source-reading test refuses a
+// hand-made detach anywhere else.
+func RunDetachedStoreAccessUntil(ctx context.Context, deadline time.Time, access func(context.Context) error) error {
+	accessCtx, cancel := DetachedStoreContext(ctx, deadline)
 	defer cancel()
 
 	return StoreAccessError(accessCtx, access(accessCtx))

@@ -1659,17 +1659,22 @@ process's change is unfinished gets this error, as any start failure (R-3.7.3,
 
 A few store accesses run on a context detached from the engine's
 cancellation, because a shutdown must not drop the record of work that
-already happened or skip a cleanup. Every one of them carries a deadline, in
-the same expression that detaches it:
+already happened or skip a cleanup. Every one of them goes through the one
+helper, `syncexec.RunDetachedStoreAccess` (a bound from now) or
+`RunDetachedStoreAccessUntil` (a deadline the caller holds), both on
+`DetachedStoreContext`; only that helper and `SyncStore.Close` detach by hand
+(`TestDetachedContexts_TheSyncTreeDetachesOnlyThroughTheOneHelper`,
+`TestHandMadeDetaches_NamesTheFunctionOfEachDetach`):
 
 | Access | Where | Bound |
 | --- | --- | --- |
 | commit of a completed action's outcome | `worker.go` `commitOutcome` | `OutcomeCommitTimeout` (30 s) |
 | record of an item a create made | `executor_transfer.go` `recordPendingCreate` | `OutcomeCommitTimeout` |
-| clearing the intent of a create that succeeded | `executor_transfer.go` `clearPendingCreateIntent` | `OutcomeCommitTimeout` |
-| dropping the record of a placeholder the cleanup removed | `executor_transfer.go` `forgetRemovedPlaceholder` | `OutcomeCommitTimeout` |
+| clearing the intent of a create that succeeded | `executor_transfer.go` `clearPendingCreateIntent` | `OutcomeCommitTimeout`, or the outer deadline inside a detached caller |
+| dropping the record of a placeholder the cleanup removed | `executor_transfer.go` `forgetRemovedPlaceholder` | `OutcomeCommitTimeout`, or the outer deadline inside a detached caller |
+| restoring the baseline rows a failed release forgot | `engine_shortcut_release.go` `restoreForgottenRows` | one `OutcomeCommitTimeout` for every row, or the outer deadline inside a detached caller |
 | clearing a succeeded action's retry work | `engine_retry_trial.go` `clearRetryWorkOnActionSuccess` | `OutcomeCommitTimeout` |
-| a local snapshot observed before a shutdown | `engine_watch_local_observation.go` `applyLocalSnapshot` | `OutcomeCommitTimeout` |
+| a local snapshot observed before a shutdown | `engine_watch_local_observation.go` `applyLocalSnapshot` | the stop's one deadline (`runStoppedStoreAccess`, `stopDeadline`) |
 | persisted-invariant checks (tests and debug only) | `engine_runtime_invariants.go` | `OutcomeCommitTimeout` |
 | the records of the completions a stopping run drains | `engine_runtime_shutdown.go` `processShutdownCompletion` | one `OutcomeCommitTimeout` for the whole drain, measured from the cancel (`stopDrain`) |
 | the WAL checkpoint in `SyncStore.Close` | `store.go` | `StoreCloseCheckpointTimeout` (10 s) |
@@ -1704,6 +1709,22 @@ also once the run has ended, and never a request that timed out
 run whose write of that failure fails on the ended run's context says it could
 not record the result, since the record of done work is lost
 (`TestEngineFlow_ACommitThatOutlastsItsBoundWhileStoppingIsSaid`).
+
+A local scan that reaches the watch after its context ended is committed
+under the stop's one deadline (`stopDeadline`: the running drain's, or
+`stopBound` after the cancel), never a bound of its own, so it cannot hold a
+stop past that deadline. When the deadline cuts the commit short the lost scan
+is said once at Warn and the watch ends as the stop asked, with no new error:
+a scan is observation, not the record of work done, and the next sync scans
+the tree again. Until 2026-11-23 the commit took its own 30 s bound and a
+timeout there was read as the stop's echo and dropped without a word
+(`TestWatchRuntime_AScanCommitTheStopsDeadlineCutsIsSaidNotAnError`,
+`TestWatchRuntime_AScanAfterTheStopIsStillCommitted`). The executor's
+best-effort pending-create writes and the release's row restores keep their
+own bound when they run on a live context, and the outer deadline when they
+run inside a stopping run's detached one; a completion in flight on the live
+context at the instant the cancel lands is still cut by the cancel, not
+finished under the stop's deadline.
 
 ### Permission recovery
 

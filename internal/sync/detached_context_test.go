@@ -148,3 +148,101 @@ func f(ctx context.Context) {
 	require.Len(t, unbounded, 1)
 	assert.Equal(t, 18, fset.Position(unbounded[0]).Line)
 }
+
+// detachSiteAllowed names, by file and function, the places in the sync
+// tree's product code that may detach from cancellation by hand: the one
+// helper every store wait after a run's context ended goes through
+// (syncexec.DetachedStoreContext, under RunDetachedStoreAccess and
+// RunDetachedStoreAccessUntil), and the store's own close, which runs after
+// every run is over and checkpoints under its own bound. Every other detach
+// takes the helper, so a stopping run's waits share the stop's one deadline.
+func detachSiteAllowed() map[string]bool {
+	return map[string]bool{
+		filepath.Join("internal", "syncexec", "worker.go") + ":DetachedStoreContext": true,
+		filepath.Join("syncstore", "store.go") + ":Close":                            true,
+	}
+}
+
+// handMadeDetaches returns, as "<function>", the functions of file that call
+// context.WithoutCancel, once per call.
+func handMadeDetaches(file *ast.File) []string {
+	var sites []string
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			call, isCall := node.(*ast.CallExpr)
+			if isCall && isContextCall(call, "WithoutCancel") {
+				sites = append(sites, fn.Name.Name)
+			}
+			return true
+		})
+	}
+
+	return sites
+}
+
+// Every store wait the sync tree detaches from cancellation goes through the
+// one helper, so once a run's context ended its waits share the stop's one
+// deadline instead of each taking a bound of its own.
+//
+// Validates: R-6.3.9
+func TestDetachedContexts_TheSyncTreeDetachesOnlyThroughTheOneHelper(t *testing.T) {
+	t.Parallel()
+
+	allowed := detachSiteAllowed()
+	seen := make(map[string]bool, len(allowed))
+	for _, dir := range syncTreePackageDirs() {
+		paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		require.NoError(t, err)
+		for _, path := range paths {
+			if strings.HasSuffix(path, "_test.go") {
+				continue
+			}
+			fset := token.NewFileSet()
+			file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			require.NoError(t, parseErr)
+			for _, function := range handMadeDetaches(file) {
+				site := filepath.Clean(path) + ":" + function
+				seen[site] = true
+				assert.True(t, allowed[site],
+					"%s detaches by hand: run the store wait through syncexec.RunDetachedStoreAccess or, after the run's context ended, the stop's deadline (runStoppedStoreAccess)", site)
+			}
+		}
+	}
+	for site := range allowed {
+		assert.True(t, seen[site], "the allowed site %s no longer detaches: remove it from the list", site)
+	}
+}
+
+// The scan above finds a hand-made detach in the function that makes it.
+//
+// Validates: R-6.3.9
+func TestHandMadeDetaches_NamesTheFunctionOfEachDetach(t *testing.T) {
+	t.Parallel()
+
+	const source = `package p
+
+import (
+	"context"
+	"time"
+)
+
+func helper(ctx context.Context) {
+	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	defer cancel()
+	_ = bounded
+}
+
+func clean(ctx context.Context) {
+	_ = ctx
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "p.go", source, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"helper"}, handMadeDetaches(file))
+}

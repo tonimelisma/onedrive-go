@@ -667,8 +667,9 @@ func (cfg *ExecutorConfig) detachedStoreBound() time.Duration {
 // window the intent covers. The write would also fail on the canceled context
 // and warn at a clean shutdown (R-6.6.21). An attempt that succeeded has
 // nothing left in flight, so its intent is cleared on a context detached from
-// the action's and bounded like an outcome's commit: kept, it outlived a file
-// that was already synced.
+// the action's and bounded like an outcome's commit (RunDetachedStoreAccess,
+// which keeps a stopping run's one deadline when it runs inside one): kept, it
+// outlived a file that was already synced.
 func (e *Executor) clearPendingCreateIntent(ctx context.Context, action *syncdomain.Action, succeeded bool) {
 	if e.pendingCreates == nil {
 		return
@@ -679,9 +680,9 @@ func (e *Executor) clearPendingCreateIntent(ctx context.Context, action *syncdom
 		return
 	}
 
-	clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.detachedStoreBound())
-	defer cancel()
-	if err := e.pendingCreates.ClearPendingCreateIntent(clearCtx, action.Path); err != nil {
+	if err := RunDetachedStoreAccess(ctx, e.detachedStoreBound(), func(clearCtx context.Context) error {
+		return e.pendingCreates.ClearPendingCreateIntent(clearCtx, action.Path)
+	}); err != nil {
 		e.logger.Warn("Could not clear a pending create intent", slog.String("path", action.Path), slog.Any("error", err))
 	}
 }
@@ -690,17 +691,17 @@ func (e *Executor) clearPendingCreateIntent(ctx context.Context, action *syncdom
 // once the cleanup after the failure reported it removed: the item is gone,
 // so it can never receive this client's upload, and nothing of this attempt
 // is left on OneDrive to recognize. On a context detached from the action's
-// and bounded like an outcome's commit, since the removal already happened
-// whatever became of the action. Best effort: a record left behind ends when
+// and bounded like an outcome's commit (RunDetachedStoreAccess), since the
+// removal already happened whatever became of the action. Best effort: a record left behind ends when
 // observation sees the item's delete.
 func (e *Executor) forgetRemovedPlaceholder(ctx context.Context, action *syncdomain.Action, itemID string) {
 	if e.pendingCreates == nil {
 		return
 	}
 
-	forgetCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.detachedStoreBound())
-	defer cancel()
-	if err := e.pendingCreates.ForgetRemovedPlaceholder(forgetCtx, action.Path, itemID); err != nil {
+	if err := RunDetachedStoreAccess(ctx, e.detachedStoreBound(), func(forgetCtx context.Context) error {
+		return e.pendingCreates.ForgetRemovedPlaceholder(forgetCtx, action.Path, itemID)
+	}); err != nil {
 		e.logger.Warn("Could not forget the record of a removed placeholder",
 			slog.String("path", action.Path), slog.String("item_id", itemID), slog.Any("error", err))
 	}

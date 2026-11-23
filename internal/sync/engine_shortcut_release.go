@@ -669,23 +669,27 @@ func releaseRestoreMutation(row *syncdomain.BaselineEntry) *syncdomain.BaselineM
 
 // restoreForgottenRows puts back the rows whose entries are still on disk and
 // returns cause joined with any restore that failed. The restores run on a
-// context without the caller's cancellation, bounded like an outcome commit:
+// context without the caller's cancellation, bounded like an outcome commit,
+// all of them under one bound (RunDetachedStoreAccess, which keeps the outer
+// deadline of a detached caller):
 // a row whose entry stays must not be lost to a shutdown. A row whose entry
 // is gone, or cannot be checked, stays forgotten: an entry without its row is
 // adopted by the next run, a row without its entry is not safe.
 func (e *Engine) restoreForgottenRows(ctx context.Context, rows []*syncdomain.BaselineEntry, cause error) error {
-	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), syncdomain.OutcomeCommitTimeout)
-	defer cancel()
-
 	errs := []error{cause}
-	for _, row := range rows {
-		if !e.releaseEntryRemains(row.Path) {
-			continue
+	accessErr := syncexec.RunDetachedStoreAccess(ctx, syncdomain.OutcomeCommitTimeout, func(restoreCtx context.Context) error {
+		for _, row := range rows {
+			if !e.releaseEntryRemains(row.Path) {
+				continue
+			}
+			if err := e.baseline.CommitMutation(restoreCtx, releaseRestoreMutation(row)); err != nil {
+				errs = append(errs, fmt.Errorf("sync: restoring the baseline row of %s: %w", row.Path, err))
+			}
 		}
-		if err := e.baseline.CommitMutation(restoreCtx, releaseRestoreMutation(row)); err != nil {
-			errs = append(errs, fmt.Errorf("sync: restoring the baseline row of %s: %w", row.Path, err))
-		}
-	}
+
+		return nil
+	})
+	errs = append(errs, accessErr)
 
 	return errors.Join(errs...)
 }

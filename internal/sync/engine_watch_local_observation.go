@@ -2,10 +2,13 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 func (rt *watchRuntime) handleWatchLocalObservationBatch(
@@ -62,15 +65,30 @@ func (rt *watchRuntime) applyLocalObservationBatch(
 // is recognized when it is unmounted.
 func (rt *watchRuntime) applyLocalSnapshot(ctx context.Context, batch *syncobserve.LocalObservation) (bool, error) {
 	// A scan observed before a shutdown is still committed: detached from
-	// the cancellation, under the bound every detached store write has.
-	commitCtx := ctx
+	// the cancellation, under the stop's one deadline (runStoppedStoreAccess).
+	// A commit that deadline cuts short is said once and costs nothing but
+	// the scan: the next sync scans the tree again, so the watch ends as the
+	// stop asked, not with a new error.
+	var (
+		result syncstore.LocalSnapshotCommitResult
+		err    error
+	)
 	if ctx.Err() != nil {
-		detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), syncdomain.OutcomeCommitTimeout)
-		defer cancel()
-		commitCtx = detached
+		err = rt.runStoppedStoreAccess(ctx, func(commitCtx context.Context) error {
+			var commitErr error
+			result, commitErr = rt.commitLocalScan(commitCtx, batch.Rows, batch.Findings, batch.CrossedMounts)
+			return commitErr
+		})
+		if errors.Is(err, syncdomain.ErrStoreAccessTimedOut) {
+			rt.deps.logger.Warn("The stop's time ran out before the last local scan was recorded; the next sync scans again",
+				slog.Int("rows", len(batch.Rows)),
+				slog.Any("error", err),
+			)
+			return false, nil
+		}
+	} else {
+		result, err = rt.commitLocalScan(ctx, batch.Rows, batch.Findings, batch.CrossedMounts)
 	}
-
-	result, err := rt.commitLocalScan(commitCtx, batch.Rows, batch.Findings, batch.CrossedMounts)
 	if err != nil && isWatchShutdownError(ctx, err) {
 		return false, nil
 	}
