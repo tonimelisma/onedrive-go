@@ -96,17 +96,28 @@ func nightlyClaimIssueName(issue int) string {
 // and its head, the value a later compare-and-swap expects the issue to still
 // hold.
 func syncNightlyClaims(ctx context.Context, gh ghClient, repoRoot string) (map[string]nightlyClaimEntry, error) {
+	claims, _, err := readNightlyClaims(ctx, gh, repoRoot)
+
+	return claims, err
+}
+
+// readNightlyClaims is syncNightlyClaims that also returns the duplicates:
+// the open issues whose live lineage names a claim a lower-numbered issue
+// already holds. A duplicate is the issue of an agent that lost a create race
+// and has not closed it yet, or never will because it stopped first.
+func readNightlyClaims(ctx context.Context, gh ghClient, repoRoot string) (map[string]nightlyClaimEntry, []int, error) {
 	issues, err := listOpenLabeledIssues(ctx, gh, repoRoot, "nightly claim", nightlyClaimLabel)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	claims := map[string]nightlyClaimEntry{}
+	duplicates := []int{}
 	for _, issue := range issues {
 		var comments []githubIssueComment
 		if issue.Comments > 0 {
 			comments, err = listNightlyClaimComments(ctx, gh, repoRoot, issue.Number)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		head := readNightlyClaimHead(issue.Body, comments)
@@ -123,13 +134,18 @@ func syncNightlyClaims(ctx context.Context, gh ghClient, repoRoot string) (map[s
 		if parseNightlyClaimRecord(issue.Body, &first) {
 			entry.Name = nightlyClaimName(first.Key)
 		}
-		if held, taken := claims[entry.Name]; taken && held.Issue < entry.Issue {
-			continue
+		if held, taken := claims[entry.Name]; taken {
+			if held.Issue < entry.Issue {
+				duplicates = append(duplicates, entry.Issue)
+				continue
+			}
+			duplicates = append(duplicates, held.Issue)
 		}
 		claims[entry.Name] = entry
 	}
+	slices.Sort(duplicates)
 
-	return claims, nil
+	return claims, duplicates, nil
 }
 
 // readNightlyClaimHead walks an issue's comments from its body to its head.

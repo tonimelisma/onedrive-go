@@ -1686,6 +1686,29 @@ func TestNightlyClaimCreateLosesToAnIssueOpenedFirst(t *testing.T) {
 
 // Validates: R-6.10.23
 //
+// An agent that lost a create race and stopped before closing its issue
+// leaves an open duplicate of the claim. The next check closes it, so it can
+// never become the claim once the winner's lineage ends.
+func TestNightlyCheckClosesTheDuplicateOfALoserThatStoppedEarly(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, checkConclusionSuccess)
+	recent := nightlyTestNow().Add(-time.Hour).Format(time.RFC3339)
+	winner := remote.seed(nightlyTestKey, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther, At: recent})
+	loser := remote.seed(nightlyTestKey, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOwner, At: recent})
+
+	_, err := runNightlyCheck(t, remote)
+	require.NoError(t, err)
+
+	assert.True(t, winner.open, "the claim stays")
+	assert.False(t, loser.open, "its duplicate is closed")
+	claim, held := remote.claim(nightlyTestKey)
+	require.True(t, held)
+	assert.Equal(t, nightlyTestOther, claim.Owner)
+}
+
+// Validates: R-6.10.23
+//
 // Two agents moving one claim from the same version each post a comment
 // naming it: the comment stored first is the claim's new head, the later one
 // loses the compare-and-swap and stays on the issue, ignored for good.

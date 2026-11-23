@@ -291,8 +291,8 @@ func checkNightly(
 	if err := writeStatus(stdout, formatNightlyCheck(run, verdict.reports, results, stale, seeds)); err != nil {
 		return err
 	}
-	for _, key := range kept {
-		if err := writeStatus(stdout, "nightly: kept the retired claim on "+key+
+	for _, what := range kept {
+		if err := writeStatus(stdout, "nightly: kept "+what+
 			": GitHub refused to delete it with these credentials (HTTP 403); "+
 			"it blocks no one, and a check whose credentials may write issues deletes it\n"); err != nil {
 			return err
@@ -556,12 +556,25 @@ func pruneNightlyClaims(
 	reports []nightlyJobReport,
 	now func() time.Time,
 ) ([]string, []string, error) {
-	claims, err := syncNightlyClaims(ctx, gh, repoRoot)
+	claims, duplicates, err := readNightlyClaims(ctx, gh, repoRoot)
 	if err != nil {
 		return nil, nil, err
 	}
+	// A duplicate never holds the claim, so closing it decides nothing; an
+	// agent still racing for it finds, when it reads the claims back, that it
+	// lost, and its own close of the same issue changes nothing.
 	stale := []string{}
 	kept := []string{}
+	for _, issue := range duplicates {
+		closeErr := closeNightlyClaimIssue(ctx, gh, repoRoot, issue)
+		switch {
+		case closeErr == nil:
+		case isGitHubForbidden(closeErr):
+			kept = append(kept, fmt.Sprintf("the duplicate claim issue #%d", issue))
+		default:
+			return nil, nil, fmt.Errorf("close duplicate nightly claim issue #%d: %w", issue, closeErr)
+		}
+	}
 	for _, name := range sortedClaimKeys(claims) {
 		current := claims[name]
 		if current.isStale() {
@@ -591,7 +604,7 @@ func pruneNightlyClaims(
 		case errors.Is(err, errNightlyClaimsForbidden):
 			// A retired claim holds no failure, so keeping it blocks no
 			// increment; only taking or renewing a claim must reach GitHub.
-			kept = append(kept, current.Claim.Key)
+			kept = append(kept, "the retired claim on "+current.Claim.Key)
 		default:
 			return nil, nil, fmt.Errorf("delete claim %s: %w", current.Claim.Key, err)
 		}
