@@ -946,10 +946,14 @@ func commandFailureText(err error, details bool) string {
 // reportMainPanic handles a panic on the command's goroutine that nothing
 // below recovered. It is logged once, with its stack, through the command
 // logger, which reaches the log file when there is one (before the command
-// logger exists, through fallback); the log file is then closed so the record
-// is on disk; and the error and the stack go to stderr, as for any command
-// that ends with a recovered panic. A write of those last lines that fails is
-// dropped: the exit status is 1 already and the log file is closed.
+// logger exists, through fallback); the command's performance session is
+// completed with the panic's error, so the summary reads "error" as for a
+// helper goroutine's panic (a session already completed, by main or by the
+// panic's own path through Complete, is left as it is); the log file is then
+// closed so both records are on disk; and the error and the stack go to
+// stderr, as for any command that ends with a recovered panic. A write of
+// those last lines that fails is dropped: the exit status is 1 already and
+// the log file is closed.
 func reportMainPanic(cmd *cobra.Command, statusWriter io.Writer, fallback *slog.Logger, r any) int {
 	logger := fallback
 	if cc := rootCLIContext(cmd); cc != nil && cc.Logger != nil {
@@ -957,6 +961,7 @@ func reportMainPanic(cmd *cobra.Command, statusWriter io.Writer, fallback *slog.
 	}
 
 	err := panicguard.Recovered(logger, "in onedrive-go", r)
+	completeRootCommandPerf(cmd, err)
 	if closeErr := closeRootCommandLogger(cmd); closeErr != nil {
 		_ = writeWarningf(statusWriter, "Warning: could not close the log file: %v\n", closeErr) //nolint:errcheck // see the doc comment
 	}

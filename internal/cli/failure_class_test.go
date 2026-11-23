@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -317,4 +318,47 @@ func TestMainWithWriters_PanicExitsOne(t *testing.T) {
 	record := logFileRecord(t, readLogFile(t, logPath), "Internal error in onedrive-go; this is a bug, please report it")
 	assert.Equal(t, "output exploded", record["panic"])
 	assert.Contains(t, record["stack"], "panickingWriter", "the log file carries the stack")
+}
+
+// A panic on the command's own goroutine completes the command's
+// performance session: the log file holds exactly one summary, and it reads
+// "error", as for a helper goroutine's panic.
+//
+// Validates: R-6.3.10
+func TestMainWithWriters_APanicOnTheCommandsGoroutineWritesOnePerformanceSummary(t *testing.T) {
+	setTestDriveHome(t)
+
+	logPath := filepath.Join(t.TempDir(), "onedrive-go.log")
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(fmt.Sprintf("log_file = %q\n", logPath)), 0o600))
+
+	var stderr bytes.Buffer
+	exitCode, escaped := func() (code int, escaped any) {
+		defer func() { escaped = recover() }()
+		return mainWithWriters([]string{"--config", cfgPath, "drive", "list"}, panickingWriter{}, &stderr), nil
+	}()
+
+	require.Nil(t, escaped, "the panic escaped main")
+	assert.Equal(t, exitFailure, exitCode)
+	contents := readLogFile(t, logPath)
+	assert.Equal(t, 1, strings.Count(contents, `"msg":"performance summary"`), contents)
+	record := logFileRecord(t, contents, "performance summary")
+	assert.Equal(t, "error", record["result"])
+	assert.Equal(t, "onedrive-go drive list", record["perf_name"])
+}
+
+// panicCarriedBy finds the panic in a join, returns a bare panic as itself,
+// and returns nil for an error that carries none.
+//
+// Validates: R-6.3.10
+func TestPanicCarriedBy_FindsThePanicInAJoin(t *testing.T) {
+	t.Parallel()
+
+	recovered := testPanicError(t)
+	other := errors.New("watch failed")
+
+	assert.Same(t, recovered, panicCarriedBy(errors.Join(other, recovered)))
+	assert.Same(t, recovered, panicCarriedBy(recovered))
+	assert.NoError(t, panicCarriedBy(other))
+	assert.NoError(t, panicCarriedBy(nil))
 }
