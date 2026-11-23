@@ -118,6 +118,10 @@ func TestWithTestUser_RunsGoTestAsTheUserThroughRunuser(t *testing.T) {
 	assert.Equal(t, []string{asUserTestModCache}, envValuesOf(test.env, "GOMODCACHE"))
 	assert.Equal(t, []string{asUserTestGoPath}, envValuesOf(test.env, "GOPATH"))
 	assert.Equal(t, []string{"go1.26.11"}, envValuesOf(test.env, "GOTOOLCHAIN"), "the pinned toolchain carries over")
+	assert.Equal(t, []string{"1"}, envValuesOf(test.env, "GIT_CONFIG_COUNT"))
+	assert.Equal(t, []string{"safe.directory"}, envValuesOf(test.env, "GIT_CONFIG_KEY_0"))
+	assert.Equal(t, []string{"/repo"}, envValuesOf(test.env, "GIT_CONFIG_VALUE_0"),
+		"git, as the user, trusts the root-owned checkout and nothing else")
 
 	switched := inner.outputCommands[len(inner.outputCommands)-1]
 	assert.Equal(t, "/usr/bin/runuser", switched.name)
@@ -127,6 +131,27 @@ func TestWithTestUser_RunsGoTestAsTheUserThroughRunuser(t *testing.T) {
 	for _, want := range []string{"/repo", "GOMODCACHE=" + asUserTestModCache, "GOPATH=" + asUserTestGoPath, "GOROOT=" + asUserTestGoRoot, "GOCACHE=" + asUserTestHome} {
 		assert.Contains(t, note, want)
 	}
+}
+
+// Validates: R-6.10.38
+func TestWithTestUser_AddsTheCheckoutTrustAfterTheCallersGitConfig(t *testing.T) {
+	t.Parallel()
+
+	host := &fakeTestUserHost{euid: rootUID, tools: []string{"runuser"}}
+	inner := goEnvRunner()
+	runner, err := withTestUser(inner, asUserTestName, host.host(), &bytes.Buffer{})
+	require.NoError(t, err)
+
+	rootEnv := []string{
+		"HOME=/root", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.autocrlf", "GIT_CONFIG_VALUE_0=false",
+	}
+	require.NoError(t, runner.Run(t.Context(), "/repo", rootEnv, &bytes.Buffer{}, &bytes.Buffer{}, "go", "test", "./..."))
+
+	test := inner.runCommands[len(inner.runCommands)-1]
+	assert.Equal(t, []string{"2"}, envValuesOf(test.env, "GIT_CONFIG_COUNT"))
+	assert.Equal(t, []string{"core.autocrlf"}, envValuesOf(test.env, "GIT_CONFIG_KEY_0"), "the caller's setting stays")
+	assert.Equal(t, []string{"safe.directory"}, envValuesOf(test.env, "GIT_CONFIG_KEY_1"))
+	assert.Equal(t, []string{"/repo"}, envValuesOf(test.env, "GIT_CONFIG_VALUE_1"))
 }
 
 // Validates: R-6.10.38

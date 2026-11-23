@@ -39,14 +39,15 @@ stays for a person to judge. It removes only clean worktrees, never with
 run it with `--dry-run` first to read the verdicts. The full rule is in
 `spec/design/system.md` (R-6.10.37).
 
-The session's clone is shallow. A builder branch cut before the oldest
+A session's clone is shallow unless the environment's setup script (below) deepens it. A builder branch cut before the oldest
 fetched commit of `origin/main` shows no common history with it and is kept
 with that reason; `git fetch --unshallow origin` (or `--deepen`) lets the
 next run judge it.
 
 `--as-user` switches only the go test steps, so formatting, lint and git keep
 running as root, and the test user reuses root's module cache and pinned
-toolchain while writing its own build cache (R-6.10.38). Before the first go
+toolchain while writing its own build cache, and git, as the user, trusts the
+root-owned checkout for that go test alone (R-6.10.38). Before the first go
 test it prints what the user must be able to reach.
 
 ## Recommended environment setup script
@@ -67,6 +68,10 @@ set -euo pipefail
 
 if [ -d onedrive-go ]; then
   cd onedrive-go
+  # Full history, so worktree prune-merged can judge every builder branch.
+  if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+    git fetch --unshallow origin
+  fi
   # The go.mod toolchain: the image's go fetches it into the module cache.
   export GOTOOLCHAIN="$(awk '/^toolchain /{print $2}' go.mod)"
   go version
@@ -79,13 +84,10 @@ if [ -d onedrive-go ]; then
   go build ./...
 fi
 
-# The non-root test user. It reads root's module cache and toolchain: the
-# cache's files are world-readable, so /root only needs to be traversable.
+# The non-root test user devtool verify --as-user runs go test as. It reads
+# root's module cache and toolchain, so /root only needs to be traversable.
 id dev >/dev/null 2>&1 || useradd --create-home --shell /bin/bash dev
 chmod 0711 /root
-# Tests that run git in the checkout need git, as dev, to trust root's
-# checkouts and their worktrees.
-runuser -u dev -- git config --global --add safe.directory '*'
 ```
 
 With it, set the non-secret environment variable `DEVTOOL_TEST_USER=dev`, so

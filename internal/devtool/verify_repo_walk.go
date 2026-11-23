@@ -21,7 +21,10 @@ const (
 // skipRepositoryRuleDir reports whether a repository-rule walk leaves out a
 // directory of this name, at any depth. It is the one skip set of the
 // output-boundary, test-convention, spec-ownership, backlog-id, mutex-doc and
-// requirement-traceability walks. Two walks follow the go command's own
+// requirement-traceability walks. It also leaves out defaultVerifyLogDirName,
+// where verify keeps the output of failed go test steps: verify's own output,
+// which may quote any source, and, written by root, unreadable to the test
+// user `--as-user` runs the walks' tests as. Two walks follow the go command's own
 // pattern rules instead, on purpose: the e2e tier's list of test files
 // (e2eTestFiles) and the lint-pass check (filesNoLintPassBuilds) ask what
 // `go test ./e2e/...` and `./...` build, and the go command skips testdata
@@ -29,7 +32,8 @@ const (
 // among them.
 func skipRepositoryRuleDir(name string) bool {
 	switch name {
-	case verifyGitDir, verifyTestdataDir, verifyWorktreesDir, verifyClaudeDir, verifyNodeModulesDir, verifyVendorDir:
+	case verifyGitDir, verifyTestdataDir, verifyWorktreesDir, verifyClaudeDir, verifyNodeModulesDir, verifyVendorDir,
+		defaultVerifyLogDirName:
 		return true
 	default:
 		return false

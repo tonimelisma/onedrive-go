@@ -43,6 +43,11 @@ const mergeTreeConflictExit = 1
 // branch cut long ago from costing a merge per commit of main's history.
 const squashSearchDepth = 500
 
+// squashPathspecLimit bounds how many changed paths are passed to git log to
+// narrow the commits tried; a branch past it keeps the argument list short and
+// is tried against every commit instead.
+const squashPathspecLimit = 1000
+
 // mergeBaseNoneExit is the exit status of `git merge-base` when the two
 // commits share no history.
 const mergeBaseNoneExit = 1
@@ -380,33 +385,140 @@ func (j worktreeJudge) workInOriginMain(ctx context.Context, branch string) (boo
 		return true, "every commit is in " + originMainRef, nil
 	}
 
-	line, err := j.runner.Output(ctx, j.mainRoot, os.Environ(), "git", "log", "--first-parent",
-		"--format=%H %T", "--max-count="+strconv.Itoa(squashSearchDepth),
-		strings.TrimSpace(string(base))+".."+originMainRef)
+	mergeBase := strings.TrimSpace(string(base))
+	paths, err := j.changedPaths(ctx, mergeBase, branch)
 	if err != nil {
-		return false, "", fmt.Errorf("list %s since its merge base with %s: %w", originMainRef, branch, err)
+		return false, "", err
 	}
-	for _, entry := range strings.Split(strings.TrimSpace(string(line)), "\n") {
-		commit, tree, ok := strings.Cut(entry, " ")
-		if !ok {
+	candidates, err := j.squashCandidates(ctx, mergeBase, branch, paths)
+	if err != nil {
+		return false, "", err
+	}
+	for _, candidate := range candidates {
+		changedEvery, err := j.changedEveryPath(ctx, mergeBase, candidate.commit, paths)
+		if err != nil {
+			return false, "", err
+		}
+		if !changedEvery {
 			continue
 		}
-		contained, err := j.mergeChangesNothing(ctx, commit, tree, branch)
+		contained, err := j.mergeChangesNothing(ctx, candidate.commit, candidate.tree, branch)
 		if err != nil {
 			return false, "", err
 		}
 		if !contained {
 			continue
 		}
-		if tree == j.mainTree {
+		if candidate.tree == j.mainTree {
 			return true, "its changes are already in " + originMainRef + " (squash-merged)", nil
 		}
 		const shortCommitLength = 12
 		return true, fmt.Sprintf("its changes were all in %s at %s (squash-merged; main changed them since)",
-			originMainRef, commit[:min(len(commit), shortCommitLength)]), nil
+			originMainRef, candidate.commit[:min(len(candidate.commit), shortCommitLength)]), nil
 	}
 
 	return false, "has changes " + originMainRef + " does not contain", nil
+}
+
+// squashCandidate is a commit of origin/main's first-parent line, with its
+// tree, tried as the one that held a branch's work.
+type squashCandidate struct {
+	commit string
+	tree   string
+}
+
+// squashCandidates lists the commits worth a merge to find the one that held
+// branch's work: origin/main itself, then, newest first and at most
+// squashSearchDepth, the commits of its first-parent line since base that
+// changed a path the branch changed. Merging the branch into a commit leaves
+// every other path as that commit has it, so between two such commits the
+// verdict cannot change; a merge per commit of main's history is what made
+// the command take minutes once a clone holds its full history. Each verdict
+// still comes from a real merge, so a commit skipped here can only keep a
+// worktree, never remove one wrongly. A branch touching more than
+// squashPathspecLimit paths is tried against every commit instead.
+func (j worktreeJudge) squashCandidates(
+	ctx context.Context, base, branch string, paths []string,
+) ([]squashCandidate, error) {
+	tip, err := j.runner.Output(ctx, j.mainRoot, os.Environ(), "git", "rev-parse", originMainRef)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", originMainRef, err)
+	}
+	tipCommit := strings.TrimSpace(string(tip))
+	candidates := []squashCandidate{{commit: tipCommit, tree: j.mainTree}}
+	if len(paths) == 0 {
+		return candidates, nil
+	}
+
+	args := []string{
+		"log", "--first-parent", "--format=%H %T", "--max-count=" + strconv.Itoa(squashSearchDepth),
+		base + ".." + originMainRef,
+	}
+	if len(paths) <= squashPathspecLimit {
+		args = append(args, "--")
+		for _, path := range paths {
+			// A literal pathspec: a path with glob characters names only itself.
+			args = append(args, ":(literal)"+path)
+		}
+	}
+	listing, err := j.runner.Output(ctx, j.mainRoot, os.Environ(), "git", args...)
+	if err != nil {
+		return nil, fmt.Errorf("list %s since its merge base with %s: %w", originMainRef, branch, err)
+	}
+	for _, entry := range strings.Split(strings.TrimSpace(string(listing)), "\n") {
+		commit, tree, ok := strings.Cut(entry, " ")
+		if !ok || commit == tipCommit {
+			continue
+		}
+		candidates = append(candidates, squashCandidate{commit: commit, tree: tree})
+	}
+
+	return candidates, nil
+}
+
+// changedPaths lists the paths whose content differs between two commits, a
+// rename as both of its paths. It compares trees only, never file contents
+// line by line, so it costs milliseconds where a merge costs a second.
+func (j worktreeJudge) changedPaths(ctx context.Context, from, to string) ([]string, error) {
+	changed, err := j.runner.Output(ctx, j.mainRoot, os.Environ(), "git", "diff", "--name-only", "--no-renames", "-z",
+		from, to)
+	if err != nil {
+		return nil, fmt.Errorf("list paths changed from %s to %s: %w", from, to, err)
+	}
+	var paths []string
+	for _, path := range strings.Split(string(changed), "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+
+	return paths, nil
+}
+
+// changedEveryPath reports whether commit differs from base at every one of
+// paths, the paths a branch changed. It is necessary for the branch's work to
+// be in commit: where commit still has base's version of a path the branch
+// changed, a three-way merge takes the branch's version, so the merge changes
+// commit's tree. Checking it first spares the merge for nearly every commit.
+func (j worktreeJudge) changedEveryPath(ctx context.Context, base, commit string, paths []string) (bool, error) {
+	if len(paths) == 0 {
+		return true, nil
+	}
+	changed, err := j.changedPaths(ctx, base, commit)
+	if err != nil {
+		return false, err
+	}
+	changedSet := make(map[string]struct{}, len(changed))
+	for _, path := range changed {
+		changedSet[path] = struct{}{}
+	}
+	for _, path := range paths {
+		if _, ok := changedSet[path]; !ok {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 // mergeChangesNothing reports whether merging branch into commit, whose tree

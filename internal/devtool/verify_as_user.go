@@ -231,6 +231,10 @@ func (r *testUserRunner) switched(
 		envSetting{key: "GOMODCACHE", value: r.goEnv.modCache},
 		envSetting{key: "GOCACHE", value: r.goEnv.cacheOwned},
 	)
+	userEnv, err := trustCheckoutForGit(userEnv, cwd)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	goArgs := append([]string{r.goEnv.goBinary}, args...)
 
 	switch r.target.tool {
@@ -285,7 +289,7 @@ func (r *testUserRunner) announce(ctx context.Context, cwd string, env []string)
 	}
 
 	note := fmt.Sprintf("devtool verify: running go test as %s (uid %d, via %s). %s must be able to read "+
-		"the checkout %s (and git, as that user, trust it: safe.directory), "+
+		"the checkout %s (git trusts it through GIT_CONFIG_COUNT), "+
 		"read (and reach through every directory above) GOMODCACHE=%s, GOPATH=%s, "+
 		"GOROOT=%s and %s, and write its own GOCACHE=%s.\n",
 		r.target.name, r.target.uid, r.target.tool, r.target.name, cwd,
@@ -295,6 +299,32 @@ func (r *testUserRunner) announce(ctx context.Context, cwd string, env []string)
 	}
 
 	return nil
+}
+
+// trustCheckoutForGit adds safe.directory=checkout to env as git
+// configuration of command scope (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_<n>,
+// GIT_CONFIG_VALUE_<n>), after any the caller already set. The checkout is
+// root's, and git refuses a repository another user owns, so without it every
+// test that runs git in the checkout fails as the test user. Command scope is
+// one git honors for safe.directory, and it reaches only this go test's
+// processes: nothing is written to the user's git configuration, and no other
+// repository is trusted.
+func trustCheckoutForGit(env []string, checkout string) ([]string, error) {
+	count := 0
+	if existing := envValue(env, "GIT_CONFIG_COUNT"); existing != "" {
+		parsed, err := strconv.Atoi(existing)
+		if err != nil || parsed < 0 {
+			return nil, fmt.Errorf("--as-user: GIT_CONFIG_COUNT=%q is not a count of git settings", existing)
+		}
+		count = parsed
+	}
+	index := strconv.Itoa(count)
+
+	return withEnvValues(env,
+		envSetting{key: "GIT_CONFIG_COUNT", value: strconv.Itoa(count + 1)},
+		envSetting{key: "GIT_CONFIG_KEY_" + index, value: "safe.directory"},
+		envSetting{key: "GIT_CONFIG_VALUE_" + index, value: checkout},
+	), nil
 }
 
 // handCoverProfileOver gives the test user the coverage profile verify

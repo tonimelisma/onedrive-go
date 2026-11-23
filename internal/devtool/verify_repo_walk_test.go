@@ -25,6 +25,7 @@ func repoWalkSkippedDirs() []string {
 		"internal/" + verifyClaudeDir,
 		"internal/" + verifyNodeModulesDir,
 		"internal/" + verifyVendorDir,
+		"internal/" + defaultVerifyLogDirName,
 	}
 }
 
