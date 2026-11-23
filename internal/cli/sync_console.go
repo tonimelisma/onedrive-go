@@ -39,15 +39,21 @@ type syncConsole struct {
 	now    func() time.Time
 	home   string
 
-	// mu guards multi, tallies, jsonFailureReported and reportedConditions,
-	// which engine completion goroutines update concurrently, and serializes
+	// recordStatusError keeps a line stderr refused, for main to fail a
+	// sync that otherwise worked (CLIContext.recordStatusError). Nil for a
+	// console built without a command context: the refusal is then dropped.
+	recordStatusError func(error)
+
+	// mu guards multi, tallies, outputErr and reportedConditions, which
+	// engine completion goroutines update concurrently, and serializes
 	// writes so lines from several mounts never interleave.
 	mu      sync.Mutex
 	multi   bool
 	tallies map[string]*activityTally
-	// jsonFailureReported is set once a sync --json line could not be
-	// written and the warning saying so went to stderr.
-	jsonFailureReported bool
+	// outputErr is the first write stdout refused, text or --json. It is
+	// said once on stderr when it happens and is the command's error when
+	// the run ends with no other (OutputError).
+	outputErr error
 	// reportedConditions holds, for each path the console reported refused by
 	// a condition only the user can clear, that condition, so the retries that
 	// follow are not reported again. An activity of the path that names no
@@ -85,17 +91,47 @@ func newSyncConsole(cc *CLIContext, watch bool) *syncConsole {
 	}
 
 	return &syncConsole{
-		out:     cc.Output(),
-		errOut:  cc.Status(),
-		quiet:   cc.Flags.Quiet,
-		json:    cc.Flags.JSON,
-		verbose: cc.Flags.Verbose || cc.Flags.Debug,
-		stamp:   watch && !journal,
-		journal: journal,
-		now:     time.Now,
-		home:    home,
-		tallies: make(map[string]*activityTally),
+		out:               cc.Output(),
+		errOut:            cc.Status(),
+		quiet:             cc.Flags.Quiet,
+		json:              cc.Flags.JSON,
+		verbose:           cc.Flags.Verbose || cc.Flags.Debug,
+		stamp:             watch && !journal,
+		journal:           journal,
+		now:               time.Now,
+		home:              home,
+		tallies:           make(map[string]*activityTally),
+		recordStatusError: cc.recordStatusError,
 	}
+}
+
+// syncOutputError is a write stdout refused while sync reported its work.
+// main names it as itself: the cause underneath (ENOSPC on a stdout
+// redirected to a full disk) would otherwise read as the sync's own disk
+// filling up.
+type syncOutputError struct {
+	err error
+}
+
+func (e *syncOutputError) Error() string {
+	return "sync output is incomplete: " + e.err.Error()
+}
+
+func (e *syncOutputError) Unwrap() error { return e.err }
+
+// OutputError is the first write stdout refused, or nil. The sync goes on
+// past it (a lost report is no reason to stop syncing), so the command
+// returns it only when the run ended with no other error: a script reading
+// the output must not take a cut-off report for a whole one.
+func (c *syncConsole) OutputError() error {
+	if c == nil {
+		return nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.outputErr
 }
 
 // setMountCount tells the console whether lines need a drive prefix.
@@ -620,26 +656,54 @@ func (c *syncConsole) printOut(prefix, line string) {
 		return
 	}
 
-	c.write(c.out, c.linePrefix()+prefix+line)
+	text := c.linePrefix() + prefix + line
+	c.writeOut(func(w io.Writer) error {
+		if _, err := fmt.Fprintln(w, text); err != nil {
+			return fmt.Errorf("write sync output: %w", err)
+		}
+
+		return nil
+	})
 }
 
+// writeOut writes one stdout line through write, under mu, so lines from
+// several mounts never interleave. A refused write does not stop the sync:
+// the first one is kept (OutputError) and said once on stderr, and the
+// lines after it are still attempted, so a stdout that is gone does not
+// repeat the warning for every later line. A closed pipe never gets here:
+// the process does not catch SIGPIPE, so Go ends it on a write to a closed
+// stdout; what does is a full disk or an I/O error on a redirected stdout.
+func (c *syncConsole) writeOut(write func(io.Writer) error) {
+	c.mu.Lock()
+	err := write(c.out)
+	first := err != nil && c.outputErr == nil
+	if first {
+		c.outputErr = &syncOutputError{err: err}
+	}
+	outputErr := c.outputErr
+	c.mu.Unlock()
+
+	if first {
+		c.printErr("", "Warning: "+outputErr.Error())
+	}
+}
+
+// printErr writes one stderr line. A line stderr refuses is recorded through
+// the command context like a refused status line, so main fails a sync that
+// otherwise worked: the user never read the failure, the held deletes or
+// the warning the line carried.
 func (c *syncConsole) printErr(prefix, line string) {
 	journalPrefix := ""
 	if c.journal {
 		journalPrefix = fmt.Sprintf("<%d>", journalPriorityErr)
 	}
 
-	c.write(c.errOut, journalPrefix+c.linePrefix()+prefix+line)
-}
-
-func (c *syncConsole) write(w io.Writer, line string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	_, err := fmt.Fprintln(c.errOut, journalPrefix+c.linePrefix()+prefix+line)
+	c.mu.Unlock()
 
-	// A console that cannot be written to (closed pipe) must not stop the
-	// sync; the log file and exit code still record the outcome.
-	if _, err := fmt.Fprintln(w, line); err != nil {
-		return
+	if err != nil && c.recordStatusError != nil {
+		c.recordStatusError(fmt.Errorf("write sync console line: %w", err))
 	}
 }
 

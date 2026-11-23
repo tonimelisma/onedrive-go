@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/loglevel/loglevel.go, internal/sdnotify/sdnotify.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.36 [verified], R-6.6.33 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.8.28 [verified], R-6.8.31 [verified]
+Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.36 [verified], R-6.6.33 [verified], R-6.6.37 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.8.28 [verified], R-6.8.31 [verified]
 
 ## Overview
 
@@ -154,7 +154,7 @@ scripts and service managers:
 | Status | Meaning | Chosen by |
 | --- | --- | --- |
 | 0 | success (also `sync --watch` stopped by a signal: the watch finishes cleanly, including one that idled because every drive was paused), unless stderr refused a write or a refreshed sign-in is still unsaved | `err == nil` and no refused stderr write recorded |
-| 1 | any other failure, transient or not, a one-shot `sync` that finished but left a file unsynced, a recovered panic, also one that ended a stop the user asked for or travels with a sign-in or configuration failure, a command that worked but could not write to stderr, and a command (a stopped watch included) that worked but holds a refreshed sign-in it could not save | default (`errSyncLeftWork` carries no sentinel); `panicguard.ErrPanic` is checked first, before usage, sign-in, configuration and cancellation; a refused stderr write turns 0 into 1 (`exitCodeAfterStatusStream`); an unsaved sign-in replaces a nil or canceled result (`withTokenSaveFailure`) |
+| 1 | any other failure, transient or not, a one-shot `sync` that finished but left a file unsynced, a `sync` (one-shot or a stopped watch) that did its work but whose stdout refused a line of its report (R-6.6.36), a recovered panic, also one that ended a stop the user asked for or travels with a sign-in or configuration failure, a command that worked but could not write to stderr, and a command (a stopped watch included) that worked but holds a refreshed sign-in it could not save | default (`errSyncLeftWork` carries no sentinel); `panicguard.ErrPanic` is checked first, before usage, sign-in, configuration and cancellation; a refused stderr write turns 0 into 1 (`exitCodeAfterStatusStream`); an unsaved sign-in replaces a nil or canceled result (`withTokenSaveFailure`) |
 | 2 | command-line mistake | `*usageError` |
 | 77 (EX_NOPERM) | sign-in required | `graph.ErrNotLoggedIn` or `graph.ErrUnauthorized` (`ErrLoginExpired` travels with it) |
 | 78 (EX_CONFIG) | invalid configuration | `config.ErrInvalidConfig` |
@@ -179,22 +179,27 @@ to stop, and the unit shows as failed until it next starts
 
 What the CLI could not tell the user changes the exit status, as it does for
 the GNU tools when standard error fails: `Statusf`, `warnf`, `Progressf`,
-`ProgressDone` and the watch's warning that a drive did not start record the
-first write stderr refused (`recordStatusError`), and once the command has
-returned `mainWithWriters` gives that record once to the command logger at
-warn level, the log file included, and ends a command that worked with exit 1;
-a command that failed for its own reason keeps its message and status
+`ProgressDone`, the watch's warning that a drive did not start, every
+stderr line `sync` writes through `syncConsole` (a failed or retried file
+action, a drive's error, held deletes, the warning that stdout refused a
+line; R-6.6.37) and main's final error record the first write stderr refused
+(`recordStatusError`), and `mainWithWriters` gives that record once to the
+command logger at warn level, the log file included, and ends a command that
+worked with exit 1; a command that failed for its own reason keeps its
+message and status
 (`TestMainWithWriters_AStatusStreamThatFailsAWriteFailsAWorkingCommand`,
 `TestMainWithWriters_AFailedCommandKeepsItsStatusWhenTheStatusStreamFails`,
-`TestRunSyncDaemonWithFactory_AStartWarningThatCannotBeWrittenIsRecorded`).
-Two kinds of stderr line are not recorded, and a write of theirs that fails is
-dropped: the lines `sync` writes through `syncConsole` (a failed or retried
-file action, a drive's error, held deletes), and main's own last lines (the
-final error, the warning that the log file did not close), which are written
-only for a command whose exit status is not 0 already, after the log file
-closed. A broken pipe on stderr never reaches the record: the CLI does not
-ask for SIGPIPE, so Go ends a program that writes to one on descriptor 2 with
-that signal.
+`TestRunSyncDaemonWithFactory_AStartWarningThatCannotBeWrittenIsRecorded`,
+`TestSyncConsole_AStderrLineThatCannotBeWrittenIsRecorded`,
+`TestMainWithWriters_ARefusedFinalErrorIsRecordedInTheLogFile`). main writes
+the final error before it closes the log file, so its refusal reaches the
+log. Two of main's last lines come after the close, because only the close
+tells whether they are needed, and a refused write of theirs is dropped: the
+warning that the log file did not close, and the final error of a command
+whose only failure was that close; both are written only for a command whose
+exit status is not 0 already. A broken pipe on stderr never reaches the
+record: the CLI does not ask for SIGPIPE, so Go ends a program that writes to
+one on descriptor 2 with that signal.
 
 Classification is by sentinel only. `internal/config` tags every failure at its
 exported read/parse/validate/resolve entrypoints (`Load*`, `Validate*`,
@@ -344,7 +349,27 @@ sends; the unit is `Type=notify` with that `ExecReload`, not
 
 Rules: [cli-output-guidelines.md](../reference/cli-output-guidelines.md).
 
-`sync` output is owned by `syncConsole` (`internal/cli/sync_console.go`):
+`sync` output is owned by `syncConsole` (`internal/cli/sync_console.go`).
+One policy covers a stdout that refuses a line, text and `--json`, one-shot
+and watch (R-6.6.37): the sync goes on, the first refusal is kept
+(`syncConsole.outputErr`) and said once on stderr, "Warning: sync output is
+incomplete: <cause>", the later lines are still attempted, and the command
+returns it (`OutputError`, a `*syncOutputError`) when the run ended with no
+other error, so it exits 1 and main's final error names it again; a run that
+failed or left work returns its own error. main names a `syncOutputError` as
+itself, never through the cause under it, which on a stdout redirected to a
+full disk is ENOSPC and would read as the sync's own disk being full. A
+closed pipe never reaches the console: the CLI does not ask for SIGPIPE, so Go
+ends the process on a write to a closed stdout
+(`TestSyncConsole_ATextLineStdoutRefusesIsSaidOnceAndIsTheOutputError`,
+`TestSyncConsole_NoOutputErrorWhenStdoutTookEveryLine`,
+`TestRunSyncCommand_AStdoutThatRefusesTheReportFailsAWorkingRun`,
+`TestRunSyncCommand_StdoutOnDevFullFailsTheRun`,
+`TestRunSyncDaemonWithFactory_AStdoutThatRefusesALineFailsAWatchThatStopsCleanly`).
+A stderr line the console cannot write is recorded through the command
+context (Exit Status).
+
+The console prints:
 
 - before a one-shot run, one line per drive: "Syncing ~/OneDrive with
   user@example.com..." (R-6.6.19)
@@ -679,7 +704,8 @@ walking the type with no depth limit; a type holding a list no probe can
 reach (inside a recursive type, or under a map not keyed by strings) fails
 the test (`TestListDepth_FindsTheDeepestList`). A `sync --json` line that
 cannot be written is reported once on stderr, and the sync goes on
-(`TestSyncConsole_EmitJSONFailureIsReported`).
+(`TestSyncConsole_EmitJSONFailureIsReported`); the text console does the
+same, and the run's exit status follows (Console Output, R-6.6.37).
 
 The mutating commands' documents:
 

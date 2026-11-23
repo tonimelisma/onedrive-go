@@ -110,8 +110,13 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	// lines just printed, so the exit status cannot say done while a summary
 	// line (or `status`) says otherwise (R-6.6.28).
 	left := console.Summary(result)
+	if err := runOnceResultError(result, left); err != nil {
+		// The run's own failure is the one returned; a stdout that also
+		// refused a line already said so on stderr.
+		return err
+	}
 
-	return runOnceResultError(result, left)
+	return console.OutputError()
 }
 
 func runSyncWatch(

@@ -301,6 +301,14 @@ func commandErrorText(err error, details bool) string {
 		return "Error: " + usage.err.Error() + "\nRun '" + usage.commandPath + " --help' for usage."
 	}
 
+	// A stdout the sync could not write to is said as such: the cause under
+	// it (ENOSPC on a stdout redirected to a full disk) would otherwise
+	// read as the sync's own disk filling up.
+	var output *syncOutputError
+	if errors.As(err, &output) {
+		return "Error: " + output.Error()
+	}
+
 	plain := networkErrorReason(err)
 	if plain != "" {
 		plain += ". Check your network connection, then run the command again."
