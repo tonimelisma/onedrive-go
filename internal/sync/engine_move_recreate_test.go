@@ -603,6 +603,86 @@ func TestRunOnce_AFolderMovedOnOneDriveOntoAFolderItDeletedReplacesTheFolderHere
 	requireScenarioQuietPlan(t, eng)
 }
 
+// Validates: R-2.17.9, R-2.17.6
+//
+// The folder docs was renamed docs2 here, carrying a.txt, while OneDrive
+// deleted the folder archive and moved docs/a.txt onto its path. The row of
+// a.txt is a local move, which names no OneDrive target, so the item ID
+// places a.txt at archive on OneDrive: the moves compose, OneDrive's place
+// wins, archive is deleted here and a.txt moved onto it, and docs is renamed
+// docs2 on OneDrive. Before, a.txt had no OneDrive position: it was
+// downloaded at archive while its copy in docs2 went back to OneDrive as a
+// new file. One sync converges with a.txt once on each side, nothing
+// uploaded or downloaded.
+func TestRunOnce_AFileOfAFolderRenamedHereMovedOnOneDriveOntoAFolderItDeletedEndsOnce(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-docs", "root", "docs")
+	remote.addFile(t, "item-a", "item-docs", "a.txt", "a\n")
+	remote.addFolder("item-archive", "root", "archive")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Rename(local("docs"), local("docs2")))
+	remote.deleteAt(t, "archive")
+	remote.moveAt(t, "docs/a.txt", "archive")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes")
+	assert.Zero(t, superseded)
+
+	want := map[string]string{"archive": "a\n", "docs2": "/"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "archive", remote.pathOf("item-a"), "a.txt is the item OneDrive moved")
+	assert.Equal(t, "docs2", remote.pathOf("item-docs"), "docs is renamed on OneDrive")
+	assert.Zero(t, remote.uploads, "nothing is uploaded again")
+	assert.Equal(t, downloadsBefore, remote.downloads, "a.txt is moved here, not downloaded")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.6, R-2.17.8
+//
+// Here the folder archive was deleted and notes.txt moved onto its path,
+// while OneDrive renamed notes.txt to final.txt. SQLite pairs a local move
+// only onto a path no synced item had, so it read notes.txt at archive as
+// new content and final.txt as a new file on OneDrive; the file's identity
+// places it at archive here, so its moves compose: OneDrive's name wins,
+// notes.txt is moved to final.txt here, and archive is deleted on OneDrive.
+// Before, final.txt was downloaded and archive uploaded as a new file: the
+// content twice on both sides. One sync converges with the file once,
+// nothing uploaded or downloaded.
+func TestRunOnce_AFileMovedHereOntoAFolderDeletedHereAndRenamedOnOneDriveEndsOnce(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-archive", "root", "archive")
+	remote.addFile(t, "item-notes", "root", "notes.txt", "notes\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Remove(local("archive")))
+	require.NoError(t, os.Rename(local("notes.txt"), local("archive")))
+	remote.moveAt(t, "notes.txt", "final.txt")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes")
+	assert.Zero(t, superseded)
+
+	want := map[string]string{"final.txt": "notes\n"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "final.txt", remote.pathOf("item-notes"), "final.txt is the item OneDrive renamed")
+	assert.Zero(t, remote.uploads, "nothing is uploaded again")
+	assert.Equal(t, downloadsBefore, remote.downloads, "notes.txt is moved here, not downloaded")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-2.17.9, R-2.17.10
 //
 // OneDrive deleted the folder archive and moved notes.txt onto its path,

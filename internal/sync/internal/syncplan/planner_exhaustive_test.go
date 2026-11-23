@@ -1926,6 +1926,112 @@ func TestPlannerPairs_AFolderOneDriveDeletedGivesWayToAnItemItMovedOntoItsPath(t
 	}
 }
 
+// Validates: R-2.17.9, R-2.17.6
+//
+// OneDrive deleted an entry and moved a synced item onto its path while this
+// computer moved that item too: p renamed q here, carrying f, while OneDrive
+// moved p/f onto the deleted x or z, or p itself onto the deleted x; z
+// renamed g here while OneDrive moved it onto the deleted folder p. The item
+// ID proves where OneDrive holds the item, so the move composes, OneDrive's
+// place wins and the copy here moves there. And from the held start,
+// OneDrive moved z onto the old x, deleted, whose path here holds the new
+// folder made in its place: that folder is kept as a conflict copy and z
+// moved onto its path. Every run ends with each content once, with each
+// create refused once. Before, the item was downloaded at OneDrive's path
+// and its copy here uploaded again as a new file.
+func TestPlannerPairs_AnItemMovedOnBothSidesOntoAnEntryOneDriveDeletedEndsOnce(t *testing.T) {
+	t.Parallel()
+
+	registerExCachingDriver(t)
+	for _, tc := range []struct {
+		name   string
+		start  string
+		local  []exEdit
+		remote []exEdit
+	}{
+		{
+			name: "a file of a folder renamed here onto a deleted folder", start: "synced",
+			local:  []exEdit{{kind: exMoveFolder, from: "p", to: "q"}},
+			remote: []exEdit{{kind: exDeleteFolder, from: "x"}, {kind: exMoveFile, from: "p/f", to: "x"}},
+		},
+		{
+			name: "a file of a folder renamed here onto a deleted file", start: "synced",
+			local:  []exEdit{{kind: exMoveFolder, from: "p", to: "q"}},
+			remote: []exEdit{{kind: exDeleteFile, from: "z"}, {kind: exMoveFile, from: "p/f", to: "z"}},
+		},
+		{
+			name: "a folder renamed here onto a deleted folder", start: "synced",
+			local:  []exEdit{{kind: exMoveFolder, from: "p", to: "q"}},
+			remote: []exEdit{{kind: exDeleteFolder, from: "x"}, {kind: exMoveFolder, from: "p", to: "x"}},
+		},
+		{
+			name: "a file renamed here onto a deleted folder", start: "synced",
+			local:  []exEdit{{kind: exMoveFile, from: "z", to: "g"}},
+			remote: []exEdit{{kind: exDeleteFolder, from: "p"}, {kind: exMoveFile, from: "z", to: "p"}},
+		},
+		{
+			name: "a file onto the folder made in the held one's place", start: "held",
+			remote: []exEdit{{kind: exDeleteFolder, from: "x"}, {kind: exMoveFile, from: "z", to: "x"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			requirePairKeepsEveryInvariant(t, &exPair{start: exStartNamed(t, tc.start), local: tc.local, remote: tc.remote})
+		})
+	}
+}
+
+// Validates: R-2.17.6, R-2.17.8
+//
+// This computer moved a file onto a path another synced entry vacated or a
+// delete freed, while OneDrive moved the same file elsewhere: z onto the
+// deleted p or onto p renamed q, p/f onto x renamed q, q/f up onto p after
+// p was renamed q on both sides. SQLite pairs a local move only onto a path
+// no synced item had, so it read the file here as new content and
+// OneDrive's copy as a new file; the file's identity places it here, its
+// moves compose, OneDrive's place wins and nothing is uploaded or
+// downloaded again. Every run ends with each content once, with each create
+// refused once. Before, the file was downloaded at OneDrive's path and
+// uploaded at this computer's.
+func TestPlannerPairs_AFileMovedHereOntoAPathAnotherItemHadAndElsewhereOnOneDriveEndsOnce(t *testing.T) {
+	t.Parallel()
+
+	registerExCachingDriver(t)
+	for _, tc := range []struct {
+		name   string
+		local  []exEdit
+		remote []exEdit
+	}{
+		{
+			name:   "onto a deleted folder",
+			local:  []exEdit{{kind: exDeleteFolder, from: "p"}, {kind: exMoveFile, from: "z", to: "p"}},
+			remote: []exEdit{{kind: exMoveFile, from: "z", to: "g"}},
+		},
+		{
+			name:   "onto a renamed folder's path",
+			local:  []exEdit{{kind: exMoveFolder, from: "p", to: "q"}, {kind: exMoveFile, from: "z", to: "p"}},
+			remote: []exEdit{{kind: exMoveFile, from: "z", to: "x/z"}},
+		},
+		{
+			name:   "out of a folder onto a renamed folder's path",
+			local:  []exEdit{{kind: exMoveFolder, from: "x", to: "q"}, {kind: exMoveFile, from: "p/f", to: "x"}},
+			remote: []exEdit{{kind: exMoveFile, from: "p/f", to: "f"}},
+		},
+		{
+			name:   "up onto the path of its folder renamed on both sides",
+			local:  []exEdit{{kind: exMoveFolder, from: "p", to: "q"}, {kind: exMoveFile, from: "q/f", to: "p"}},
+			remote: []exEdit{{kind: exMoveFolder, from: "p", to: "q"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			requirePairKeepsEveryInvariant(t, &exPair{start: exStartNamed(t, "synced"), local: tc.local, remote: tc.remote})
+		})
+	}
+}
+
 // Validates: R-2.17.6, R-2.1.7
 //
 // Here p moved aside, a new p made, x moved into it as p/x, a new p/x/a made

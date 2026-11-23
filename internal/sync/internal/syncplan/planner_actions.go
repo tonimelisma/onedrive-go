@@ -120,7 +120,7 @@ func (p *Planner) planBuiltActions(
 		}
 	}
 
-	allActions := dropReconciliationOfComposedMoves(reconciled, composition, mode)
+	allActions := dropReconciliationOfComposedMoves(reconciled, composition, inputs.identified, mode)
 	allActions = append(allActions, composed...)
 
 	normalizedActions, trimmedActions, trimmedInMode := normalizeCurrentPlanActions(

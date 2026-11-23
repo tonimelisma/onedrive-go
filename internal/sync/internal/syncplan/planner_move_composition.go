@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // Move composition decides, once per synced item, where the item ends up and
@@ -266,6 +267,10 @@ type moveOccupancy struct {
 	// move's destination is renamed aside as a conflict copy
 	// (localDisplacementAt).
 	localFiles map[string]bool
+	// localFolders holds the local paths that are folders: a new one at a
+	// file's local move destination is renamed aside as a conflict copy
+	// (newFolderMeetsAFile).
+	localFolders map[string]bool
 }
 
 type moveComposer struct {
@@ -1875,6 +1880,9 @@ func (e *moveEmitter) destinationFree(n *moveNode, side moveCoord, newPath strin
 		if displace := e.localDisplacementAt(occupant, isNode, snapshotPath); displace != moveDisplaceNever {
 			return true, displace
 		}
+		if e.newFolderMeetsAFile(n, isNode, snapshotPath) {
+			return true, moveDisplaceConflictCopy
+		}
 	}
 
 	return false, moveDisplaceNever
@@ -1913,6 +1921,18 @@ func (e *moveEmitter) localDisplacementAt(occupant string, isNode bool, p string
 	}
 
 	return e.nodes[key].displace
+}
+
+// newFolderMeetsAFile reports a file n moving onto p here, where the entry is
+// a folder that is no synced item at its place (one made here, at a path
+// whose synced folder moved elsewhere here or none had): a file and a folder
+// cannot share the path, and the reconciliation of the path keeps both, the
+// folder as a conflict copy. The move is composed with that copy, so the
+// file lands here as itself; left waiting, the path's reconciliation
+// downloaded it beside its copy here, which went back to OneDrive as a new
+// file.
+func (e *moveEmitter) newFolderMeetsAFile(n *moveNode, isNode bool, p string) bool {
+	return n.itemType == syncdomain.ItemTypeFile && !isNode && e.occupancy.localFolders[p]
 }
 
 // movedAwayHere reports a node whose synced copy sits here at another path
@@ -1992,6 +2012,10 @@ type moveInputs struct {
 	// recreated maps an item's key to the baseline path it moved away from
 	// while a new local entry took that path (rename and recreate, D-056).
 	recreated map[string]string
+	// identified maps a local path to the key of the synced file found there
+	// by its identity (movedOntoAnotherItemsPath): the move here SQLite did
+	// not pair, as the path's baseline names another item.
+	identified map[string]string
 	// filesByContent locates each file of the snapshots by the key a delete
 	// of its synced content carries (contentKey): a file here by its local
 	// identity, an item on OneDrive by its ID (withholdDeletesOfUncarriedContent).
@@ -2013,6 +2037,7 @@ func moveCompositionInputs(
 	var nodes []moveNode
 	frozen := map[string]bool{}
 	recreated := map[string]string{}
+	identified := map[string]string{}
 	for i := range comparisons {
 		cmp := &comparisons[i]
 		view := views[cmp.Path]
@@ -2023,6 +2048,12 @@ func moveCompositionInputs(
 		node := moveNode{key: entry.ItemID, itemType: entry.ItemType}
 		node.paths[moveCoordBaseline] = cmp.Path
 		node.paths[moveCoordLocal] = composedLocalPosition(cmp, view)
+		if node.paths[moveCoordLocal] == "" {
+			if at, ok := movedOntoAnotherItemsPath(cmp, entry, localRows, cmpByPath); ok {
+				node.paths[moveCoordLocal] = at
+				identified[at] = node.key
+			}
+		}
 		node.paths[moveCoordRemote] = composedRemotePosition(cmp, entry, remoteByID, cmpByPath, node.paths[moveCoordLocal])
 		node.displace = composedDisplacement(&node, entry, view, remoteByID)
 		if moveNodeTouchesUnavailableTruth(&node, views) {
@@ -2035,9 +2066,56 @@ func moveCompositionInputs(
 	}
 
 	return moveInputs{
-		nodes: nodes, occupancy: occupancy, frozen: frozen, recreated: recreated,
+		nodes: nodes, occupancy: occupancy, frozen: frozen, recreated: recreated, identified: identified,
 		filesByContent: filesByContent(remoteRows, localRows),
 	}
+}
+
+// movedOntoAnotherItemsPath finds where this computer moved a synced file
+// that SQLite left unpaired: gone from its baseline path on both sides (cmp,
+// the row of that path), and here at a path whose baseline names another
+// item, freed by that item's move or delete (`mv p q, mv z p`,
+// `rm p, mv z p`). SQLite pairs a local move only onto a path no synced item
+// had, so it reconciled the path as that item replaced and the file as new
+// content there, while OneDrive's own move of the file elsewhere was a new
+// file too: the file was downloaded at OneDrive's path and uploaded at this
+// computer's. The file's filesystem identity and its synced content prove
+// it is the item, so its moves compose. Only a file whose identity both
+// sides know and whose hash is the synced one: an edited file, or a new one
+// on a reused inode, stays new content.
+func movedOntoAnotherItemsPath(
+	cmp *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry,
+	localRows []syncdomain.LocalStateRow, cmpByPath map[string]*syncdomain.SQLiteComparisonRow,
+) (string, bool) {
+	if entry.ItemType != syncdomain.ItemTypeFile || cmp.LocalType.Present() || cmp.RemoteType.Present() {
+		return "", false
+	}
+	want, known := entry.FileIdentity()
+	if !known {
+		return "", false
+	}
+	for i := range localRows {
+		row := &localRows[i]
+		if row.ItemType != syncdomain.ItemTypeFile {
+			continue
+		}
+		have, ok := row.FileIdentity()
+		if !ok || !synctree.SameIdentity(have, want) {
+			continue
+		}
+		if row.Hash == "" || row.Hash != entry.LocalHash {
+			// A reused inode, or the file edited too: not proven the item,
+			// so it stays new content and nothing of OneDrive's is
+			// overwritten by it.
+			return "", false
+		}
+		if at := cmpByPath[row.Path]; at != nil && at.BaselineType.Present() && at.BaselineItemID != entry.ItemID {
+			return row.Path, true
+		}
+		return "", false
+	}
+
+	return "", false
 }
 
 func indexMoveSnapshot(
@@ -2045,10 +2123,11 @@ func indexMoveSnapshot(
 ) (map[string]*syncdomain.RemoteStateRow, moveOccupancy) {
 	remoteByID := make(map[string]*syncdomain.RemoteStateRow, len(remoteRows))
 	occupancy := moveOccupancy{
-		local:       make(map[string]bool, len(localRows)),
-		remote:      make(map[string]bool, len(remoteRows)),
-		remoteFiles: make(map[string]bool, len(remoteRows)),
-		localFiles:  make(map[string]bool, len(localRows)),
+		local:        make(map[string]bool, len(localRows)),
+		remote:       make(map[string]bool, len(remoteRows)),
+		remoteFiles:  make(map[string]bool, len(remoteRows)),
+		localFiles:   make(map[string]bool, len(localRows)),
+		localFolders: make(map[string]bool, len(localRows)),
 	}
 	for i := range remoteRows {
 		remoteByID[remoteRows[i].ItemID] = &remoteRows[i]
@@ -2061,6 +2140,9 @@ func indexMoveSnapshot(
 		occupancy.local[localRows[i].Path] = true
 		if localRows[i].ItemType == syncdomain.ItemTypeFile {
 			occupancy.localFiles[localRows[i].Path] = true
+		}
+		if localRows[i].ItemType == syncdomain.ItemTypeFolder {
+			occupancy.localFolders[localRows[i].Path] = true
 		}
 	}
 
@@ -2192,6 +2274,8 @@ func composedRemotePosition(
 		return row.Path
 	case at.ComparisonKind == syncdomain.ComparisonLocalMoveDest && row.Path == localPosition:
 		return row.Path
+	case unpairedRemoteMoveOf(cmp, at, entry, remoteByID):
+		return row.Path
 	default:
 		return ""
 	}
@@ -2216,6 +2300,33 @@ func sitsAtAnotherSyncedItemsPath(at *syncdomain.SQLiteComparisonRow, entry *syn
 
 	return at.ComparisonKind == syncdomain.ComparisonRemoteMoveSource ||
 		(at.BaselineType.Present() && !at.LocalType.Present())
+}
+
+// unpairedRemoteMoveOf reports OneDrive's move of entry onto the path whose
+// comparison row is at, which SQLite did not pair with the entry's own row
+// (cmp), while the item ID proves the item sits there:
+//   - the path is another synced item's, which OneDrive deleted (a
+//     replacing move, D-058), while this item also moved here, so its own
+//     row is a local move and names no remote target: p renamed q here,
+//     while OneDrive deleted x and moved p/f onto it, and x still stands
+//     here (sitsAtAnotherSyncedItemsPath answers the path freed here);
+//   - the item left its path on both sides and SQLite paired neither move
+//     (movedOntoAnotherItemsPath): OneDrive's destination reads as a new
+//     file.
+//
+// Without it the item had no remote position and was downloaded at
+// OneDrive's path while its copy here went back up as a new file.
+func unpairedRemoteMoveOf(
+	cmp, at *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry, remoteByID map[string]*syncdomain.RemoteStateRow,
+) bool {
+	if at.RemoteItemID != entry.ItemID {
+		return false
+	}
+	if at.BaselineType.Present() && remoteByID[at.BaselineItemID] == nil {
+		return true
+	}
+
+	return at.ComparisonKind == syncdomain.ComparisonRemoteOnlyCreate && !cmp.LocalType.Present() && !cmp.RemoteType.Present()
 }
 
 // remoteToLocalFolderPrefixes maps each composed folder's remote path to where
@@ -2408,6 +2519,11 @@ func recreatedSourceCreates(
 		if node == nil || sourceView.Local == nil || plannerSuppressesUnavailableTruth(&sourceView.TruthStatus) {
 			continue
 		}
+		if _, synced := inputs.identified[source]; synced {
+			// The entry that took the path is a synced file moved there
+			// (movedOntoAnotherItemsPath), whose own moves carry it.
+			continue
+		}
 		createView := &syncdomain.PathView{Path: source, Local: sourceView.Local, TruthStatus: sourceView.TruthStatus}
 		create := makeCreateUploadAction(createView)
 		if sourceView.Local.ItemType == syncdomain.ItemTypeFolder {
@@ -2502,13 +2618,17 @@ func giveWayFoldersReplacedOnOneDrive(
 	for i := range comparisons {
 		cmpByPath[comparisons[i].Path] = &comparisons[i]
 	}
+	synced := make(map[string]bool, len(inputs.nodes))
+	for i := range inputs.nodes {
+		synced[inputs.nodes[i].key] = true
+	}
 	deleted := localDeletePaths(reconciled)
 	replace := map[string]bool{}
 	for i := range inputs.nodes {
 		n := &inputs.nodes[i]
 		p := n.paths[moveCoordBaseline]
 		cmp := cmpByPath[p]
-		if !replacedOnOneDriveAndLeftHere(n, cmp) {
+		if !replacedOnOneDriveAndLeftHere(n, cmp, synced) {
 			continue
 		}
 		switch {
@@ -2541,11 +2661,13 @@ func giveWayFoldersReplacedOnOneDrive(
 
 // replacedOnOneDriveAndLeftHere reports a synced folder OneDrive deleted,
 // at its baseline path here, whose path OneDrive gives another synced item it
-// moved there (cmp is the comparison row of that path).
-func replacedOnOneDriveAndLeftHere(n *moveNode, cmp *syncdomain.SQLiteComparisonRow) bool {
+// moved there (cmp is the comparison row of that path, synced the keys of
+// the synced items).
+func replacedOnOneDriveAndLeftHere(n *moveNode, cmp *syncdomain.SQLiteComparisonRow, synced map[string]bool) bool {
 	p := n.paths[moveCoordBaseline]
 	return n.itemType == syncdomain.ItemTypeFolder && n.displace == moveDisplaceNever && !n.present(moveCoordRemote) &&
-		n.paths[moveCoordLocal] == p && cmp != nil && cmp.RemoteMoveSource != "" && cmp.RemoteType.Present()
+		n.paths[moveCoordLocal] == p && cmp != nil && cmp.RemoteType.Present() &&
+		cmp.RemoteItemID != n.key && synced[cmp.RemoteItemID]
 }
 
 // holdsOnlySyncedHere reports whether every local entry below folder is a
@@ -3433,7 +3555,7 @@ func createsOnSide(action *syncdomain.Action, side moveCoord) bool {
 // it at that path again; the next pass would read the item as moved on the
 // other side and move it back into the folder.
 func dropReconciliationOfComposedMoves(
-	actions []syncdomain.Action, composition *moveComposition, mode syncdomain.SyncMode,
+	actions []syncdomain.Action, composition *moveComposition, identified map[string]string, mode syncdomain.SyncMode,
 ) []syncdomain.Action {
 	moved := map[moveCoord]map[string]bool{moveCoordLocal: {}, moveCoordRemote: {}}
 	for i := range composition.moves {
@@ -3443,27 +3565,51 @@ func dropReconciliationOfComposedMoves(
 		return actions
 	}
 
+	movedOrHeld := func(key string) bool {
+		return moved[moveCoordLocal][key] || moved[moveCoordRemote][key] || composition.holdsMoveInMode(key, mode)
+	}
 	kept := actions[:0:0]
 	for i := range actions {
-		action := &actions[i]
-		switch action.Type {
-		case syncdomain.ActionBaselineUpdate:
-			if moved[moveCoordLocal][action.ItemID] || moved[moveCoordRemote][action.ItemID] ||
-				composition.holdsMoveInMode(action.ItemID, mode) {
-				continue
-			}
-		case syncdomain.ActionDownload, syncdomain.ActionConflictCopy:
-			if moved[moveCoordLocal][action.ItemID] {
-				continue
-			}
-		case syncdomain.ActionUpload, syncdomain.ActionLocalDelete, syncdomain.ActionRemoteDelete, syncdomain.ActionLocalMove,
-			syncdomain.ActionRemoteMove,
-			syncdomain.ActionFolderCreate, syncdomain.ActionCleanup:
-		default:
-			panic(syncdomain.OutsideTheEnum(action.Type))
+		if !replacedByAComposedMove(&actions[i], moved, movedOrHeld, identified) {
+			kept = append(kept, actions[i])
 		}
-		kept = append(kept, *action)
 	}
 
 	return kept
+}
+
+// replacedByAComposedMove reports a reconciliation action the plan's moves
+// replace (dropReconciliationOfComposedMoves). moved holds the keys each side
+// moves; movedOrHeld also answers a move held for a later pass in the mode.
+func replacedByAComposedMove(
+	action *syncdomain.Action, moved map[moveCoord]map[string]bool, movedOrHeld func(string) bool, identified map[string]string,
+) bool {
+	switch action.Type {
+	case syncdomain.ActionBaselineUpdate:
+		return movedOrHeld(action.ItemID)
+	case syncdomain.ActionConflictCopy:
+		return moved[moveCoordLocal][action.ItemID]
+	case syncdomain.ActionDownload:
+		// A download of an item the plan moves on either side writes a
+		// second copy of it: the move puts the copy here where OneDrive
+		// holds it, or OneDrive's copy where this one is (p renamed q on
+		// both sides, q/f moved up to p here: f moves to p on OneDrive, and
+		// its download at q/f made it twice).
+		return moved[moveCoordLocal][action.ItemID] || moved[moveCoordRemote][action.ItemID]
+	case syncdomain.ActionUpload:
+		// The file SQLite read as new content at a path another item had
+		// is a synced item found by its identity; its moves carry it
+		// (movedOntoAnotherItemsPath).
+		key, ok := identified[action.Path]
+		return ok && movedOrHeld(key)
+	case syncdomain.ActionCleanup:
+		// The baseline row of an item the plan moves is re-pathed by the
+		// move's commit; removed first, the move found no row to move.
+		return movedOrHeld(action.ItemID)
+	case syncdomain.ActionLocalDelete, syncdomain.ActionRemoteDelete, syncdomain.ActionLocalMove,
+		syncdomain.ActionRemoteMove, syncdomain.ActionFolderCreate:
+		return false
+	default:
+		panic(syncdomain.OutsideTheEnum(action.Type))
+	}
 }
