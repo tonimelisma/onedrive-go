@@ -645,7 +645,8 @@ func (e *Executor) namesOneLocalEntry(oldPath, newPath string) bool {
 // the new spelling). It renames through a temporary sibling, both of whose
 // steps never replace, named so that local observation always excludes it
 // (isSpellingRenameArtifactName): a crash between the two renames must not
-// leave a file that syncs under the temporary name. A failure of either step
+// leave a file that syncs under the temporary name (the engine's next start
+// puts such a leftover back under its plain name). A failure of either step
 // is the rename's own failure, even when the second finds newPath taken: the
 // entry is then put back, or kept under the temporary name where it cannot
 // be, and the failure says which.
@@ -657,7 +658,7 @@ func (e *Executor) respellLocal(newPath string) error {
 
 	err = e.syncTree.RenameWithTemporarySibling(
 		filepath.Join(filepath.Dir(newPath), stored), newPath,
-		syncdomain.SpellingRenameArtifactPrefix+filepath.Base(newPath), localSpellingRenameAttempts,
+		syncdomain.SpellingRenameArtifactPrefix+filepath.Base(newPath), syncdomain.SpellingRenameArtifactAttempts,
 	)
 	if errors.Is(err, synctree.ErrSourceNotRemoved) {
 		// The entry has its new spelling; a name left behind is reported.
@@ -694,10 +695,6 @@ func (e *Executor) storedNameSpelling(path string) (string, error) {
 
 	return entries[match.Index].Name(), nil
 }
-
-// localSpellingRenameAttempts bounds the temporary sibling names tried for a
-// spelling-only local rename.
-const localSpellingRenameAttempts = 10
 
 // ExecuteRemoteMove renames/moves an item on OneDrive.
 func (e *Executor) ExecuteRemoteMove(ctx context.Context, action *syncdomain.Action) syncdomain.ActionOutcome {

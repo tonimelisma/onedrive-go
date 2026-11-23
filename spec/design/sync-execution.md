@@ -321,11 +321,18 @@ spelled as the move asks, else the only entry of that OneDrive name, by
 error naming the folder, which the user sees, instead of renaming one of them
 by listing order: `TestExecutor_StoredNameSpelling_TwoKeyEqualEntriesAreAnError`), the move goes
 through a temporary sibling with two renames that never replace; the sibling
-is named `.onedrive-go.spelling.<name>`, which local observation always
-excludes and cleanup never deletes, so a crash between the two renames
-leaves nothing that syncs (R-2.12.4,
+is named `.onedrive-go.spelling.<name>` (then `<name>-1` up to `<name>-9`
+while those are taken, `syncdomain.SpellingRenameArtifactAttempts`), which
+local observation always excludes and cleanup never deletes, so a crash
+between the two renames leaves nothing that syncs (R-2.12.4,
 `TestContentFilter_SpellingRenameArtifactIsAlwaysExcluded`,
-`TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed`). Accepting it
+`TestExecutor_LocalMove_SpellingOnlyRenameOntoSameInodeIsAllowed`). What it
+leaves is the user's entry, so the engine's next live start puts it back
+under its plain name before the first plan, through the no-replace rename,
+and keeps it, warning with both paths, where that name is taken or the
+temporary name does not say which it was (R-2.12.8, sync-engine.md,
+`TestRunOnce_SpellingRenameLeftoverIsPutBackBeforeThePlan`); the rename is
+then planned again from truth. Accepting it
 is what lets a remote case-only rename apply on macOS's case-insensitive volume.
 A failure of either step through the temporary sibling, the second finding the
 new spelling taken included, is the rename's own failure, not a superseded

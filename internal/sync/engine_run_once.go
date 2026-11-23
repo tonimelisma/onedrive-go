@@ -76,6 +76,7 @@ func (e *Engine) runOnce(ctx context.Context, mode syncdomain.SyncMode, opts Run
 	if opts.DryRun {
 		return e.runOnceDryRun(ctx, runner, bl, mode, opts, start)
 	}
+	e.restoreSpellingRenameLeftovers(ctx)
 
 	var total *Report
 	var last oneShotPass
