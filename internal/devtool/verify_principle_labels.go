@@ -29,7 +29,7 @@ func findPrincipleLabelViolations(repoRoot string) ([]checkViolation, error) {
 		}
 		rel := repoRelative(repoRoot, path)
 		if d.IsDir() {
-			if skipBacklogScanDir(d.Name()) || filepath.ToSlash(rel) == principleLabelHistoryDir {
+			if skipRepositoryRuleDir(d.Name()) || filepath.ToSlash(rel) == principleLabelHistoryDir {
 				return filepath.SkipDir
 			}
 			return nil
