@@ -92,7 +92,7 @@ func silenceRunErrorUsage(root *cobra.Command) {
 func newNightlyCmd(getwd cwdLookup, runNightly nightlyFunc) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "nightly",
-		Short: "Check the nightly CI run, own its failures through claim refs, and report its verdict",
+		Short: "Check the nightly CI run, own its failures through claim issues, and report its verdict",
 	}
 
 	var checkBranch string

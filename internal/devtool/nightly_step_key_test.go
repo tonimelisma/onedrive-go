@@ -119,11 +119,11 @@ func TestNightlyFailureKeysReadOnlyMarkersOfTheClosedSet(t *testing.T) {
 
 // Validates: R-6.10.23
 //
-// A step key is its own claim ref name, a valid ref component, for every step
-// of the closed set in every job the night requires, and no two pairs of a
-// job and a step share one, so two failures never merge into one claim. The
-// check claims a failed step under that key and reads the key back from the
-// claim record unchanged.
+// A step key is its own claim name, which needs no quoting on a command
+// line, for every step of the closed set in every job the night requires, and
+// no two pairs of a job and a step share one, so two failures never merge
+// into one claim. The check claims a failed step under that key and reads the
+// key back from the claim record unchanged.
 func TestNightlyCheckClaimsAFailedStepUnderItsOwnKey(t *testing.T) {
 	t.Parallel()
 
@@ -134,8 +134,8 @@ func TestNightlyCheckClaimsAFailedStepUnderItsOwnKey(t *testing.T) {
 			key := nightlyStepKey(job, step)
 			assert.NotContains(t, pairOfKey, key, "job %q step %q shares its key with %s", job, step, pairOfKey[key])
 			pairOfKey[key] = job + " " + string(step)
-			assert.Equal(t, key, nightlyClaimRefName(key), "job %q step %q", job, step)
-			assert.Empty(t, refComponentViolation(key), "job %q step %q", job, step)
+			assert.Equal(t, key, nightlyClaimName(key), "job %q step %q", job, step)
+			assert.Empty(t, claimNameViolation(key), "job %q step %q", job, step)
 		}
 	}
 
@@ -148,7 +148,8 @@ func TestNightlyCheckClaimsAFailedStepUnderItsOwnKey(t *testing.T) {
 
 	const key = "step-stress-sync-tree-race-repeated"
 	assert.Equal(t, []string{key}, remote.claimKeys())
-	assert.Contains(t, remote.refs, key, "the key is its claim's ref name")
+	require.Len(t, remote.claimIssues(), 1)
+	assert.Equal(t, nightlyClaimTitlePrefix+key, remote.claimIssues()[0].title, "the claim's issue names its key")
 	claim, held := remote.claim(key)
 	require.True(t, held)
 	assert.Equal(t, key, claim.Key, "the claim record reads the key back unchanged")

@@ -482,6 +482,9 @@ type githubOpenIssue struct {
 	Title       string          `json:"title"`
 	Body        string          `json:"body"`
 	PullRequest json.RawMessage `json:"pull_request"`
+	// Comments counts the issue's comments, so a reader that needs them
+	// skips the request for an issue that has none.
+	Comments int `json:"comments"`
 }
 
 // listOpenLabeledIssues lists the open issues carrying label, newest first,

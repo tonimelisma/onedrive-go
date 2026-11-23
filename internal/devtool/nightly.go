@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,26 +13,23 @@ import (
 	"time"
 )
 
-// Nightly failures are owned through claim refs on the shared remote. A claim
-// is one commit on the empty tree whose subject is a JSON record, stored at
-// refs/nightly-claims/<key>. Every transition (create, renew, take over, mark
-// fixed, delete) is a compare-and-swap push: git rejects it atomically when
-// the ref no longer holds the value the agent last read, so two agents
-// checking the same nightly at the same moment cannot both win a claim.
+// Nightly failures are owned through claims: JSON records of who fixes a
+// failing key, kept in GitHub issues that nightly_claim_store.go reads and
+// writes over REST. Every transition (create, renew, take over, mark fixed,
+// delete) is a compare-and-swap on the record the agent last read, so two
+// agents checking the same nightly at the same moment cannot both win a
+// claim.
 const (
-	nightlyClaimRefPrefix  = "refs/nightly-claims/"
-	nightlyClaimRefspec    = "+" + nightlyClaimRefPrefix + "*:" + nightlyClaimRefPrefix + "*"
-	nightlyEmptyTree       = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 	nightlyCASAttempts     = 3
 	nightlyStateClaimed    = "claimed"
 	nightlyStateFixed      = "fixed"
 	checkConclusionFailure = "failure"
 
 	// nightlyClaimFormat names the key format a claim record was written
-	// for. A record that names another format, or none, or that sits at a
-	// ref its key does not name, is a stale claim: its key may stand for a
-	// test that fails under another key now. The check reports it by its ref
-	// name, a failing key whose ref it holds replaces it, and `nightly
+	// for. A record that names another format, or none, or whose key does
+	// not name the claim it belongs to, is a stale claim: its key may stand
+	// for a test that fails under another key now. The check reports it by
+	// its issue, a failing key whose claim it is replaces it, and `nightly
 	// release` deletes it; it is never read as the claim of a key.
 	nightlyClaimFormat = "package-qualified"
 
@@ -44,36 +40,34 @@ const (
 	NightlyClaimLease = 24 * time.Hour
 )
 
-// A claim's ref is refs/nightly-claims/ and nightlyClaimRefName of its key.
+// A claim's name is nightlyClaimName of its key.
 const (
-	// nightlyClaimRefMaxLen bounds a claim's whole ref name: git hosts handle
-	// a ref of up to 255 bytes, and the bound leaves room under that.
-	nightlyClaimRefMaxLen = 200
-	// nightlyClaimRefEscape starts every escape of the encoding.
-	nightlyClaimRefEscape = '_'
-	// nightlyClaimRefDigestMarker starts the digest that ends the name of a
+	// nightlyClaimNameMaxLen bounds a claim's name, so a name stays short
+	// enough to type as `nightly release --key` and to print on one line.
+	nightlyClaimNameMaxLen = 180
+	// nightlyClaimNameEscape starts every escape of the encoding.
+	nightlyClaimNameEscape = '_'
+	// nightlyClaimNameDigestMarker starts the digest that ends the name of a
 	// key whose encoding is too long. An escape is always followed by a
 	// letter or a digit, so no encoding holds the marker.
-	nightlyClaimRefDigestMarker = "_-"
+	nightlyClaimNameDigestMarker = "_-"
 )
 
-// nightlyClaimRefName is the name, under refs/nightly-claims/, of key's
-// claim: one git ref component, the same key always giving the same name and
-// two keys never one. Lowercase letters, digits and '-' stand for
-// themselves, except a '-' that would start the name; an uppercase letter is
-// '_' and its lowercase, and every other byte, '_' included, is '_' and its
-// three-digit decimal value, so every escape reads one way. The name
-// therefore holds only lowercase letters, digits, '-' and '_': no rule of
-// git check-ref-format can fail (no '.', '/', '@{', control byte, space or
-// any of ~^:?*[\), it starts with no '-', and two names never differ by case
-// alone, which keeps the claims apart on a case-insensitive file system. A
-// key with no name, or one whose ref would pass nightlyClaimRefMaxLen, is
-// named by the head of its encoding cut between escapes,
-// nightlyClaimRefDigestMarker and the SHA-256 of the whole key.
-func nightlyClaimRefName(key string) string {
+// nightlyClaimName is the name of key's claim, its identity among the
+// claims: the same key always gives the same name and two keys never one.
+// Lowercase letters, digits and '-' stand for themselves, except a '-' that
+// would start the name; an uppercase letter is '_' and its lowercase, and
+// every other byte, '_' included, is '_' and its three-digit decimal value,
+// so every escape reads one way. The name therefore holds only lowercase
+// letters, digits, '-' and '_': it needs no quoting on a command line, starts
+// with no '-' a command line would read as an option, and two names never
+// differ by case alone. A key with no name, or one whose name would pass
+// nightlyClaimNameMaxLen, is named by the head of its encoding cut between
+// escapes, nightlyClaimNameDigestMarker and the SHA-256 of the whole key.
+func nightlyClaimName(key string) string {
 	var b strings.Builder
-	limit := nightlyClaimRefMaxLen - len(nightlyClaimRefPrefix)
-	head := limit - len(nightlyClaimRefDigestMarker) - hex.EncodedLen(sha256.Size)
+	limit := nightlyClaimNameMaxLen
+	head := limit - len(nightlyClaimNameDigestMarker) - hex.EncodedLen(sha256.Size)
 	headLen := 0
 	for i := 0; i < len(key); i++ {
 		c := key[i]
@@ -81,10 +75,10 @@ func nightlyClaimRefName(key string) string {
 		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-' && i > 0:
 			b.WriteByte(c)
 		case c >= 'A' && c <= 'Z':
-			b.WriteByte(nightlyClaimRefEscape)
+			b.WriteByte(nightlyClaimNameEscape)
 			b.WriteByte(c - 'A' + 'a')
 		default:
-			fmt.Fprintf(&b, "%c%03d", nightlyClaimRefEscape, c)
+			fmt.Fprintf(&b, "%c%03d", nightlyClaimNameEscape, c)
 		}
 		if b.Len() <= head {
 			headLen = b.Len()
@@ -95,7 +89,7 @@ func nightlyClaimRefName(key string) string {
 	}
 	digest := sha256.Sum256([]byte(key))
 
-	return b.String()[:headLen] + nightlyClaimRefDigestMarker + hex.EncodeToString(digest[:])
+	return b.String()[:headLen] + nightlyClaimNameDigestMarker + hex.EncodeToString(digest[:])
 }
 
 type NightlyAction string
@@ -141,25 +135,32 @@ type nightlyClaim struct {
 	FixCommit string   `json:"fix_commit,omitempty"`
 }
 
-// nightlyClaimRef is one claim ref as the remote holds it.
-type nightlyClaimRef struct {
-	// Name is the ref's name under refs/nightly-claims/.
-	Name  string
-	SHA   string
-	Claim nightlyClaim
+// nightlyClaimEntry is one claim as the issue store holds it.
+type nightlyClaimEntry struct {
+	// Name is the claim's identity: nightlyClaimName of the key its issue
+	// was opened for, or issue-<number> for an issue whose record cannot be
+	// read.
+	Name string
+	// Issue is the number of the issue that holds the claim.
+	Issue int
+	// Version is the state of the claim this agent read, which a later
+	// compare-and-swap expects the issue to still hold.
+	Version string
+	Claim   nightlyClaim
 }
 
 // isStale reports whether the record was written for another key format, or
-// sits at a ref its key does not name.
-func (r *nightlyClaimRef) isStale() bool {
-	return r.Claim.Format != nightlyClaimFormat || nightlyClaimRefName(r.Claim.Key) != r.Name
+// names a key that is not the claim's.
+func (r *nightlyClaimEntry) isStale() bool {
+	return r.Claim.Format != nightlyClaimFormat || nightlyClaimName(r.Claim.Key) != r.Name
 }
 
-// displayKey is what the check prints for the claim: its key, or the ref's
-// name for a stale claim, which is what `nightly release --key` takes for it.
-func (r *nightlyClaimRef) displayKey() string {
+// displayKey is what the check prints for the claim: its key, or for a stale
+// claim its issue, issue-<number>, which is what `nightly release --key`
+// takes for it.
+func (r *nightlyClaimEntry) displayKey() string {
 	if r.isStale() {
-		return r.Name
+		return nightlyClaimIssueName(r.Issue)
 	}
 
 	return r.Claim.Key
@@ -182,10 +183,9 @@ type nightlyKeyResult struct {
 
 var errNightlyClaimLost = errors.New("nightly claim changed on the remote")
 
-// errNightlyClaimRefsForbidden is a claim push GitHub refused with 403: the
-// checkout may not write refs/nightly-claims, as a Claude Code cloud session,
-// whose git proxy takes pushes to its own branch alone, may not.
-var errNightlyClaimRefsForbidden = errors.New("nightly claim refs may not be pushed from this checkout")
+// errNightlyClaimsForbidden is a claim write GitHub refused with 403: the
+// credentials this checkout's gh holds may not write the repository's issues.
+var errNightlyClaimsForbidden = errors.New("nightly claims may not be written with these GitHub credentials")
 
 // RunNightly is the entry point of `devtool nightly`. A GitHub request that
 // still fails after the client's retries ends the command with one plain
@@ -213,7 +213,7 @@ func RunNightly(ctx context.Context, runner commandRunner, opts NightlyOptions) 
 		}
 		return plainGitHubFailure(checkNightly(ctx, runner, gh, opts.RepoRoot, owner, now, stdout))
 	case NightlyActionRelease:
-		return releaseNightlyClaim(ctx, runner, opts.RepoRoot, opts.Branch, opts.Key, stdout)
+		return plainGitHubFailure(releaseNightlyClaim(ctx, gh, opts.RepoRoot, opts.Branch, opts.Key, stdout))
 	case NightlyActionReport:
 		if opts.RunID <= 0 {
 			return errors.New("nightly report: --run-id is required")
@@ -277,13 +277,13 @@ func checkNightly(
 
 	results := make([]nightlyKeyResult, 0, len(failures))
 	for _, key := range sortedFailureKeys(failures) {
-		result, resolveErr := resolveNightlyKey(ctx, runner, repoRoot, key, failures[key], owner, run, now)
+		result, resolveErr := resolveNightlyKey(ctx, runner, gh, repoRoot, key, failures[key], owner, run, now)
 		if resolveErr != nil {
 			return resolveErr
 		}
 		results = append(results, result)
 	}
-	stale, kept, err := pruneNightlyClaims(ctx, runner, repoRoot, failures, run, verdict.reports, now)
+	stale, kept, err := pruneNightlyClaims(ctx, runner, gh, repoRoot, failures, run, verdict.reports, now)
 	if err != nil {
 		return err
 	}
@@ -293,8 +293,8 @@ func checkNightly(
 	}
 	for _, key := range kept {
 		if err := writeStatus(stdout, "nightly: kept the retired claim on "+key+
-			": this checkout may not push claim refs (a Claude Code cloud session pushes only its own branch); "+
-			"it blocks no one, and a run that can push deletes it\n"); err != nil {
+			": GitHub refused to delete it with these credentials (HTTP 403); "+
+			"it blocks no one, and a check whose credentials may write issues deletes it\n"); err != nil {
 			return err
 		}
 	}
@@ -377,7 +377,7 @@ func formatNightlyCheck(
 	}
 	for _, key := range stale {
 		fmt.Fprintf(&b,
-			"  %s: stale claim, of an old key format or at a ref its key does not name; "+
+			"  %s: stale claim, of an old key format, unreadable, or naming another key than its issue; "+
 				"delete it with `go run ./cmd/devtool nightly release --branch <branch> --key %s`\n",
 			key, key)
 	}
@@ -398,6 +398,7 @@ func shortSHA(sha string) string {
 func resolveNightlyKey(
 	ctx context.Context,
 	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	key string,
 	jobs []string,
@@ -405,14 +406,14 @@ func resolveNightlyKey(
 	run *githubRun,
 	now func() time.Time,
 ) (nightlyKeyResult, error) {
-	name := nightlyClaimRefName(key)
+	name := nightlyClaimName(key)
 	for attempt := 0; attempt < nightlyCASAttempts; attempt++ {
-		claims, err := syncNightlyClaims(ctx, runner, repoRoot)
+		claims, err := syncNightlyClaims(ctx, gh, repoRoot)
 		if err != nil {
 			return nightlyKeyResult{}, err
 		}
 		current, exists := claims[name]
-		var held *nightlyClaimRef
+		var held *nightlyClaimEntry
 		if exists {
 			held = &current
 		}
@@ -440,7 +441,7 @@ func resolveNightlyKey(
 			RunHead: run.HeadSHA,
 			At:      now().UTC().Format(time.RFC3339),
 		}
-		err = swapNightlyClaim(ctx, runner, repoRoot, name, current.SHA, &next)
+		err = swapNightlyClaim(ctx, gh, repoRoot, name, current.Version, &next)
 		if errors.Is(err, errNightlyClaimLost) {
 			continue
 		}
@@ -452,15 +453,14 @@ func resolveNightlyKey(
 	return nightlyKeyResult{}, fmt.Errorf("nightly: claim %s kept changing on the remote; run the check again", key)
 }
 
-// decideNightlyKey decides who owns key, given the record at its ref (nil
-// for none), and whether this increment takes it.
+// decideNightlyKey decides who owns key, given its claim (nil for none), and whether this increment takes it.
 func decideNightlyKey(
 	ctx context.Context,
 	runner commandRunner,
 	repoRoot string,
 	key string,
 	owner string,
-	held *nightlyClaimRef,
+	held *nightlyClaimEntry,
 	run *githubRun,
 	at time.Time,
 ) (bool, nightlyKeyResult, error) {
@@ -543,19 +543,20 @@ func fixIsInRun(ctx context.Context, runner commandRunner, repoRoot string, fixC
 // pruneNightlyClaims deletes claims that no longer describe an open failure:
 // a fix that a run containing it confirmed, every job the key failed in
 // having passed there, and an expired claim of a key that no longer fails.
-// It returns the stale claims, by the ref names `nightly release` takes for
-// them, and leaves them to it. Losing a delete race is harmless, so it is
+// It returns the stale claims, by the issue names `nightly release` takes
+// for them, and leaves them to it. Losing a delete race is harmless, so it is
 // ignored.
 func pruneNightlyClaims(
 	ctx context.Context,
 	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	failing map[string][]string,
 	run *githubRun,
 	reports []nightlyJobReport,
 	now func() time.Time,
 ) ([]string, []string, error) {
-	claims, err := syncNightlyClaims(ctx, runner, repoRoot)
+	claims, err := syncNightlyClaims(ctx, gh, repoRoot)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -584,10 +585,10 @@ func pruneNightlyClaims(
 		if !obsolete {
 			continue
 		}
-		err = swapNightlyClaim(ctx, runner, repoRoot, name, current.SHA, nil)
+		err = swapNightlyClaim(ctx, gh, repoRoot, name, current.Version, nil)
 		switch {
 		case err == nil, errors.Is(err, errNightlyClaimLost):
-		case errors.Is(err, errNightlyClaimRefsForbidden):
+		case errors.Is(err, errNightlyClaimsForbidden):
 			// A retired claim holds no failure, so keeping it blocks no
 			// increment; only taking or renewing a claim must reach GitHub.
 			kept = append(kept, current.Claim.Key)
@@ -598,7 +599,7 @@ func pruneNightlyClaims(
 	return stale, kept, nil
 }
 
-func sortedClaimKeys(claims map[string]nightlyClaimRef) []string {
+func sortedClaimKeys(claims map[string]nightlyClaimEntry) []string {
 	keys := make([]string, 0, len(claims))
 	for key := range claims {
 		keys = append(keys, key)
@@ -609,10 +610,10 @@ func sortedClaimKeys(claims map[string]nightlyClaimRef) []string {
 
 // releaseNightlyClaim gives up the claim owner holds on key. A stale claim
 // belongs to no current increment, so any branch may release it; it is named
-// by its ref, as the check prints it.
+// by its key or by its issue, issue-<number>, as the check prints it.
 func releaseNightlyClaim(
 	ctx context.Context,
-	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	owner string,
 	key string,
@@ -621,19 +622,23 @@ func releaseNightlyClaim(
 	if owner == "" || key == "" {
 		return errors.New("nightly release: --branch and --key are required")
 	}
-	claims, err := syncNightlyClaims(ctx, runner, repoRoot)
+	claims, err := syncNightlyClaims(ctx, gh, repoRoot)
 	if err != nil {
 		return err
 	}
-	current, exists := claims[nightlyClaimRefName(key)]
-	if stale, named := claims[key]; (!exists || current.isStale()) && named && stale.isStale() {
-		current, exists = stale, true
+	current, exists := claims[nightlyClaimName(key)]
+	if !exists {
+		for _, name := range sortedClaimKeys(claims) {
+			if stale := claims[name]; stale.isStale() && stale.displayKey() == key {
+				current, exists = stale, true
+			}
+		}
 	}
 	isStale := exists && current.isStale()
 	if !isStale && (!exists || current.Claim.State != nightlyStateClaimed || current.Claim.Owner != owner) {
 		return fmt.Errorf("nightly release: %s holds no claim on %s", owner, key)
 	}
-	if err := swapNightlyClaim(ctx, runner, repoRoot, current.Name, current.SHA, nil); err != nil {
+	if err := swapNightlyClaim(ctx, gh, repoRoot, current.Name, current.Version, nil); err != nil {
 		return fmt.Errorf("nightly release %s: %w", key, err)
 	}
 	if isStale {
@@ -643,12 +648,12 @@ func releaseNightlyClaim(
 }
 
 // heldNightlyClaims lists, by key, the claims an increment branch holds.
-func heldNightlyClaims(ctx context.Context, runner commandRunner, repoRoot string, owner string) (map[string]nightlyClaimRef, error) {
-	claims, err := syncNightlyClaims(ctx, runner, repoRoot)
+func heldNightlyClaims(ctx context.Context, gh ghClient, repoRoot string, owner string) (map[string]nightlyClaimEntry, error) {
+	claims, err := syncNightlyClaims(ctx, gh, repoRoot)
 	if err != nil {
 		return nil, err
 	}
-	held := map[string]nightlyClaimRef{}
+	held := map[string]nightlyClaimEntry{}
 	for _, name := range sortedClaimKeys(claims) {
 		current := claims[name]
 		if !current.isStale() && current.Claim.State == nightlyStateClaimed && current.Claim.Owner == owner {
@@ -662,8 +667,8 @@ func heldNightlyClaims(ctx context.Context, runner commandRunner, repoRoot strin
 // an increment that runs longer than the lease keeps the failures it is
 // fixing. It returns the keys it renewed; a claim another agent moved
 // meanwhile is reported in the error and the others are still renewed.
-func renewNightlyClaims(ctx context.Context, runner commandRunner, repoRoot string, owner string, now time.Time) ([]string, error) {
-	held, err := heldNightlyClaims(ctx, runner, repoRoot, owner)
+func renewNightlyClaims(ctx context.Context, gh ghClient, repoRoot string, owner string, now time.Time) ([]string, error) {
+	held, err := heldNightlyClaims(ctx, gh, repoRoot, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -674,7 +679,7 @@ func renewNightlyClaims(ctx context.Context, runner commandRunner, repoRoot stri
 		next := current.Claim
 		next.Host = hostName()
 		next.At = now.UTC().Format(time.RFC3339)
-		swapErr := swapNightlyClaim(ctx, runner, repoRoot, current.Name, current.SHA, &next)
+		swapErr := swapNightlyClaim(ctx, gh, repoRoot, current.Name, current.Version, &next)
 		if errors.Is(swapErr, errNightlyClaimLost) {
 			lost = append(lost, fmt.Errorf("renew claim %s: %w", key, swapErr))
 			continue
@@ -693,12 +698,12 @@ func renewNightlyClaims(ctx context.Context, runner commandRunner, repoRoot stri
 // the pull request must also close that issue (`Closes #N`); the gate reads
 // the open seed issues as the check does, and only when it holds a seed key.
 // It returns the pull request's branch, the owner of its claims.
-func requireNightlyClaimsInPR(ctx context.Context, runner commandRunner, gh ghClient, repoRoot string, prNumber int) (string, error) {
+func requireNightlyClaimsInPR(ctx context.Context, gh ghClient, repoRoot string, prNumber int) (string, error) {
 	pr, err := loadPullRequest(ctx, gh, repoRoot, prNumber)
 	if err != nil {
 		return "", err
 	}
-	held, err := heldNightlyClaims(ctx, runner, repoRoot, pr.Head.Ref)
+	held, err := heldNightlyClaims(ctx, gh, repoRoot, pr.Head.Ref)
 	if err != nil {
 		return "", err
 	}
@@ -774,13 +779,13 @@ func isNightlyKeyChar(c byte) bool {
 // until a nightly that contains the merge commit has run.
 func markNightlyClaimsFixed(
 	ctx context.Context,
-	runner commandRunner,
+	gh ghClient,
 	repoRoot string,
 	owner string,
 	mergeCommit string,
 	now time.Time,
 ) error {
-	held, err := heldNightlyClaims(ctx, runner, repoRoot, owner)
+	held, err := heldNightlyClaims(ctx, gh, repoRoot, owner)
 	if err != nil {
 		return err
 	}
@@ -790,90 +795,11 @@ func markNightlyClaimsFixed(
 		next.State = nightlyStateFixed
 		next.FixCommit = mergeCommit
 		next.At = now.UTC().Format(time.RFC3339)
-		if err := swapNightlyClaim(ctx, runner, repoRoot, current.Name, current.SHA, &next); err != nil {
+		if err := swapNightlyClaim(ctx, gh, repoRoot, current.Name, current.Version, &next); err != nil {
 			return fmt.Errorf("dod post-merge mark nightly claim %s fixed: %w", key, err)
 		}
 	}
 	return nil
-}
-
-// syncNightlyClaims mirrors the remote claim refs into the local repository
-// and returns them by ref name; nightlyClaimRefName(key) finds a key's. The
-// mirrored commit ID is the value a later compare-and-swap expects the
-// remote to still hold.
-func syncNightlyClaims(ctx context.Context, runner commandRunner, repoRoot string) (map[string]nightlyClaimRef, error) {
-	if err := runner.Run(
-		ctx, repoRoot, os.Environ(), io.Discard, io.Discard,
-		"git", "fetch", "--quiet", "--prune", "origin", nightlyClaimRefspec,
-	); err != nil {
-		return nil, fmt.Errorf("nightly fetch claims: %w", err)
-	}
-	out, err := runner.Output(
-		ctx, repoRoot, os.Environ(),
-		"git", "for-each-ref", "--format=%(objectname)%09%(refname)%09%(contents:subject)", nightlyClaimRefPrefix,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("nightly list claims: %w", err)
-	}
-	claims := map[string]nightlyClaimRef{}
-	for _, line := range strings.Split(string(out), "\n") {
-		const claimFields = 3
-		fields := strings.SplitN(strings.TrimSpace(line), "\t", claimFields)
-		if len(fields) != claimFields {
-			continue
-		}
-		name := strings.TrimPrefix(fields[1], nightlyClaimRefPrefix)
-		var claim nightlyClaim
-		if decodeErr := json.Unmarshal([]byte(fields[2]), &claim); decodeErr != nil {
-			// An unreadable record names no key, so it is a stale claim: the
-			// check reports it, and it blocks no increment.
-			claim = nightlyClaim{State: nightlyStateClaimed, Owner: "unreadable"}
-		}
-		claims[name] = nightlyClaimRef{Name: name, SHA: fields[0], Claim: claim}
-	}
-	return claims, nil
-}
-
-// swapNightlyClaim moves the claim ref named name from the commit this agent
-// last read (empty for "does not exist") to a new record, or deletes it when
-// next is nil. It returns errNightlyClaimLost when the remote ref changed
-// meanwhile.
-func swapNightlyClaim(
-	ctx context.Context,
-	runner commandRunner,
-	repoRoot string,
-	name string,
-	expectSHA string,
-	next *nightlyClaim,
-) error {
-	ref := nightlyClaimRefPrefix + name
-	source := ""
-	if next != nil {
-		record, err := json.Marshal(next)
-		if err != nil {
-			return fmt.Errorf("encode nightly claim %s: %w", ref, err)
-		}
-		out, err := runner.Output(ctx, repoRoot, os.Environ(), "git", "commit-tree", nightlyEmptyTree, "-m", string(record))
-		if err != nil {
-			return fmt.Errorf("nightly claim commit %s: %w", ref, err)
-		}
-		source = strings.TrimSpace(string(out))
-	}
-	out, err := runner.CombinedOutput(
-		ctx, repoRoot, os.Environ(),
-		"git", "push", "--porcelain", "--force-with-lease="+ref+":"+expectSHA, "origin", source+":"+ref,
-	)
-	if err == nil {
-		return nil
-	}
-	text := string(out)
-	if strings.Contains(text, "[rejected]") || strings.Contains(text, "stale info") {
-		return fmt.Errorf("%w: %s", errNightlyClaimLost, ref)
-	}
-	if strings.Contains(text, "HTTP 403") || strings.Contains(text, "returned error: 403") {
-		return fmt.Errorf("%w: %s: %s", errNightlyClaimRefsForbidden, ref, strings.TrimSpace(text))
-	}
-	return fmt.Errorf("nightly claim push %s: %s: %w", ref, strings.TrimSpace(text), err)
 }
 
 // hostName is this machine's name for a claim record, or "" when the system

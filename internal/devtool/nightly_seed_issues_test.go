@@ -397,12 +397,12 @@ func TestNightlyPreMergeGateRequiresAClaimedSeedsIssueToClose(t *testing.T) {
 		"## Nightly failures\n- " + engine + ": fixed.\n\nCloses #" + number + "0",
 	} {
 		remote.prBody = body
-		_, err := requireNightlyClaimsInPR(t.Context(), remote, newGHClient(remote, nil), "/repo", 7)
+		_, err := requireNightlyClaimsInPR(t.Context(), newGHClient(remote, nil), "/repo", 7)
 		require.ErrorContains(t, err, "Closes #"+number, body)
 	}
 
 	remote.prBody = "## Nightly failures\n- " + engine + ": fixed.\n\nCloses #" + number
-	head, err := requireNightlyClaimsInPR(t.Context(), remote, newGHClient(remote, nil), "/repo", 7)
+	head, err := requireNightlyClaimsInPR(t.Context(), newGHClient(remote, nil), "/repo", 7)
 	require.NoError(t, err)
 	assert.Equal(t, nightlyTestOwner, head)
 }

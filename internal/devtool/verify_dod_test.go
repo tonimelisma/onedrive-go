@@ -418,7 +418,7 @@ func TestLoadMainRunsForCommitAsksForPushRunsOnly(t *testing.T) {
 }
 
 // nightlyStageRunner runs a whole DoD stage against two fakes: the nightly
-// step's gh commands and claim-ref git commands go to a claimRemote, every
+// step's gh commands, the claims' among them, go to a claimRemote, every
 // other command to a fakeRunner.
 type nightlyStageRunner struct {
 	*fakeRunner
@@ -426,33 +426,27 @@ type nightlyStageRunner struct {
 }
 
 // isNightlyStepCommand reports whether a command is one of the nightly
-// step's: any gh command, and the git commands that read and write claims.
-func isNightlyStepCommand(name string, args []string) bool {
-	if name == githubCLI {
-		return true
-	}
-	claimCommands := []string{"for-each-ref", "commit-tree", "push"}
-
-	return name == nightlyTestGit && len(args) > 0 &&
-		(slices.Contains(claimCommands, args[0]) || slices.Contains(args, nightlyClaimRefspec))
+// step's: any gh command.
+func isNightlyStepCommand(name string) bool {
+	return name == githubCLI
 }
 
 func (r *nightlyStageRunner) Run(ctx context.Context, cwd string, env []string, stdout, stderr io.Writer, name string, args ...string) error {
-	if isNightlyStepCommand(name, args) {
+	if isNightlyStepCommand(name) {
 		return r.remote.Run(ctx, cwd, env, stdout, stderr, name, args...)
 	}
 	return r.fakeRunner.Run(ctx, cwd, env, stdout, stderr, name, args...)
 }
 
 func (r *nightlyStageRunner) Output(ctx context.Context, cwd string, env []string, name string, args ...string) ([]byte, error) {
-	if isNightlyStepCommand(name, args) {
+	if isNightlyStepCommand(name) {
 		return r.remote.Output(ctx, cwd, env, name, args...)
 	}
 	return r.fakeRunner.Output(ctx, cwd, env, name, args...)
 }
 
 func (r *nightlyStageRunner) CombinedOutput(ctx context.Context, cwd string, env []string, name string, args ...string) ([]byte, error) {
-	if isNightlyStepCommand(name, args) {
+	if isNightlyStepCommand(name) {
 		return r.remote.CombinedOutput(ctx, cwd, env, name, args...)
 	}
 	return r.fakeRunner.CombinedOutput(ctx, cwd, env, name, args...)
@@ -500,8 +494,11 @@ func TestDODPrePRRunsThePRProfileByDefault(t *testing.T) {
 	}), "the pr profile reports no coverage")
 	assert.Contains(t, stdout.String(), "dod pre-pr:")
 
-	require.Len(t, remote.pushes, 1, "the stage renews the branch's one claim")
-	assert.True(t, strings.HasSuffix(remote.pushes[0], ":"+nightlyClaimRefPrefix+nightlyClaimRefName(nightlyTestKey)))
+	require.Len(t, remote.claimWrites, 1, "the stage renews the branch's one claim")
+	require.Len(t, remote.claimIssues(), 1)
+	assert.True(t, strings.HasPrefix(remote.claimWrites[0],
+		fmt.Sprintf("gh api -X POST %s/issues/%d/comments ", githubRepoPath, remote.claimIssues()[0].number)),
+		"the renewal is a comment on the claim's issue")
 	assert.Contains(t, stdout.String(), "nightly: renewed "+nightlyTestOwner+"'s claim on "+nightlyTestKey+"\n")
 	assert.Contains(t, stdout.String(), fmt.Sprintf("nightly: run %d on %s concluded failure", nightlyTestRunID, shortSHA(nightlyTestRunHead)))
 	assert.Contains(t, stdout.String(), "  e2e: failed\n")

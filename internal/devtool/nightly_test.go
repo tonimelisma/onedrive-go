@@ -187,26 +187,27 @@ func (e nightlyExitError) Error() string { return fmt.Sprintf("exit status %d", 
 
 func (e nightlyExitError) ExitCode() int { return e.code }
 
-// claimRemote is a commandRunner that behaves like the shared remote for
-// claim refs and like GitHub for the nightly's runs, issues, labels and
-// commit statuses: pushes are compare-and-swap, and a hook can move a ref
-// between an agent's read and its push to model a concurrent agent.
+// claimRemote is a commandRunner that behaves like GitHub for the nightly's
+// runs, issues, labels, comments and commit statuses, the claims' issues
+// among them: issues are numbered and comments given IDs in the order they
+// are stored, and a hook can store a racing agent's write between an agent's
+// read and its claim write, to model a concurrent agent.
 type claimRemote struct {
-	t          *testing.T
-	refs       map[string]string
-	commits    map[string]string
-	nextCommit int
-	runs       string
-	jobs       string
-	jobLogs    map[string]string
-	prBody     string
-	prBranch   string
-	ancestors  map[string]bool
-	beforePush func(remote *claimRemote)
-	pushes     []string
-	// pushForbidden makes every push fail the way a Claude Code cloud
-	// session's git proxy refuses a ref other than the session's branch.
-	pushForbidden bool
+	t         *testing.T
+	runs      string
+	jobs      string
+	jobLogs   map[string]string
+	prBody    string
+	prBranch  string
+	ancestors map[string]bool
+	// beforeClaimWrite runs once, before the next claim write is stored.
+	beforeClaimWrite func(remote *claimRemote)
+	// claimWrites lists every claim write the fake stored: an issue opened
+	// with the claim label, a comment on a claim issue, or its close.
+	claimWrites []string
+	// claimWritesForbidden makes every claim write fail with HTTP 403, as
+	// GitHub answers credentials that may not write issues.
+	claimWritesForbidden bool
 	// jobLogErrs are the failures the job-log fetch of a job id answers
 	// with, in order, before it returns the log; jobLogCalls counts the
 	// fetches. runListErrs does the same for the run list, and labelListErrs
@@ -224,7 +225,7 @@ type claimRemote struct {
 	// sleeps records the backoffs the check waited out.
 	sleeps recordedSleeps
 
-	// GitHub's side of the nightly report.
+	// GitHub's side of the nightly report and the claims.
 	labels   map[string]bool
 	issues   []*fakeIssue
 	statuses []fakeStatus
@@ -242,6 +243,19 @@ type fakeIssue struct {
 	comments []string
 }
 
+// fakeCommentID is the ID of an issue's comment at index: IDs rise in the
+// order comments are stored, as GitHub's do.
+func fakeCommentID(issue *fakeIssue, index int) int64 {
+	const perIssue = 1000
+
+	return int64(issue.number*perIssue + index + 1)
+}
+
+// isClaimIssue reports whether the issue carries the claim label.
+func (i *fakeIssue) isClaimIssue() bool {
+	return slices.Contains(i.labels, nightlyClaimLabel)
+}
+
 // fakeStatus is one commit status posted to the fake repository.
 type fakeStatus struct {
 	sha         string
@@ -255,9 +269,7 @@ func newClaimRemote(t *testing.T, conclusion string) *claimRemote {
 	t.Helper()
 
 	return &claimRemote{
-		t:       t,
-		refs:    map[string]string{},
-		commits: map[string]string{},
+		t: t,
 		runs: nightlyRunList(t, nightlyListedRun{
 			id: nightlyTestRunID, status: checkStatusCompleted, conclusion: conclusion, age: 10 * time.Hour,
 		}),
@@ -270,64 +282,140 @@ func newClaimRemote(t *testing.T, conclusion string) *claimRemote {
 	}
 }
 
-// seed stores a claim record of the current format at key's ref.
-func (r *claimRemote) seed(key string, claim *nightlyClaim) {
+// seed opens a claim issue for key holding a record of the current format.
+func (r *claimRemote) seed(key string, claim *nightlyClaim) *fakeIssue {
 	r.t.Helper()
 
 	claim.Format = nightlyClaimFormat
-	r.seedRecord(nightlyClaimRefName(key), key, claim)
+	claim.Key = key
+	return r.seedClaimIssue(key, fakeClaimRecordText(r.t, claim))
 }
 
-// seedOldFormat stores a claim record that carries no format at a ref named
-// by the key itself, as devtool wrote them before keys named their package.
-func (r *claimRemote) seedOldFormat(key string, claim *nightlyClaim) {
+// seedOldFormat opens a claim issue for key whose record carries no format,
+// as devtool wrote them before keys named their package.
+func (r *claimRemote) seedOldFormat(key string, claim *nightlyClaim) *fakeIssue {
 	r.t.Helper()
 
 	claim.Format = ""
-	r.seedRecord(key, key, claim)
-}
-
-func (r *claimRemote) seedRecord(ref string, key string, claim *nightlyClaim) {
-	r.t.Helper()
-
 	claim.Key = key
-	record, err := json.Marshal(claim)
-	require.NoError(r.t, err)
-	r.refs[ref] = r.commit(string(record))
+	return r.seedClaimIssue(key, fakeClaimRecordText(r.t, claim))
 }
 
-// claimKeys are the keys the remote's claim records name, sorted.
-func (r *claimRemote) claimKeys() []string {
+// seedClaimIssue opens an issue with the claim label, titled for key and
+// holding body.
+func (r *claimRemote) seedClaimIssue(key string, body string) *fakeIssue {
+	r.labels[nightlyClaimLabel] = true
+	issue := &fakeIssue{
+		number: len(r.issues) + 1, title: nightlyClaimTitlePrefix + key, labels: []string{nightlyClaimLabel}, body: body, open: true,
+	}
+	r.issues = append(r.issues, issue)
+
+	return issue
+}
+
+// seedClaimComment stores a comment on a claim issue that moves its claim
+// from prev to claim, or deletes it when claim is nil.
+func (r *claimRemote) seedClaimComment(issue *fakeIssue, prev string, claim *nightlyClaim) {
 	r.t.Helper()
 
-	keys := make([]string, 0, len(r.refs))
-	for _, sha := range r.refs {
-		var claim nightlyClaim
-		require.NoError(r.t, json.Unmarshal([]byte(r.commits[sha]), &claim))
-		keys = append(keys, claim.Key)
+	record := map[string]any{"prev": prev}
+	if claim == nil {
+		record["deleted"] = true
+	} else {
+		record["claim"] = claim
+	}
+	issue.comments = append(issue.comments, fakeClaimRecordText(r.t, record))
+}
+
+// fakeClaimRecordText is a claim body or comment as a person would see it:
+// a line of prose, then the record in a fenced json block.
+func fakeClaimRecordText(t *testing.T, record any) string {
+	t.Helper()
+
+	data, err := json.Marshal(record)
+	require.NoError(t, err)
+
+	return "Seeded by the test.\n\n```json\n" + string(data) + "\n```\n"
+}
+
+// fakeClaimRecord decodes the record of a claim body or comment.
+func fakeClaimRecord(text string, into any) bool {
+	_, rest, found := strings.Cut(text, "```json\n")
+	if !found {
+		return false
+	}
+	record, _, found := strings.Cut(rest, "\n```")
+
+	return found && json.Unmarshal([]byte(record), into) == nil
+}
+
+// fakeClaimHead is the claim a claim issue holds by the store's rule: the
+// body's record, moved by each comment, in ID order, that names the version
+// before it; deleted is true when such a comment deletes the claim, and
+// readable is false when the body holds no record.
+func fakeClaimHead(issue *fakeIssue) (claim nightlyClaim, deleted bool, readable bool) {
+	if !fakeClaimRecord(issue.body, &claim) {
+		return nightlyClaim{}, false, false
+	}
+	head := "b"
+	for index, comment := range issue.comments {
+		var next struct {
+			Prev    string        `json:"prev"`
+			Claim   *nightlyClaim `json:"claim"`
+			Deleted bool          `json:"deleted"`
+		}
+		if !fakeClaimRecord(comment, &next) || next.Prev != head {
+			continue
+		}
+		head = "c" + strconv.FormatInt(fakeCommentID(issue, index), 10)
+		if next.Deleted {
+			return nightlyClaim{}, true, true
+		}
+		claim = *next.Claim
+	}
+
+	return claim, false, true
+}
+
+// claimKeys are the keys of the claims the open claim issues hold, sorted.
+func (r *claimRemote) claimKeys() []string {
+	keys := []string{}
+	for _, issue := range r.claimIssues() {
+		if claim, deleted, readable := fakeClaimHead(issue); readable && !deleted {
+			keys = append(keys, claim.Key)
+		}
 	}
 	sort.Strings(keys)
 
 	return keys
 }
 
-func (r *claimRemote) commit(message string) string {
-	r.nextCommit++
-	sha := fmt.Sprintf("c%03d", r.nextCommit)
-	r.commits[sha] = message
-	return sha
+// claimIssues are the open issues carrying the claim label.
+func (r *claimRemote) claimIssues() []*fakeIssue {
+	issues := []*fakeIssue{}
+	for _, issue := range r.issues {
+		if issue.open && issue.isClaimIssue() {
+			issues = append(issues, issue)
+		}
+	}
+
+	return issues
 }
 
+// claim is key's claim: the head of the lowest-numbered open claim issue
+// opened for key whose claim is not deleted.
 func (r *claimRemote) claim(key string) (nightlyClaim, bool) {
-	r.t.Helper()
-
-	sha, ok := r.refs[nightlyClaimRefName(key)]
-	if !ok {
-		return nightlyClaim{}, false
+	for _, issue := range r.claimIssues() {
+		var first nightlyClaim
+		if !fakeClaimRecord(issue.body, &first) || first.Key != key {
+			continue
+		}
+		if claim, deleted, _ := fakeClaimHead(issue); !deleted {
+			return claim, true
+		}
 	}
-	var claim nightlyClaim
-	require.NoError(r.t, json.Unmarshal([]byte(r.commits[sha]), &claim))
-	return claim, true
+
+	return nightlyClaim{}, false
 }
 
 func (r *claimRemote) Run(_ context.Context, _ string, _ []string, _, _ io.Writer, name string, args ...string) error {
@@ -345,17 +433,7 @@ func (r *claimRemote) Output(_ context.Context, _ string, _ []string, name strin
 	if name == githubCLI {
 		return r.github(joined, args)
 	}
-	switch {
-	case strings.HasPrefix(joined, "git for-each-ref"):
-		var b strings.Builder
-		for _, ref := range slices.Sorted(maps.Keys(r.refs)) {
-			sha := r.refs[ref]
-			fmt.Fprintf(&b, "%s\t%s%s\t%s\n", sha, nightlyClaimRefPrefix, ref, r.commits[sha])
-		}
-		return []byte(b.String()), nil
-	case strings.HasPrefix(joined, "git commit-tree"):
-		return []byte(r.commit(args[len(args)-1]) + "\n"), nil
-	case strings.HasPrefix(joined, "git rev-parse --abbrev-ref HEAD"):
+	if strings.HasPrefix(joined, "git rev-parse --abbrev-ref HEAD") {
 		return []byte(nightlyTestOwner + "\n"), nil
 	}
 	return nil, fmt.Errorf("unexpected command: %s", joined)
@@ -443,9 +521,12 @@ func popRemoteErr(errs map[string][]error, key string) error {
 	return failures[0]
 }
 
-// githubWrite carries out the gh commands of the nightly report that change
-// something on GitHub.
+// githubWrite carries out the gh commands of the nightly report and the
+// claims that change something on GitHub.
 func (r *claimRemote) githubWrite(joined string, args []string) ([]byte, error) {
+	if out, handled, err := r.restIssueWrite(joined, args); handled {
+		return out, err
+	}
 	switch {
 	case strings.HasPrefix(joined, "gh api -X POST repos/{owner}/{repo}/statuses/"):
 		fields := ghFields(args)
@@ -479,6 +560,71 @@ func (r *claimRemote) githubWrite(joined string, args []string) ([]byte, error) 
 	return nil, fmt.Errorf("unexpected command: %s", joined)
 }
 
+// restIssueWrite carries out the REST writes of issues the claims make:
+// opening an issue, commenting on one and closing one. handled is false for
+// any other command.
+func (r *claimRemote) restIssueWrite(joined string, args []string) ([]byte, bool, error) {
+	const issuesPath = githubRepoPath + "/issues"
+	switch {
+	case strings.HasPrefix(joined, "gh api -X POST "+issuesPath+"/") && strings.HasSuffix(args[3], "/comments"):
+		number, _, _ := strings.Cut(strings.TrimPrefix(args[3], issuesPath+"/"), "/")
+		issue := r.issue(number)
+		if err := r.admitClaimWrite(issue.isClaimIssue(), joined); err != nil {
+			return nil, true, err
+		}
+		issue.comments = append(issue.comments, ghFields(args)["body"])
+		return fmt.Appendf(nil, `{"id":%d}`, fakeCommentID(issue, len(issue.comments)-1)), true, nil
+	case strings.HasPrefix(joined, "gh api -X POST ") && args[3] == issuesPath:
+		fields := ghFields(args)
+		label := fields["labels[]"]
+		if err := r.admitClaimWrite(label == nightlyClaimLabel, joined); err != nil {
+			return nil, true, err
+		}
+		r.labels[label] = true
+		issue := &fakeIssue{
+			number: len(r.issues) + 1, title: fields["title"], labels: []string{label}, body: fields["body"], open: true,
+		}
+		r.issues = append(r.issues, issue)
+		return fmt.Appendf(nil, `{"number":%d}`, issue.number), true, nil
+	case strings.HasPrefix(joined, "gh api -X PATCH "+issuesPath+"/"):
+		issue := r.issue(strings.TrimPrefix(args[3], issuesPath+"/"))
+		if r.claimWritesForbidden && issue.isClaimIssue() {
+			return nil, true, fakeForbidden()
+		}
+		if issue.isClaimIssue() {
+			r.claimWrites = append(r.claimWrites, joined)
+		}
+		issue.open = ghFields(args)["state"] != nightlyClaimStateClosed
+		return []byte("{}"), true, nil
+	}
+	return nil, false, nil
+}
+
+// admitClaimWrite runs the racing agent's hook before a claim write, then
+// refuses the write when claim writes are forbidden, and otherwise records
+// it. A write that is not a claim's passes untouched.
+func (r *claimRemote) admitClaimWrite(isClaim bool, joined string) error {
+	if !isClaim {
+		return nil
+	}
+	if r.beforeClaimWrite != nil {
+		hook := r.beforeClaimWrite
+		r.beforeClaimWrite = nil
+		hook(r)
+	}
+	if r.claimWritesForbidden {
+		return fakeForbidden()
+	}
+	r.claimWrites = append(r.claimWrites, joined)
+
+	return nil
+}
+
+// fakeForbidden is gh's report of GitHub refusing a write with 403.
+func fakeForbidden() error {
+	return ghFailure("gh: Resource not accessible by integration (HTTP 403)")
+}
+
 func (r *claimRemote) issue(number string) *fakeIssue {
 	r.t.Helper()
 
@@ -502,9 +648,21 @@ func restIssueListLabel(path string) string {
 	return values.Get("labels")
 }
 
+// fakeIssueState is an issue's state as REST names it.
+func fakeIssueState(issue *fakeIssue) string {
+	if issue.open {
+		return "open"
+	}
+	return nightlyClaimStateClosed
+}
+
 // issueBody answers `gh api .../issues/<n>`.
 func (r *claimRemote) issueBody(number string) ([]byte, error) {
-	out, err := json.Marshal(map[string]any{"number": r.issue(number).number, "body": r.issue(number).body})
+	issue := r.issue(number)
+	out, err := json.Marshal(map[string]any{
+		"number": issue.number, "title": issue.title, "body": issue.body,
+		"state": fakeIssueState(issue), "comments": len(issue.comments),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("encode issue: %w", err)
 	}
@@ -516,37 +674,46 @@ func (r *claimRemote) issueBody(number string) ([]byte, error) {
 // another, when there are more than one.
 func (r *claimRemote) issueComments(number string) ([]byte, error) {
 	issue := r.issue(number)
-	pages := [][]map[string]string{{}}
+	pages := [][]map[string]any{{}}
 	for i, comment := range issue.comments {
 		if i == 1 {
-			pages = append(pages, []map[string]string{})
+			pages = append(pages, []map[string]any{})
 		}
-		pages[len(pages)-1] = append(pages[len(pages)-1], map[string]string{"body": comment})
+		pages[len(pages)-1] = append(pages[len(pages)-1], map[string]any{"id": fakeCommentID(issue, i), "body": comment})
 	}
+	return encodeFakePages(pages)
+}
+
+// fakeIssueListPageSize is how many issues one page of the fake's issue
+// list holds: small, so every list a test makes spans pages.
+const fakeIssueListPageSize = 2
+
+// openIssueList answers the REST list of open issues carrying label, the
+// newest issue first, with each issue's number, title, body and comment
+// count, and a pull request carrying the label too, which the list must
+// leave out, the whole split into pages as --paginate prints them.
+func (r *claimRemote) openIssueList(label string) ([]byte, error) {
+	open := []map[string]any{{"number": 9999, "title": "a pull request", "pull_request": map[string]string{"url": "x"}}}
+	for i := len(r.issues) - 1; i >= 0; i-- {
+		if issue := r.issues[i]; issue.open && slices.Contains(issue.labels, label) {
+			open = append(open, map[string]any{
+				"number": issue.number, "title": issue.title, "body": issue.body, "comments": len(issue.comments),
+			})
+		}
+	}
+	return encodeFakePages(slices.Collect(slices.Chunk(open, fakeIssueListPageSize)))
+}
+
+// encodeFakePages prints pages the way `gh api --paginate` does: each
+// page's JSON array, one after another.
+func encodeFakePages[T any](pages [][]T) ([]byte, error) {
 	var out []byte
 	for _, page := range pages {
 		data, err := json.Marshal(page)
 		if err != nil {
-			return nil, fmt.Errorf("encode issue comments: %w", err)
+			return nil, fmt.Errorf("encode page: %w", err)
 		}
 		out = append(out, data...)
-	}
-	return out, nil
-}
-
-// openIssueList answers the REST list of open issues carrying label, the
-// newest issue first, with each issue's number, title and body, and a pull
-// request carrying the label too, which the list must leave out.
-func (r *claimRemote) openIssueList(label string) ([]byte, error) {
-	open := []map[string]any{{"number": 9999, "title": "a pull request", "pull_request": map[string]string{"url": "x"}}}
-	for i := len(r.issues) - 1; i >= 0; i-- {
-		if r.issues[i].open && slices.Contains(r.issues[i].labels, label) {
-			open = append(open, map[string]any{"number": r.issues[i].number, "title": r.issues[i].title, "body": r.issues[i].body})
-		}
-	}
-	out, err := json.Marshal(open)
-	if err != nil {
-		return nil, fmt.Errorf("encode issues: %w", err)
 	}
 	return out, nil
 }
@@ -570,31 +737,7 @@ func ghFields(args []string) map[string]string {
 }
 
 func (r *claimRemote) CombinedOutput(_ context.Context, _ string, _ []string, name string, args ...string) ([]byte, error) {
-	if name != nightlyTestGit || args[0] != "push" {
-		return nil, fmt.Errorf("unexpected command: %s %v", name, args)
-	}
-	if r.beforePush != nil {
-		hook := r.beforePush
-		r.beforePush = nil
-		hook(r)
-	}
-	if r.pushForbidden {
-		return []byte("error: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403\n" +
-			"fatal: the remote end hung up unexpectedly\n"), errors.New("exit status 1")
-	}
-	lease := strings.TrimPrefix(args[2], "--force-with-lease="+nightlyClaimRefPrefix)
-	key, expect, _ := strings.Cut(lease, ":")
-	source, _, _ := strings.Cut(args[4], ":")
-	if r.refs[key] != expect {
-		return []byte("!\t" + args[4] + "\t[rejected] (stale info)\n"), errors.New("exit status 1")
-	}
-	r.pushes = append(r.pushes, args[4])
-	if source == "" {
-		delete(r.refs, key)
-	} else {
-		r.refs[key] = source
-	}
-	return nil, nil
+	return nil, fmt.Errorf("unexpected command: %s %v", name, args)
 }
 
 var _ commandRunner = (*claimRemote)(nil)
@@ -910,13 +1053,13 @@ func TestNightlyFailureKeysNameTheAggregateThatFailedOnItsOwn(t *testing.T) {
 
 // Validates: R-6.10.23
 //
-// A claim's ref is named by an encoding of its key: no two keys share a
-// name, whatever they hold, two names never differ by case alone, and every
-// name is one valid git ref component that a command line cannot read as an
-// option. The empty key, and a key whose ref would pass
-// nightlyClaimRefMaxLen, keep the head of their encoding and end in a digest
-// of the whole key, which no other name holds.
-func TestNightlyClaimRefNameIsInjectiveAndAValidRefComponent(t *testing.T) {
+// A claim is named by an encoding of its key: no two keys share a name,
+// whatever they hold, two names never differ by case alone, and every name
+// is a word a command line takes as it is and cannot read as an option. The
+// empty key, and a key whose name would pass nightlyClaimNameMaxLen, keep the
+// head of their encoding and end in a digest of the whole key, which no other
+// name holds.
+func TestNightlyClaimNameIsInjectiveAndNeedsNoQuoting(t *testing.T) {
 	t.Parallel()
 
 	long := strings.Repeat("internal/sync.", 20)
@@ -930,39 +1073,36 @@ func TestNightlyClaimRefNameIsInjectiveAndAValidRefComponent(t *testing.T) {
 	}
 	byName := map[string]string{}
 	for _, key := range keys {
-		name := nightlyClaimRefName(key)
-		assert.Empty(t, refComponentViolation(name), "key %q gives ref name %q", key, name)
-		assert.LessOrEqual(t, len(nightlyClaimRefPrefix+name), nightlyClaimRefMaxLen, "key %q", key)
+		name := nightlyClaimName(key)
+		assert.Empty(t, claimNameViolation(name), "key %q gives claim name %q", key, name)
+		assert.LessOrEqual(t, len(name), nightlyClaimNameMaxLen, "key %q", key)
 		folded := strings.ToLower(name)
 		if other, taken := byName[folded]; taken {
-			assert.Failf(t, "two keys share a ref name", "%q and %q both give %q", other, key, name)
+			assert.Failf(t, "two keys share a claim name", "%q and %q both give %q", other, key, name)
 		}
 		byName[folded] = key
 		if key != "" && len(key) < len(long) {
-			assert.NotContains(t, name, nightlyClaimRefDigestMarker, "key %q", key)
+			assert.NotContains(t, name, nightlyClaimNameDigestMarker, "key %q", key)
 		}
 	}
-	assert.Equal(t, "job-verify-full--macos-latest", nightlyClaimRefName("job-verify-full--macos-latest"),
-		"a job key is its own ref name")
+	assert.Equal(t, "job-verify-full--macos-latest", nightlyClaimName("job-verify-full--macos-latest"),
+		"a job key is its own claim name")
 }
 
-// refComponentViolation names the rule of git check-ref-format that name
-// breaks as one component of a ref, or "" when it breaks none; a leading '-'
-// is refused too, because a command line would read it as an option.
-func refComponentViolation(name string) string {
+// claimNameViolation says why name is not a claim name a command line takes
+// as it is, or "" when it is one: it is not empty, starts with no '-' a
+// command line would read as an option, and holds only lowercase letters,
+// digits, '-' and '_'.
+func claimNameViolation(name string) string {
 	switch {
-	case name == "" || name == "@":
-		return "empty or @"
-	case strings.HasPrefix(name, ".") || strings.HasPrefix(name, "-"):
-		return "leading . or -"
-	case strings.HasSuffix(name, ".") || strings.HasSuffix(name, ".lock"):
-		return "trailing . or .lock"
-	case strings.Contains(name, "..") || strings.Contains(name, "@{"):
-		return ".. or @{"
-	case strings.ContainsAny(name, " ~^:?*[\\/"):
-		return "a forbidden character"
-	case strings.ContainsFunc(name, func(r rune) bool { return r < ' ' || r == '\x7f' }):
-		return "a control byte"
+	case name == "":
+		return "empty"
+	case strings.HasPrefix(name, "-"):
+		return "leading -"
+	case strings.ContainsFunc(name, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '_'
+	}):
+		return "a character other than a lowercase letter, a digit, - or _"
 	}
 
 	return ""
@@ -1014,7 +1154,7 @@ func TestNightlyCheckClaimsNothingForAJobThatDidNotRun(t *testing.T) {
 	out, err = runNightlyCheck(t, queuedOnly)
 	require.NoError(t, err, "a night red only because a job did not run fails no start stage")
 	assert.Contains(t, out, "e2e: did not run")
-	assert.Empty(t, queuedOnly.refs)
+	assert.Empty(t, queuedOnly.claimKeys())
 }
 
 // Validates: R-6.10.23, R-6.10.24
@@ -1108,8 +1248,8 @@ func TestNightlyCheck_SaysGitHubFailedAfterTheRetryBound(t *testing.T) {
 	assert.Contains(t, err.Error(), fmt.Sprintf("GitHub answered HTTP 502 on all %d attempts", githubAttempts))
 	assert.Len(t, remote.runListArgs, githubAttempts)
 	assert.Equal(t, githubBackoffs(), remote.sleeps.waits)
-	assert.Empty(t, remote.pushes)
-	assert.Empty(t, remote.refs)
+	assert.Empty(t, remote.claimWrites)
+	assert.Empty(t, remote.claimKeys())
 }
 
 // Validates: R-6.10.23
@@ -1280,7 +1420,7 @@ func TestNightlyCheckFindsARunStillRunningPastItsBound(t *testing.T) {
 	assert.Contains(t, err.Error(), "run 5000")
 	assert.Contains(t, err.Error(), "still running")
 	assert.NotContains(t, err.Error(), "\n")
-	assert.Empty(t, remote.pushes, "a run without a verdict claims nothing")
+	assert.Empty(t, remote.claimWrites, "a run without a verdict claims nothing")
 }
 
 // Validates: R-6.10.23
@@ -1346,7 +1486,7 @@ func TestNightlyCheckFailsOnRedRunWithoutKeys(t *testing.T) {
 	_, err := runNightlyCheck(t, remote)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no job of it failed")
-	assert.Empty(t, remote.pushes)
+	assert.Empty(t, remote.claimWrites)
 }
 
 // Validates: R-6.10.23
@@ -1481,16 +1621,20 @@ func TestNightlyCheckSkipsFailureHeldByAnotherIncrement(t *testing.T) {
 
 	claim, _ := remote.claim(nightlyTestKey)
 	assert.Equal(t, nightlyTestOther, claim.Owner)
-	assert.Empty(t, remote.pushes)
+	assert.Empty(t, remote.claimWrites)
 	assert.Contains(t, out, "being fixed elsewhere")
 }
 
 // Validates: R-6.10.23
+//
+// Two agents creating one key's claim each open an issue: the issue opened
+// first is the claim, so the agent whose issue came second closes its own,
+// loses the compare-and-swap, and reads the key as held elsewhere.
 func TestNightlyCheckLosesRaceToConcurrentClaim(t *testing.T) {
 	t.Parallel()
 
 	remote := failingNightlyRemote(t)
-	remote.beforePush = func(remote *claimRemote) {
+	remote.beforeClaimWrite = func(remote *claimRemote) {
 		remote.seed(nightlyTestKey, &nightlyClaim{
 			State: nightlyStateClaimed,
 			Owner: nightlyTestOther,
@@ -1502,9 +1646,176 @@ func TestNightlyCheckLosesRaceToConcurrentClaim(t *testing.T) {
 	require.NoError(t, err)
 
 	claim, _ := remote.claim(nightlyTestKey)
-	assert.Equal(t, nightlyTestOther, claim.Owner, "the agent that pushed first keeps the claim")
-	assert.Empty(t, remote.pushes)
+	assert.Equal(t, nightlyTestOther, claim.Owner, "the agent whose issue was opened first keeps the claim")
+	require.Len(t, remote.issues, 2)
+	assert.True(t, remote.issues[0].open, "the first issue is the claim")
+	assert.False(t, remote.issues[1].open, "the losing agent closes the issue it opened")
+	assert.Equal(t, []string{nightlyTestKey}, remote.claimKeys())
 	assert.Contains(t, out, "being fixed elsewhere")
+}
+
+// Validates: R-6.10.23
+//
+// The create itself reports the lost race: an agent whose issue another
+// agent's lower-numbered issue precedes gets errNightlyClaimLost, with its
+// own issue closed, and the claim stays the first agent's.
+func TestNightlyClaimCreateLosesToAnIssueOpenedFirst(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, checkConclusionSuccess)
+	remote.beforeClaimWrite = func(remote *claimRemote) {
+		remote.seed(nightlyTestKey, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther})
+	}
+	next := nightlyClaim{State: nightlyStateClaimed, Key: nightlyTestKey, Format: nightlyClaimFormat, Owner: nightlyTestOwner}
+
+	err := swapNightlyClaim(t.Context(), newGHClient(remote, nil), "/repo", nightlyClaimName(nightlyTestKey), "", &next)
+	require.ErrorIs(t, err, errNightlyClaimLost)
+
+	require.Len(t, remote.issues, 2)
+	assert.False(t, remote.issues[1].open, "the loser closes its issue")
+	claim, held := remote.claim(nightlyTestKey)
+	require.True(t, held)
+	assert.Equal(t, nightlyTestOther, claim.Owner)
+
+	won := nightlyClaim{State: nightlyStateClaimed, Key: "e2e.TestUncontested", Format: nightlyClaimFormat, Owner: nightlyTestOwner}
+	require.NoError(t, swapNightlyClaim(t.Context(), newGHClient(remote, nil), "/repo", nightlyClaimName(won.Key), "", &won))
+	assert.Equal(t, nightlyClaimTitlePrefix+won.Key, remote.issues[2].title)
+	assert.Equal(t, []string{nightlyClaimLabel}, remote.issues[2].labels)
+	assert.True(t, remote.issues[2].open, "an uncontested create is the claim")
+}
+
+// Validates: R-6.10.23
+//
+// Two agents moving one claim from the same version each post a comment
+// naming it: the comment stored first is the claim's new head, the later one
+// loses the compare-and-swap and stays on the issue, ignored for good.
+func TestNightlyClaimUpdatesRacingFromOneVersionKeepTheEarlierComment(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, checkConclusionSuccess)
+	old := nightlyTestNow().Add(-20 * time.Hour).Format(time.RFC3339)
+	issue := remote.seed(nightlyTestKey, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOwner, At: old})
+	remote.beforeClaimWrite = func(remote *claimRemote) {
+		remote.seedClaimComment(issue, nightlyClaimBodyVersion, &nightlyClaim{
+			State: nightlyStateFixed, Key: nightlyTestKey, Format: nightlyClaimFormat,
+			Owner: nightlyTestOwner, At: old, FixCommit: "merge-elsewhere",
+		})
+	}
+
+	renewed, err := renewNightlyClaims(t.Context(), newGHClient(remote, nil), "/repo", nightlyTestOwner, nightlyTestNow())
+	require.ErrorIs(t, err, errNightlyClaimLost)
+
+	assert.Empty(t, renewed)
+	require.Len(t, issue.comments, 2, "the losing comment stays on the issue")
+	claim, held := remote.claim(nightlyTestKey)
+	require.True(t, held)
+	assert.Equal(t, nightlyStateFixed, claim.State, "the comment stored first is the head")
+	assert.Equal(t, "merge-elsewhere", claim.FixCommit)
+	assert.True(t, issue.open)
+
+	entries, err := syncNightlyClaims(t.Context(), newGHClient(remote, nil), "/repo")
+	require.NoError(t, err)
+	assert.Equal(t, nightlyStateFixed, entries[nightlyClaimName(nightlyTestKey)].Claim.State,
+		"the store reads the head the earlier comment set")
+}
+
+// Validates: R-6.10.23
+//
+// A lineage whose head is deleted is no claim, even while its issue is still
+// open: a new claim of its key opens an issue of its own.
+func TestNightlyCheckOpensANewIssueForAKeyWhoseLineageIsDeleted(t *testing.T) {
+	t.Parallel()
+
+	remote := failingNightlyRemote(t)
+	deleted := remote.seed(nightlyTestKey, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther})
+	remote.seedClaimComment(deleted, nightlyClaimBodyVersion, nil)
+
+	out, err := runNightlyCheck(t, remote)
+	require.NoError(t, err)
+
+	assert.Contains(t, out, nightlyTestKey+": claimed by this increment; fix it here (new claim)")
+	require.Len(t, remote.issues, 2)
+	assert.Len(t, deleted.comments, 1, "a deleted lineage is never written again")
+	assert.True(t, remote.issues[1].open)
+	claim, held := remote.claim(nightlyTestKey)
+	require.True(t, held)
+	assert.Equal(t, nightlyTestOwner, claim.Owner)
+}
+
+// Validates: R-6.10.23
+//
+// An issue with the claim label whose body holds no record names no key: it
+// is a stale claim, printed by its issue, and `nightly release --key
+// issue-<n>` deletes it, closing the issue.
+func TestNightlyReleaseDeletesAClaimIssueWhoseBodyCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, checkConclusionSuccess)
+	issue := remote.seedClaimIssue(nightlyTestKey, "Someone rewrote this issue by hand.")
+	name := nightlyClaimIssueName(issue.number)
+
+	out, err := runNightlyCheck(t, remote)
+	require.NoError(t, err)
+	assert.Contains(t, out, "  "+name+": stale claim")
+	assert.Contains(t, out, "--key "+name+"`")
+	assert.True(t, issue.open, "the check reports a stale claim and leaves it to release")
+
+	var stdout bytes.Buffer
+	require.NoError(t, RunNightly(t.Context(), remote, NightlyOptions{
+		RepoRoot: "/repo", Action: NightlyActionRelease, Branch: nightlyTestOwner, Key: name, Stdout: &stdout,
+	}))
+	assert.False(t, issue.open, "release closes the stale claim's issue")
+	assert.Contains(t, stdout.String(), "nightly: deleted "+name+", a stale claim\n")
+}
+
+// Validates: R-6.10.23
+//
+// The store lists every open claim issue, over as many pages as GitHub
+// prints, and leaves out the pull requests the issues list also holds.
+func TestNightlyClaimListingPaginatesAndSkipsPullRequests(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, checkConclusionSuccess)
+	keys := []string{"a.TestOne", "b.TestTwo", "c.TestThree", "d.TestFour", "e.TestFive"}
+	for _, key := range keys {
+		remote.seed(key, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther})
+	}
+	require.Greater(t, len(keys)+1, 2*fakeIssueListPageSize, "the list spans more than two pages")
+
+	entries, err := syncNightlyClaims(t.Context(), newGHClient(remote, nil), "/repo")
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(keys))
+	for _, key := range keys {
+		names = append(names, nightlyClaimName(key))
+		entry := entries[nightlyClaimName(key)]
+		assert.Equal(t, key, entry.Claim.Key)
+		assert.Equal(t, strconv.Itoa(entry.Issue)+"/"+nightlyClaimBodyVersion, entry.Version)
+	}
+	assert.ElementsMatch(t, names, slices.Collect(maps.Keys(entries)), "no pull request is read as a claim")
+}
+
+// Validates: R-6.10.23, R-6.10.40
+//
+// Every claim write is a call of GitHub's REST API through `gh api`: no git
+// push, no GraphQL and no gh subcommand that would use it, so the claims are
+// written wherever REST reaches GitHub, as from a Claude Code cloud session.
+func TestNightlyClaimsAreWrittenOverRESTAlone(t *testing.T) {
+	t.Parallel()
+
+	remote := failingNightlyRemote(t)
+	_, err := runNightlyCheck(t, remote)
+	require.NoError(t, err)
+	require.NoError(t, RunNightly(t.Context(), remote, NightlyOptions{
+		RepoRoot: "/repo", Action: NightlyActionRelease, Branch: nightlyTestOwner, Key: nightlyTestKey,
+	}))
+
+	require.Len(t, remote.claimWrites, 3, "the create, the delete and the close")
+	for _, write := range remote.claimWrites {
+		assert.True(t, strings.HasPrefix(write, "gh api -X "), "a REST call: %s", write)
+		assert.NotContains(t, write, "graphql")
+	}
+	assert.Empty(t, remote.claimKeys())
 }
 
 // Validates: R-6.10.23
@@ -1586,7 +1897,7 @@ func TestNightlyCheckFailsWhenNoIncrementCanOwnTheFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), nightlyTestKey)
 	assert.Contains(t, stdout.String(), "UNCLAIMED")
-	assert.Empty(t, remote.refs)
+	assert.Empty(t, remote.claimKeys())
 }
 
 // Validates: R-6.10.23
@@ -1618,9 +1929,9 @@ func TestNightlyCheckPrunesConfirmedFixesAndExpiredStaleClaims(t *testing.T) {
 
 // Validates: R-6.10.23, R-6.10.40
 //
-// A checkout that may not push claim refs, as a Claude Code cloud session may
-// push only its own branch, keeps a retired claim and says so: the claim
-// blocks no one, and a run that can push deletes it.
+// Credentials that may not write the repository's issues keep a retired
+// claim, and the check says so: the claim blocks no one, and a check whose
+// credentials may write issues deletes it.
 func TestNightlyCheckReportsARetiredClaimItMayNotDelete(t *testing.T) {
 	t.Parallel()
 
@@ -1629,28 +1940,30 @@ func TestNightlyCheckReportsARetiredClaimItMayNotDelete(t *testing.T) {
 		State: nightlyStateFixed, Owner: nightlyTestOther, FixCommit: "fix1", Jobs: []string{nightlyTestE2EJob},
 	})
 	remote.ancestors["fix1.."+nightlyTestRunHead] = true
-	remote.pushForbidden = true
+	remote.claimWritesForbidden = true
 
 	out, err := runNightlyCheck(t, remote)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"e2e.TestConfirmed"}, remote.claimKeys())
-	assert.Contains(t, out, "nightly: kept the retired claim on e2e.TestConfirmed: this checkout may not push claim refs")
+	assert.Contains(t, out, "nightly: kept the retired claim on e2e.TestConfirmed: GitHub refused to delete it")
 }
 
 // Validates: R-6.10.23, R-6.10.40
 //
-// Taking a claim must reach GitHub: where claim refs may not be pushed, a red
-// night fails the check naming why, instead of leaving the failure unowned.
-func TestNightlyCheckFailsToClaimWhereClaimRefsMayNotBePushed(t *testing.T) {
+// Taking a claim must reach GitHub: where GitHub refuses a claim write with
+// 403, a red night fails the check naming why, instead of leaving the
+// failure unowned.
+func TestNightlyCheckFailsToClaimWhereClaimsMayNotBeWritten(t *testing.T) {
 	t.Parallel()
 
 	remote := failingNightlyRemote(t)
-	remote.pushForbidden = true
+	remote.claimWritesForbidden = true
 
 	_, err := runNightlyCheck(t, remote)
-	require.ErrorIs(t, err, errNightlyClaimRefsForbidden)
+	require.ErrorIs(t, err, errNightlyClaimsForbidden)
 	assert.Empty(t, remote.claimKeys())
+	assert.Empty(t, remote.issues, "no claim issue was opened")
 }
 
 // Validates: R-6.10.23
@@ -1690,9 +2003,11 @@ func TestNightlyCheckKeepsAFixedClaimWhoseJobDidNotPass(t *testing.T) {
 
 // Validates: R-6.10.23
 //
-// Claims written before keys named their package are stale: the check names
-// each one and how to delete it, and replaces one whose key fails again; it
-// never ignores one or reads it as the claim of another test.
+// Claims written before keys named their package are stale, and so is a
+// claim whose head names another key than the one its issue was opened for:
+// the check names each one by its issue and how to delete it, and replaces
+// one whose key fails again; it never ignores one or reads it as the claim of
+// another test.
 func TestNightlyCheckReportsAnOldFormatClaimAsStale(t *testing.T) {
 	t.Parallel()
 
@@ -1700,21 +2015,22 @@ func TestNightlyCheckReportsAnOldFormatClaimAsStale(t *testing.T) {
 	remote.jobs = nightlyRunView(t, map[string]string{"stress": checkConclusionFailure})
 	remote.jobLogs["13"] = "the stress step never started\n"
 	fresh := nightlyTestNow().Add(-time.Hour).Format(time.RFC3339)
-	remote.seedOldFormat(nightlyTestStale, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther, At: fresh})
+	old := remote.seedOldFormat(nightlyTestStale, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther, At: fresh})
 	remote.seedOldFormat("job-stress", &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther, At: fresh})
-	const misnamed = "internal-sync.TestPlanner"
-	remote.seedRecord(misnamed, "internal/sync.TestPlanner", &nightlyClaim{
-		State: nightlyStateClaimed, Format: nightlyClaimFormat, Owner: nightlyTestOther, At: fresh,
+	misnamed := remote.seed("internal-sync.TestPlanner", &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther, At: fresh})
+	remote.seedClaimComment(misnamed, nightlyClaimBodyVersion, &nightlyClaim{
+		State: nightlyStateClaimed, Key: "internal/sync.TestPlanner", Format: nightlyClaimFormat, Owner: nightlyTestOther, At: fresh,
 	})
 
 	out, err := runNightlyCheck(t, remote)
 	require.NoError(t, err)
 
-	assert.Contains(t, out, nightlyTestStale+": stale claim")
-	assert.Contains(t, out, misnamed+": stale claim", "a record at a ref its key does not name is stale")
+	assert.Contains(t, out, nightlyClaimIssueName(old.number)+": stale claim")
+	assert.Contains(t, out, nightlyClaimIssueName(misnamed.number)+": stale claim",
+		"a claim whose head names another key than its issue is stale")
 	assert.Contains(t, out, "devtool nightly release")
-	assert.Contains(t, remote.refs, nightlyTestStale, "the check reports a stale claim; release deletes it")
-	assert.Contains(t, remote.refs, misnamed)
+	assert.True(t, old.open, "the check reports a stale claim; release deletes it")
+	assert.True(t, misnamed.open)
 	replaced, ok := remote.claim("job-stress")
 	require.True(t, ok)
 	assert.Equal(t, nightlyTestOwner, replaced.Owner, "a failing key's stale claim is replaced, not held")
@@ -1731,13 +2047,13 @@ func TestNightlyPreMergeGateRequiresHeldClaimsInPRBody(t *testing.T) {
 	remote.seed("TestSomeoneElses", &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther})
 
 	remote.prBody = "## Summary\nUnrelated change."
-	_, err := requireNightlyClaimsInPR(t.Context(), remote, newGHClient(remote, nil), "/repo", 7)
+	_, err := requireNightlyClaimsInPR(t.Context(), newGHClient(remote, nil), "/repo", 7)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), nightlyTestKey)
 	assert.NotContains(t, err.Error(), "TestSomeoneElses")
 
 	remote.prBody = "## Nightly failures\n- " + nightlyTestKey + ": reruns sync until it converges."
-	head, err := requireNightlyClaimsInPR(t.Context(), remote, newGHClient(remote, nil), "/repo", 7)
+	head, err := requireNightlyClaimsInPR(t.Context(), newGHClient(remote, nil), "/repo", 7)
 	require.NoError(t, err)
 	assert.Equal(t, nightlyTestOwner, head)
 }
@@ -1770,7 +2086,7 @@ func TestNightlyPreMergeGateMatchesWholeKeys(t *testing.T) {
 		remote.prBody = body
 		remote.seed(key, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOwner})
 
-		_, err := requireNightlyClaimsInPR(t.Context(), remote, newGHClient(remote, nil), "/repo", 7)
+		_, err := requireNightlyClaimsInPR(t.Context(), newGHClient(remote, nil), "/repo", 7)
 		assert.Equal(t, want, err == nil, "body %q", body)
 	}
 }
@@ -1796,7 +2112,7 @@ func TestDODPreMergeNightlyGatesAndRenewsThePRHeadsClaims(t *testing.T) {
 	err := runDODPreMergeNightly(t.Context(), remote, gh, "/repo", 7, nightlyTestNow, &stdout)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), nightlyTestKey)
-	assert.Empty(t, remote.pushes, "a refused gate renews nothing")
+	assert.Empty(t, remote.claimWrites, "a refused gate renews nothing")
 
 	remote.prBody = "## Nightly failures\n- " + nightlyTestKey + ": fixed."
 	require.NoError(t, runDODPreMergeNightly(t.Context(), remote, gh, "/repo", 7, nightlyTestNow, &stdout))
@@ -1817,7 +2133,7 @@ func TestNightlyPostMergeMarksHeldClaimsFixed(t *testing.T) {
 	remote.seed(nightlyTestKey, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOwner})
 	remote.seed("TestSomeoneElses", &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther})
 
-	require.NoError(t, markNightlyClaimsFixed(t.Context(), remote, "/repo", nightlyTestOwner, "merge1", nightlyTestNow()))
+	require.NoError(t, markNightlyClaimsFixed(t.Context(), newGHClient(remote, nil), "/repo", nightlyTestOwner, "merge1", nightlyTestNow()))
 
 	mine, _ := remote.claim(nightlyTestKey)
 	assert.Equal(t, nightlyStateFixed, mine.State)
@@ -1831,7 +2147,7 @@ func TestNightlyReleaseDeletesOnlyTheHoldersClaim(t *testing.T) {
 	t.Parallel()
 
 	remote := newClaimRemote(t, checkConclusionSuccess)
-	remote.seed(nightlyTestKey, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther})
+	issue := remote.seed(nightlyTestKey, &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther})
 
 	release := NightlyOptions{RepoRoot: "/repo", Action: NightlyActionRelease, Branch: nightlyTestOwner, Key: nightlyTestKey}
 	require.Error(t, RunNightly(t.Context(), remote, release))
@@ -1842,24 +2158,35 @@ func TestNightlyReleaseDeletesOnlyTheHoldersClaim(t *testing.T) {
 	require.NoError(t, RunNightly(t.Context(), remote, release))
 	_, held = remote.claim(nightlyTestKey)
 	assert.False(t, held)
+	assert.False(t, issue.open, "a deleted claim's issue is closed")
 }
 
 // Validates: R-6.10.23
 //
-// A stale claim, here of the old key format, belongs to no current increment, so any
-// branch may release it.
+// A stale claim, here of the old key format, belongs to no current
+// increment, so any branch may release it, by its key or by its issue.
 func TestNightlyReleaseDeletesAStaleOldFormatClaim(t *testing.T) {
 	t.Parallel()
 
 	remote := newClaimRemote(t, checkConclusionSuccess)
-	remote.seedOldFormat(nightlyTestStale, &nightlyClaim{State: nightlyStateFixed, Owner: nightlyTestOther, FixCommit: "fix1"})
+	byKey := remote.seedOldFormat(nightlyTestStale, &nightlyClaim{State: nightlyStateFixed, Owner: nightlyTestOther, FixCommit: "fix1"})
+	byIssue := remote.seedOldFormat("TestOtherOldStyle", &nightlyClaim{State: nightlyStateFixed, Owner: nightlyTestOther, FixCommit: "fix1"})
 
-	var stdout bytes.Buffer
-	require.NoError(t, RunNightly(t.Context(), remote, NightlyOptions{
-		RepoRoot: "/repo", Action: NightlyActionRelease, Branch: nightlyTestOwner, Key: nightlyTestStale, Stdout: &stdout,
-	}))
-	assert.NotContains(t, remote.refs, nightlyTestStale)
-	assert.Contains(t, stdout.String(), "stale")
+	for _, release := range []struct {
+		key   string
+		issue *fakeIssue
+	}{
+		{key: nightlyTestStale, issue: byKey},
+		{key: nightlyClaimIssueName(byIssue.number), issue: byIssue},
+	} {
+		var stdout bytes.Buffer
+		require.NoError(t, RunNightly(t.Context(), remote, NightlyOptions{
+			RepoRoot: "/repo", Action: NightlyActionRelease, Branch: nightlyTestOwner, Key: release.key, Stdout: &stdout,
+		}))
+		assert.False(t, release.issue.open, "release --key %s closes the stale claim's issue", release.key)
+		assert.Contains(t, stdout.String(), "stale")
+	}
+	assert.Empty(t, remote.claimKeys())
 }
 
 // Validates: R-6.10.23
@@ -1875,7 +2202,7 @@ func TestNightlyRenewClaimsRestampsOnlyTheOwnersClaims(t *testing.T) {
 	remote.seed("e2e.TestFixedHere", &nightlyClaim{State: nightlyStateFixed, Owner: nightlyTestOwner, At: old, FixCommit: "fix1"})
 	remote.seed("e2e.TestSomeoneElses", &nightlyClaim{State: nightlyStateClaimed, Owner: nightlyTestOther, At: old})
 
-	renewed, err := renewNightlyClaims(t.Context(), remote, "/repo", nightlyTestOwner, nightlyTestNow())
+	renewed, err := renewNightlyClaims(t.Context(), newGHClient(remote, nil), "/repo", nightlyTestOwner, nightlyTestNow())
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{nightlyTestKey}, renewed)
@@ -1908,7 +2235,7 @@ func TestDODNightlyStartFailsWithOneSentenceWhenGitHubKeepsFailing(t *testing.T)
 		"GitHub answered HTTP 502 on all %d attempts at nightly run list "+
 			"(GET repos/{owner}/{repo}/actions/workflows/ci.yml/runs); run it again once GitHub answers",
 		githubAttempts), err.Error())
-	assert.Empty(t, remote.pushes)
+	assert.Empty(t, remote.claimWrites)
 }
 
 // Validates: R-6.10.16, R-6.10.23
@@ -1957,7 +2284,7 @@ func TestDODNightlyLaterStagesReportARedNightlyWithoutFailing(t *testing.T) {
 		DODStagePostMerge, nightlyTestOwner, nightlyTestNow, &stdout))
 
 	assert.Contains(t, stdout.String(), "e2e: failed")
-	assert.Empty(t, remote.pushes, "a later stage claims nothing")
+	assert.Empty(t, remote.claimWrites, "a later stage claims nothing")
 
 	remote.runs = "[]"
 	stdout.Reset()
