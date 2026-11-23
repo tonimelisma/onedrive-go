@@ -1277,7 +1277,7 @@ func (w *exWorld) remoteFolderAt(dir string) (string, bool) {
 func (w *exWorld) exLocalDelete(a *syncdomain.Action) bool {
 	item, ok := w.local[a.Path]
 	if !ok {
-		deleteSyncedTree(w.baseline, a.Path)
+		delete(w.baseline, a.Path)
 
 		return true
 	}
@@ -1291,7 +1291,7 @@ func (w *exWorld) exLocalDelete(a *syncdomain.Action) bool {
 		return false
 	}
 	delete(w.local, a.Path)
-	deleteSyncedTree(w.baseline, a.Path)
+	delete(w.baseline, a.Path)
 
 	return true
 }
@@ -1333,7 +1333,9 @@ func (w *exWorld) exRemoteDelete(a *syncdomain.Action) bool {
 		return false
 	}
 	w.deleteTree(w.remote, at)
-	deleteSyncedTree(w.baseline, a.Path)
+	// The store's commit removes the baseline row at the path alone
+	// (commitDelete): a synced item that left the folder keeps its row.
+	delete(w.baseline, a.Path)
 
 	return true
 }
@@ -1420,7 +1422,7 @@ func (w *exWorld) exRemoteFolderCreate(a *syncdomain.Action) bool {
 		remote = pmItem{id: "item-" + strconv.Itoa(w.next()), folder: true, etag: w.next()}
 		w.remote[at] = remote
 	}
-	w.baseline[a.Path] = pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag}
+	w.recordSynced(a.Path, pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag})
 
 	return true
 }
@@ -1465,7 +1467,7 @@ func (w *exWorld) exLocalFolderCreate(a *syncdomain.Action) bool {
 		local = pmItem{folder: true, inode: uint64(w.next())}
 		w.local[a.Path] = local
 	}
-	w.baseline[a.Path] = pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag}
+	w.recordSynced(a.Path, pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag})
 
 	return true
 }
@@ -2189,4 +2191,127 @@ func requireExhaustiveGolden(t *testing.T, results []exResult, complete bool) {
 			t.Logf("%s: %s", id, byID[id].detail)
 		}
 	}
+}
+
+// Validates: R-2.17.6
+//
+// Two pairs that ended with one content at two paths: here p renamed q
+// while OneDrive renamed x to q and moved p/f onto x, where the two q
+// folders merge and f's item ID places it at x on OneDrive; and here x
+// moved into p and p renamed x, a rotation through nesting, while OneDrive
+// moved p/f into x, where p's identity places it at x here and the rotation
+// is replayed on OneDrive. f ends once on each side, on every run with each
+// create refused once.
+func TestPlannerPairs_AFileMovedOnOneDriveBesideAFolderRenamedOrRotatedHereEndsOnce(t *testing.T) {
+	t.Parallel()
+
+	for _, pair := range []exPair{
+		{
+			start: exStartNamed(t, "synced"),
+			local: []exEdit{{kind: exMoveFolder, from: "p", to: "q"}},
+			remote: []exEdit{
+				{kind: exMoveFolder, from: "x", to: "q"},
+				{kind: exMoveFile, from: "p/f", to: "x"},
+			},
+		},
+		{
+			start: exStartNamed(t, "synced"),
+			local: []exEdit{
+				{kind: exMoveFolder, from: "x", to: "p/x"},
+				{kind: exMoveFolder, from: "p", to: "x"},
+			},
+			remote: []exEdit{{kind: exMoveFile, from: "p/f", to: "x/f"}},
+		},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}
+
+// Validates: R-2.17.6
+//
+// From the held start, f's move here into the new x waits, while OneDrive
+// moves f into X2 and deletes p (or p is deleted here), or moves z onto f's
+// synced path p/f, or z moves onto p/f here while OneDrive moves it into x
+// or X2. The waiting item keeps its synced row: a move of another item onto
+// that path waits with it, and a download of an item whose move waits, at a
+// path the item never had, waits too. Each file ends once on each side, on
+// every run with each create refused once.
+func TestPlannerPairs_AnItemWhoseMoveWaitsKeepsItsRowAndIsNeverCopied(t *testing.T) {
+	t.Parallel()
+
+	held := exStartNamed(t, "held")
+	for _, pair := range []exPair{
+		{start: held, remote: []exEdit{
+			{kind: exMoveFile, from: "p/f", to: "X2/f"}, {kind: exDeleteFolder, from: "p"},
+		}},
+		{start: held, local: []exEdit{{kind: exDeleteFolder, from: "p"}}, remote: []exEdit{
+			{kind: exMoveFile, from: "p/f", to: "X2/f"},
+		}},
+		{start: held, remote: []exEdit{
+			{kind: exMoveFile, from: "p/f", to: "X2/f"}, {kind: exMoveFile, from: "z", to: "p/f"},
+		}},
+		{start: held, local: []exEdit{{kind: exMoveFile, from: "z", to: "p/f"}}, remote: []exEdit{
+			{kind: exMoveFile, from: "z", to: "X2/z"},
+		}},
+		{start: held, local: []exEdit{{kind: exMoveFile, from: "z", to: "p/f"}}, remote: []exEdit{
+			{kind: exMoveFile, from: "z", to: "x/z"},
+		}},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}
+
+// Validates: R-2.17.10, R-2.17.6
+//
+// From the held start (x renamed x2 here while OneDrive keeps it as x, a new
+// x made here), a file g made in the new x here and one made in the old x on
+// OneDrive are in different folders: OneDrive's is downloaded into x2, where
+// the old x sits here, and no conflict copy is made. The copy, rebased to
+// x2/g with the download, renamed nothing the first pass and the downloaded
+// g every pass after. Neither that pair nor an edit of f in the new x while
+// OneDrive moved f into the old x plans any action twice, and both keep
+// every invariant.
+func TestPlannerPairs_AFileOneDriveMadeInAHeldFolderIsDownloadedWithoutAConflictCopy(t *testing.T) {
+	t.Parallel()
+
+	held := exStartNamed(t, "held")
+	for _, pair := range []exPair{
+		{start: held, local: []exEdit{{kind: exCreateFile, to: "x/g"}}, remote: []exEdit{{kind: exCreateFile, to: "x/g"}}},
+		{start: held, local: []exEdit{{kind: exEditFile, from: "x/f"}}, remote: []exEdit{{kind: exMoveFile, from: "p/f", to: "x/f"}}},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+		registerExCachingDriver(t)
+		r := newExRun(t, exQuietStore(t), &pair)
+		r.run()
+		assert.Empty(t, exActionsPlannedTwice(r.log), "%s plans an action again on a later pass:\n%s",
+			pair.id(), strings.Join(r.log, "\n"))
+	}
+}
+
+// exActionsPlannedTwice lists the action lines of a run's log that more than
+// one pass planned alike: work a pass did, or meant to do, done again.
+func exActionsPlannedTwice(log []string) []string {
+	seen := map[string]int{}
+	pass := 0
+	for _, entry := range log {
+		for _, line := range strings.Split(entry, "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case strings.HasPrefix(line, "pass "):
+				pass++
+			case pass == 0, line == "", strings.HasPrefix(line, "local "), strings.HasPrefix(line, "remote "):
+			default:
+				seen[line]++
+			}
+		}
+	}
+	var twice []string
+	for line, n := range seen {
+		if n > 1 {
+			twice = append(twice, line)
+		}
+	}
+	slices.Sort(twice)
+
+	return twice
 }

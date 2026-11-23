@@ -131,6 +131,7 @@ func (p *Planner) planBuiltActions(
 	held := slices.Concat(waiting, trimmedActions, droppedCreateActions)
 	normalizedActions, withheld, withheldInMode := withholdDeletesOfHeldWork(
 		p.logger, normalizedActions, held, inputs, composition, mode)
+	normalizedActions = setAsideRemovedContent(p.logger, normalizedActions, inputs, mode)
 	if mount.ReleasesLocalTree {
 		normalizedActions = p.leaveOutNewLocalItems(normalizedActions, mode)
 	}
@@ -306,14 +307,24 @@ func rebaseLocalWritesToLocalFolderPositions(actions []syncdomain.Action, remote
 		return actions
 	}
 
-	rebased := make([]syncdomain.Action, len(actions))
-	copy(rebased, actions)
-	for i := range rebased {
-		if rebased[i].Type == syncdomain.ActionLocalMove || !writesLocally(&rebased[i]) ||
-			deletesWhatIsHere(&rebased[i]) {
+	rebased := make([]syncdomain.Action, 0, len(actions))
+	for i := range actions {
+		action := actions[i]
+		if action.Type == syncdomain.ActionLocalMove || !writesLocally(&action) || deletesWhatIsHere(&action) {
+			rebased = append(rebased, action)
 			continue
 		}
-		rebased[i].Path = rebaseThroughFolderMoves(rebased[i].Path, remoteToLocal)
+		at := rebaseThroughFolderMoves(action.Path, remoteToLocal)
+		if action.Type == syncdomain.ActionConflictCopy && at != action.Path {
+			// A conflict copy keeps the entry here at its path, which is
+			// not in the folder OneDrive's item is in: that folder sits
+			// elsewhere here, where the download lands with nothing to
+			// keep. Rebased there, the copy renamed nothing, or the
+			// download of an earlier pass, on every pass.
+			continue
+		}
+		action.Path = at
+		rebased = append(rebased, action)
 	}
 
 	return rebased

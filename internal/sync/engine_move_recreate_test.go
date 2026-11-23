@@ -644,6 +644,90 @@ func TestRunOnce_AFileOfAFolderRenamedHereMovedOnOneDriveOntoAFolderItDeletedEnd
 	requireScenarioQuietPlan(t, eng)
 }
 
+// Validates: R-2.17.6
+//
+// Here the folder docs was renamed shared, while OneDrive renamed the folder
+// archive to shared and moved docs/a.txt onto archive's old path. The two
+// shared folders merge as one made on both sides, so SQLite never read
+// archive's move, and a.txt, which OneDrive moved onto a path another synced
+// item had, read as a new file there: it was downloaded at archive while its
+// copy here went up again at shared/a.txt. The item ID places it at archive
+// on OneDrive, so its moves compose: OneDrive's place wins and a.txt moves
+// there here. One sync converges with a.txt once, nothing uploaded or
+// downloaded.
+func TestRunOnce_AFileOneDriveMovedOntoAPathItsFolderLeftWhileTheFolderMergedHereEndsOnce(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-docs", "root", "docs")
+	remote.addFile(t, "item-a", "item-docs", "a.txt", "a\n")
+	remote.addFolder("item-archive", "root", "archive")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Rename(local("docs"), local("shared")))
+	remote.moveAt(t, "archive", "shared")
+	remote.moveAt(t, "docs/a.txt", "archive")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes")
+	assert.Zero(t, superseded)
+
+	want := map[string]string{"archive": "a\n", "shared": "/"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "archive", remote.pathOf("item-a"), "a.txt is the item OneDrive moved")
+	assert.Zero(t, remote.uploads, "nothing is uploaded again")
+	assert.Equal(t, downloadsBefore, remote.downloads, "a.txt is moved here, not downloaded")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// Here the folder archive was moved into docs, and docs then renamed to
+// archive (a rotation through nesting), while OneDrive moved docs/a.txt into
+// archive. SQLite pairs a local move only onto a path no synced item had, so
+// it read docs as gone, deleted it on OneDrive, and a.txt, which this
+// computer carried along in docs, went up again as a new file beside
+// OneDrive's copy. The folder's identity places docs at archive here, and
+// the rotation is replayed on OneDrive: archive moves into docs at the path
+// docs has there, docs's move to archive then carries it, and a.txt moves
+// here into archive/archive, where OneDrive keeps it. One sync converges
+// with a.txt once, nothing uploaded or downloaded.
+func TestRunOnce_AFolderRotatedThroughNestingHereIsRotatedOnOneDrive(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-docs", "root", "docs")
+	remote.addFile(t, "item-a", "item-docs", "a.txt", "a\n")
+	remote.addFolder("item-archive", "root", "archive")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Rename(local("archive"), local("docs/archive")))
+	require.NoError(t, os.Rename(local("docs"), local("archive")))
+	remote.moveAt(t, "docs/a.txt", "archive/a.txt")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.LessOrEqual(t, runs, 2, "the syncs finish")
+	assert.Zero(t, superseded)
+
+	want := map[string]string{"archive": "/", "archive/archive": "/", "archive/archive/a.txt": "a\n"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "archive", remote.pathOf("item-docs"), "docs is renamed on OneDrive")
+	assert.Equal(t, "archive/archive", remote.pathOf("item-archive"), "archive is moved into docs on OneDrive")
+	assert.Equal(t, "archive/archive/a.txt", remote.pathOf("item-a"), "a.txt is the item OneDrive moved")
+	assert.Zero(t, remote.uploads, "nothing is uploaded again")
+	assert.Equal(t, downloadsBefore, remote.downloads, "a.txt is moved here, not downloaded")
+	assert.Empty(t, remote.deletes, "nothing is deleted")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-2.17.6, R-2.17.8
 //
 // Here the folder archive was deleted and notes.txt moved onto its path,
@@ -1449,6 +1533,159 @@ func moveFOutOfPIntoANewX(t *testing.T, local func(string) string, source string
 	require.NoError(t, os.Rename(local("x"), local("x2")))
 	require.NoError(t, os.Mkdir(local("x"), 0o750))
 	require.NoError(t, os.Rename(local(source), local("x/f")))
+}
+
+// Validates: R-2.17.6
+//
+// Here the file f, which the folder P holds, is moved into a new x while x's
+// rename to x2 collides with X2, made on OneDrive, so f's move here waits;
+// meanwhile OneDrive moves f out of P into X2, and:
+//   - P is deleted here: its delete runs, and the store removes only P's row,
+//     so the next pass still knows f;
+//   - OneDrive moves z onto P/f, f's synced path: z's move here waits for
+//     f's, as its commit would record z's row at that path and take f's,
+//     and the next pass, no longer knowing f, downloaded it into X2 and
+//     uploaded it again from x;
+//   - z is moved onto P/f here while OneDrive moves it into x: its download
+//     into x, where x sits here, waits with its move, as it wrote a second
+//     copy of z beside the one here.
+//
+// While the collision lasts nothing is uploaded. Once X2 is renamed away,
+// the syncs finish with each file once on each side, where OneDrive put it,
+// still the item it was, and nothing uploaded.
+func TestRunOnce_AFileWhoseMoveWaitsKeepsItsSyncedRowAndIsNeverCopied(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name          string
+		local, remote func(t *testing.T, local func(string) string, remote *moveScenarioRemote)
+		want          map[string]string
+		paths         map[string]string
+		deletes       []string
+	}{
+		{
+			name: "P deleted here",
+			local: func(t *testing.T, local func(string) string, _ *moveScenarioRemote) {
+				t.Helper()
+				require.NoError(t, os.Remove(local("P")))
+			},
+			remote: func(t *testing.T, _ func(string) string, remote *moveScenarioRemote) {
+				t.Helper()
+				remote.moveAt(t, "P/f", "X2/f")
+			},
+			want:    map[string]string{"z": "z\n"},
+			paths:   map[string]string{"item-f": "r1/f"},
+			deletes: []string{"item-P"},
+		},
+		{
+			name: "z moved onto P/f on OneDrive",
+			remote: func(t *testing.T, _ func(string) string, remote *moveScenarioRemote) {
+				t.Helper()
+				remote.moveAt(t, "P/f", "X2/f")
+				remote.moveAt(t, "z", "P/f")
+			},
+			want:  map[string]string{"P": "/", "P/f": "z\n"},
+			paths: map[string]string{"item-f": "r1/f", "item-z": "P/f"},
+		},
+		{
+			name: "z moved onto P/f here and into x on OneDrive",
+			local: func(t *testing.T, local func(string) string, _ *moveScenarioRemote) {
+				t.Helper()
+				require.NoError(t, os.Rename(local("z"), local("P/f")))
+			},
+			remote: func(t *testing.T, _ func(string) string, remote *moveScenarioRemote) {
+				t.Helper()
+				remote.moveAt(t, "z", "x/z")
+			},
+			want:  map[string]string{"P": "/", "x/f": "f\n", "x2/z": "z\n"},
+			paths: map[string]string{"item-f": "x/f", "item-z": "x2/z"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+			remote.addFolder("item-x", "root", "x")
+			remote.addFile(t, "item-keep", "item-x", "keep.txt", "keep\n")
+			remote.addFolder("item-P", "root", "P")
+			remote.addFile(t, "item-f", "item-P", "f", "f\n")
+			remote.addFile(t, "item-z", "root", "z", "z\n")
+			eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+			local := scenarioLocalPath(syncRoot)
+			moveFOutOfPIntoANewX(t, local, "P/f")
+			if tc.local != nil {
+				tc.local(t, local, remote)
+			}
+			remote.mkdirAt(t, "X2")
+			tc.remote(t, local, remote)
+
+			runScenarioPass(t, eng)
+			assert.Zero(t, remote.uploads, "nothing is uploaded while f's move waits")
+
+			remote.moveAt(t, "X2", "r1")
+			runs, superseded := runScenarioUntilDone(t, eng)
+			assert.LessOrEqual(t, runs, 2, "the syncs finish once X2 is renamed away")
+			assert.Zero(t, superseded)
+			want := map[string]string{"x2": "/", "x2/keep.txt": "keep\n", "x": "/", "r1": "/"}
+			if tc.paths["item-f"] == "r1/f" {
+				want["r1/f"] = "f\n"
+			}
+			maps.Copy(want, tc.want)
+			assert.Equal(t, want, remote.tree(), "OneDrive")
+			assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+			for item, at := range tc.paths {
+				assert.Equal(t, at, remote.pathOf(item), "%s is still the item it was", item)
+			}
+			assert.Zero(t, remote.uploads, "nothing is uploaded again")
+			assert.ElementsMatch(t, tc.deletes, remote.deletes)
+			assert.NotContains(t, logs.String(), "dependency cycle")
+			requireScenarioQuietPlan(t, eng)
+		})
+	}
+}
+
+// Validates: R-2.17.10, R-2.17.6
+//
+// Here x is renamed x2, a new x is made and f is moved into it, while X2,
+// which OneDrive takes for x2's name, is made on OneDrive, so x's move
+// waits; a file g is made in the new x here and one in the old x on
+// OneDrive. The two are in different folders: OneDrive's g is downloaded
+// into x2, where the old x sits here, and nothing is renamed to a conflict
+// copy. The copy, rebased to x2/g with the download, found nothing to keep
+// the first sync and renamed the downloaded g every sync after. Once X2 is
+// gone, the syncs finish with both files on both sides and no conflict copy.
+func TestRunOnce_AFileOneDriveMadeInAFolderWhoseMoveWaitsIsDownloadedWithoutAConflictCopy(t *testing.T) {
+	t.Parallel()
+
+	remote := newFolderPairScenarioRemote(t)
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	moveFIntoANewXHere(t, syncRoot)
+	syncfixture.WriteLocalFile(t, syncRoot, "x/g", "here\n")
+	remote.mkdirAt(t, "X2")
+	remote.addFile(t, "item-g", "item-x", "g", "online\n")
+
+	for range 2 {
+		runScenarioPass(t, eng)
+		local := harnessLocalTree(t, syncRoot)
+		assert.Equal(t, "online\n", local["x2/g"], "OneDrive's g is downloaded into the old x")
+		assert.Equal(t, "here\n", local["x/g"], "the g made here stays in the new x")
+		for p := range local {
+			assert.NotContains(t, p, ".conflict-", "nothing is kept as a conflict copy")
+		}
+	}
+
+	remote.deleteAt(t, "X2")
+	_, superseded := runScenarioUntilDone(t, eng)
+	assert.Zero(t, superseded)
+	want := map[string]string{
+		"x2": "/", "x2/keep.txt": "keep\n", "x2/g": "online\n",
+		"x": "/", "x/g": "here\n", "x/f": "/", "x/f/c.txt": "c\n",
+	}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "x2/g", remote.pathOf("item-g"), "OneDrive's g is still the item it was")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
 }
 
 // runHeldMoveOutOfADeletedFolder syncs once while OneDrive holds
@@ -2269,6 +2506,79 @@ func TestRunOnce_AFileMovedUpOntoItsRenamedFoldersPathStaysOnOneDriveUntilItsUpl
 			assert.Equal(t, tc.deletes, remote.deletes)
 			if refuse {
 				assert.Equal(t, "P", remote.pathOf("item-f"), "f is moved, still the item it was")
+			}
+			assert.NotContains(t, logs.String(), "dependency cycle")
+			requireScenarioQuietPlan(t, eng)
+		})
+	}
+}
+
+// Validates: R-2.17.12, R-2.17.2
+//
+// Here the file f is moved up out of its folder P, P deleted and f moved onto
+// P's path. SQLite plans the delete of P/f, the delete of P, and the upload of
+// f at P, which waits for P's delete, which waits for P/f's: the delete of
+// P/f cannot also wait for the upload. Run first, it left OneDrive without f's
+// content for as long as the upload failed. The planner moves P/f aside on
+// OneDrive instead, to a free temporary name above the deleted folder, and
+// the next pass deletes it once the upload holds the content, or, with the
+// upload refused once, moves it back to P, still the item it was. No delete
+// the sync sends leaves OneDrive without f's content, and the syncs finish
+// with both sides holding f at P.
+func TestRunOnce_AFileMovedUpOntoItsDeletedFoldersPathStaysOnOneDriveUntilItsUploadRuns(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		refuse  bool
+		deletes []string
+	}{
+		{refuse: false, deletes: []string{"item-P", "item-f"}},
+		{refuse: true, deletes: []string{"item-P"}},
+	} {
+		refuse := tc.refuse
+		t.Run(fmt.Sprintf("upload refused once: %v", refuse), func(t *testing.T) {
+			t.Parallel()
+
+			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+			remote.addFolder("item-P", "root", "P")
+			remote.addFile(t, "item-f", "item-P", "f", "f\n")
+			logs := &syncfixture.SyncLockedBuffer{}
+			logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
+			eng, syncRoot := newTestEngineWithLogger(t, remote.client(t), logger)
+			clock := syncfixture.NewManualClock(time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC))
+			installManualClockForTestEngine(eng, clock)
+			runScenarioPass(t, eng)
+			local := scenarioLocalPath(syncRoot)
+			require.NoError(t, os.Rename(local("P/f"), local("g")))
+			require.NoError(t, os.Remove(local("P")))
+			require.NoError(t, os.Rename(local("g"), local("P")))
+			dropping := countDeletesDropping(remote, "f\n")
+			var uploads atomic.Int32
+			remote.mu.Lock()
+			remote.refuseCreate = func(_, name string) error {
+				if !refuse || name != "P" || uploads.Add(1) > 1 {
+					return nil
+				}
+				return &graph.GraphError{StatusCode: http.StatusBadRequest, Code: "invalidRequest", Err: graph.ErrBadRequest}
+			}
+			remote.mu.Unlock()
+
+			report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
+			require.NoError(t, err)
+			assertOneDriveHolds(t, remote, "f\n", "after the first sync")
+			for run := 1; report.LeftWork().Any(); run++ {
+				require.LessOrEqual(t, run, scenarioRunLimit, "the syncs never finish: %+v", report.LeftWork())
+				clock.Advance(time.Hour)
+				report = runScenarioPass(t, eng)
+				assertOneDriveHolds(t, remote, "f\n", "after sync %d", run)
+			}
+			assert.Zero(t, dropping(), "no delete leaves OneDrive without f's content")
+			want := map[string]string{"P": "f\n"}
+			assert.Equal(t, want, remote.tree(), "OneDrive")
+			assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+			assert.ElementsMatch(t, tc.deletes, remote.deletes)
+			if refuse {
+				assert.Equal(t, "P", remote.pathOf("item-f"), "f is moved back, still the item it was")
 			}
 			assert.NotContains(t, logs.String(), "dependency cycle")
 			requireScenarioQuietPlan(t, eng)

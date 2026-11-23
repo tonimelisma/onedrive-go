@@ -316,6 +316,34 @@ func TestExplainPlanDifferences_BaselineUpdatesAloneAreBookkeeping(t *testing.T)
 	assert.Equal(t, "b", unexplained[0].Path)
 }
 
+// A synced file the current plan moves aside on OneDrive, where the shadow
+// deletes it, explains the differences at both ends of the move, and only
+// there.
+//
+// Validates: R-2.3.1, R-2.17.12
+func TestExplainPlanDifferences_ADeleteSetAsideExplainsBothEnds(t *testing.T) {
+	t.Parallel()
+
+	aside := "x/c" + MoveSwapInfix + "1.md"
+	current := &syncdomain.ActionPlan{Actions: []syncdomain.Action{
+		{Type: syncdomain.ActionRemoteMove, Path: aside, OldPath: "x/c.md"},
+	}}
+	shadow := &syncdomain.ActionPlan{Actions: []syncdomain.Action{
+		{Type: syncdomain.ActionRemoteDelete, Path: "x/c.md"},
+	}}
+	in := &IdentityInputs{Baseline: syncdomain.NewBaselineSnapshot(nil)}
+	diffs := []PlanDifference{
+		{Path: aside, Current: []string{"remote_move " + aside + " <- x/c.md"}},
+		{Path: "x/c.md", Shadow: []string{"remote_delete x/c.md"}},
+		{Path: "y", Shadow: []string{"remote_delete y"}},
+	}
+	unexplained := ExplainPlanDifferences(in, current, shadow, diffs)
+	assert.Equal(t, reasonSetAside, diffs[0].Reason)
+	assert.Equal(t, reasonSetAside, diffs[1].Reason)
+	require.Len(t, unexplained, 1)
+	assert.Equal(t, "y", unexplained[0].Path)
+}
+
 // A local identity at two local paths, and an item ID or local identity at
 // two baseline paths, explain the differences at those paths only.
 //

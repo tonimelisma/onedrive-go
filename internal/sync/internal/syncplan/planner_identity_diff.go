@@ -1,6 +1,7 @@
 package syncplan
 
 import (
+	"path"
 	"slices"
 	"sort"
 	"strings"
@@ -124,6 +125,8 @@ const (
 		"away from here and the other plans it in place, so the difference is the move's"
 	reasonEmptiedFolder = "a folder above work a known reason covers: the identity planner " +
 		"deletes the folder once it deletes or moves out what is below it, where the current planner keeps it"
+	reasonSetAside = "a delete set aside: the current planner moves a synced file it deletes on OneDrive " +
+		"to a temporary name while the upload of its content needs the path, where the identity planner deletes it"
 )
 
 // ExplainPlanDifferences sets each difference's reason, from the shape of
@@ -141,6 +144,7 @@ func ExplainPlanDifferences(in *IdentityInputs, current, shadow *syncdomain.Acti
 	moved, replaced := identityDifferenceRoots(in)
 	copies := append(conflictCopyPaths(current), conflictCopyPaths(shadow)...)
 	shared := sharedIdentityPaths(in)
+	asides := setAsidePaths(current, shadow)
 	issues := make([]string, 0, len(in.ObservationIssues))
 	for i := range in.ObservationIssues {
 		issues = append(issues, in.ObservationIssues[i].Path)
@@ -162,6 +166,8 @@ func ExplainPlanDifferences(in *IdentityInputs, current, shadow *syncdomain.Acti
 			d.Reason = reasonSharedLocalIdentity
 		case onlyBaselineUpdates(d):
 			d.Reason = reasonBookkeeping
+		case asides[d.Path]:
+			d.Reason = reasonSetAside
 		default:
 			unexplained = append(unexplained, *d)
 		}
@@ -347,6 +353,31 @@ func onlyBaselineUpdates(d *PlanDifference) bool {
 	}
 
 	return true
+}
+
+// setAsidePaths lists both ends of each remote move of the current plan that
+// sets a synced file aside (setAsideRemovedContent) where the shadow plan
+// deletes it: the move to a parked name (MoveSwapInfix) whose source the
+// shadow deletes on OneDrive.
+func setAsidePaths(current, shadow *syncdomain.ActionPlan) map[string]bool {
+	paths := map[string]bool{}
+	if current == nil || shadow == nil {
+		return paths
+	}
+	shadowDeletes := map[string]bool{}
+	for i := range shadow.Actions {
+		if shadow.Actions[i].Type == syncdomain.ActionRemoteDelete {
+			shadowDeletes[shadow.Actions[i].Path] = true
+		}
+	}
+	for i := range current.Actions {
+		a := &current.Actions[i]
+		if a.Type == syncdomain.ActionRemoteMove && strings.Contains(path.Base(a.Path), MoveSwapInfix) && shadowDeletes[a.OldPath] {
+			paths[a.Path], paths[a.OldPath] = true, true
+		}
+	}
+
+	return paths
 }
 
 func conflictCopyPaths(plan *syncdomain.ActionPlan) []string {

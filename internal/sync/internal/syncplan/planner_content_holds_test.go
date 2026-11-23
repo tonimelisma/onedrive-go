@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -207,4 +208,48 @@ func TestPlanBuiltActions_ARemovalOfContentTheOtherSideMovedWaitsForItsCreate(t 
 	require.NoError(t, err)
 	require.Len(t, carried.Actions, 2)
 	assert.Equal(t, [][]int{{1}, nil}, carried.Deps)
+}
+
+// Validates: R-2.17.12
+//
+// The upload of a file here needs the path the delete of its synced copy on
+// OneDrive frees: f moved up onto its deleted folder's path (from the held
+// start, and from the synced one with the folder renamed first while OneDrive
+// gave another folder its new name), or z moved onto p/f while a folder takes
+// z's name. The synced copy moves aside on OneDrive instead of going, so no
+// pass leaves OneDrive without the content, with every create of every pass
+// refused once too, and the passes converge.
+func TestPlannerPairs_AFileUploadedOntoThePathItsDeleteFreesIsSetAsideOnOneDrive(t *testing.T) {
+	t.Parallel()
+
+	for _, pair := range []exPair{
+		{
+			start: exStartNamed(t, "held"),
+			local: []exEdit{{kind: exDeleteFolder, from: "p"}, {kind: exMoveFile, from: "x/f", to: "p"}},
+		},
+		{
+			start: exStartNamed(t, "held"),
+			local: []exEdit{{kind: exMoveFile, from: "z", to: "p/f"}, {kind: exMoveFolder, from: "x", to: "z"}},
+		},
+		{
+			start:  exStartNamed(t, "synced"),
+			local:  []exEdit{{kind: exMoveFolder, from: "p", to: "q"}, {kind: exMoveFile, from: "q/f", to: "p"}},
+			remote: []exEdit{{kind: exMoveFolder, from: "x", to: "q"}},
+		},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}
+
+// Validates: R-2.17.12
+//
+// An aside name is a parked move's name in the nearest folder above the
+// entry that no folder delete of the plan removes, and skips the names taken.
+func TestAsidePath_ParksAboveTheDeletedFoldersUnderAFreeName(t *testing.T) {
+	t.Parallel()
+
+	taken := map[namekey.PathKey]bool{namekey.OfPath("f" + MoveSwapInfix + "1.txt"): true}
+	assert.Equal(t, "f"+MoveSwapInfix+"2.txt", asidePath("a/b/f.txt", []string{"a/b", "a"}, taken))
+	assert.Equal(t, "a/f"+MoveSwapInfix+"1.txt", asidePath("a/b/f.txt", []string{"a/b"}, taken))
+	assert.Equal(t, "a/b/f"+MoveSwapInfix+"1.txt", asidePath("a/b/f.txt", nil, taken))
 }

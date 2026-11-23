@@ -167,7 +167,8 @@ type PlanFollowUp struct {
 	// Dropped are actions removed until the next pass: a create onto a path
 	// a composed item still holds or at or below the path of a new folder a
 	// deferred item moves into at its own path (moveComposition.ownLandings),
-	// parked or not, a delete at or above the source of work held for
+	// parked or not, a move of another item onto the synced path of an item
+	// whose own move waits, a delete at or above the source of work held for
 	// the next pass (an item's move, or a create of content the deleted item
 	// holds) or ahead of the create that writes its content, with what waits
 	// for it except a folder's move that carries it along, work below a
