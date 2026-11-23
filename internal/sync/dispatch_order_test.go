@@ -182,6 +182,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_BaselineUpdatedAfterRun,
 		TestRunOnce_Bidirectional_FullRun,
 		TestRunOnce_BothSidesRenamedIdenticallyConverges,
+		TestRunOnce_AFolderRenamedTheSameOnBothSidesWithANewFolderAtItsOldPathConverges,
 		TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending,
 		TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked,
 		TestRunOnce_ReportCountsTheWorkAThrottleLeftForTheNextSync,

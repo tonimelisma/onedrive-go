@@ -1003,19 +1003,36 @@ func (w *exWorld) applyPlan(plan *syncdomain.ActionPlan, refuse string) map[stri
 }
 
 // exPlanOrder is the plan's actions in an order that respects its
-// dependencies; actions caught in a cycle come last, in plan order.
+// dependencies, as the engine reduces its ready frontier: the ready
+// publication-only actions (a baseline update, a cleanup) first, committed
+// through the store before any action of the frontier is dispatched, then
+// the other ready actions, in plan order; actions caught in a cycle come
+// last, in plan order.
 func exPlanOrder(plan *syncdomain.ActionPlan) []int {
 	done := make([]bool, len(plan.Actions))
 	order := make([]int, 0, len(plan.Actions))
+	ready := func(i int) bool {
+		return !done[i] && (i >= len(plan.Deps) || !slices.ContainsFunc(plan.Deps[i], func(dep int) bool { return !done[dep] }))
+	}
 	for progressed := true; progressed; {
 		progressed = false
+		for drained := true; drained; {
+			drained = false
+			for i := range plan.Actions {
+				if exPublicationOnly(&plan.Actions[i]) && ready(i) {
+					done[i] = true
+					order = append(order, i)
+					drained = true
+				}
+			}
+		}
+		var frontier []int
 		for i := range plan.Actions {
-			if done[i] {
-				continue
+			if ready(i) {
+				frontier = append(frontier, i)
 			}
-			if i < len(plan.Deps) && slices.ContainsFunc(plan.Deps[i], func(dep int) bool { return !done[dep] }) {
-				continue
-			}
+		}
+		for _, i := range frontier {
 			done[i] = true
 			order = append(order, i)
 			progressed = true
@@ -1028,6 +1045,12 @@ func exPlanOrder(plan *syncdomain.ActionPlan) []int {
 	}
 
 	return order
+}
+
+// exPublicationOnly reports an action the engine commits through the store
+// rather than dispatching to a worker.
+func exPublicationOnly(a *syncdomain.Action) bool {
+	return a.Type == syncdomain.ActionBaselineUpdate || a.Type == syncdomain.ActionCleanup
 }
 
 // applyAction carries out one action and reports whether it succeeded.
@@ -1612,6 +1635,46 @@ func TestPlannerExhaustive_ShortHistoriesOnBothSidesKeepContentAndConverge(t *te
 		stride = exRaceStride
 	}
 	requireExhaustiveGolden(t, exRunPairs(t, exPairs(t), stride), stride == 1)
+}
+
+// Validates: R-2.17.6, R-2.1.7
+//
+// From the held start, OneDrive renamed the held folder away, which frees
+// its name for the folder made here in its place, and that folder's create
+// on OneDrive is refused once. The local move that follows OneDrive's
+// rename records the item's baseline row where the item went, as the store
+// does by item ID, so the passes after the refusal make the folder and its
+// file and the plan empties, on every run with each create refused once.
+func TestPlannerPairs_AFolderCreateRefusedAfterTheHeldFolderMovesAwayConverges(t *testing.T) {
+	t.Parallel()
+
+	requirePairKeepsEveryInvariant(t, &exPair{
+		start: exStartNamed(t, "held"),
+		remote: []exEdit{
+			{kind: exDeleteFolder, from: "p"},
+			{kind: exMoveFolder, from: "x", to: "q"},
+		},
+	})
+}
+
+// Validates: R-2.17.6, R-2.1.7
+//
+// The same rename on both sides, with a folder made here at the old path:
+// the re-key of the renamed folder's baseline row is publication-only, so
+// it is committed before the folder create is dispatched, and the create
+// then records the new folder at the path the row left. The passes make
+// the new folder on OneDrive and the plan empties.
+func TestPlannerPairs_AFolderRenamedTheSameOnBothSidesWithANewFolderAtItsOldPathConverges(t *testing.T) {
+	t.Parallel()
+
+	requirePairKeepsEveryInvariant(t, &exPair{
+		start: exStartNamed(t, "synced"),
+		local: []exEdit{
+			{kind: exMoveFolder, from: "p", to: "q"},
+			{kind: exMakeFolder, to: "p"},
+		},
+		remote: []exEdit{{kind: exMoveFolder, from: "p", to: "q"}},
+	})
 }
 
 // exRunPairs runs every stride-th pair, and that pair again with each of its

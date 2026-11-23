@@ -1004,11 +1004,17 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    kept with it, which is the delete the check reports as undone. Keeping a
    whole folder the user wrote into is the data-safe outcome; the check's
    delete rule does not yet count a conflict copy as a reason to keep a file.
-6. A move made the same on both sides, its vacated path reused on one (13
-   runs: 12 synced, 1 held): `mv p q` on both (or `mv p Q` there), and here
-   also `mv x p` or `mkdir p` at the old path. The sides end equal, but a
-   plan with nothing to do never comes: the agreed move keeps being planned
-   against the reuse of its source.
+6. No longer listed: a move made the same on both sides, its vacated path
+   reused on one (`mv p q` on both, and here `mv x p` or `mkdir p`), kept
+   being planned. The check's model ran the plan's actions in plan order,
+   so a folder create at the old path could record its row there before
+   the re-key moved the renamed folder's row away, and the re-key then
+   moved the new folder's row; the engine commits a ready publication-only
+   action (a baseline update, a cleanup) through the store before it
+   dispatches the frontier, so the re-key is always first. The model now
+   reduces its frontier as the engine does
+   (`TestPlannerPairs_AFolderRenamedTheSameOnBothSidesWithANewFolderAtItsOldPathConverges`,
+   `TestRunOnce_AFolderRenamedTheSameOnBothSidesWithANewFolderAtItsOldPathConverges`).
 7. Two different entries given the same new name, one on each side (3
    runs: 1 synced, 2 held): `mv p q, mv x q/x` here and `mv x q` on
    OneDrive, or, from the held start, the folder made in the held one's
@@ -1034,7 +1040,8 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    folder's baseline row at its old path after this computer followed
    OneDrive's move (above); with the row re-pathed by item ID, as the store
    does, the next pass creates the folder and the work that waited for it,
-   and the plan empties.
+   and the plan empties
+   (`TestPlannerPairs_AFolderCreateRefusedAfterTheHeldFolderMovesAwayConverges`).
 10. A held folder moved into a folder that moves in the same pass (4 runs,
    all held, nothing done on OneDrive): `mv p q, mv x2 q/x2` or
    `mv x2 p/f, mv p q`. After the name collision is resolved the held move
