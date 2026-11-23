@@ -422,8 +422,9 @@ explicitly rather than relying on a read-through.
 
 Completion, admission, and scope decisions do not reach for the watch runtime.
 They report through `runtimeSignals`: arm the held timers, arm the retry timer,
-arm the trial timer, release due held work now, or mark that a replan is
-needed.
+arm the trial timer, or mark that a replan is needed. The interface holds only
+what product code asks through it; the watch loop releases due held work
+itself, on its own goroutine, so that request is no method of the seam.
 
 One-shot and watch differ in exactly one way those decisions can observe:
 whether there is a future. A one-shot pass returns when its work settles, so
@@ -431,7 +432,7 @@ nothing armed during it could fire and no replan mark has a reader. (A one-shot
 run's follow-up passes are decided by the plan's `FollowUp`, not by replan
 marks: a superseded action means truth changed under the run, which the next
 sync observes.) Watch keeps
-the runtime alive across timer ticks and observation batches, so all five mean
+the runtime alive across timer ticks and observation batches, so all four mean
 something.
 
 This was previously expressed by passing `watch *watchRuntime` into `engineFlow`
@@ -443,7 +444,9 @@ implementation states the same rule as a fact about one-shot rather than as an
 absence every call site must remember to check.
 
 `watchInspector` is the parallel seam for the debug-only invariant pass, which
-production leaves disabled through `engineHooks.assertInvariants`. It is separate
+production leaves disabled through `engineHooks.assertInvariants`; it holds the
+reads that pass makes and nothing else (the watch loop reads its own phase
+directly). It is separate
 from `runtimeSignals` because the two have different lifetimes, and keeping them
 apart stops a debug-only read from re-introducing the production coupling.
 

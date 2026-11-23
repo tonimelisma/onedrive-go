@@ -26,7 +26,54 @@ func syncTreePackageDirs() []string {
 	return []string{
 		".", "syncdomain", "syncshortcut", "syncstore",
 		filepath.Join("internal", "syncplan"), filepath.Join("internal", "syncobserve"), filepath.Join("internal", "syncexec"),
+		filepath.Join("internal", "syncsched"),
 	}
+}
+
+// syncTreeTestSupportDirs are the sync tree's packages that only tests
+// import: fixtures, which the source checks over product code leave out.
+func syncTreeTestSupportDirs() []string {
+	return []string{filepath.Join("internal", "syncfixture"), filepath.Join("internal", "syncstoretest")}
+}
+
+// The source checks over the sync tree's product code read every product
+// package of it: a package the list leaves out is a package no check reads.
+//
+// Validates: R-6.3.10
+func TestSyncTreePackageDirs_NameEveryProductPackage(t *testing.T) {
+	t.Parallel()
+
+	support := make(map[string]bool)
+	for _, dir := range syncTreeTestSupportDirs() {
+		support[dir] = true
+	}
+	var found []string
+	for _, pattern := range []string{"*.go", filepath.Join("*", "*.go"), filepath.Join("internal", "*", "*.go")} {
+		paths, err := filepath.Glob(pattern)
+		require.NoError(t, err)
+		for _, path := range paths {
+			dir := filepath.Dir(path)
+			if !strings.HasSuffix(path, "_test.go") && !support[dir] {
+				found = append(found, dir)
+			}
+		}
+	}
+
+	assert.ElementsMatch(t, syncTreePackageDirs(), uniqueStrings(found))
+}
+
+// uniqueStrings is values without repeats, in first-seen order.
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			unique = append(unique, value)
+		}
+	}
+
+	return unique
 }
 
 // unboundedDetachedContexts returns the context.WithoutCancel calls in file

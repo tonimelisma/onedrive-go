@@ -327,6 +327,7 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				shortcutRootEventChildFinalDrainClean:      {ShortcutRootStateRemovedReleasePending},
 				shortcutRootEventProjectionCleanupFailed:   {ShortcutRootStateRemovedCleanupBlocked},
 				shortcutRootEventWaitingReplacementPromote: {ShortcutRootStateActive},
+				shortcutRootEventExcludedFinalDrainSkipped: {ShortcutRootStateRemovedChildCleanupPending},
 			},
 		},
 		ShortcutRootStateRemovedReleasePending: {
@@ -406,6 +407,7 @@ func shortcutRootLifecycleMetadataTable() map[ShortcutRootState]shortcutRootLife
 				shortcutRootEventChildFinalDrainClean:      {ShortcutRootStateRemovedReleasePending},
 				shortcutRootEventProjectionCleanupFailed:   {ShortcutRootStateRemovedCleanupBlocked},
 				shortcutRootEventWaitingReplacementPromote: {ShortcutRootStateActive},
+				shortcutRootEventExcludedFinalDrainSkipped: {ShortcutRootStateRemovedChildCleanupPending},
 			},
 		},
 		ShortcutRootStateDuplicateTarget: {

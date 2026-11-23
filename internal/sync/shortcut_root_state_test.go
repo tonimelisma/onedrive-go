@@ -961,6 +961,47 @@ func TestEngine_ShortcutTheFiltersExcludeLeavesAFolderAlreadyThereAlone(t *testi
 	}
 }
 
+// A removed shortcut whose path the user's filters exclude has no child run
+// to drain it, so it does not wait for that drain for ever: the parent's local
+// lifecycle hands its sync data to the child cleanup and leaves its folder,
+// and what the user keeps there, exactly as it is.
+//
+// Validates: R-2.4.18
+func TestEngine_ARemovedShortcutTheFiltersExcludeDoesNotWaitForADrainForEver(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range shortcutFilterCases() {
+		if !tc.excluded {
+			continue
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
+			eng.contentFilter = tc.filter
+			kept := filepath.Join(syncRoot, "Shared", "Docs", "notes.txt")
+			require.NoError(t, os.MkdirAll(filepath.Dir(kept), 0o700))
+			require.NoError(t, os.WriteFile(kept, []byte("the user's own"), 0o600))
+			removed := excludedShortcutRoot(nil)
+			removed.State = syncshortcut.ShortcutRootStateRemovedFinalDrain
+			require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{removed}))
+
+			changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
+			require.NoError(t, err)
+
+			assert.True(t, changed)
+			roots, err := eng.baseline.ListShortcutRoots(t.Context())
+			require.NoError(t, err)
+			require.Len(t, roots, 1)
+			assert.Equal(t, syncshortcut.ShortcutRootStateRemovedChildCleanupPending, roots[0].State,
+				"the drain no child run would ever acknowledge is skipped")
+			content, err := os.ReadFile(kept) //nolint:gosec // the test reads the folder it made
+			require.NoError(t, err)
+			assert.Equal(t, "the user's own", string(content), "the excluded folder is left as it is")
+		})
+	}
+}
+
 // Validates: R-2.4.18, R-2.4.8
 func TestEngine_ShortcutTheFiltersExcludeIsNotReadAsTheAliasDeleted(t *testing.T) {
 	t.Parallel()

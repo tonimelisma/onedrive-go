@@ -150,38 +150,39 @@ func (flow *engineFlow) applyPermissionFailureEvidence(
 
 // applyTrialPermissionReclassification hands a scope trial's failure to the
 // permission probes when its error is a permission answer, and returns the
-// retry_work row the store wrote when the probes' evidence decided
-// it, or nil when it did not. A stopping run probes nothing for a trial either
-// (isStoppingRun): the trial falls back to the retry work it is.
+// retry_work row the store wrote when the probes' evidence decided it;
+// persisted is false, with no row, when it did not. A stopping run probes
+// nothing for a trial either (isStoppingRun): the trial falls back to the
+// retry work it is.
 func (flow *engineFlow) applyTrialPermissionReclassification(
 	ctx context.Context,
 	r *syncdomain.ActionCompletion,
 	bl syncdomain.BaselineView,
-) (*syncdomain.RetryWorkRow, error) {
+) (row *syncdomain.RetryWorkRow, persisted bool, err error) {
 	if isStoppingRun(ctx) {
-		return nil, nil //nolint:nilnil // no row: a stopping run persists nothing
+		return nil, false, nil
 	}
 
 	evidence, handled, err := flow.permissionEvidenceForCompletion(ctx, r, bl)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !handled || evidence.Kind == permissionEvidenceNone {
-		return nil, nil //nolint:nilnil // no row: no permission evidence to persist
+		return nil, false, nil
 	}
 
 	work := syncdomain.RetryWorkKeyForCompletion(r)
 	if clearErr := flow.clearBlockedRetryWorkForScope(ctx, work, r.TrialScopeKey); clearErr != nil {
-		return nil, clearErr
+		return nil, false, clearErr
 	}
 
-	row, err := flow.applyTrialPermissionEvidence(ctx, work, r.TrialScopeKey, evidence)
+	row, err = flow.applyTrialPermissionEvidence(ctx, work, r.TrialScopeKey, evidence)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	flow.signals.armHeldTimers()
 
-	return row, nil
+	return row, true, nil
 }
 
 func (flow *engineFlow) permissionEvidenceForCompletion(

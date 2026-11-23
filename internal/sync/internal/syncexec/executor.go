@@ -1033,7 +1033,6 @@ func (e *Executor) moveOutcome(action *syncdomain.Action) syncdomain.ActionOutco
 	baseline := action.View.Baseline
 
 	if remote := action.View.Remote; remote != nil {
-		o.ItemType = remote.ItemType
 		o.ETag = remote.ETag
 		o.RemoteHash = remote.Hash
 		o.RemoteSize = remote.Size
@@ -1078,11 +1077,29 @@ func (e *Executor) moveOutcome(action *syncdomain.Action) syncdomain.ActionOutco
 	} else {
 		fillOutcomeFromBaseline(&o, baseline, action.View.Remote != nil)
 	}
-	if o.ItemType == syncdomain.ItemTypeFile && baseline != nil && baseline.ItemType != syncdomain.ItemTypeFile {
-		o.ItemType = baseline.ItemType
-	}
+	o.ItemType = movedItemType(action)
 
 	return o
+}
+
+// movedItemType is the type of the item a move moved, read from the side
+// known to be observed, in one order and with no "a file means unknown": the
+// remote observation, then the source baseline (a rename preserves the type),
+// then the moved item's observed local truth. It differs from
+// ResolveItemType only in skipping the view's local side, which for a move
+// describes what sat at the destination before it, not the moved item.
+func movedItemType(action *syncdomain.Action) syncdomain.ItemType {
+	view := action.View
+	switch {
+	case view.Remote != nil:
+		return view.Remote.ItemType
+	case view.Baseline != nil:
+		return view.Baseline.ItemType
+	case action.MovedLocal != nil:
+		return action.MovedLocal.ItemType
+	default:
+		return syncdomain.ResolveItemType(nil)
+	}
 }
 
 // plannedRemoteItemType is the remote item type the planner saw for action.

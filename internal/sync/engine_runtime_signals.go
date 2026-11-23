@@ -7,7 +7,7 @@ package sync
 // observe: whether there is a future. A one-shot pass returns when its work
 // settles, so nothing armed during it could ever fire, and marking truth dirty
 // has no reader. Watch keeps the runtime alive across timer ticks and
-// observation batches, so all five requests mean something.
+// observation batches, so all four requests mean something.
 //
 // This was previously expressed by passing `watch *watchRuntime` into
 // engineFlow methods and nil-checking it at nineteen sites -- a parent taking
@@ -22,9 +22,6 @@ type runtimeSignals interface {
 	armRetryTimer()
 	// armTrialTimer asks the runtime to schedule the next due scope trial.
 	armTrialTimer()
-	// kickDueHeldRelease asks the runtime to release already-due held
-	// retry work immediately rather than waiting for the next tick.
-	kickDueHeldRelease()
 	// markReplanNeeded reports that committed truth changed under the current
 	// plan, so the runtime should replan from it.
 	markReplanNeeded()
@@ -35,18 +32,16 @@ type runtimeSignals interface {
 // replan could be consumed.
 type noRuntimeSignals struct{}
 
-func (noRuntimeSignals) armHeldTimers()      {}
-func (noRuntimeSignals) armRetryTimer()      {}
-func (noRuntimeSignals) armTrialTimer()      {}
-func (noRuntimeSignals) kickDueHeldRelease() {}
-func (noRuntimeSignals) markReplanNeeded()   {}
+func (noRuntimeSignals) armHeldTimers()    {}
+func (noRuntimeSignals) armRetryTimer()    {}
+func (noRuntimeSignals) armTrialTimer()    {}
+func (noRuntimeSignals) markReplanNeeded() {}
 
 // watchInspector is the debug-only view the invariant pass needs into watch
 // state. It is separate from runtimeSignals because the two have different
 // lifetimes: signals are a production path, while these reads happen only when
 // engine.hooks.assertInvariants is enabled, which production leaves off.
 type watchInspector interface {
-	phase() watchPhase
 	isDraining() bool
 	hasRetryTimer() bool
 	hasTrialTimer() bool
@@ -58,7 +53,6 @@ type watchInspector interface {
 // satisfies: it never drains, arms no watch timers, and runs no refresh.
 type noWatchInspector struct{}
 
-func (noWatchInspector) phase() watchPhase      { return watchPhaseRunning }
 func (noWatchInspector) isDraining() bool       { return false }
 func (noWatchInspector) hasRetryTimer() bool    { return false }
 func (noWatchInspector) hasTrialTimer() bool    { return false }

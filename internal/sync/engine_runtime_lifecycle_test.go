@@ -250,7 +250,7 @@ func TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t *test
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	row, err := flow.applyTrialReclassification(t.Context(), &syncdomain.ResultDecision{
+	row, persisted, err := flow.applyTrialReclassification(t.Context(), &syncdomain.ResultDecision{
 		Class:    errclass.ClassScopeBlockingTransient,
 		ScopeKey: syncdomain.SKDiskLocal(),
 	}, &syncdomain.ActionCompletion{
@@ -259,6 +259,7 @@ func TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t *test
 		ErrMsg:     "disk full",
 	}, nil)
 	require.NoError(t, err)
+	require.True(t, persisted, "the evidence reclassified the trial")
 	require.NotNil(t, row, "the reclassification returns the row the store wrote")
 	assert.True(t, row.Blocked)
 	assert.Equal(t, syncdomain.SKDiskLocal(), row.ScopeKey)
@@ -291,7 +292,7 @@ func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissi
 		AttemptCount: 1,
 	}))
 
-	row, err := flow.applyTrialReclassification(t.Context(), &syncdomain.ResultDecision{}, &syncdomain.ActionCompletion{
+	row, persisted, err := flow.applyTrialReclassification(t.Context(), &syncdomain.ResultDecision{}, &syncdomain.ActionCompletion{
 		Path:          "accessible/file.txt",
 		ActionType:    syncdomain.ActionDownload,
 		Err:           os.ErrPermission,
@@ -299,6 +300,7 @@ func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissi
 		TrialScopeKey: scopeKey,
 	}, nil)
 	require.NoError(t, err)
+	require.True(t, persisted, "the evidence reclassified the trial")
 	require.NotNil(t, row, "the reclassification returns the row the store wrote")
 	assert.False(t, row.Blocked)
 

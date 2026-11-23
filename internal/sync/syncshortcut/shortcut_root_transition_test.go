@@ -483,6 +483,65 @@ func TestPlanShortcutRootReleaseCleanupPromotesWaitingReplacement(t *testing.T) 
 	assert.Empty(t, plan.Records[0].ProtectedPaths)
 }
 
+// A removed shortcut the filters exclude skips the final drain no child run
+// would acknowledge: it goes to the child cleanup, and a same-path
+// replacement it held back takes its place. A record that does not wait for a
+// final drain is not changed.
+//
+// Validates: R-2.4.18
+func TestPlanExcludedRetiringShortcutRootSkipsTheDrainNoChildRuns(t *testing.T) {
+	t.Parallel()
+
+	waiting := &ShortcutRootReplacement{
+		BindingItemID: "new-binding", RelativeLocalPath: "Shared/Docs", LocalAlias: "Docs",
+		RemoteDriveID: driveid.New("new-drive"), RemoteItemID: "new-item", RemoteIsFolder: true,
+	}
+	for _, tc := range []struct {
+		name        string
+		state       ShortcutRootState
+		waiting     *ShortcutRootReplacement
+		wantChanged bool
+		wantStates  []ShortcutRootState
+	}{
+		{
+			name: "a final drain", state: ShortcutRootStateRemovedFinalDrain, wantChanged: true,
+			wantStates: []ShortcutRootState{ShortcutRootStateRemovedChildCleanupPending},
+		},
+		{
+			name: "a replacement waiting", state: ShortcutRootStateSamePathReplacementWaiting, waiting: waiting, wantChanged: true,
+			wantStates: []ShortcutRootState{ShortcutRootStateRemovedChildCleanupPending, ShortcutRootStateActive},
+		},
+		{
+			name: "an active root", state: ShortcutRootStateActive,
+			wantStates: []ShortcutRootState{ShortcutRootStateActive},
+		},
+		{
+			name: "a blocked cleanup", state: ShortcutRootStateRemovedCleanupBlocked,
+			wantStates: []ShortcutRootState{ShortcutRootStateRemovedCleanupBlocked},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			records, changed := PlanExcludedRetiringShortcutRoot(&ShortcutRootRecord{
+				BindingItemID: "old-binding", RelativeLocalPath: "Shared/Docs", State: tc.state,
+				ProtectedPaths: []string{"Shared/Docs"}, Waiting: tc.waiting,
+			})
+
+			assert.Equal(t, tc.wantChanged, changed)
+			states := make([]ShortcutRootState, 0, len(records))
+			for i := range records {
+				states = append(states, records[i].State)
+			}
+			assert.Equal(t, tc.wantStates, states)
+			if tc.wantChanged {
+				assert.Empty(t, records[0].ProtectedPaths, "the cleaned-up record protects no path")
+				assert.Nil(t, records[0].Waiting)
+			}
+		})
+	}
+}
+
 // Validates: R-2.4.8
 //
 // The parent removes a released alias root only as an empty directory. A root

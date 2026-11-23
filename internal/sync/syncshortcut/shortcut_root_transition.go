@@ -26,6 +26,10 @@ const (
 	shortcutRootEventChildArtifactsPurged      shortcutRootLifecycleEvent = "child_artifacts_purged"
 	shortcutRootEventDuplicateTargetDetected   shortcutRootLifecycleEvent = "duplicate_target_detected"
 	shortcutRootEventDuplicateTargetResolved   shortcutRootLifecycleEvent = "duplicate_target_resolved"
+	// shortcutRootEventExcludedFinalDrainSkipped: a removed shortcut whose
+	// path the user's filters exclude has no child run to drain it, so its
+	// final drain is skipped and only its sync data is cleaned up.
+	shortcutRootEventExcludedFinalDrainSkipped shortcutRootLifecycleEvent = "excluded_final_drain_skipped"
 )
 
 func shortcutRootTransitionTable() map[ShortcutRootState]map[shortcutRootLifecycleEvent][]ShortcutRootState {

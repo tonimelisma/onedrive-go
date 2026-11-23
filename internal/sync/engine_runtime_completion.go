@@ -85,7 +85,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 
 	switch decision.Class {
 	case errclass.ClassInvalid:
-		if _, err := flow.applyResultPersistence(ctx, decision, r, nil); err != nil {
+		if _, _, err := flow.applyResultPersistence(ctx, decision, r, nil); err != nil {
 			return nil, flow.failAfterControlStateError(current, err)
 		}
 		flow.sched.Finished(current)
@@ -317,8 +317,8 @@ func (flow *engineFlow) persistAndHoldFailure(
 	if decision.Persistence != syncdomain.PersistRetryWork {
 		return false, nil
 	}
-	row, err := flow.applyResultPersistence(ctx, decision, r, activation)
-	if err != nil {
+	row, persisted, err := flow.applyResultPersistence(ctx, decision, r, activation)
+	if err != nil || !persisted {
 		return false, err
 	}
 	flow.holdActionFromPersistedRetryState(current, row)
@@ -712,17 +712,24 @@ func (flow *engineFlow) retryWorkShouldBeBlocked(
 	return flow.sched.HasScope(scopeKey)
 }
 
+// applyResultPersistence writes what decision persists and returns the
+// retry_work row the store wrote; persisted is false, with no row, when the
+// decision persists nothing.
 func (flow *engineFlow) applyResultPersistence(
 	ctx context.Context,
 	decision *syncdomain.ResultDecision,
 	r *syncdomain.ActionCompletion,
 	activation *blockActivation,
-) (*syncdomain.RetryWorkRow, error) {
+) (row *syncdomain.RetryWorkRow, persisted bool, err error) {
 	switch decision.Persistence {
 	case syncdomain.PersistNone:
-		return nil, nil //nolint:nilnil // no row: the decision persists nothing
+		return nil, false, nil
 	case syncdomain.PersistRetryWork:
-		return flow.recordRetryWork(ctx, decision, r, retryDelayForDecision(decision), activation)
+		row, err := flow.recordRetryWork(ctx, decision, r, retryDelayForDecision(decision), activation)
+		if err != nil {
+			return nil, false, err
+		}
+		return row, true, nil
 	default:
 		panic(fmt.Sprintf("unknown failure persistence mode %d", decision.Persistence))
 	}
