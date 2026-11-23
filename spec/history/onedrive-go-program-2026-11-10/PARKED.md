@@ -7,10 +7,10 @@ Not queued: W59 (being shipped now), W101 (being fixed now, noted under Data saf
 In flight: W57 has branch `test/crash-model-replacing-move` at `c6e273a6` (built, not reviewed); W20 and W34 have worktrees (`identity-check-not-a-precondition`, `perf-tx-counted-once`). Ship or rebase them before the split (R5).
 
 ## Data safety
-- W101 (in progress, not queued here) — A rebind after a mount vanished deletes no unmounted disk's content unconfirmed — being fixed now as its own PR, ahead of the refactor.
-- W44 — An entry left under the temporary spelling name is finished or made visible at the next start — touches start-up, which E2/E7/E10 reshape.
-- W32 — A shortcut child's trash is reachable, purged after retention, and says why a released file is there — shortcut release code moves in the split.
-- W67 — A replacing local move that finds a new file at the freed name still moves — planner composition; do it after F4, against the Go `decide`.
+- [x] W101 (in progress, not queued here) — A rebind after a mount vanished deletes no unmounted disk's content unconfirmed — being fixed now as its own PR, ahead of the refactor. — built in #954
+- [x] W44 — An entry left under the temporary spelling name is finished or made visible at the next start — touches start-up, which E2/E7/E10 reshape. — built in #974 (rider 1, the old name an unremovable source leaves, not built: proving it needs a run)
+- [x] W32 — A shortcut child's trash is reachable, purged after retention, and says why a released file is there — shortcut release code moves in the split. — built in #974
+- [x] W67 — A replacing local move that finds a new file at the freed name still moves — planner composition; do it after F4, against the Go `decide`. — built in #974
 
 ## Correctness
 - W20 — The account identity check never fails or stalls a command — in flight (worktree); ship when a slot is free.
