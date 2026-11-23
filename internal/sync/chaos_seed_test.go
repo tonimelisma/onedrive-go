@@ -27,7 +27,7 @@ import (
 // run (the header of chaos_remote_test.go lists each). The run waits in
 // virtual time and draws every jitter from a seeded source, so a seed usually
 // replays the whole run (TestModel_ChaosSameSeedReplaysIdentically); the
-// order of goroutines at one virtual instant stays outside the seed. A
+// real filesystem's inode numbers and timestamps stay outside the seed. A
 // failing chaos run logs the `seed-replay:` line that reruns its seed
 // (logSeedReplayOnFailure).
 

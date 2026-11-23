@@ -517,15 +517,20 @@ Static verification is a first-class architectural constraint, not a best-effort
   numbers in the order they reach the layer; and the client releases retry
   work by elapsed time, on the bubble's virtual clock. None of these is a
   random draw, and every jitter of the run comes from a seeded source
-  (retry.md, Jitter sources). What is left outside the seed is the order in
-  which goroutines that run at one virtual instant reach a shared step (the
-  bubble fixes time, not scheduling: the hash workers of a scan, the store's
-  connections), which a run's actions can follow. Measured: twenty runs of
-  each chaos seed the tests use (1, 2 and 79) meet the same faults in every
-  stream, dispatch the same actions in the same order and wait the same
-  virtual time to the nanosecond (`TestModel_ChaosSameSeedReplaysIdentically`,
-  R-6.10.34), where runs on the wall clock diverged; seed 50 did not replay,
-  failing one run in three on the wipe check of a local wipe. A failing
+  (retry.md, Jitter sources). The model's dispatch shuffle permutes a
+  canonical order of each frontier (`dispatchOrderCanonical`), not plan order,
+  and its scans hash on one worker. What is left outside the seed is the real
+  filesystem the run writes to: the kernel's inode numbers, which it reuses
+  for a file made after another was deleted, and its timestamps. The planner
+  keys an upload's content by local identity (`carriedContentKey`), so a new
+  file that took a deleted file's inode is read as carrying its content, an
+  ordering edge that comes and goes run to run, and the scan's racily-clean
+  check reads the kernel's times. Measured: twenty runs of each chaos seed
+  the tests use (1, 2 and 79) meet the same faults in every stream, dispatch
+  the same actions in the same order and wait the same virtual time to the
+  nanosecond (`TestModel_ChaosSameSeedReplaysIdentically`, R-6.10.34), where
+  runs on the wall clock diverged, and so do seeds 75 and 162; seed 50 does
+  not replay (a reused inode adds a content edge in some runs). A failing
   chaos run logs its `seed-replay:` line like the other seeded families, and
   that command reruns its seed, usually its run
   (`TestLogSeedReplayOnFailure_LogsTheCommandThatRerunsTheSeed`); no seeded
