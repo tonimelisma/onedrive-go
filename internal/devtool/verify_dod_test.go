@@ -569,7 +569,8 @@ func TestRestartBranchFromMainPointsTheBranchAtMainAndPushesIt(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeRunner{}
-	require.NoError(t, restartBranchFromMain(context.Background(), runner, testCleanupRepoRoot, "fix/the-head", io.Discard))
+	require.NoError(t, restartBranchFromMain(context.Background(), runner, testCleanupRepoRoot, "fix/the-head", io.Discard,
+		(&recordedSleeps{}).sleep))
 
 	got := make([]string, 0, len(runner.runCommands))
 	for _, command := range runner.runCommands {
@@ -580,6 +581,55 @@ func TestRestartBranchFromMainPointsTheBranchAtMainAndPushesIt(t *testing.T) {
 		"git checkout -B fix/the-head origin/main",
 		"git push --force-with-lease -u origin fix/the-head",
 	}, got)
+}
+
+// Validates: R-6.10.16
+//
+// GitHub deletes a merged pull request's branch a moment after the merge, so
+// the lease of the first push can name a branch that is gone by the time the
+// push lands. The restart fetches again, which prunes it, and pushes again.
+func TestRestartBranchFromMainRetriesAPushTheBranchDeletionRaced(t *testing.T) {
+	t.Parallel()
+
+	const push = "git push --force-with-lease -u origin fix/the-head"
+	runner := &fakeRunner{runErrSequenceByKey: map[string][]error{
+		push: {errors.New("remote rejected: cannot lock ref"), nil},
+	}}
+	sleeps := &recordedSleeps{}
+	require.NoError(t, restartBranchFromMain(context.Background(), runner, testCleanupRepoRoot, "fix/the-head", io.Discard,
+		sleeps.sleep))
+
+	got := make([]string, 0, len(runner.runCommands))
+	for _, command := range runner.runCommands {
+		got = append(got, command.name+" "+strings.Join(command.args, " "))
+	}
+	assert.Equal(t, []string{
+		"git fetch --prune origin",
+		"git checkout -B fix/the-head origin/main",
+		push,
+		"git fetch --prune origin",
+		push,
+	}, got)
+	assert.Len(t, sleeps.waits, 1, "the second push waits for GitHub's deletion to land")
+}
+
+// Validates: R-6.10.16
+func TestRestartBranchFromMainFailsAfterItsPushAttempts(t *testing.T) {
+	t.Parallel()
+
+	const push = "git push --force-with-lease -u origin fix/the-head"
+	runner := &fakeRunner{runErrByKey: map[string]error{push: errors.New("remote rejected: protected branch")}}
+	err := restartBranchFromMain(context.Background(), runner, testCleanupRepoRoot, "fix/the-head", io.Discard,
+		(&recordedSleeps{}).sleep)
+	require.ErrorContains(t, err, "protected branch")
+
+	pushes := 0
+	for _, command := range runner.runCommands {
+		if command.name+" "+strings.Join(command.args, " ") == push {
+			pushes++
+		}
+	}
+	assert.Equal(t, restartPushAttempts, pushes)
 }
 
 // assertNoMergeRequest fails when runner sent a merge request.

@@ -417,7 +417,7 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 	if err := markNightlyClaimsFixed(ctx, gh, opts.RepoRoot, branch, merged.MergeCommitSHA, time.Now()); err != nil {
 		return err
 	}
-	if err := restartBranchFromMain(ctx, runner, opts.RepoRoot, branch, stderr); err != nil {
+	if err := restartBranchFromMain(ctx, runner, opts.RepoRoot, branch, stderr, ciWait.sleep); err != nil {
 		return err
 	}
 	if err := waitForPostMergePushCI(ctx, runner, opts.RepoRoot, merged.MergeCommitSHA, ciWait); err != nil {
@@ -468,27 +468,63 @@ func requireCleanCheckout(ctx context.Context, runner commandRunner, repoRoot st
 	return nil
 }
 
+// restartPushAttempts bounds the pushes of a restarted branch, and
+// restartPushBackoff is the wait before the first repeat, doubled after.
+const (
+	restartPushAttempts = 3
+	restartPushBackoff  = 2 * time.Second
+)
+
 // restartBranchFromMain points the increment's branch at the new origin/main
 // and pushes it, the way a session's branch starts its next increment after a
 // squash merge: the squash commit is not a descendant of the branch, so the
 // branch would otherwise carry the merged commits into the next pull request.
 // The push is a force with lease, since the remote branch holds only the
-// merged commits, or nothing when the merge deleted it.
-func restartBranchFromMain(ctx context.Context, runner commandRunner, repoRoot string, branch string, stderr io.Writer) error {
-	steps := [][]string{
-		// Every ref, not main alone: the merge may have deleted the remote
-		// branch, and a remote-tracking ref --prune left behind would make
-		// the lease below expect a branch that no longer exists.
-		{"fetch", "--prune", "origin"},
-		{"checkout", "-B", branch, originMainRef},
-		{"push", "--force-with-lease", "-u", "origin", branch},
-	}
-	for _, args := range steps {
+// merged commits, or nothing once the merge deleted it. GitHub deletes the
+// branch a moment after the merge, so the lease can name a branch that is gone
+// when the push lands; a failed push waits, fetches again, which prunes it,
+// and is repeated, at most restartPushAttempts times in all.
+func restartBranchFromMain(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	branch string,
+	stderr io.Writer,
+	sleep func(context.Context, time.Duration) error,
+) error {
+	git := func(args ...string) error {
 		if err := runner.Run(ctx, repoRoot, os.Environ(), io.Discard, stderr, "git", args...); err != nil {
 			return fmt.Errorf("dod post-merge restart %s from %s: git %s: %w", branch, originMainRef, args[0], err)
 		}
+		return nil
 	}
-	return nil
+	// Every ref, not main alone: the merge may have deleted the remote
+	// branch, and a remote-tracking ref --prune left behind would make the
+	// lease below expect a branch that no longer exists.
+	fetch := []string{"fetch", "--prune", "origin"}
+	if err := git(fetch...); err != nil {
+		return err
+	}
+	if err := git("checkout", "-B", branch, originMainRef); err != nil {
+		return err
+	}
+	backoff := restartPushBackoff
+	var pushErr error
+	for attempt := 1; ; attempt++ {
+		if pushErr = git("push", "--force-with-lease", "-u", "origin", branch); pushErr == nil {
+			return nil
+		}
+		if attempt == restartPushAttempts {
+			return pushErr
+		}
+		if err := sleep(ctx, backoff); err != nil {
+			return errors.Join(pushErr, err)
+		}
+		backoff *= 2
+		if err := git(fetch...); err != nil {
+			return errors.Join(pushErr, err)
+		}
+	}
 }
 
 func dodRecentMerged(opts *VerifyOptions) int {
