@@ -176,8 +176,9 @@ func syncedCrossedDisksNowUnmounted(
 			remote.addFile(t, diskFileItemID(disk, i), "item-"+disk, fmt.Sprintf("f%d.txt", i), "disk file\n")
 		}
 	}
-	eng, syncRoot := newTestEngine(t, remote.client(t))
-	eng.contentFilter = syncdomain.ContentFilterConfig{CrossFilesystems: true}
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), remote.client(t), t.TempDir(), func(inputs *engineInputs) {
+		inputs.ContentFilter = syncdomain.ContentFilterConfig{CrossFilesystems: true}
+	})
 	runScenarioPass(t, eng)
 
 	var held []diskFile
@@ -591,8 +592,9 @@ func TestRunOnce_AVanishedCrossedMountIsMissingNotABoundary(t *testing.T) {
 	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFolder("item-nas", "root", "nas")
 	remote.addFile(t, "item-n0", "item-nas", "n0.txt", "nas file\n")
-	eng, syncRoot := newTestEngine(t, remote.client(t))
-	eng.contentFilter = syncdomain.ContentFilterConfig{CrossFilesystems: true}
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), remote.client(t), t.TempDir(), func(inputs *engineInputs) {
+		inputs.ContentFilter = syncdomain.ContentFilterConfig{CrossFilesystems: true}
+	})
 	runScenarioPass(t, eng)
 
 	_, err := eng.baseline.RawDBForTest().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES ('nas')`)

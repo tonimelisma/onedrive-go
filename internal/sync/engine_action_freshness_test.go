@@ -17,8 +17,7 @@ import (
 func TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents(t *testing.T) {
 	t.Parallel()
 
-	eng := newSingleOwnerEngine(t)
-	eng.perfCollector = perf.NewCollector(nil)
+	eng := newSingleOwnerEngineWith(t, func(inputs *engineInputs) { inputs.PerfCollector = perf.NewCollector(nil) })
 	refreshTestFlowInputs(eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)

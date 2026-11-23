@@ -71,8 +71,9 @@ func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.contentFilter = syncdomain.ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.ContentFilter = syncdomain.ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	})
 	refreshTestFlowInputs(eng)
 	ctx := t.Context()
 

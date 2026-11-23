@@ -112,8 +112,9 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t
 func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.contentFilter = syncdomain.ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.ContentFilter = syncdomain.ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)

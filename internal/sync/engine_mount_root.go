@@ -24,8 +24,8 @@ func (flow *observation) hasRemoteMountRoot() bool {
 // mountRootObservation is what one mount-root observation saw.
 type mountRootObservation struct {
 	items []syncdomain.RemoteItem
-	token  string
-	mode   syncdomain.RemoteObservationMode
+	token string
+	mode  syncdomain.RemoteObservationMode
 	// complete marks a whole-folder enumeration (a delta without a token,
 	// after a requested refresh or an expired token).
 	complete bool

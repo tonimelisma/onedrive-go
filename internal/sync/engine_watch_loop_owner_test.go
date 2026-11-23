@@ -368,8 +368,7 @@ func TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal(t 
 func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	t.Parallel()
 
-	eng := newSingleOwnerEngine(t)
-	eng.perfCollector = perf.NewCollector(nil)
+	eng := newSingleOwnerEngineWith(t, func(inputs *engineInputs) { inputs.PerfCollector = perf.NewCollector(nil) })
 	eng.transferWorkers = 2 // below the pool's floor: the pools run four workers
 	recorder := attachDebugEventRecorder(eng)
 	setupWatchEngine(t, eng)
@@ -419,8 +418,7 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *testing.T) {
 	t.Parallel()
 
-	eng := newSingleOwnerEngine(t)
-	eng.perfCollector = perf.NewCollector(nil)
+	eng := newSingleOwnerEngineWith(t, func(inputs *engineInputs) { inputs.PerfCollector = perf.NewCollector(nil) })
 	eng.transferWorkers = 2 // below the pool's floor: the pools run four workers
 	clock := syncfixture.NewManualClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	advance := clock.Advance

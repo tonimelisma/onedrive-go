@@ -21,8 +21,9 @@ import (
 func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.perfCollector = perf.NewCollector(nil)
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.PerfCollector = perf.NewCollector(nil)
+	})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
@@ -87,8 +88,9 @@ func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.perfCollector = perf.NewCollector(nil)
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.PerfCollector = perf.NewCollector(nil)
+	})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
@@ -120,8 +122,9 @@ func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) 
 func TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.perfCollector = perf.NewCollector(nil)
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.PerfCollector = perf.NewCollector(nil)
+	})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
@@ -155,8 +158,9 @@ func TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth(t *tes
 func TestWatchRuntime_LocalObservationBatchMarksLocalTruthSuspect(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.perfCollector = perf.NewCollector(nil)
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.PerfCollector = perf.NewCollector(nil)
+	})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)

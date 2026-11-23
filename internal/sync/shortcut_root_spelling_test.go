@@ -22,9 +22,7 @@ import (
 func nfdShortcutAliasEngine(t *testing.T, mock *syncfixture.EngineMockClient, state syncshortcut.ShortcutRootState) (*testEngine, string) {
 	t.Helper()
 
-	eng, syncRoot := newTestEngine(t, mock)
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
-	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), withTestShortcutNamespace)
 	aliasOnDisk := filepath.Join(syncRoot, "Shared", norm.NFD.String("Café"))
 	require.NoError(t, os.MkdirAll(aliasOnDisk, 0o700))
 	if _, err := os.Lstat(filepath.Join(syncRoot, "Shared", norm.NFC.String("Café"))); err == nil {
