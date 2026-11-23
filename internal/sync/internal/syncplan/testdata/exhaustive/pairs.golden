@@ -330,7 +330,6 @@ held L[] R[mv p/f X2/f, rm p] refuse download X2/f #1 :: duplicated
 held L[] R[mv p/f X2/f, rm p] refuse folder_create x (remote) #1 :: duplicated
 held L[] R[mv p/f X2/f, rm p] refuse upload x/f #1 :: duplicated
 held L[] R[mv p/f X2/f, mv z p/f] :: duplicated
-held L[] R[mv p/f x/f, mv x p/f] :: no-quiet-plan sides-differ
 held L[] R[mv x p/x, mv p x] :: sides-differ left-held
 held L[] R[rm x, mv p x] :: sides-differ left-held
 held L[] R[rm x, mv p x] refuse folder_create X2 (local) #1 :: sides-differ left-held

@@ -87,6 +87,52 @@ func TestPlannerPairs_AFileOverwrittenHereWaitsForTheDownloadOfItsMovedContent(t
 	})
 }
 
+// Validates: R-2.17.11, R-2.3.1
+//
+// z renamed g here and moved by OneDrive onto p/f, a path whose own synced
+// item is gone here (p/f deleted here): z's item ID at p/f proves where it
+// sits on OneDrive, so the two renames compose into one move and z is not
+// downloaded at p/f beside its renamed copy g, which was then uploaded as a
+// new file. Where OneDrive swapped the two (p/f's item now at z), that
+// download also waited as a removal of p/f's content, which OneDrive still
+// held at z, and sync never converged (chaos seed 55). Each converges with
+// every content at one path, on every run, with every create of every pass
+// refused once too.
+func TestPlannerPairs_AFileRenamedHereAndMovedOnOneDriveOntoAPathDeletedHereMoves(t *testing.T) {
+	t.Parallel()
+
+	here := []exEdit{
+		{kind: exMoveFile, from: "z", to: "g"},
+		{kind: exDeleteFile, from: "p/f"},
+	}
+	for _, tc := range []struct {
+		name     string
+		onedrive []exEdit
+	}{
+		{
+			name: "p/f deleted on OneDrive and z moved onto it",
+			onedrive: []exEdit{
+				{kind: exDeleteFile, from: "p/f"},
+				{kind: exMoveFile, from: "z", to: "p/f"},
+			},
+		},
+		{
+			name: "z and p/f swapped on OneDrive",
+			onedrive: []exEdit{
+				{kind: exMoveFile, from: "z", to: "G"},
+				{kind: exMoveFile, from: "p/f", to: "z"},
+				{kind: exMoveFile, from: "G", to: "p/f"},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			requirePairKeepsEveryInvariant(t, &exPair{start: exStartNamed(t, "synced"), local: here, remote: tc.onedrive})
+		})
+	}
+}
+
 // Validates: R-2.17.11
 //
 // A download of another item over a synced file here removes that file's
