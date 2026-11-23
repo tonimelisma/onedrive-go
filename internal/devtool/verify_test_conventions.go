@@ -16,9 +16,11 @@ import (
 	"unicode/utf8"
 )
 
-// testConventionViolation is a test the integration tier would never run, or
-// a production use of a test seam. The other test conventions (testify for
-// failures, no wall-clock sleep) are lint rules: forbidigo in .golangci.yml.
+// testConventionViolation is a test the integration tier would never run, a
+// test wait bounded by a literal duration (verify_test_waits.go), or a
+// production use of a test seam. The other test conventions (testify for
+// failures, no wall-clock sleep, no fixed-wait absence assertion) are lint
+// rules: forbidigo in .golangci.yml.
 type testConventionViolation struct {
 	Path    string
 	Line    int
@@ -57,7 +59,7 @@ func findTestConventionViolations(repoRoot string) ([]testConventionViolation, e
 		}
 
 		if entry.IsDir() {
-			if shouldSkipTestConventionDir(entry.Name()) {
+			if skipRepositoryRuleDir(entry.Name()) {
 				return filepath.SkipDir
 			}
 
@@ -84,6 +86,7 @@ func findTestConventionViolations(repoRoot string) ([]testConventionViolation, e
 		}
 		if isTest {
 			violations = append(violations, integrationTestNameViolations(fset, rel, file)...)
+			violations = append(violations, literalWaitViolations(fset, rel, file)...)
 		} else {
 			violations = append(violations, testSeamUseViolations(fset, rel, file)...)
 			violations = append(violations, hookSettingViolations(fset, rel, file)...)
@@ -345,15 +348,6 @@ func constraintNamesTag(expr constraint.Expr, tag string, negated bool) bool {
 		return constraintNamesTag(node.X, tag, negated) || constraintNamesTag(node.Y, tag, negated)
 	case *constraint.OrExpr:
 		return constraintNamesTag(node.X, tag, negated) || constraintNamesTag(node.Y, tag, negated)
-	default:
-		return false
-	}
-}
-
-func shouldSkipTestConventionDir(name string) bool {
-	switch name {
-	case verifyGitDir, verifyTestdataDir, verifyWorktreesDir, verifyVendorDir:
-		return true
 	default:
 		return false
 	}

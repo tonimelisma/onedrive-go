@@ -278,7 +278,7 @@ func collectValidatesRefs(repoRoot string) ([]requirementRef, error) {
 		}
 
 		if d.IsDir() {
-			if skipRequirementScanDir(d.Name()) {
+			if skipRepositoryRuleDir(d.Name()) {
 				return filepath.SkipDir
 			}
 
@@ -310,10 +310,6 @@ func collectValidatesRefs(repoRoot string) ([]requirementRef, error) {
 // scanning it would flag the rule itself.
 func isRequirementRuleOwnFile(name string) bool {
 	return name == "verify_requirements_test.go"
-}
-
-func skipRequirementScanDir(name string) bool {
-	return name == verifyGitDir || name == verifyWorktreesDir || name == verifyNodeModulesDir
 }
 
 func scanFileForValidatesRefs(repoRoot string, path string) ([]requirementRef, error) {

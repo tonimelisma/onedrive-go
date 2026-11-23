@@ -133,7 +133,7 @@ func TestReleaseJitter_OneShotBatchIsAdmittedOverAWindow(t *testing.T) {
 	assertSyncInvariants(t, h)
 }
 
-// Validates: R-6.8.24, R-6.8.9
+// Validates: R-6.8.24, R-6.10.31
 //
 // The same pass with the frontier reversed on one serialized worker (D-090):
 // the in-loop wait for a parked member must not depend on worker count or

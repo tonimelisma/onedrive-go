@@ -82,11 +82,11 @@ func TestMain(m *testing.M) {
 	logDir = resolveSuiteLogDir()
 
 	fmt.Fprintf(os.Stderr, "E2E debug logs: %s\n", logDir)
-	suiteTimingRecorder, err = newE2ETimingRecorder(logDir)
+	suiteTimingRecorder, err = newE2ETimingRecorder(logDir, suiteDriveRoles)
 	if err != nil {
 		abortSuitef(cleanupIsolation, tmpDir, "creating E2E timing recorder: %v", err)
 	}
-	suiteQuirkRecorder, err = newE2EQuirkRecorder(logDir)
+	suiteQuirkRecorder, err = newE2EQuirkRecorder(logDir, suiteDriveRoles)
 	if err != nil {
 		abortSuitef(cleanupIsolation, tmpDir, "creating E2E quirk recorder: %v", err)
 	}
@@ -198,6 +198,36 @@ type syncAttemptResult struct {
 	Err    error
 }
 
+// syncConvergence is every pass a converge loop ran, in order. What a sync
+// did, an action its summary names, may be in any pass: an earlier pass can
+// have done the work and ended with an error from unrelated churn, leaving a
+// later clean pass nothing to name. So an assertion on what the sync did
+// reads every pass (AllStdout), and one on the end state reads the pass that
+// converged (Last); a quick-tier source rule fails an action assertion on
+// the last pass alone (converge_action_rule_test.go).
+type syncConvergence struct {
+	attempts []syncAttemptResult
+}
+
+// Last is the pass the loop's predicate accepted.
+func (c syncConvergence) Last() syncAttemptResult {
+	if len(c.attempts) == 0 {
+		return syncAttemptResult{}
+	}
+
+	return c.attempts[len(c.attempts)-1]
+}
+
+// AllStdout is the stdout of every pass, in order, one after another.
+func (c syncConvergence) AllStdout() string {
+	outputs := make([]string, 0, len(c.attempts))
+	for _, attempt := range c.attempts {
+		outputs = append(outputs, attempt.Stdout)
+	}
+
+	return strings.Join(outputs, "\n")
+}
+
 func writeSuiteConfig(path string, drives ...string) error {
 	var builder strings.Builder
 	for _, driveID := range drives {
@@ -279,11 +309,6 @@ func findModuleRoot() string {
 	return testutil.FindModuleRoot("..")
 }
 
-// sanitizeTestName replaces characters invalid in filenames.
-func sanitizeTestName(name string) string {
-	return strings.NewReplacer("/", "_", " ", "_", ":", "_").Replace(name)
-}
-
 // shouldAddDebug returns true unless args already contain a mutually exclusive
 // verbosity flag (--quiet, -q, --verbose, -v, --debug).
 func shouldAddDebug(args []string) bool {
@@ -343,35 +368,16 @@ func debugLogPath(testName string) string {
 	return filepath.Join(logDir, debugLogFileName(testName))
 }
 
-// debugLogFileName is a test's debug log file name: the test's name, any
-// configured drive in it replaced by its role first, because the file is a CI
-// artifact of a public repository and its name goes with it.
+// debugLogFileName is a test's debug log file name, through the suite's
+// roles (debugLogFileNameWith).
 func debugLogFileName(testName string) string {
-	return sanitizeTestName(suiteDriveRoles.Redact(testName)) + ".log"
+	return debugLogFileNameWith(suiteDriveRoles, testName)
 }
 
-// appendDebugLogChunk appends content to a per-test debug log through
-// suiteDriveRoles.Redact, the command line, shared --json and drive list
-// --json included: every account, drive, item and fixture of the suite named
-// by role and any other identifier masked, because the logs are uploaded as
-// CI artifacts of a public repository, where log masking does not reach.
-func appendDebugLogChunk(path string, content string) (err error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // the per-test debug log under the suite's own log dir
-	if err != nil {
-		return fmt.Errorf("opening debug log %s: %w", path, err)
-	}
-	defer func() {
-		closeErr := f.Close()
-		if err == nil {
-			err = closeErr
-		}
-	}()
-
-	if _, err = f.WriteString(suiteDriveRoles.Redact(content)); err != nil {
-		return fmt.Errorf("writing debug log %s: %w", path, err)
-	}
-
-	return nil
+// appendDebugLogChunk appends content to a per-test debug log through the
+// suite's roles (appendDebugLogChunkWith).
+func appendDebugLogChunk(path string, content string) error {
+	return appendDebugLogChunkWith(suiteDriveRoles, path, content)
 }
 
 // writeMinimalConfig writes a config file with drive but no sync_dir (uses defaults).
@@ -591,7 +597,7 @@ func requireSyncEventuallyConverges(
 	description string,
 	ready func(syncAttemptResult) bool,
 	args ...string,
-) syncAttemptResult {
+) syncConvergence {
 	t.Helper()
 
 	return requireSyncEventuallyConvergesWith(t, syncRunnerForDrive(cfgPath, env, ""), timeout, description, ready, args...)
@@ -608,7 +614,7 @@ func requireSyncEventuallyConvergesForDrive(
 	description string,
 	ready func(syncAttemptResult) bool,
 	args ...string,
-) syncAttemptResult {
+) syncConvergence {
 	t.Helper()
 
 	return requireSyncEventuallyConvergesWith(t, syncRunnerForDrive(cfgPath, env, driveID), timeout, description, ready, args...)
@@ -624,7 +630,7 @@ func requireSyncEventuallyConvergesAllDrives(
 	description string,
 	ready func(syncAttemptResult) bool,
 	args ...string,
-) syncAttemptResult {
+) syncConvergence {
 	t.Helper()
 
 	return requireSyncEventuallyConvergesWith(t, syncRunnerAllDrives(cfgPath, env), timeout, description, ready, args...)
@@ -637,21 +643,23 @@ func requireSyncEventuallyConvergesWith(
 	description string,
 	ready func(syncAttemptResult) bool,
 	args ...string,
-) syncAttemptResult {
+) syncConvergence {
 	t.Helper()
 
-	var last syncAttemptResult
+	var convergence syncConvergence
 	syncArgs := append([]string{"sync"}, args...)
 	startedAt := time.Now()
 	deadline := time.Now().Add(timeout)
 
 	for attempt := 0; ; attempt++ {
+		var last syncAttemptResult
 		last.Stdout, last.Stderr, last.Err = runner.run(t, syncArgs...)
+		convergence.attempts = append(convergence.attempts, last)
 		requireLeftWorkExitsNonZero(t, last)
 		if ready(last) {
 			recordTimingEvent(t, timingKindSyncConvergence, description, runner.driveID, syncArgs,
 				timeout, time.Since(startedAt), attempt+1, timingOutcomeSuccess)
-			return last
+			return convergence
 		}
 
 		if time.Now().After(deadline) {

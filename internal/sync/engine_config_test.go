@@ -320,7 +320,7 @@ func TestNewEngine_PropagatesPathConvergence(t *testing.T) {
 	assert.Equal(t, []string{"photos"}, pathConvergence.waitCalls)
 }
 
-// Validates: R-6.8.9
+// Validates: R-6.8.10
 //
 // The engine's clock is the one time capability (domain_clock.go), yet its
 // store and executor each kept time.Now. A retry the store scheduled by the

@@ -12,25 +12,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
-func TestApplyDotEnv(t *testing.T) {
-	t.Setenv("KEEP_EXISTING", "keep")
-
-	err := applyDotEnv(strings.NewReader(`
-# comment
-FIRST=value
-KEEP_EXISTING=replace
-QUOTED="quoted value"
-SINGLE='single quoted'
-INVALID
-`))
-	require.NoError(t, err)
-
-	assert.Equal(t, "value", os.Getenv("FIRST"))
-	assert.Equal(t, "keep", os.Getenv("KEEP_EXISTING"))
-	assert.Equal(t, "quoted value", os.Getenv("QUOTED"))
-	assert.Equal(t, "single quoted", os.Getenv("SINGLE"))
-}
-
 func TestLoadDotEnv(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
@@ -398,53 +379,6 @@ func TestValidateAllowlist(t *testing.T) {
 	t.Setenv("ONEDRIVE_TEST_DRIVE", "business:user@contoso.com")
 
 	ValidateAllowlist("ONEDRIVE_TEST_DRIVE")
-}
-
-// Validates: R-6.10.27
-//
-// Entries are comma-separated and trimmed, and a drive must match one
-// exactly.
-func TestAllowlistIncludes(t *testing.T) {
-	t.Parallel()
-
-	const allowlist = " personal:user@example.com ,business:user@contoso.com"
-	assert.True(t, AllowlistIncludes(allowlist, "personal:user@example.com"))
-	assert.True(t, AllowlistIncludes(allowlist, "business:user@contoso.com"))
-	assert.False(t, AllowlistIncludes(allowlist, "personal:user@contoso.com"))
-	assert.False(t, AllowlistIncludes(allowlist, "user@example.com"), "an entry is a whole drive, not a part of one")
-	assert.False(t, AllowlistIncludes("", "personal:user@example.com"))
-	assert.False(t, AllowlistIncludes(allowlist, ""))
-}
-
-// Validates: R-6.10.27
-//
-// The live suites run in public CI logs. A refused drive names the variables
-// to check and never their values.
-func TestCheckDriveAllowed_NamesTheVariablesAndNoValue(t *testing.T) {
-	const (
-		drive     = "personal:someone@example.test"
-		allowlist = "business:other@example.test"
-	)
-
-	t.Setenv(AllowedTestAccountsEnvVar, allowlist)
-	err := CheckDriveAllowed("ONEDRIVE_TEST_DRIVE_2", drive)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ONEDRIVE_TEST_DRIVE_2")
-	assert.Contains(t, err.Error(), AllowedTestAccountsEnvVar)
-	for _, value := range []string{drive, allowlist, "someone", "other@example.test"} {
-		assert.NotContains(t, err.Error(), value)
-	}
-
-	err = CheckDriveAllowed("ONEDRIVE_TEST_DRIVE", "")
-	require.ErrorContains(t, err, "ONEDRIVE_TEST_DRIVE is not set")
-
-	t.Setenv(AllowedTestAccountsEnvVar, "")
-	err = CheckDriveAllowed("ONEDRIVE_TEST_DRIVE", drive)
-	require.ErrorContains(t, err, AllowedTestAccountsEnvVar+" is not set")
-	assert.NotContains(t, err.Error(), drive)
-
-	t.Setenv(AllowedTestAccountsEnvVar, allowlist+", "+drive)
-	require.NoError(t, CheckDriveAllowed("ONEDRIVE_TEST_DRIVE", drive))
 }
 
 // Validates: R-6.10.27

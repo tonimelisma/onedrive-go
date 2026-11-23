@@ -236,7 +236,7 @@ func TestRunWatch_MountRootKeepsPollingOnly(t *testing.T) {
 	assert.Zero(t, wakeSourcesMade.Load(), noWakeSourceAfterTheDecision)
 }
 
-// Validates: R-2.8.3, R-6.8.9, R-6.10.10
+// Validates: R-2.8.3, R-6.10.10
 func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 	t.Parallel()
 

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/testutil"
+	"github.com/tonimelisma/onedrive-go/testutil/liveenv"
 )
 
 const (
@@ -286,7 +286,7 @@ const benchExcerptCutMark = "..."
 // allowlist does not name, through the one allowlist reader the live suites
 // use.
 func validateBenchAllowlist(driveID string) error {
-	if err := testutil.CheckDriveAllowed(benchPrimaryDriveEnvVar, driveID); err != nil {
+	if err := liveenv.CheckDriveAllowed(benchPrimaryDriveEnvVar, driveID); err != nil {
 		return fmt.Errorf("live benchmark: %w", err)
 	}
 
@@ -428,6 +428,7 @@ func resetBenchRemoteScope(
 	runtime benchLiveCommandRuntime,
 	remoteScopePath string,
 ) error {
+	clock := subject.retryClock()
 	for attempt := 0; attempt < benchLiveDeleteRetryAttempts; attempt++ {
 		process, err := subject.measure(ctx, runtime.commandSpec("rm", "-r", remoteScopePath))
 		if err == nil || cliReportsRemoteItemMissing(string(process.Stderr)) {
@@ -445,7 +446,9 @@ func resetBenchRemoteScope(
 			)
 		}
 
-		time.Sleep(benchPollBackoff(attempt))
+		if err := clock.wait(ctx, benchPollBackoff(attempt)); err != nil {
+			return fmt.Errorf("reset remote scope %s: %w", remoteScopePath, err)
+		}
 	}
 
 	return nil
@@ -464,7 +467,8 @@ func waitForBenchRemoteScopeVisible(
 		parentPath = "/"
 	}
 
-	deadline := time.Now().Add(benchLivePollTimeout)
+	clock := subject.retryClock()
+	deadline := clock.now().Add(benchLivePollTimeout)
 	var lastProcess benchMeasuredProcess
 	var lastErr error
 	for attempt := 0; ; attempt++ {
@@ -485,7 +489,7 @@ func waitForBenchRemoteScopeVisible(
 			if ctx.Err() != nil {
 				return fmt.Errorf("wait for remote scope visibility %s: %w", remoteScopePath, ctx.Err())
 			}
-			if time.Now().After(deadline) {
+			if clock.now().After(deadline) {
 				if lastErr == nil {
 					lastErr = fmt.Errorf("scope %q not visible yet", remoteScopePath)
 				}
@@ -497,7 +501,9 @@ func waitForBenchRemoteScopeVisible(
 				)
 			}
 
-			time.Sleep(benchPollBackoff(attempt))
+			if err := clock.wait(ctx, benchPollBackoff(attempt)); err != nil {
+				return fmt.Errorf("wait for remote scope visibility %s: %w", remoteScopePath, err)
+			}
 			continue
 		}
 
@@ -537,7 +543,7 @@ func classifyBenchVisibilityError(stderr []byte, err error) error {
 		return nil
 	}
 
-	if cliReportsRemoteItemMissing(string(stderr)) || isRetryableBenchGraphReadFailure(string(stderr)) {
+	if cliReportsRemoteItemMissing(string(stderr)) || cliReportsServerProblem(string(stderr)) {
 		return nil
 	}
 
@@ -555,18 +561,20 @@ const (
 	cliListParentHintSuffix    = "' to see what is there."
 )
 
+// cliServerProblemMessage is the sentence the CLI prints as its error for a
+// 5xx answer from OneDrive (remoteFailureText in
+// internal/cli/error_presentation.go). Without --verbose or --debug, which
+// the benchmark never passes, it is the only line that says the failure was
+// the server's: the status itself is in the Details line alone.
+const cliServerProblemMessage = "OneDrive had a temporary server problem. Try again in a few minutes."
+
 // cliReportsRemoteItemMissing reports whether a failed command's stderr holds
 // the CLI's own error line for an item OneDrive does not have. It reads that
 // line alone: a log line on stderr can say "not found" of a request the
 // command retried before it failed for another reason, and another failure's
 // own text can say it of something else.
 func cliReportsRemoteItemMissing(stderr string) bool {
-	for line := range strings.Lines(stderr) {
-		message, isError := strings.CutPrefix(strings.TrimRight(line, "\r\n"), cliErrorLinePrefix)
-		if !isError {
-			continue
-		}
-
+	for _, message := range cliErrorMessages(stderr) {
 		_, rest, isMissing := strings.Cut(message, cliRemoteItemMissingSuffix)
 		if isMissing && (rest == "" ||
 			strings.HasPrefix(rest, cliListParentHintPrefix) && strings.HasSuffix(rest, cliListParentHintSuffix)) {
@@ -577,10 +585,31 @@ func cliReportsRemoteItemMissing(stderr string) bool {
 	return false
 }
 
-func isRetryableBenchGraphReadFailure(stderr string) bool {
-	return strings.Contains(stderr, "graph: HTTP 502") ||
-		strings.Contains(stderr, "graph: HTTP 503") ||
-		strings.Contains(stderr, "graph: HTTP 504")
+// cliReportsServerProblem reports whether a failed command's stderr holds
+// the CLI's own error line for a 5xx answer, read the way
+// cliReportsRemoteItemMissing reads the missing-item line: the error line
+// alone, and the whole of it.
+func cliReportsServerProblem(stderr string) bool {
+	for _, message := range cliErrorMessages(stderr) {
+		if message == cliServerProblemMessage {
+			return true
+		}
+	}
+
+	return false
+}
+
+// cliErrorMessages are the messages of the CLI's error lines on stderr: each
+// line that starts with "Error: ", without that prefix.
+func cliErrorMessages(stderr string) []string {
+	messages := []string{}
+	for line := range strings.Lines(stderr) {
+		if message, isError := strings.CutPrefix(strings.TrimRight(line, "\r\n"), cliErrorLinePrefix); isError {
+			messages = append(messages, message)
+		}
+	}
+
+	return messages
 }
 
 func benchPollBackoff(attempt int) time.Duration {

@@ -57,6 +57,14 @@ func (flow *engineFlow) reduceReadyFrontierStage(
 	if flow.hooks.dispatchOrder != nil && len(frontier) > 1 {
 		frontier = flow.hooks.dispatchOrder(frontier)
 	}
+	// On an error, or in a stopping run, the caller completes the frontier
+	// as shutdown instead of dispatching it, so nothing is recorded as
+	// dispatched.
+	if err == nil && !isStoppingRun(ctx) {
+		for _, ta := range frontier {
+			flow.hooks.recordFrontierStep(frontierDispatched, ta)
+		}
+	}
 
 	return frontier, err
 }

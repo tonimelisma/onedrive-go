@@ -24,9 +24,11 @@ import (
 // or a new route then fails a test here instead of printing an identifier.
 
 // Invented values no role names and of no identifier's shape, so only a
-// position mask can mask them.
+// position mask can mask them; an address is of the address shape, which
+// masks it anywhere, so a sharer label is held with an invented name.
 const (
 	inventedPositionAddress = "nobody.position@example.test"
+	inventedPositionSharer  = "Nobody Position"
 	inventedPositionDrive   = "inventedpositiondrive"
 	inventedPositionItem    = "inventedpositionitem"
 	// inventedPathName stands where a route format takes a path or a name.
@@ -411,9 +413,27 @@ func TestStatIDLineMaskFollowsStatsOutput(t *testing.T) {
 		"Name:     report.txt\n"+fmt.Sprintf(formats[0], inventedPositionItem)+"Size:     7 bytes\n", inventedPositionItem)
 }
 
+// sharerFields are the fields that hold a sharer's name or address.
+func sharerFields() []string {
+	return []string{"OwnerEmail", "OwnerName", "SharedByEmail", "SharedByName"}
+}
+
+// namesSharer reports an argument that is a sharer field, or a call given
+// one (shared discovery's extractFirstName(item.SharedByName)).
+func namesSharer(arg ast.Expr) bool {
+	if isSelectorNamed(arg, sharerFields()...) {
+		return true
+	}
+	call, ok := arg.(*ast.CallExpr)
+
+	return ok && slices.ContainsFunc(call.Args, func(inner ast.Expr) bool {
+		return isSelectorNamed(inner, sharerFields()...)
+	})
+}
+
 // sharerLabels are the labels fn prints a sharer in, a literal joined to the
 // sharer or a format given it: masked those under the text sharedByPattern
-// starts with, filled with an invented address, and unmasked the literal or
+// starts with, filled with an invented name, and unmasked the literal or
 // format of every other one.
 func sharerLabels(t *testing.T, fn *ast.FuncDecl) (masked, unmasked []string) {
 	t.Helper()
@@ -426,27 +446,26 @@ func sharerLabels(t *testing.T, fn *ast.FuncDecl) (masked, unmasked []string) {
 			unmasked = append(unmasked, format)
 		}
 	}
-	sharerFields := []string{"OwnerEmail", "OwnerName", "SharedByEmail", "SharedByName"}
 	ast.Inspect(fn, func(node ast.Node) bool {
 		switch node := node.(type) {
 		case *ast.BinaryExpr:
-			if literal, ok := node.X.(*ast.BasicLit); ok && literal.Kind == token.STRING && isSelectorNamed(node.Y, sharerFields...) {
-				add(stringLiteral(t, literal), stringLiteral(t, literal)+inventedPositionAddress)
+			if literal, ok := node.X.(*ast.BasicLit); ok && literal.Kind == token.STRING && namesSharer(node.Y) {
+				add(stringLiteral(t, literal), stringLiteral(t, literal)+inventedPositionSharer)
 			}
 		case *ast.CallExpr:
 			if !isSelectorNamed(node.Fun, "Sprintf") || len(node.Args) < 2 {
 				return true
 			}
 			args := make([]any, 0, len(node.Args)-1)
-			namesSharer := false
+			isSharerLabel := false
 			for _, arg := range node.Args[1:] {
 				value := "Planted Folder"
-				if isSelectorNamed(arg, sharerFields...) {
-					value, namesSharer = inventedPositionAddress, true
+				if namesSharer(arg) {
+					value, isSharerLabel = inventedPositionSharer, true
 				}
 				args = append(args, value)
 			}
-			if namesSharer {
+			if isSharerLabel {
 				format := stringLiteral(t, node.Args[0])
 				add(format, fmt.Sprintf(format, args...))
 			}
@@ -460,9 +479,10 @@ func sharerLabels(t *testing.T, fn *ast.FuncDecl) (masked, unmasked []string) {
 
 // drive list labels a shared drive with its sharer, and drive add and shared
 // discovery name a folder by it (internal/cli). A label outside the shared-by
-// text is held by its format: no mask covers the display names shared
-// discovery gives a folder whose name another folder took, the sharer's name
-// before the folder's, with the address after it in the last one.
+// text is held by its format: no position mask covers the display names
+// shared discovery gives a folder, the sharer's first or full name before the
+// folder's, with the address after it in the last one; the learned names and
+// the address shape mask those (TestSharedDisplayNamesAreMaskedInEveryForm).
 //
 // Validates: R-6.10.27
 func TestSharedByMaskFollowsTheProductsLabels(t *testing.T) {
@@ -477,7 +497,7 @@ func TestSharedByMaskFollowsTheProductsLabels(t *testing.T) {
 		{file: "drive_list_render.go", function: "driveListSharedOwnerLabel", labelCount: 2},
 		{
 			file: "shared_discovery.go", function: "deriveSharedDisplayName", labelCount: 1,
-			unmasked: []string{"%s's %s", "%s's %s (%s)"},
+			unmasked: []string{"%s's %s", "%s's %s", "%s's %s (%s)"},
 		},
 		{file: "drive_add.go", function: "addSharedDriveByName", labelCount: 1},
 	} {
@@ -485,10 +505,97 @@ func TestSharedByMaskFollowsTheProductsLabels(t *testing.T) {
 		require.Lenf(t, labels, site.labelCount,
 			"%s's shared-by labels changed: give sharedByPattern their new text, then their count here", site.function)
 		for _, label := range labels {
-			assertMasked(t, roles, site.function+"'s label", "  Planted Folder  "+label+"\n", inventedPositionAddress)
+			assertMasked(t, roles, site.function+"'s label", "  Planted Folder  "+label+"\n", inventedPositionSharer)
 		}
 		assert.Equalf(t, site.unmasked, unmasked,
 			"%s prints a sharer in a label no mask covers: mask it, or name its format here", site.function)
+	}
+}
+
+// A sharer the catalog holds and its first name, and an address no catalog
+// holds, all invented.
+const (
+	plantedSharerName    = "Rosalind Sharer"
+	plantedSharerFirst   = "Rosalind"
+	outsideSharerAddress = "quiet.outsider@example.org"
+	plantedSharedFolder  = "Holiday Folder"
+)
+
+// sharedDisplayNames are the display names deriveSharedDisplayName builds
+// for a sharer, each format read from its source and filled as the product
+// fills it: the sharer's name, its first name (a call given the name), its
+// address, and the folder's name for every other argument.
+func sharedDisplayNames(t *testing.T, fn *ast.FuncDecl) []string {
+	t.Helper()
+
+	var names []string
+	ast.Inspect(fn, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || !isSelectorNamed(call.Fun, "Sprintf") || len(call.Args) < 2 {
+			return true
+		}
+		args := make([]any, 0, len(call.Args)-1)
+		isSharerName := false
+		for _, arg := range call.Args[1:] {
+			var value string
+			switch {
+			case isSelectorNamed(arg, "SharedByName"):
+				value, isSharerName = plantedSharerName, true
+			case isSelectorNamed(arg, "SharedByEmail"):
+				value, isSharerName = outsideSharerAddress, true
+			case namesSharer(arg):
+				value, isSharerName = sharerFirstName(plantedSharerName), true
+			default:
+				value = plantedSharedFolder
+			}
+			args = append(args, value)
+		}
+		if isSharerName {
+			names = append(names, fmt.Sprintf(stringLiteral(t, call.Args[0]), args...))
+		}
+
+		return true
+	})
+
+	return names
+}
+
+// Shared discovery takes a sharer's first name as the text before the
+// first space of its display name (internal/cli's extractFirstName), and the
+// masks learn it by the same rule.
+//
+// Validates: R-6.10.27
+func TestSharerFirstNameFollowsTheProductsRule(t *testing.T) {
+	t.Parallel()
+
+	source, err := readProductSource(productPath("internal", "cli", "shared_discovery.go"))
+	require.NoError(t, err)
+	assert.Contains(t, source,
+		"func extractFirstName(fullName string) string {\n\tif i := strings.Index(fullName, \" \"); i > 0 {\n"+
+			"\t\treturn fullName[:i]\n\t}\n\n\treturn fullName\n}",
+		"shared discovery forms a first name another way: give sharerFirstName its new rule")
+	assert.Equal(t, plantedSharerFirst, sharerFirstName(plantedSharerName))
+	assert.Equal(t, "Mononym", sharerFirstName("Mononym"))
+}
+
+// Every display name shared discovery gives a folder by its sharer prints
+// neither the sharer's name, nor its first name, nor its address: the names
+// a catalog account's display name teaches (AccountNameIdentities) and the
+// address shape, which masks an address no catalog holds.
+//
+// Validates: R-6.10.27
+func TestSharedDisplayNamesAreMaskedInEveryForm(t *testing.T) {
+	t.Parallel()
+
+	roles := NewSuiteRoles(nil, AccountNameIdentities(plantedSharerName, "drive-1-account"))
+	names := sharedDisplayNames(t, productFunc(t,
+		parseProductFile(t, "internal", "cli", "shared_discovery.go"), "deriveSharedDisplayName"))
+	require.Lenf(t, names, 4,
+		"deriveSharedDisplayName's sharer forms changed: hold each new form to a mask, then its count here")
+	for _, name := range names {
+		assertMasked(t, roles, "a shared folder's display name", "  "+name+"\n",
+			plantedSharerName, plantedSharerFirst, outsideSharerAddress)
+		assert.Contains(t, roles.Redact(name), plantedSharedFolder, "the folder's own name stays readable")
 	}
 }
 

@@ -937,7 +937,7 @@ func syncedBaselineFor(t *testing.T, absPath string) *syncdomain.BaselineEntry {
 	}
 }
 
-// Validates: R-6.8.9
+// Validates: R-2.8.3
 // Regression: a shutdown landing between transfer completion and the outcome
 // commit used to drop the record because the commit ran on the pool context.
 // The remote create has already happened, so its baseline row must persist.

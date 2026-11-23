@@ -7,7 +7,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 )
@@ -19,46 +18,38 @@ func lintScopeFullFiles() []string {
 	return []string{"go.mod", "go.sum", ".golangci.yml"}
 }
 
-// runChangedLint is the pr profile's golangci-lint: only the packages a change
-// against origin/main touches, and the packages that import them directly, so
-// the local pre-PR gate does not lint the whole tree for a change to a few
-// packages. CI's verify lint job and the full profiles (verify default and
-// verify public, which nightly CI runs) still lint the whole tree. A change to
-// go.mod, go.sum or .golangci.yml lints the whole tree here too, and a change
-// with no Go package in it lints nothing.
-func runChangedLint(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
-	if err := writeStatus(stdout, "==> golangci-lint\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	if err := assertLintVersionMatchesCI(ctx, runner, repoRoot, env); err != nil {
-		return err
-	}
+// lintChangedPackages is the pr profile's lint scope: only the packages a
+// change against origin/main touches, and the packages that import them
+// directly, so the local pre-PR gate does not lint the whole tree for a
+// change to a few packages. CI's verify lint job and the full profiles
+// (verify default and verify public, which nightly CI runs) still lint the
+// whole tree. A change to go.mod, go.sum or .golangci.yml lints the whole
+// tree here too, and a change with no Go package in it lints nothing. Every
+// lint pass lints the same packages.
+func lintChangedPackages(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout io.Writer) (
+	[]string, bool, error,
+) {
 	packages, whole, err := changedLintPackages(ctx, runner, repoRoot, env)
 	if err != nil {
-		return fmt.Errorf("lint: find the packages changed against %s: %w", originMainRef, err)
+		return nil, false, fmt.Errorf("lint: find the packages changed against %s: %w", originMainRef, err)
 	}
-	args := lintCommandArgs(runtime.GOMAXPROCS(0))
 	switch {
 	case whole:
 		if err := writeStatus(stdout, "    the change touches the build or the lint config: linting every package\n"); err != nil {
-			return fmt.Errorf("write status: %w", err)
+			return nil, false, fmt.Errorf("write status: %w", err)
 		}
+		return nil, false, nil
 	case len(packages) == 0:
 		if err := writeStatus(stdout, "    no Go package changed against "+originMainRef+": nothing to lint\n"); err != nil {
-			return fmt.Errorf("write status: %w", err)
+			return nil, false, fmt.Errorf("write status: %w", err)
 		}
-		return nil
+		return nil, true, nil
 	default:
 		if err := writeStatus(stdout, fmt.Sprintf("    %d changed or directly dependent packages\n", len(packages))); err != nil {
-			return fmt.Errorf("write status: %w", err)
+			return nil, false, fmt.Errorf("write status: %w", err)
 		}
-		args = append(args, packages...)
+		return packages, false, nil
 	}
-	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, lintBinaryName, args...); err != nil {
-		return fmt.Errorf("lint: %w", err)
-	}
-
-	return nil
 }
 
 // changedLintPackages returns, as ./dir arguments in name order, the packages

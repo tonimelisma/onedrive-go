@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,25 +65,124 @@ func TestBenchScopeRootRelativePathValidatesInputs(t *testing.T) {
 	require.Error(t, err)
 }
 
+// recordedBenchClock is a retry clock that records each wait and returns at
+// once, moving its own time on by the wait, so a retry test takes no wall
+// time and a deadline is reached by the waits alone.
+type recordedBenchClock struct {
+	at    time.Time
+	waits []time.Duration
+}
+
+func (c *recordedBenchClock) clock() benchRetryClock {
+	return benchRetryClock{
+		now: func() time.Time { return c.at },
+		wait: func(_ context.Context, d time.Duration) error {
+			c.waits = append(c.waits, d)
+			c.at = c.at.Add(d)
+
+			return nil
+		},
+	}
+}
+
+// benchServerProblemStderr is what a command prints for a 5xx answer
+// without --verbose: the CLI's error line alone.
+const benchServerProblemStderr = cliErrorLinePrefix + cliServerProblemMessage + "\n"
+
 // Validates: R-6.10.14
 func TestResetBenchRemoteScopeRetriesUntilSuccessOrNotFound(t *testing.T) {
 	t.Parallel()
 
 	callCount := 0
+	clock := &recordedBenchClock{}
 	subject := preparedBenchSubject{
 		measure: func(context.Context, benchCommandSpec) (benchMeasuredProcess, error) {
 			callCount++
 			if callCount == 1 {
-				return benchMeasuredProcess{Stderr: []byte("graph: HTTP 503")}, assert.AnError
+				return benchMeasuredProcess{Stderr: []byte(benchServerProblemStderr)}, assert.AnError
 			}
 
 			return benchMeasuredProcess{Stderr: []byte(benchMissingFolderStderr)}, assert.AnError
 		},
+		retry: clock.clock(),
 	}
 
 	err := resetBenchRemoteScope(t.Context(), subject, benchLiveCommandRuntime{}, "/benchmarks/test")
 	require.NoError(t, err)
 	assert.Equal(t, 2, callCount)
+	assert.Equal(t, []time.Duration{benchPollBackoff(0)}, clock.waits, "one wait between the two attempts, on the injected clock")
+}
+
+// Validates: R-6.10.14
+//
+// A 5xx during the visibility probe is retried: the CLI says so in its own
+// error line, the only line that names it without --verbose, which the
+// benchmark never passes. The probe waits on the injected clock and then
+// finds the scope.
+func TestWaitForBenchRemoteScopeVisibleRetriesTheCLIsServerProblemLine(t *testing.T) {
+	t.Parallel()
+
+	callCount := 0
+	clock := &recordedBenchClock{}
+	subject := preparedBenchSubject{
+		measure: func(context.Context, benchCommandSpec) (benchMeasuredProcess, error) {
+			callCount++
+			if callCount <= 2 {
+				return benchMeasuredProcess{Stderr: []byte(benchServerProblemStderr)}, assert.AnError
+			}
+
+			return benchMeasuredProcess{}, nil
+		},
+		retry: clock.clock(),
+	}
+
+	err := waitForBenchRemoteScopeVisible(t.Context(), subject, benchLiveCommandRuntime{}, "/benchmarks/test")
+	require.NoError(t, err)
+	assert.Equal(t, 3, callCount, "stat and ls saw the server problem, then stat found the scope")
+	assert.Equal(t, []time.Duration{benchPollBackoff(0)}, clock.waits)
+}
+
+// Validates: R-6.10.14
+//
+// A scope that never appears ends the probe at its deadline, read from the
+// injected clock, after waits that grow to their cap: no wall time passes.
+func TestWaitForBenchRemoteScopeVisibleGivesUpAtItsDeadline(t *testing.T) {
+	t.Parallel()
+
+	clock := &recordedBenchClock{}
+	subject := preparedBenchSubject{
+		measure: func(context.Context, benchCommandSpec) (benchMeasuredProcess, error) {
+			return benchMeasuredProcess{Stderr: []byte(benchMissingFolderStderr)}, assert.AnError
+		},
+		retry: clock.clock(),
+	}
+
+	err := waitForBenchRemoteScopeVisible(t.Context(), subject, benchLiveCommandRuntime{}, "/benchmarks/test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timed out after "+benchLivePollTimeout.String())
+	require.NotEmpty(t, clock.waits)
+	assert.Equal(t, benchPollBackoff(0), clock.waits[0])
+	assert.Equal(t, benchLivePollBackoffCap, clock.waits[len(clock.waits)-1], "the waits grow to their cap")
+	total := time.Duration(0)
+	for _, wait := range clock.waits {
+		total += wait
+	}
+	assert.Greater(t, total, benchLivePollTimeout, "the probe waited past its deadline before it gave up")
+}
+
+// Validates: R-6.10.14
+//
+// The CLI lines the benchmark reads are the CLI's own: each sentence is in
+// internal/cli/error_presentation.go, read as text, since devtool links no
+// product package.
+func TestBenchCLIErrorLinesFollowTheCLIsSource(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile(filepath.Join(repoRootForTest(t), "internal", "cli", "error_presentation.go"))
+	require.NoError(t, err)
+	assert.Contains(t, string(source), `"`+cliServerProblemMessage+`"`)
+	assert.Contains(t, string(source), `"`+cliRemoteItemMissingSuffix+`"`)
+	assert.Contains(t, string(source), `"Error: " + plain`)
 }
 
 // Validates: R-6.10.14
@@ -164,6 +264,7 @@ func TestWaitForBenchRemoteScopeVisibleRequiresExactScopeNameMatch(t *testing.T)
 	t.Parallel()
 
 	callCount := 0
+	clock := &recordedBenchClock{}
 	subject := preparedBenchSubject{
 		measure: func(_ context.Context, spec benchCommandSpec) (benchMeasuredProcess, error) {
 			callCount++
@@ -182,6 +283,7 @@ func TestWaitForBenchRemoteScopeVisibleRequiresExactScopeNameMatch(t *testing.T)
 				return benchMeasuredProcess{}, nil
 			}
 		},
+		retry: clock.clock(),
 	}
 
 	err := waitForBenchRemoteScopeVisible(t.Context(), subject, benchLiveCommandRuntime{
@@ -190,6 +292,7 @@ func TestWaitForBenchRemoteScopeVisibleRequiresExactScopeNameMatch(t *testing.T)
 	}, "/benchmarks/test")
 	require.NoError(t, err)
 	assert.Equal(t, 3, callCount, "a sibling name should not satisfy scope visibility")
+	assert.Equal(t, []time.Duration{benchPollBackoff(0)}, clock.waits)
 }
 
 // Validates: R-6.10.14
@@ -197,8 +300,15 @@ func TestClassifyBenchVisibilityErrorAllowsRetryableFamilies(t *testing.T) {
 	t.Parallel()
 
 	assert.NoError(t, classifyBenchVisibilityError([]byte(benchMissingFolderStderr), assert.AnError))
-	assert.NoError(t, classifyBenchVisibilityError([]byte("graph: HTTP 503"), assert.AnError))
+	assert.NoError(t, classifyBenchVisibilityError([]byte(benchServerProblemStderr), assert.AnError))
+	assert.NoError(t, classifyBenchVisibilityError([]byte(benchServerProblemStderr+
+		`Details: resolving "/benchmarks/test": graph: HTTP 503: serviceNotAvailable`+"\n"), assert.AnError),
+		"under --verbose the error line still comes first")
 	require.Error(t, classifyBenchVisibilityError([]byte("permission denied"), assert.AnError))
+	require.Error(t, classifyBenchVisibilityError([]byte(`level=WARN msg="`+cliServerProblemMessage+`"`+"\n"), assert.AnError),
+		"the sentence on a log line is not the CLI's error")
+	require.Error(t, classifyBenchVisibilityError([]byte(benchServerProblemStderr[:len(benchServerProblemStderr)-1]+" And more.\n"),
+		assert.AnError), "an error that goes on after the sentence is another error")
 	require.Error(t, classifyBenchVisibilityError([]byte("Error: drive section not found\n"), assert.AnError),
 		"a failure whose text says not found is not a missing item")
 }

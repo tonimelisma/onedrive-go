@@ -142,8 +142,21 @@ func TestRunVerifyLintRunsOnlyLint(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{"golangci-lint run --allow-parallel-runners"}, recordedCommandSequence(runner))
+	assert.Equal(t, lintPassSequence(), recordedCommandSequence(runner))
 	assert.Equal(t, hostLintCommandArgs(), runner.runCommands[0].args)
+	assert.Equal(t, append(hostLintCommandArgs(), "--build-tags=e2e,e2e_full,integration,race"), runner.runCommands[1].args,
+		"the darwin pass adds the race tag to the configuration's tags")
+	assert.Equal(t, hostLintCommandArgs(), runner.runCommands[2].args)
+}
+
+// lintPassSequence is what the lint step runs, one golangci-lint per pass,
+// as recordedCommandSequence reports it.
+func lintPassSequence() []string {
+	return []string{
+		"golangci-lint run --allow-parallel-runners GOOS=linux",
+		"golangci-lint run --allow-parallel-runners GOOS=darwin",
+		"golangci-lint run --allow-parallel-runners GOOS=freebsd",
+	}
 }
 
 // hostLintCommandArgs is the linter's command line on the host the tests run
@@ -194,7 +207,7 @@ func TestRunVerifyPRRunsLintThenQuick(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	expected := append([]string{"golangci-lint run --allow-parallel-runners"}, quickCommandSequence()...)
+	expected := append(lintPassSequence(), quickCommandSequence()...)
 	assert.Equal(t, expected, recordedCommandSequence(runner))
 	assert.Equal(t, append(hostLintCommandArgs(), "./internal/a", "./internal/b"), runner.runCommands[0].args,
 		"pr lints the changed package and its direct importer, not the one that imports neither")
@@ -274,6 +287,7 @@ func TestRunVerifyPRLintScopeFollowsTheChange(t *testing.T) {
 			for _, command := range runner.runCommands {
 				if command.name == lintBinaryName {
 					lint = command.args
+					break
 				}
 			}
 			assert.Equal(t, tc.want, lint)

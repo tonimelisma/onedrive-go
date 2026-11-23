@@ -344,7 +344,7 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 }
 
 // adoptEngine makes eng the model's engine: the model's clock, one worker,
-// and the seed's dispatch order, recorded.
+// the seed's dispatch order, and a record of every publication and dispatch.
 func (r *modelRun) adoptEngine(eng *testEngine) {
 	r.eng = eng
 	eng.hooks.clock = r.clock
@@ -354,15 +354,8 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 	}
 	eng.hooks.serializeWorkers = true
 	eng.hooks.shadowPlanned = r.checkShadowPlan
-	eng.hooks.dispatchOrder = func(frontier []*syncdomain.TrackedAction) []*syncdomain.TrackedAction {
-		frontier = order(frontier)
-		r.recordDispatch(frontier)
-		select {
-		case r.dispatched <- struct{}{}:
-		default:
-		}
-		return frontier
-	}
+	eng.hooks.dispatchOrder = order
+	eng.hooks.recordFrontier = r.recordFrontierStep
 }
 
 // checkShadowPlan is every pass's comparison with the identity-keyed shadow
@@ -445,9 +438,17 @@ func (r *modelRun) recordf(format string, args ...any) {
 	r.transcript = append(r.transcript, line)
 }
 
-func (r *modelRun) recordDispatch(frontier []*syncdomain.TrackedAction) {
-	for _, ta := range frontier {
-		r.recordf("dispatch %s %s <- %s", ta.Action.Type, ta.Action.Path, ta.Action.OldPath)
+// recordFrontierStep keeps every action a pass publishes or dispatches in
+// the transcript, so a failing seed's kept log shows each pass, one with a
+// single action or only publications included.
+func (r *modelRun) recordFrontierStep(step frontierStep, action *syncdomain.Action) {
+	r.recordf("%s %s %s <- %s", step, action.Type, action.Path, action.OldPath)
+	if step != frontierDispatched {
+		return
+	}
+	select {
+	case r.dispatched <- struct{}{}:
+	default:
 	}
 }
 

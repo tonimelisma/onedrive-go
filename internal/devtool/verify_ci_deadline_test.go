@@ -88,14 +88,18 @@ const ciLintJobSetupAllowance = 5 * time.Minute
 // A linter that hangs on a CI runner is ended by its own deadline, and its
 // message says so, only when the lint job's timeout-minutes leaves room for
 // that deadline plus the steps before it. At an equal number the job ends
-// first and the log names no cause.
+// first and the log names no cause. Each leg of the job runs one lint pass
+// (TestCILintJobRunsEveryLintPass), so one linter deadline is what a leg can
+// start; a leg that ran every pass would need their sum.
 func TestCILintJobTimeoutCoversTheLintersDeadline(t *testing.T) {
 	t.Parallel()
 
 	workflow, err := os.ReadFile(filepath.Join(repoRootFromDevtoolPackage(t), ciWorkflowPath))
 	require.NoError(t, err)
 
-	deadline := lintTimeoutForCores(unitTestReferenceCores)
+	passes, err := resolveLintPasses(lintPasses()[0].name)
+	require.NoError(t, err)
+	deadline := time.Duration(len(passes)) * lintTimeoutForCores(unitTestReferenceCores)
 	for _, event := range []string{ciEventPullRequest, ciEventPush} {
 		timeout := ciJobTimeout(t, string(workflow), "verify-lint", event)
 		assert.LessOrEqualf(t, deadline+ciLintJobSetupAllowance, timeout,

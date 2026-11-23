@@ -183,3 +183,62 @@ func TestRecycleBinTableMaskFollowsTheProductsHeaders(t *testing.T) {
 		"recycle-bin list's table changed: give recycleBinHeaderPattern and maskRecycleBinIDs its new columns")
 	assert.Regexp(t, recycleBinHeaderPattern, "NAME  SIZE  TYPE  DELETED  ID")
 }
+
+// inventedOutsideAddress is an address no catalog holds and no fixture
+// names.
+const inventedOutsideAddress = "rosa.outsider@example.org"
+
+// Validates: R-6.10.27
+//
+// An address no catalog holds, a sharer outside the configured accounts, is
+// masked wherever it stands in free text, its @ also spelled %40, and a
+// sentence's last dot stays. A role is no address, and neither is a word
+// whose domain ends in no letters, such as a module version, nor one with no
+// dotted domain: both stay readable.
+func TestRedactMasksAnyAddressShapedWord(t *testing.T) {
+	t.Parallel()
+
+	roles := plantedSuiteRoles()
+	for _, row := range []struct{ text, want string }{
+		{
+			text: "Error: drive add: no folder of " + inventedOutsideAddress + " is named Docs",
+			want: "Error: drive add: no folder of masked is named Docs",
+		},
+		{
+			text: "Rosa's Docs (" + inventedOutsideAddress + ") was added",
+			want: "Rosa's Docs (masked) was added",
+		},
+		{text: "invited " + inventedOutsideAddress + ".", want: "invited masked."},
+		{
+			text: "mailto:" + strings.Replace(inventedOutsideAddress, "@", percentEncodedAt, 1) + " failed",
+			want: "mailto:masked failed",
+		},
+		{text: "Up to date: planted.one@example.test", want: "Up to date: drive-1-account"},
+		{text: "go run golang.org/x/tools/cmd/stringer@v0.30.0", want: "go run golang.org/x/tools/cmd/stringer@v0.30.0"},
+		{text: "ssh git@localhost failed", want: "ssh git@localhost failed"},
+		{text: "an @ alone", want: "an @ alone"},
+	} {
+		assert.Equal(t, row.want, roles.Redact(row.text), row.text)
+	}
+}
+
+// Validates: R-6.10.27
+//
+// A catalog account's display name teaches the masks its first name too, as
+// shared discovery labels a folder with it ("<first name>'s <folder>"); a
+// first name shorter than minLearnedNameLength characters is reported by its
+// role, never learned, and a name without a space is one name.
+func TestAccountNameIdentities_LearnTheFirstName(t *testing.T) {
+	t.Parallel()
+
+	roles := NewSuiteRoles([]string{plantedFirstDrive}, AccountNameIdentities("Rosalind Sharer", "drive-1-account"))
+	assert.Equal(t, "drive-1-account-first-name's Holiday Folder", roles.Redact("Rosalind's Holiday Folder"))
+	assert.Equal(t, "drive-1-account-name's Holiday Folder", roles.Redact("Rosalind Sharer's Holiday Folder"))
+
+	short := NewSuiteRoles([]string{plantedFirstDrive}, AccountNameIdentities("Ann Sharer", "drive-1-account"))
+	assert.Equal(t, "Ann's Docs", short.Redact("Ann's Docs"))
+	assert.Equal(t, []string{"drive-1-account-first-name"}, short.UnlearnedNameRoles())
+
+	assert.Equal(t, []IdentityRole{{Value: "Mononym", Role: "drive-1-account-name", IsName: true}},
+		AccountNameIdentities("Mononym", "drive-1-account"))
+}

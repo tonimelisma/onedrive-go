@@ -124,8 +124,8 @@ func findSeedIssues(ctx context.Context, gh ghClient, repoRoot string, withTexts
 // issue's body, and its open issue (seedIssueCloseLine says how to close it).
 func nightlySeedReplayLines(reports []nightlyJobReport, issues seedIssues) map[string]string {
 	commands := map[string]string{}
-	for _, report := range reports {
-		for _, seed := range report.seeds {
+	for i := range reports {
+		for _, seed := range reports[i].seeds {
 			commands[seed.key()] = seed.command()
 		}
 	}
@@ -210,7 +210,8 @@ type failingSeed struct {
 func (r nightlyRunReport) failingSeeds() []failingSeed {
 	seeds := []failingSeed{}
 	index := map[string]int{}
-	for _, job := range r.jobs {
+	for j := range r.jobs {
+		job := &r.jobs[j]
 		for _, seed := range job.seeds {
 			i, seen := index[seed.key()]
 			if !seen {

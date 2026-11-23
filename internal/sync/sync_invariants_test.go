@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,11 +36,14 @@ import (
 //   - nothing left waiting: retry_work, held_deletes and pending_creates are
 //     empty;
 //   - no stray artifacts: no partial download or other .onedrive-go. file in
-//     the tree, no upload session left behind, no empty file at a
-//     conflict-copy name: a conflict copy is its source renamed, and scenario
-//     content is never empty. The one empty file allowed there is the item a
-//     create left on OneDrive whose intent the crash harness's lost-WAL
-//     variant then took with the WAL (syncHarness.placeholdersWithoutIntent).
+//     the tree, no upload session left behind, and no empty file on either
+//     side without an allowance: scenario content is never empty, so an empty
+//     file is a create's placeholder or a lost claim left behind, at a
+//     conflict-copy name or any other. A scenario that syncs a zero-byte file
+//     on purpose declares its path (syncHarness.emptyFilesAllowed), and the
+//     item a create left on OneDrive whose intent the crash harness's lost-WAL
+//     variant then took with the WAL is allowed by its ID
+//     (syncHarness.placeholdersWithoutIntent).
 
 // syncHarness is a test engine, its sync root and the fake OneDrive it
 // syncs with.
@@ -61,6 +65,11 @@ type syncHarness struct {
 	// at one name (R-2.3.5) and downloads it, empty. A plain crash keeps the
 	// intent, so it adds nothing here.
 	placeholdersWithoutIntent map[string]bool
+
+	// emptyFilesAllowed are the paths at which the scenario syncs a
+	// zero-byte file on purpose; any other empty file of a converged tree
+	// fails the stray-artifact invariant.
+	emptyFilesAllowed map[string]bool
 }
 
 func newSyncHarness(t *testing.T, remote *moveScenarioRemote) *syncHarness {
@@ -194,14 +203,13 @@ func assertNoStrayArtifacts(t *testing.T, h *syncHarness, local map[string]strin
 	t.Helper()
 
 	ok := true
-	remoteEmpty := h.remote.emptyFiles()
-	for p, content := range local {
-		name := filepath.Base(p)
-		ok = assert.False(t, strings.HasPrefix(name, ".onedrive-go."), "invariant: no transfer artifact left at %s", p) && ok
-		allowed := h.placeholdersWithoutIntent[remoteEmpty[p]]
-		ok = assert.False(t, strings.Contains(name, modelConflictMarker) && content == "" && !allowed,
-			"invariant: no empty file at the conflict-copy name %s (a conflict copy holds its source's content, "+
-				"and scenario content is never empty)", p) && ok
+	for p := range local {
+		ok = assert.False(t, strings.HasPrefix(filepath.Base(p), ".onedrive-go."), "invariant: no transfer artifact left at %s", p) && ok
+	}
+	for _, p := range strayEmptyFiles(local, h.remote.emptyFiles(), h.emptyFilesAllowed, h.placeholdersWithoutIntent) {
+		ok = assert.Fail(t, "invariant: no empty file without an allowance",
+			"%s is empty: scenario content is never empty, so it is a placeholder or a lost claim left behind; "+
+				"a scenario that syncs a zero-byte file there declares it (syncHarness.emptyFilesAllowed)", p) && ok
 	}
 
 	sessions, err := os.ReadDir(filepath.Join(h.eng.dataDir, "upload-sessions"))
@@ -211,6 +219,34 @@ func assertNoStrayArtifacts(t *testing.T, h *syncHarness, local map[string]strin
 	}
 
 	return ok
+}
+
+// strayEmptyFiles lists, sorted, every path at which either side of a
+// converged tree holds an empty file without an allowance: local is the sync
+// root as path -> content, remoteEmpty OneDrive's empty files as path ->
+// item ID, allowedPaths the paths a scenario declares, and placeholders the
+// item IDs the lost-WAL crash variant allows.
+func strayEmptyFiles(local, remoteEmpty map[string]string, allowedPaths, placeholders map[string]bool) []string {
+	empty := map[string]bool{}
+	for p, content := range local {
+		if content == "" {
+			empty[p] = true
+		}
+	}
+	for p := range remoteEmpty {
+		empty[p] = true
+	}
+
+	var stray []string
+	for p := range empty {
+		if allowedPaths[p] || placeholders[remoteEmpty[p]] {
+			continue
+		}
+		stray = append(stray, p)
+	}
+	slices.Sort(stray)
+
+	return stray
 }
 
 // harnessLocalTree is the sync root as path -> content, folders as "/".
@@ -310,4 +346,41 @@ func syncStateDump(t *testing.T, eng *testEngine) string {
 	}
 
 	return out.String()
+}
+
+// Validates: R-6.5.2
+//
+// The stray-artifact invariant reads every empty file of a converged tree,
+// on either side, against an explicit allowance: a planted recovery that
+// left a lost claim's empty file at an ordinary name beside the user's
+// conflict copy is caught, and so is one at a conflict-copy name and one
+// only OneDrive holds; a scenario's zero-byte file passes with its declared
+// path and is caught without it; the lost-WAL placeholder stays allowed by
+// its item.
+func TestStrayEmptyFiles_EveryEmptyFileNeedsAnAllowance(t *testing.T) {
+	t.Parallel()
+
+	const conflictCopy = "doc.conflict-20260101-000000.txt"
+	plantedRecovery := map[string]string{"doc.txt": "", conflictCopy: "my words\n", "keep.txt": "keep\n"}
+	assert.Equal(t, []string{"doc.txt"},
+		strayEmptyFiles(plantedRecovery, map[string]string{"doc.txt": "item-lost"}, nil, nil),
+		"a lost claim's empty file at an ordinary name")
+	assert.Equal(t, []string{conflictCopy},
+		strayEmptyFiles(map[string]string{conflictCopy: ""}, map[string]string{conflictCopy: "item-copy"}, nil, nil),
+		"an empty file at a conflict-copy name")
+	assert.Equal(t, []string{"remote-only.txt"},
+		strayEmptyFiles(map[string]string{}, map[string]string{"remote-only.txt": "item-remote"}, nil, nil),
+		"an empty file only OneDrive holds")
+
+	zeroByte := map[string]string{"empty.txt": "", "keep.txt": "keep\n"}
+	remoteZeroByte := map[string]string{"empty.txt": "item-empty"}
+	assert.Empty(t, strayEmptyFiles(zeroByte, remoteZeroByte, map[string]bool{"empty.txt": true}, nil),
+		"a zero-byte file the scenario declares")
+	assert.Equal(t, []string{"empty.txt"}, strayEmptyFiles(zeroByte, remoteZeroByte, nil, nil),
+		"the same zero-byte file without the declaration")
+
+	assert.Empty(t, strayEmptyFiles(map[string]string{"doc.txt": ""}, map[string]string{"doc.txt": "orphan"},
+		nil, map[string]bool{"orphan": true}), "the lost-WAL placeholder, allowed by its item")
+	assert.Empty(t, strayEmptyFiles(map[string]string{"docs": syncfixture.ModelFolderSentinel, "a.txt": "a\n"},
+		map[string]string{}, nil, nil), "folders and files with content")
 }

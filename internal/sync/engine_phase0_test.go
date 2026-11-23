@@ -455,8 +455,7 @@ func TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta(t *testing.T
 	assert.False(t, found, "bootstrap should settle remote delete drift from baseline + mirror truth")
 }
 
-// Validates: R-6.8.9
-// Validates: R-2.10.5
+// Validates: R-2.10.5, R-6.8.9
 func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testing.T) {
 	t.Parallel()
 

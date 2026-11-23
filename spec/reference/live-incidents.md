@@ -62,6 +62,7 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261121-02 | The nightly report could not read a red job's log and did not say why | mitigated | test harness | 2026-11-21 | no |
 | LI-20261121-01 | The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline | fixed | test harness | 2026-11-21 | yes |
 | LI-20261115-01 | Graph answered an ordinary folder move with 400 `Invalid request` | mitigated | graph quirk | 2026-11-15 | yes |
 | LI-20261115-02 | The stress lane's race runs of the sync tree ran past a fixed 40-minute deadline | fixed | test harness | 2026-11-15 | yes |
@@ -113,6 +114,42 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261121-02: The nightly report could not read a red job's log and did not say why
+
+First seen: 2026-11-21
+Last seen: 2026-11-21
+Area: `internal/devtool/nightly_verdict.go` (`attributeNightlyFailures`)
+Suite / test: the `nightly-report` job of the scheduled run, for the red
+`verify-full (ubuntu-latest)` job
+Classification: test harness
+Status: mitigated (the cause of the refusal is not yet known)
+Recurring: no
+Summary: the `nightly-failure` issue said of the red job "failed; its log
+could not be read". The reader kept only that the read failed and dropped
+why, so neither the issue nor the job's output named the cause.
+
+Evidence:
+- The report printed the issue text about two seconds after it posted the
+  commit status, so the job-log read failed on its first attempt: the
+  client repeats a 5xx, a dropped connection and an unreachable host with
+  backoff for 35 seconds, so the failure was none of those.
+- The job had finished an hour before the report ran, and the same
+  `GET repos/{owner}/{repo}/actions/jobs/<id>/logs` request, made with a
+  maintainer's token on 2026-11-23, returned the whole 90 kB log, so the log
+  existed and was not too large. What remains is how GitHub answered the
+  report's own `GITHUB_TOKEN` (`contents: read`, `actions: read`), which the
+  report did not keep.
+
+Fix: the reader keeps, per job, why its log could not be read, in the
+report's own words, and the check's job line and the issue print it: the
+HTTP status GitHub answered, how GitHub failed on every attempt, or that the
+request failed without a status; gh's text, which quotes the request, never
+reaches the public issue (`nightlyLogReadFailure`,
+`TestNightlyLogReadFailureNamesTheStatusAndNoText`,
+`TestNightlyReportIssueTextHoldsOnlyJobsTestsAndTheRunURL`). The next red
+night with an unreadable log names the status; the token's permission is
+the fix to make if it is a 403.
 
 ## LI-20261121-01: The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline
 
@@ -739,7 +776,7 @@ Evidence:
 - The failing log showed `TestE2E_Sync_IncrementalDeltaToken` completing its
   first upload-only sync successfully, then the second upload-only sync read an
   incremental root delta page containing a deleted item with empty name,
-  parent ID `F1DA660E69BDEC82!sdda8fb3401414e36b6425c2569f57d6f`, and no
+  parent ID `0123456789ABCD00!invented000xxxxxxxxxxxxxxxxxxxxxx`, and no
   matching inflight or baseline parent.
 - The observer logged `skipping remote delete without recoverable path` and
   then returned `Error: run sync engine once: sync: observing remote delta:
@@ -1314,9 +1351,9 @@ Evidence:
   `2026-04-22T14:42:40-07:00` on the same recipient account logged
   `search_count=11`, `ignored_count=8`, and `actionable_count=3`, and its JSON
   output included both configured shared-folder fixture selectors exactly:
-  `shared:drive-1-account:bd50cf43646e28e6:BD50CF43646E28E6!s2c217defed3e4551a5a24a3b5d13e577`
+  `shared:drive-1-account:0123456789abcd01:0123456789ABCD01!invented001xxxxxxxxxxxxxxxxxxxxxx`
   and
-  `shared:drive-1-account:bd50cf43646e28e6:BD50CF43646E28E6!sc28fe6110ea0419394f1ce27d20a3790`.
+  `shared:drive-1-account:0123456789abcd01:0123456789ABCD01!invented002xxxxxxxxxxxxxxxxxxxxxx`.
 - The fixture selectors in `.testdata/fixtures.env` already matched those
   exact IDs, which ruled out stale fixture configuration and isolated the
   failure to one provider search-visibility window.
@@ -1538,7 +1575,7 @@ Evidence:
   `TestE2E_FileOpsSmokeCRUD` while downloading
   `/onedrive-go-e2e-smoke-1776131801762376000/smoke.txt`.
 - The child CLI log first resolved the file successfully by path with
-  `GET /drives/bd50cf43646e28e6/root:/onedrive-go-e2e-smoke-1776131801762376000/smoke.txt: = 200`.
+  `GET /drives/0123456789abcd01/root:/onedrive-go-e2e-smoke-1776131801762376000/smoke.txt: = 200`.
 - The immediate follow-on metadata fetch by item ID then returned HTTP 404
   `itemNotFound` on each documented quirk retry attempt until
   `download-metadata-transient-404 retry exhausted after 4 attempts`.
@@ -1553,7 +1590,7 @@ Follow-up evidence:
 - Local `go run ./cmd/devtool verify default` on April 28, 2026 reproduced the
   same family in `TestE2E_FileOpsSmokeCRUD`: path lookup succeeded for
   `/onedrive-go-e2e-smoke-1777392244287330000/smoke.txt`, but the follow-on
-  `GET /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s8191aeadd8f44644a718c2248112ba6d`
+  `GET /drives/0123456789abcd01/items/0123456789ABCD01!invented003xxxxxxxxxxxxxxxxxxxxxx`
   returned four consecutive `404 itemNotFound` responses and exhausted the
   then-current four-attempt budget.
 Resolution / mitigation: this increment corrected the stale quirk-reference
@@ -1784,10 +1821,10 @@ Evidence:
   `/e2e-cp-folder-1775879036248706000/src.txt` into
   `/e2e-cp-folder-1775879036248706000/dest`.
 - The child CLI log first showed
-  `GET /drives/bd50cf43646e28e6/root:/e2e-cp-folder-1775879036248706000/dest: = 200`,
+  `GET /drives/0123456789abcd01/root:/e2e-cp-folder-1775879036248706000/dest: = 200`,
   proving the destination folder was already path-visible.
 - The immediate follow-on
-  `POST /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s75b8ff1dfb2846adbb1003d999d52233/copy`
+  `POST /drives/0123456789abcd01/items/0123456789ABCD01!invented004xxxxxxxxxxxxxxxxxxxxxx/copy`
   then returned HTTP 404 with request ID
   `f7f79148-fe82-4350-8bc7-a620c0598a1b` and message
   `Failed to verify the existence of destination location`.
@@ -1849,7 +1886,7 @@ Evidence:
 - Local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on April
   8, 2026 failed in `TestE2E_Cp_File` while creating
   `/e2e-cp-file-1775671921484525000`.
-- `POST /drives/bd50cf43646e28e6/items/root/children` returned HTTP 200 with
+- `POST /drives/0123456789abcd01/items/root/children` returned HTTP 200 with
   request ID `4b1bc4e6-0a58-4d5c-bda6-95c14326203f`.
 - The body was empty enough that `CreateFolder()` surfaced
   `graph: decoding create folder response: EOF`.
@@ -1878,9 +1915,9 @@ Evidence:
   `/onedrive-go-e2e-1775667044557991000/perm-test.txt` successfully via
   simple upload during `TestE2E_RoundTrip/rm_permanent` setup.
 - The upload response returned item ID
-  `A1B2C3D4E5F60718!s1a2b3c4d5e6f708192a3b4c5d6e7f809`.
+  `0123456789ABCD02!invented005xxxxxxxxxxxxxxxxxxxxxx`.
 - The immediate follow-on
-  `PATCH /drives/a1b2c3d4e5f60718/items/A1B2C3D4E5F60718!s1a2b3c4d5e6f708192a3b4c5d6e7f809`
+  `PATCH /drives/0123456789abcd02/items/0123456789ABCD02!invented005xxxxxxxxxxxxxxxxxxxxxx`
   still returned HTTP 404 `itemNotFound` with request ID
   `c597aa4d-e4c5-4c89-8888-fa9a07ab36db`.
 - The later `rm_permanent` failure in that same fast-suite run was secondary:
@@ -1891,16 +1928,16 @@ Evidence:
   `TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges` while a shared-root
   helper used CLI `put` to create `remote-owned.txt`.
 - The simple upload itself succeeded and returned item ID
-  `BD50CF43646E28E6!s092611d0ad674c02b5d0f2b7c48d00b1`, but the immediate
-  follow-on `PATCH /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s092611d0ad674c02b5d0f2b7c48d00b1`
+  `0123456789ABCD01!invented006xxxxxxxxxxxxxxxxxxxxxx`, but the immediate
+  follow-on `PATCH /drives/0123456789abcd01/items/0123456789ABCD01!invented006xxxxxxxxxxxxxxxxxxxxxx`
   still returned HTTP 404 `itemNotFound` on six straight attempts between
   14:12:48 and 14:12:59 PDT before the old budget exhausted.
 - Local `go run ./cmd/devtool verify e2e-full --classify-live-quirks` on
   April 23, 2026 hit the same boundary again in
   `TestE2E_SyncWatch_FileDeletion`.
 - The simple upload itself succeeded and returned item ID
-  `BD50CF43646E28E6!s5bf7484a62804c52a3304385a4586cfd`, but the immediate
-  follow-on `PATCH /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s5bf7484a62804c52a3304385a4586cfd`
+  `0123456789ABCD01!invented007xxxxxxxxxxxxxxxxxxxxxx`, but the immediate
+  follow-on `PATCH /drives/0123456789abcd01/items/0123456789ABCD01!invented007xxxxxxxxxxxxxxxxxxxxxx`
   returned HTTP 504 `UnknownError` with request ID
   `0bb61a88-1a17-44e0-bed9-e92c3b6bc0b7`.
 - The later watch deletion failure was secondary: the file content already
@@ -2064,7 +2101,7 @@ Evidence:
   `TestE2E_Sync_DriveRemoveAndReAdd`: after the first `sync --upload-only
   --force` created `/e2e-sync-readd-1775676089553365000/file1.txt`, the second
   sync still exhausted `createUploadSession` on `file2.txt` for parent
-  `BD50CF43646E28E6!sa7cb589636134fe4b1bf296e555fb410`, then exhausted the old
+  `0123456789ABCD01!invented008xxxxxxxxxxxxxxxxxxxxxx`, then exhausted the old
   final simple-upload replay budget with request ID
   `a9ad7aa8-ba79-424d-9ead-9b718939ddca`.
 - The same family recurred again on April 10, 2026 during local
@@ -2150,7 +2187,7 @@ Evidence:
   `stat /e2e-watch-conf-1776958144182171000/conflict-watch.txt` through the
   derived shared-root canonical drive, but the read kept failing with
   `resolve item path ... list children for segment ... graph: HTTP 404`
-  against `GET /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s43ecd2615dbd421488246c4c51cdb6cd/children?$top=200`
+  against `GET /drives/0123456789abcd01/items/0123456789ABCD01!invented009xxxxxxxxxxxxxxxxxxxxxx/children?$top=200`
   until the 3-minute poll budget expired. A focused rerun of
   `go test -tags='e2e e2e_full' -run '^TestE2E_SyncWatch_ConflictDuringWatch$' -count=1 -v ./e2e/...`
   passed immediately after the shared-root read pollers were taught to
@@ -2206,7 +2243,7 @@ Evidence:
   on April 5, 2026 resolved
   `/onedrive-go-e2e-edge-1775450932112095000/concurrent-1.txt` successfully by
   path during cleanup.
-- The immediate `DELETE /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s5fd8d410d21d4234a567f45e01fc46e2`
+- The immediate `DELETE /drives/0123456789abcd01/items/0123456789ABCD01!invented010xxxxxxxxxxxxxxxxxxxxxx`
   still returned HTTP 404 `itemNotFound` with request ID
   `335ea56d-e3a9-4d2f-8b4c-742da9088eec`.
 - On April 7, 2026, the isolated repro for `TestE2E_Sync_DeleteSafetyThreshold`
@@ -2384,8 +2421,8 @@ Evidence:
   family in `TestE2E_Sync_IgnoreMarkerRemovalReconcilesBlockedRemoteDownload`:
   after `mkdir /e2e-sync-marker-1775870853588831314` had already produced a
   readable parent item ID
-  `F1DA660E69BDEC82!s1905001a0a384fdeb1e03964b22f430d`, the immediate child
-  create `POST /drives/f1da660e69bdec82/items/F1DA660E69BDEC82!s1905001a0a384fdeb1e03964b22f430d/children`
+  `0123456789ABCD00!invented011xxxxxxxxxxxxxxxxxxxxxx`, the immediate child
+  create `POST /drives/0123456789abcd00/items/0123456789ABCD00!invented011xxxxxxxxxxxxxxxxxxxxxx/children`
   still returned `404 itemNotFound` with request ID
   `c98813fc-6726-4d1f-ad89-a8a7da8522b3`. Cleanup immediately afterward also
   saw `/e2e-sync-marker-1775870853588831314` as missing by exact path with
@@ -2554,7 +2591,7 @@ Recurring: no
 Summary: A full-suite keep-local resolution proved that sync upload execution still recreated files through the parent-path upload route even when the conflict record already carried the authoritative remote `itemID`. During the live run, the small-file overwrite first hit the simple-upload `404` fallback and then exhausted the parent-based `createUploadSession` retry budget on the same folder. The Graph inconsistency was already known, but the executor widened its exposure by ignoring the narrower item-ID overwrite route it already had available.
 Evidence:
 - Local `go run ./cmd/devtool verify e2e-full` on April 7, 2026 failed in `TestE2E_Sync_CreateCreateConflict_ResolveKeepLocal` while resolving `e2e-sync-cc-1775631264479623000/collision.txt` with the legacy keep-local conflict command.
-- The child CLI log showed that legacy keep-local flow restoring the conflict copy, then attempting a parent-path simple upload followed by repeated `POST /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s8842f8751f7c491fbfd30ddaa2fc0031:/collision.txt:/createUploadSession` failures ending with request ID `9dce082f-97ae-4f6c-9cc2-69b650dcf4c1`.
+- The child CLI log showed that legacy keep-local flow restoring the conflict copy, then attempting a parent-path simple upload followed by repeated `POST /drives/0123456789abcd01/items/0123456789ABCD01!invented012xxxxxxxxxxxxxxxxxxxxxx:/collision.txt:/createUploadSession` failures ending with request ID `9dce082f-97ae-4f6c-9cc2-69b650dcf4c1`.
 - [graph-api-quirks.md](graph-api-quirks.md) already documented the broader fresh-parent `createUploadSession` `404 itemNotFound` family; this incident showed the executor still depended on that family in an overwrite flow that already had stable remote item identity.
 Resolution / mitigation: `ExecuteUpload` now overwrites by item ID whenever the action carries a non-empty `ItemID`, using parent-path upload only for true create flows with no remote identity yet. The legacy keep-local flow therefore restored the local conflict copy and then overwrote the known remote item directly instead of recreating it through the parent route.
 Promoted docs: [drive-transfers.md](../design/drive-transfers.md), [sync-execution.md](../design/sync-execution.md), [graph-api-quirks.md](graph-api-quirks.md)
@@ -2571,7 +2608,7 @@ Recurring: yes
 Summary: A full-suite conflict setup proved that a parent folder could be visible to one command and still fail the immediate next command's parent-path resolution. The test helper confirmed the folder path before starting the remote edit step, but the subsequent CLI `put` still died resolving the same parent path with `404 itemNotFound` instead of treating it as a bounded visibility-convergence gap.
 Evidence:
 - Local `go run ./cmd/devtool verify e2e-full` on April 7, 2026 failed in `TestE2E_Resolve_Both_PreservesConflictCopy` while uploading `/e2e-cli-keepboth-1775630146992732000/both.txt`.
-- The child CLI log showed `GET /me` first stalling to a transient `504`, then succeeding on retry, followed by `GET /drives/bd50cf43646e28e6/root:/e2e-cli-keepboth-1775630146992732000:` returning `404 itemNotFound` with request ID `55b3980f-1c7c-4465-b09f-6683a0771f08`.
+- The child CLI log showed `GET /me` first stalling to a transient `504`, then succeeding on retry, followed by `GET /drives/0123456789abcd01/root:/e2e-cli-keepboth-1775630146992732000:` returning `404 itemNotFound` with request ID `55b3980f-1c7c-4465-b09f-6683a0771f08`.
 - [graph-api-quirks.md](graph-api-quirks.md) already records the broader path-visibility lag family for adjacent `mkdir` / `put` / `mv` flows; this incident showed the same family could hit pre-upload parent resolution too.
 - Local `go run ./cmd/devtool verify default` on April 8, 2026 hit the same family in fast E2E `TestE2E_Sync_SyncPathsExactFileDownloadsOnlySelectedRemoteFile`: after `mkdir /.../docs` succeeded, the harness still timed out polling `stat /.../docs` before the follow-on helper-driven `put`, even though the product `put` command already owns parent convergence through `WaitPathVisible()`.
 - Local `go run ./cmd/devtool verify default` on April 9, 2026 hit the same

@@ -37,7 +37,9 @@ const (
 	// goTestTimeoutPanicPrefix starts the panic a test binary prints when its
 	// -timeout fires. goTestRunningTestsHeader follows, then one line per test
 	// still running, `<name> (<elapsed>)`, indented or not depending on how
-	// the runtime prints a multi-line panic.
+	// the runtime prints a multi-line panic. The list is sorted by name, not
+	// by how long each test ran; the top-level test that ran longest is the
+	// one that hung (hungTimeoutEntries).
 	goTestTimeoutPanicPrefix = "panic: test timed out after "
 	goTestRunningTestsHeader = "running tests:"
 
@@ -113,8 +115,9 @@ type goTestFailure struct {
 	pkg string
 	// test is the failed test's full name, empty for a package failure.
 	test string
-	// timedOut marks a test the timeout panic listed as running: it was
-	// killed at the binary's deadline, not failed by its own verdict.
+	// timedOut marks a test the timeout panic named as hung: the top-level
+	// test that ran longest, or a subtest of it, killed at the binary's
+	// deadline rather than failed by its own verdict.
 	timedOut bool
 	// attempt counts the go tests of its package that the log closed before
 	// the one that reported it: zero for the first go test of the package in
@@ -163,6 +166,7 @@ func parseGoTestLog(log string) goTestLog {
 		failedRuns: map[goTestRun]bool{},
 		results:    map[string]int{},
 		listing:    map[string]timeoutListing{},
+		running:    map[string][]runningTest{},
 	}
 	for line := range strings.Lines(log) {
 		text, event, isEvent := decodeGoTestLogLine(line)
@@ -178,6 +182,9 @@ func parseGoTestLog(log string) goTestLog {
 	}
 	// A log cut off before its package results, a job killed at its own
 	// timeout, still names what it saw fail.
+	for scope := range scan.running {
+		scan.flushTimeoutListing(scope)
+	}
 	for _, p := range scan.pending {
 		scan.settle(p.failure)
 	}
@@ -328,6 +335,15 @@ type goTestLogScan struct {
 	// result line.
 	pendingRawSeed string
 	listing        map[string]timeoutListing
+	// running holds, per scope, the tests the timeout panic being read lists,
+	// until the list ends and flushTimeoutListing keeps the hung one.
+	running map[string][]runningTest
+}
+
+// runningTest is one `<name> (<elapsed>)` line of a timeout panic.
+type runningTest struct {
+	name    string
+	elapsed time.Duration
 }
 
 // pendingGoTestFailure is a failure waiting for the result of the package
@@ -435,35 +451,79 @@ func (s *goTestLogScan) readTimeoutListing(scope string, trimmed string) bool {
 			return true
 		}
 	case timeoutListingTests:
-		if name, ok := runningTestName(trimmed); ok {
-			s.pending = append(s.pending, pendingGoTestFailure{
-				scope:   scope,
-				failure: goTestFailure{pkg: scope, test: name, timedOut: true},
-			})
+		if running, ok := readRunningTest(trimmed); ok {
+			s.running[scope] = append(s.running[scope], running)
 			return true
 		}
 	}
 	// A timeout with no test running lists none, and the first line that is
 	// not a running test ends the list.
 	delete(s.listing, scope)
+	s.flushTimeoutListing(scope)
 
 	return false
 }
 
-// runningTestName reads one `<name> (<elapsed>)` line of a timeout panic.
-func runningTestName(trimmed string) (string, bool) {
-	name, elapsed, ok := strings.Cut(trimmed, " ")
-	if !ok || name == "" || !strings.HasPrefix(elapsed, "(") || !strings.HasSuffix(elapsed, ")") {
-		return "", false
+// flushTimeoutListing records the tests of scope's timeout panic that hung
+// as failures waiting for their package's result, and forgets the list.
+func (s *goTestLogScan) flushTimeoutListing(scope string) {
+	for _, hung := range hungTimeoutEntries(s.running[scope]) {
+		s.pending = append(s.pending, pendingGoTestFailure{
+			scope:   scope,
+			failure: goTestFailure{pkg: scope, test: hung.name, timedOut: true},
+		})
+	}
+	delete(s.running, scope)
+}
+
+// hungTimeoutEntries keeps, of the tests a timeout panic lists as running,
+// the entries of the top-level test that ran longest, its subtests among
+// them, in the order listed. Every other listed test was merely running when
+// the alarm fired: a parallel test started after the hung one, which the
+// deadline cut short, is no failure of its own, and keying it handed a
+// healthy test to an increment. Tests that ran equally long are all kept,
+// and so is every entry when no elapsed time could be read, since then the
+// list cannot tell which one hung.
+func hungTimeoutEntries(listed []runningTest) []runningTest {
+	longestByTop := map[string]time.Duration{}
+	longest := time.Duration(0)
+	for _, entry := range listed {
+		top, _, _ := strings.Cut(entry.name, "/")
+		longestByTop[top] = max(longestByTop[top], entry.elapsed)
+		longest = max(longest, entry.elapsed)
+	}
+	hung := []runningTest{}
+	for _, entry := range listed {
+		top, _, _ := strings.Cut(entry.name, "/")
+		if longestByTop[top] == longest {
+			hung = append(hung, entry)
+		}
 	}
 
-	return name, true
+	return hung
+}
+
+// readRunningTest reads one `<name> (<elapsed>)` line of a timeout panic. An
+// elapsed time that does not parse as a Go duration counts as zero: the line
+// still names a running test.
+func readRunningTest(trimmed string) (runningTest, bool) {
+	name, elapsed, ok := strings.Cut(trimmed, " ")
+	if !ok || name == "" || !strings.HasPrefix(elapsed, "(") || !strings.HasSuffix(elapsed, ")") {
+		return runningTest{}, false
+	}
+	duration, err := time.ParseDuration(strings.TrimSuffix(strings.TrimPrefix(elapsed, "("), ")"))
+	if err != nil {
+		duration = 0
+	}
+
+	return runningTest{name: name, elapsed: duration}, true
 }
 
 // packageFailed settles the failures scope reported with pkg as their
 // package, or the package itself when this go test of it failed without
 // naming a test.
 func (s *goTestLogScan) packageFailed(scope string, pkg string) {
+	s.flushTimeoutListing(scope)
 	s.claimRawSeed(scope, pkg)
 	s.claimPasses(scope, pkg)
 	kept := s.pending[:0]
@@ -486,6 +546,7 @@ func (s *goTestLogScan) packageFailed(scope string, pkg string) {
 // packagePassed drops the failure lines scope printed: a package that passed
 // failed no test.
 func (s *goTestLogScan) packagePassed(scope string, pkg string) {
+	s.flushTimeoutListing(scope)
 	s.claimRawSeed(scope, pkg)
 	s.claimPasses(scope, pkg)
 	kept := s.pending[:0]

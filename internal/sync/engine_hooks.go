@@ -33,6 +33,13 @@ type engineHooks struct {
 	// so a bug that depends on dispatch order cannot pass by timing; nil
 	// keeps the dependency graph's order.
 	dispatchOrder func([]*syncdomain.TrackedAction) []*syncdomain.TrackedAction
+	// recordFrontier is told, in order, every publication-only action the
+	// engine applies and then every action a frontier dispatches, after
+	// dispatchOrder: one-action and publication-only frontiers included, so
+	// a model's kept log shows every pass. It receives a copy of each
+	// action, so it records but cannot reorder or change what runs; nil
+	// records nothing.
+	recordFrontier func(step frontierStep, action *syncdomain.Action)
 	// serializeWorkers runs one worker instead of the pool, so with a
 	// dispatch order execution is deterministic.
 	serializeWorkers bool
@@ -82,6 +89,30 @@ type engineHooks struct {
 	// emulated filesystem under the engine through it: a case-insensitive
 	// volume, injected errno (D-094).
 	interposeSyncTree func(synctree.Handle) synctree.Handle
+}
+
+// frontierStep names what the engine did with an action recordFrontier is
+// told about.
+type frontierStep string
+
+const (
+	// frontierPublished is a publication-only action the engine applied on
+	// its own side of the runtime boundary, without a worker.
+	frontierPublished frontierStep = "publish"
+	// frontierDispatched is an action handed to the workers.
+	frontierDispatched frontierStep = "dispatch"
+)
+
+// recordFrontierStep tells the recordFrontier hook, when a test set one,
+// what the engine did with ta.
+func (h *engineHooks) recordFrontierStep(step frontierStep, ta *syncdomain.TrackedAction) {
+	if h.recordFrontier == nil || ta == nil {
+		return
+	}
+
+	// A copy, so the record cannot change or reorder what runs.
+	action := ta.Action
+	h.recordFrontier(step, &action)
 }
 
 // runClock is the clock a run reads: the engine's real clock unless a test

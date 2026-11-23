@@ -3,7 +3,9 @@ package devtool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -134,6 +136,14 @@ type nightlyJobReport struct {
 	// tests are the keys of the failed tests its log names, a failing seed
 	// keyed by its replay line in place of its test.
 	tests []string
+	// hung are the keys, of those, of the tests a go test deadline ended:
+	// the test the timeout panic shows ran longest, never every test it
+	// lists as running.
+	hung []string
+	// overBudget are the test keys of the stress members whose slowest run
+	// was over the budget of one run, read from the budget lines the step
+	// printed (readOverBudgetMarker), each once and in log order.
+	overBudget []string
 	// seeds are the replay lines of the failing seeds its log names.
 	seeds []seedReplay
 	// steps are the keys of the failed steps its log's marker lines name,
@@ -145,12 +155,15 @@ type nightlyJobReport struct {
 	// naming a test: a build or setup failure, a TestMain exit, a package
 	// timeout with no test running.
 	packageFailed bool
-	// logUnreadable records that its log could not be read.
-	logUnreadable bool
+	// logReadFailure says, in the report's own words, why its log could not
+	// be read: the HTTP status GitHub answered, or the class of the failure.
+	// It is empty when the log was read or never asked for, and never holds
+	// text of the failure, which can quote the request or the answer.
+	logReadFailure string
 }
 
 // workflowJob is the ci.yml job the report's job is a run of.
-func (r nightlyJobReport) workflowJob() string {
+func (r *nightlyJobReport) workflowJob() string {
 	return ciCheckJob(r.name)
 }
 
@@ -158,13 +171,13 @@ func (r nightlyJobReport) workflowJob() string {
 // names: its log names no failed test, or names a package that failed without
 // naming one. Such a failure is keyed by the job's failed steps, or by the
 // job when its log names no failed step.
-func (r nightlyJobReport) failsWithoutTest() bool {
-	return len(r.tests) == 0 || r.packageFailed
+func (r *nightlyJobReport) failsWithoutTest() bool {
+	return (len(r.tests) == 0 && len(r.overBudget) == 0) || r.packageFailed
 }
 
 // hasLog reports whether the job ran far enough to leave a log that can name
 // failed tests.
-func (r nightlyJobReport) hasLog() bool {
+func (r *nightlyJobReport) hasLog() bool {
 	return r.id != 0 && slices.Contains(
 		[]nightlyJobResult{nightlyJobFailed, nightlyJobTimedOut, nightlyJobCanceled}, r.result)
 }
@@ -196,9 +209,9 @@ func nightlyJobReports(jobs []githubJob, ignore string) []nightlyJobReport {
 // nightlyFailedJobs are the reports whose jobs made the night red.
 func nightlyFailedJobs(reports []nightlyJobReport) []nightlyJobReport {
 	failed := []nightlyJobReport{}
-	for _, report := range reports {
-		if report.result.failsTheNight() {
-			failed = append(failed, report)
+	for i := range reports {
+		if reports[i].result.failsTheNight() {
+			failed = append(failed, reports[i])
 		}
 	}
 
@@ -212,8 +225,8 @@ func nightlyAggregateRepeats(reports []nightlyJobReport, i int) bool {
 		return false
 	}
 	needs := nightlyAggregateNeeds()
-	for _, other := range reports {
-		if other.result.failsTheNight() && slices.Contains(needs, other.workflowJob()) {
+	for j := range reports {
+		if other := &reports[j]; other.result.failsTheNight() && slices.Contains(needs, other.workflowJob()) {
 			return true
 		}
 	}
@@ -230,8 +243,9 @@ func nightlyAggregateRepeats(reports []nightlyJobReport, i int) bool {
 // by its replay, instead of as the test. The aggregate job's log is not read
 // while a job it waits for failed. A log that cannot be read, after the
 // client's retries, is recorded as such and the next job's log is read: a
-// job's verdict never depends on its log. Only a canceled context ends the
-// reads.
+// job's verdict never depends on its log; why the read failed is kept with
+// the job, so the report says it (nightlyLogReadFailure). Only a canceled
+// context ends the reads.
 func attributeNightlyFailures(ctx context.Context, gh ghClient, repoRoot string, reports []nightlyJobReport) error {
 	for i := range reports {
 		if !reports[i].hasLog() || nightlyAggregateRepeats(reports, i) {
@@ -247,11 +261,12 @@ func attributeNightlyFailures(ctx context.Context, gh ghClient, repoRoot string,
 			if ctx.Err() != nil {
 				return fmt.Errorf("read nightly job log %s: %w", reports[i].name, ctx.Err())
 			}
-			reports[i].logUnreadable = true
+			reports[i].logReadFailure = nightlyLogReadFailure(err)
 			continue
 		}
 		parsed := parseGoTestLog(string(log))
-		reports[i].tests, reports[i].seeds = nightlyFailureNames(parsed, seedReplaysFromLog(string(log)))
+		reports[i].tests, reports[i].hung, reports[i].seeds = nightlyFailureNames(parsed, seedReplaysFromLog(string(log)))
+		reports[i].overBudget = nightlyOverBudgetKeys(string(log))
 		reports[i].packageFailed = parsed.failedPackageWithoutTest()
 		reports[i].steps = nightlyFailedStepKeys(reports[i].name, string(log), reports[i].failsWithoutTest())
 	}
@@ -263,26 +278,80 @@ func attributeNightlyFailures(ctx context.Context, gh ghClient, repoRoot string,
 // failing seeds the log names, in replay lines or in the names of failing
 // subtests that printed none, by the key of each seed, once; any other test
 // by its test key. A seeded family's failing subtest whose name holds no seed
-// keeps its test's key beside the seeds, so the failure stays claimable.
-func nightlyFailureNames(log goTestLog, replays []seedReplay) ([]string, []seedReplay) {
+// keeps its test's key beside the seeds, so the failure stays claimable. The
+// second list holds the keys, of the first, of a test a go test deadline
+// ended, so the issue can say which failures hung.
+func nightlyFailureNames(log goTestLog, replays []seedReplay) ([]string, []string, []seedReplay) {
 	keys := []string{}
+	hung := []string{}
 	seeds := []seedReplay{}
 	seen := map[string]bool{}
+	add := func(key string, timedOut bool) {
+		keys = append(keys, key)
+		if timedOut {
+			hung = append(hung, key)
+		}
+	}
 	for _, failure := range log.failedTopLevelTestsByPackage() {
 		failing, complete := failingSeedsOf(failure, log.failures, replays)
 		for _, seed := range failing {
 			if key := seed.key(); !seen[key] {
 				seen[key] = true
-				keys = append(keys, key)
+				add(key, failure.timedOut)
 				seeds = append(seeds, seed)
 			}
 		}
 		if len(failing) == 0 || !complete {
-			keys = append(keys, nightlyFailedTestKey(failure))
+			add(nightlyFailedTestKey(failure), failure.timedOut)
 		}
 	}
 
-	return keys, seeds
+	return keys, hung, seeds
+}
+
+// nightlyOverBudgetKeys keys the stress members a job's log names over the
+// budget of one run, each once and in log order, by the member's test key.
+// A line is read the way a step marker is, after the byte-order mark and the
+// timestamp CI adds, and never from a -json event.
+func nightlyOverBudgetKeys(log string) []string {
+	keys := []string{}
+	seen := map[string]bool{}
+	for line := range strings.Lines(log) {
+		text, _, isEvent := decodeGoTestLogLine(line)
+		if isEvent {
+			continue
+		}
+		member, isMarker := readOverBudgetMarker(text)
+		if !isMarker {
+			continue
+		}
+		if key := nightlyFailedTestKey(member); !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
+
+	return keys
+}
+
+// githubStatusPattern finds the HTTP status in gh's error text: `HTTP 404:
+// Not Found (url)` from most commands, `Not Found (HTTP 404)` from `gh api`.
+var githubStatusPattern = regexp.MustCompile(`HTTP (\d{3})\b`)
+
+// nightlyLogReadFailure says why a job log could not be read, in words the
+// public issue may carry: the HTTP status GitHub answered, or the class of
+// the failure when it named none. The failure's own text never reaches it,
+// since gh quotes the request and can quote the answer.
+func nightlyLogReadFailure(err error) string {
+	var unavailable *githubUnavailableError
+	if errors.As(err, &unavailable) {
+		return fmt.Sprintf("GitHub %s on all %d attempts", unavailable.cause, githubAttempts)
+	}
+	if m := githubStatusPattern.FindStringSubmatch(err.Error()); m != nil {
+		return "GitHub answered HTTP " + m[1]
+	}
+
+	return "the gh request failed without an HTTP status"
 }
 
 // nightlyFailureKeys names what failed in a run, each key with the ci.yml
@@ -299,7 +368,8 @@ func nightlyFailureKeys(reports []nightlyJobReport) map[string][]string {
 		}
 		jobsByKey[key][job] = true
 	}
-	for i, report := range reports {
+	for i := range reports {
+		report := &reports[i]
 		if !report.result.failsTheNight() || report.result == nightlyJobNotRun || nightlyAggregateRepeats(reports, i) {
 			continue
 		}
@@ -311,6 +381,9 @@ func nightlyFailureKeys(reports []nightlyJobReport) map[string][]string {
 		}
 		for _, test := range report.tests {
 			add(test, report.workflowJob())
+		}
+		for _, member := range report.overBudget {
+			add(member, report.workflowJob())
 		}
 	}
 
@@ -330,7 +403,8 @@ func nightlyJobsPassed(jobs []string, reports []nightlyJobReport) bool {
 	}
 	for _, job := range jobs {
 		ran := false
-		for _, report := range reports {
+		for i := range reports {
+			report := &reports[i]
 			if report.workflowJob() != job {
 				continue
 			}
@@ -591,13 +665,15 @@ func loadNightlyRun(ctx context.Context, gh ghClient, repoRoot string, runID int
 // leaves nothing to claim.
 func writeNightlyRunVerdict(b *strings.Builder, run *githubRun, reports []nightlyJobReport) {
 	fmt.Fprintf(b, "nightly: run %d on %s concluded %s (%s)\n", run.DatabaseID, shortSHA(run.HeadSHA), run.Conclusion, run.URL)
-	for _, report := range nightlyFailedJobs(reports) {
+	failed := nightlyFailedJobs(reports)
+	for i := range failed {
+		report := &failed[i]
 		fmt.Fprintf(b, "  %s: %s", report.name, report.result)
 		switch {
 		case report.result == nightlyJobNotRun:
 			b.WriteString("; nothing to claim")
-		case report.logUnreadable:
-			b.WriteString("; its log could not be read")
+		case report.logReadFailure != "":
+			fmt.Fprintf(b, "; its log could not be read (%s)", report.logReadFailure)
 		}
 		b.WriteString("\n")
 	}

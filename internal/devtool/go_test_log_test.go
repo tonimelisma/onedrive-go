@@ -64,8 +64,11 @@ func TestParseGoTestLog_BraceInARawLineIsNotJSON(t *testing.T) {
 // A test that hangs until go test's -timeout fires prints no --- FAIL line:
 // the timeout panic lists it under "running tests:". Without reading that
 // list the nightly keyed the failure by its job and `verify failed-test`
-// reran the whole package. A test named only by the panic is not a verdict a
-// classified rerun may answer.
+// reran the whole package. The list names every test still running, sorted
+// by name; only the top-level test that ran longest hung, and a test merely
+// running beside it (TestOther, started two seconds later) is no failure. A
+// test named only by the panic is not a verdict a classified rerun may
+// answer.
 func TestParseGoTestLog_TimeoutPanicNamesTheRunningTest(t *testing.T) {
 	t.Parallel()
 
@@ -119,11 +122,11 @@ func TestParseGoTestLog_TimeoutPanicNamesTheRunningTest(t *testing.T) {
 			t.Parallel()
 
 			log := parseGoTestLog(tc.log)
-			assert.Equal(t, []string{"TestHang", "TestOther"}, log.failedTopLevelTests())
+			assert.Equal(t, []string{"TestHang"}, log.failedTopLevelTests())
 			assert.True(t, log.deadline)
 			last, ok := log.lastFailure()
 			require.True(t, ok)
-			assert.Equal(t, goTestFailure{pkg: testSyncPackage, test: "TestOther/sub", timedOut: true}, last)
+			assert.Equal(t, goTestFailure{pkg: testSyncPackage, test: "TestHang", timedOut: true}, last)
 			assert.Empty(t, log.classifiableFailures(), "a hang is never a classified quirk")
 		})
 	}

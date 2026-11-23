@@ -350,11 +350,22 @@ linters:
 
     forbidigo:
       analyze-types: true
+      # golangci-lint turns this on by default, which skips every Example
+      # function of a test file; an Example is test code like any other.
+      exclude-godoc-examples: false
       forbid:
         - pattern: ^os\.(Open|OpenFile|ReadFile|WriteFile|Create|CreateTemp|Mkdir|MkdirAll|ReadDir|Stat|Lstat|Remove|RemoveAll|Rename|Chmod|Chtimes|Symlink|Readlink|Truncate)$
           msg: use fsroot, synctree, or localpath filesystem boundaries instead of raw os.* calls
         - pattern: ^time\.Sleep$
           msg: use explicit test synchronization instead of wall-clock sleep
+        # testify's Never and Consistently prove an absence by a fixed wait,
+        # which a loaded host passes whether the product is right or wrong
+        # (spec/design/system.md, the wait rules). A method of Assertions
+        # matches as <package>.Assertions.<method>, and an aliased import
+        # still names its package. Nothing is exempt from it.
+        - pattern: ^(assert|require)\.(Assertions\.)?(Never|Neverf|Consistently|Consistentlyf)$
+          pkg: ^github\.com/stretchr/testify/(assert|require)$
+          msg: prove an absence by waiting for the signal that the input was handled, never by a fixed wait
         # The sync engine reads time through its SyncClock, so a model can
         # run it on a fake clock. The exclusions below scope this to the
         # non-test files of internal/sync and name the clock's own files.

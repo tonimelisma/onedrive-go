@@ -194,6 +194,7 @@ func TestRunOnce_ClaimedZeroByteFileThenRemoteMtimeChangeIsARemoteChange(t *test
 	report := runScenarioPass(t, h.eng)
 	assert.Equal(t, 1, report.Downloads+report.BaselineUpdates, "the remote change is planned and applied: %+v", report)
 	h.beginRound(t)
+	h.emptyFilesAllowed = map[string]bool{"empty.txt": true}
 	assertSyncInvariants(t, h)
 }
 
@@ -229,6 +230,7 @@ func TestRunOnce_AdoptedPlaceholderWithAnEmptyLocalFileLosesItsRecord(t *testing
 	_, _, adopted := syncstoretest.ReadBaselineRow(t, h.eng.baseline, "orphan")
 	require.True(t, adopted, "observation claimed and adopted the empty file")
 	requireNoPendingCreateAt(t, h.eng.baseline, "empty.txt", "nothing is left to upload into the placeholder")
+	h.emptyFilesAllowed = map[string]bool{"empty.txt": true}
 	assertSyncInvariants(t, h)
 }
 

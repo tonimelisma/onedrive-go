@@ -17,8 +17,10 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"golang.org/x/text/cases"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // The in-memory volume keeps names and folders in Go maps and the bytes of
@@ -703,4 +705,23 @@ func (d *memoryFSDir) ReadDir(n int) ([]fs.DirEntry, error) {
 	d.offset += n
 
 	return rest[:n], nil
+}
+
+// fold maps a name onto the key the volume compares, so two names are one
+// entry exactly when their keys are equal.
+func (c Capabilities) fold(name string) string {
+	// The stored (NFC) form equates exactly the canonically equivalent
+	// spellings, as the NFD form APFS keeps does.
+	if c.FoldNormalization {
+		name = namekey.Stored(name)
+	}
+	if c.FoldCase {
+		name = cases.Fold().String(name)
+	}
+
+	return name
+}
+
+func (c Capabilities) folds() bool {
+	return c.FoldCase || c.FoldNormalization
 }

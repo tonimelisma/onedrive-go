@@ -149,6 +149,7 @@ func TestRunVerifyStressFailsAStepWhoseMemberRunsOverItsBudget(t *testing.T) {
 		runErrByKey: map[string]error{goCommandKey(syncArgs): assert.AnError},
 	}
 	summaryPath := filepath.Join(t.TempDir(), "stress-summary.json")
+	var stderr bytes.Buffer
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:        t.TempDir(),
@@ -156,10 +157,15 @@ func TestRunVerifyStressFailsAStepWhoseMemberRunsOverItsBudget(t *testing.T) {
 		Cores:           unitTestReferenceCores,
 		SummaryJSONPath: summaryPath,
 		Stdout:          &bytes.Buffer{},
-		Stderr:          &bytes.Buffer{},
+		Stderr:          &stderr,
 	})
 
 	require.ErrorIs(t, err, assert.AnError, "the failed go test stays reported")
+	assert.Equal(t, []string{
+		overBudgetMarker("./internal/multisync", "TestInventedRunner_Stalls"),
+		overBudgetMarker("./internal/sync", "TestInventedMember_Fans"),
+		overBudgetMarker("./internal/sync", "TestInventedMember_Spins"),
+	}, linesWithPrefix(stderr.String(), overBudgetMarkerPrefix), "one budget line per member over its budget, for the nightly reader")
 	var budgetLines []string
 	for line := range strings.Lines(err.Error()) {
 		if strings.Contains(line, "budget") {
@@ -238,4 +244,17 @@ func TestRunVerifyStressLogsTextAndNamesTheFailedTests(t *testing.T) {
 	step := requireVerifySummaryStep(t, summary, stressSyncConcurrencyRaceStepName)
 	assert.Equal(t, verifySummaryStatusFail, step.Status)
 	assert.Equal(t, []string{"TestInventedMember_Breaks"}, step.FailedTests)
+}
+
+// linesWithPrefix keeps the lines of text that start with prefix, each with
+// its newline.
+func linesWithPrefix(text string, prefix string) []string {
+	kept := []string{}
+	for line := range strings.Lines(text) {
+		if strings.HasPrefix(line, prefix) {
+			kept = append(kept, line)
+		}
+	}
+
+	return kept
 }

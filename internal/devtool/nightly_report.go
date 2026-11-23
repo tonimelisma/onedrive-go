@@ -67,7 +67,8 @@ func (r nightlyRunReport) statusState() string {
 func (r nightlyRunReport) statusDescription() string {
 	failed, counted := 0, 0
 	notRun := []string{}
-	for _, job := range r.jobs {
+	for i := range r.jobs {
+		job := &r.jobs[i]
 		if job.result != nightlyJobSkipped {
 			counted++
 		}
@@ -114,24 +115,25 @@ func describeNotRun(names []string, limit int) string {
 
 // renderNightlyFailure is the issue text of a red night: the run, then each
 // job that made it red, how it ended, the failed tests its log named and the
-// keys of the failed steps the job is keyed by.
+// keys of the failed steps the job is keyed by. Of the failed tests, the ones
+// a go test deadline ended are named again as hung, and a stress member over
+// its budget of one run is named as such; a log that could not be read is
+// named with why, in the report's own words.
 func renderNightlyFailure(r nightlyRunReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "The scheduled CI run failed: %s\n\n", r.runURL)
-	for _, job := range r.failed() {
+	failed := r.failed()
+	for i := range failed {
+		job := &failed[i]
 		fmt.Fprintf(&b, "- `%s`: %s", job.name, job.result)
-		if len(job.tests) > 0 {
-			shown := job.tests[:min(len(job.tests), nightlyIssueMaxTests)]
-			fmt.Fprintf(&b, "; failed tests: `%s`", strings.Join(shown, "`, `"))
-			if hidden := len(job.tests) - len(shown); hidden > 0 {
-				fmt.Fprintf(&b, ", and %d more", hidden)
-			}
-		}
+		writeNightlyKeyList(&b, "failed tests", job.tests)
+		writeNightlyKeyList(&b, "hung at the go test deadline", job.hung)
+		writeNightlyKeyList(&b, "over the stress budget of one run", job.overBudget)
 		if len(job.steps) > 0 {
 			fmt.Fprintf(&b, "; failed steps: `%s`", strings.Join(job.steps, "`, `"))
 		}
-		if job.logUnreadable {
-			b.WriteString("; its log could not be read")
+		if job.logReadFailure != "" {
+			fmt.Fprintf(&b, "; its log could not be read (%s)", job.logReadFailure)
 		}
 		b.WriteString("\n")
 	}
@@ -140,6 +142,19 @@ func renderNightlyFailure(r nightlyRunReport) string {
 		"a manual run posts its commit status only.\n")
 
 	return b.String()
+}
+
+// writeNightlyKeyList writes one labeled list of keys of a job's line, at
+// most nightlyIssueMaxTests of them, or nothing for none.
+func writeNightlyKeyList(b *strings.Builder, label string, keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	shown := keys[:min(len(keys), nightlyIssueMaxTests)]
+	fmt.Fprintf(b, "; %s: `%s`", label, strings.Join(shown, "`, `"))
+	if hidden := len(keys) - len(shown); hidden > 0 {
+		fmt.Fprintf(b, ", and %d more", hidden)
+	}
 }
 
 // renderNightlyPass is the comment that closes the issue on a green night.

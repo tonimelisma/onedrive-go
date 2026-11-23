@@ -6,13 +6,13 @@ Known bugs, inconsistencies, and undocumented behaviors in the Microsoft Graph A
 
 ### DriveId Truncation (Personal Accounts)
 
-Personal account driveIds are 16 hexadecimal characters. The API intermittently drops leading zeros, returning 15-character values. Example: `024470056f5c3e43` (correct) → `24470056f5c3e43` (truncated). This occurs in delta responses, shared folder parent references, and folder creation responses. The bug is documented in [onedrive-api-docs#1890](https://github.com/OneDrive/onedrive-api-docs/issues/1890) but remains unfixed.
+Personal account driveIds are 16 hexadecimal characters. The API intermittently drops leading zeros, returning 15-character values. Example: `0123456789abcd03` (correct) → `24470056f5c3e43` (truncated). This occurs in delta responses, shared folder parent references, and folder creation responses. The bug is documented in [onedrive-api-docs#1890](https://github.com/OneDrive/onedrive-api-docs/issues/1890) but remains unfixed.
 
 Without normalization, this causes FOREIGN KEY constraint failures, assertion crashes, and database consistency errors that cascade into infinite resync loops.
 
 ### DriveId Casing Inconsistency
 
-The same driveId is returned as uppercase in some contexts and lowercase in others (e.g., `d8ebbd13a0551216` vs `D8EBBD13A0551216`). This occurs across delta responses, folder creation responses, and item ID prefixes. Affects primarily Personal accounts but can occur on any account type.
+The same driveId is returned as uppercase in some contexts and lowercase in others (e.g., `0123456789abcd04` vs `0123456789ABCD04`). This occurs across delta responses, folder creation responses, and item ID prefixes. Affects primarily Personal accounts but can occur on any account type.
 
 ### Normalization Requirement
 
@@ -281,7 +281,7 @@ Observed local evidence on April 5, 2026 during `go run ./cmd/devtool verify def
 - `put` succeeded for `/e2e-sync-dl-1775446530960515000/download-test.txt`
 - `stat /e2e-sync-dl-1775446530960515000/download-test.txt` succeeded
 - the following `sync --download-only --force` pass observed the file in delta
-- the worker then got `GET /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!sccc09df70b5f4290916bf66a63006a39 = 404 itemNotFound`
+- the worker then got `GET /drives/0123456789abcd01/items/0123456789ABCD01!invented013xxxxxxxxxxxxxxxxxxxxxx = 404 itemNotFound`
   with request ID `67e72d16-ea0c-4c25-aa82-3ece389a8c8e`
 
 Runtime policy:
@@ -324,8 +324,8 @@ upload response already returned that item ID.
 Observed local evidence on April 8, 2026 during `go run ./cmd/devtool verify default`:
 
 - `put /onedrive-go-e2e-1775667044557991000/perm-test.txt` used simple upload
-  and received item ID `A1B2C3D4E5F60718!s1a2b3c4d5e6f708192a3b4c5d6e7f809`
-- the immediate follow-on `PATCH /drives/a1b2c3d4e5f60718/items/A1B2C3D4E5F60718!s1a2b3c4d5e6f708192a3b4c5d6e7f809`
+  and received item ID `0123456789ABCD02!invented005xxxxxxxxxxxxxxxxxxxxxx`
+- the immediate follow-on `PATCH /drives/0123456789abcd02/items/0123456789ABCD02!invented005xxxxxxxxxxxxxxxxxxxxxx`
   returned HTTP 404 `itemNotFound` with request ID
   `c597aa4d-e4c5-4c89-8888-fa9a07ab36db`
 - the cascading fast-suite failure later surfaced in
@@ -335,8 +335,8 @@ Observed local evidence on April 8, 2026 during `go run ./cmd/devtool verify def
   April 23, 2026 hit the same boundary again in
   `TestE2E_SyncWatch_FileDeletion`
 - the simple upload itself succeeded and returned item ID
-  `BD50CF43646E28E6!s5bf7484a62804c52a3304385a4586cfd`, but the immediate
-  follow-on `PATCH /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s5bf7484a62804c52a3304385a4586cfd`
+  `0123456789ABCD01!invented007xxxxxxxxxxxxxxxxxxxxxx`, but the immediate
+  follow-on `PATCH /drives/0123456789abcd01/items/0123456789ABCD01!invented007xxxxxxxxxxxxxxxxxxxxxx`
   returned HTTP 504 `UnknownError` with request ID
   `0bb61a88-1a17-44e0-bed9-e92c3b6bc0b7`
 - the later watch deletion failure was secondary: the file content already
@@ -364,8 +364,8 @@ Graph's copy verifier can lag behind ordinary path reads for the same folder.
 Observed local evidence on April 10, 2026 during `go run ./cmd/devtool verify e2e-full`:
 
 - `mkdir /e2e-cp-folder-1775879036248706000/dest` succeeded
-- `GET /drives/bd50cf43646e28e6/root:/e2e-cp-folder-1775879036248706000/dest:` returned `200`
-- the immediate `POST /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s75b8ff1dfb2846adbb1003d999d52233/copy`
+- `GET /drives/0123456789abcd01/root:/e2e-cp-folder-1775879036248706000/dest:` returned `200`
+- the immediate `POST /drives/0123456789abcd01/items/0123456789ABCD01!invented004xxxxxxxxxxxxxxxxxxxxxx/copy`
   still returned HTTP 404 with request ID `f7f79148-fe82-4350-8bc7-a620c0598a1b`
   and message `Failed to verify the existence of destination location`
 
@@ -392,7 +392,7 @@ Observed evidence on April 8, 2026 during `go run ./cmd/devtool verify
 e2e-full --classify-live-quirks`:
 
 - `mkdir /e2e-cp-file-1775671921484525000` in `TestE2E_Cp_File` got HTTP 200
-  from `POST /drives/bd50cf43646e28e6/items/root/children`
+  from `POST /drives/0123456789abcd01/items/root/children`
 - the response body was empty enough that `CreateFolder()` failed on
   `decoding create folder response: EOF`
 - the request ID on that ambiguous success response was
@@ -500,7 +500,7 @@ Observed evidence on April 5, 2026 during `go test -tags='e2e e2e_full' ./e2e
 - cleanup for `TestE2E_Sync_EdgeCases/concurrent_uploads` resolved
   `/onedrive-go-e2e-edge-1775450932112095000/concurrent-1.txt` successfully by
   path
-- the immediate `DELETE /drives/bd50cf43646e28e6/items/BD50CF43646E28E6!s5fd8d410d21d4234a567f45e01fc46e2`
+- the immediate `DELETE /drives/0123456789abcd01/items/0123456789ABCD01!invented010xxxxxxxxxxxxxxxxxxxxxx`
   still returned HTTP 404 `itemNotFound`
 - Graph request ID for the failed delete: `335ea56d-e3a9-4d2f-8b4c-742da9088eec`
 

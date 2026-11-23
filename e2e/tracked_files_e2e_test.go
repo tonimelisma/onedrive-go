@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/testutil"
+	"github.com/tonimelisma/onedrive-go/testutil/liveenv"
 )
 
 // Validates: R-6.10.27
@@ -29,7 +30,7 @@ func TestE2E_TrackedFilesNameNoTestAccount(t *testing.T) {
 	files := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
 	require.NotEmpty(t, files)
 
-	driveIDs := append(liveConfig.CandidateDriveIDs(), strings.Split(os.Getenv(testutil.AllowedTestAccountsEnvVar), ",")...)
+	driveIDs := append(liveConfig.CandidateDriveIDs(), strings.Split(os.Getenv(liveenv.AllowedTestAccountsEnvVar), ",")...)
 	findings, err := testutil.FindTestAccounts(root, files, driveIDs)
 	require.NoError(t, err)
 	for _, finding := range findings {

@@ -314,14 +314,6 @@ func snapshotLocalTree(t *testing.T, root string) map[string]string {
 	return snapshot
 }
 
-func mustReadFile(t *testing.T, path string) []byte {
-	t.Helper()
-
-	data, err := os.ReadFile(path) //nolint:gosec // callers pass paths inside their own sync dir or temp dir
-	require.NoError(t, err)
-	return data
-}
-
 func assertConflictCopyContains(t *testing.T, localDir string, stem string, expected string) {
 	t.Helper()
 
@@ -592,7 +584,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 		},
 		"--download-only",
 	)
-	assertOutputContains(t, attempt.Stdout, "(download only)")
+	assertOutputContains(t, attempt.Last().Stdout, "(download only)")
 	assert.Equal(t, content, downloaded)
 }
 

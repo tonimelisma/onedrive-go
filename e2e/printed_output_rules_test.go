@@ -130,8 +130,9 @@ func debugEventSummary(roles testutil.DriveRoles, event *syncdomain.DebugEvent) 
 // catalogIdentities lists what the suite's catalog holds about each
 // configured drive and its account, by the drive's role: the drive's Graph
 // ID as drive-N-id (the drive's record and the account's primary drive), and
-// the account's user ID, display name and organization as drive-N-account-id,
-// -name and -org. The catalog comes with the test credentials, so learning
+// the account's user ID, display name, the first name shared discovery labels
+// its folders with, and organization as drive-N-account-id, -name,
+// -first-name and -org. The catalog comes with the test credentials, so learning
 // them takes no request to OneDrive. It also lists the roles of the drives
 // the catalog holds no record of, neither of the drive nor of its account.
 func catalogIdentities(
@@ -162,9 +163,10 @@ func catalogIdentities(
 			identities = append(identities,
 				testutil.IdentityRole{Value: account.PrimaryDriveID, Role: role + "-id"},
 				testutil.IdentityRole{Value: account.UserID, Role: role + "-account-id"},
-				testutil.IdentityRole{Value: account.DisplayName, Role: role + "-account-name", IsName: true},
-				testutil.IdentityRole{Value: account.OrgName, Role: role + "-account-org", IsName: true},
 			)
+			identities = append(identities, testutil.AccountNameIdentities(account.DisplayName, role+"-account")...)
+			identities = append(identities,
+				testutil.IdentityRole{Value: account.OrgName, Role: role + "-account-org", IsName: true})
 		}
 	}
 
@@ -250,6 +252,7 @@ func TestNewSuiteDriveRolesNamesCatalogAndFixtureValuesByRole(t *testing.T) {
 		"C1D2E3F4A5B607":           "drive-1-id",
 		printedUserID:              "drive-1-account-id",
 		printedDisplayName:         "drive-1-account-name",
+		"Printed's Holiday":        "drive-1-account-first-name's Holiday",
 		"Printed Org":              "drive-1-account-org",
 		printedFolderSelector:      "writable-shared-folder",
 		"0E1F2A3B4C5D6978!321":     "writable-shared-folder-item",

@@ -411,7 +411,7 @@ func runOnceScenarios() []func(*testing.T) {
 // second run of a scenario the suite already ran.
 const reverseDispatchSampleStride = 8
 
-// Validates: R-2.17.1, R-6.8.9
+// Validates: R-2.17.1, R-6.10.31
 func TestReverseDispatch_RunOnceScenariosPass(t *testing.T) {
 	syncfixture.SkipInShort(t)
 	t.Parallel()
@@ -431,7 +431,7 @@ func TestReverseDispatch_RunOnceScenariosPass(t *testing.T) {
 	}
 }
 
-// Validates: R-6.8.9
+// Validates: R-6.10.31
 func TestReverseDispatchTable_ListsEveryRunOnceScenario(t *testing.T) {
 	t.Parallel()
 

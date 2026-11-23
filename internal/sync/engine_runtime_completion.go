@@ -600,6 +600,7 @@ func (flow *engineFlow) runPublicationDrainStage(
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
+		flow.hooks.recordFrontierStep(frontierPublished, current)
 
 		released, err := flow.applyPublicationDrainAction(ctx, bl, current)
 		if err != nil {

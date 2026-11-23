@@ -528,7 +528,7 @@ func requireSyncWithModeEventuallyConverges(
 	timeout time.Duration,
 	description string,
 	ready func(syncAttemptResult) bool,
-) syncAttemptResult {
+) syncConvergence {
 	t.Helper()
 	return requireSyncEventuallyConverges(t, cfgPath, env, timeout, description, ready, mode.flag)
 }
@@ -630,7 +630,7 @@ func TestE2E_Sync_DownloadOnlyDefersLocalOnlyChanges(t *testing.T) {
 		},
 		"--download-only",
 	)
-	assertOutputContains(t, attempt.Stdout, "(download only)")
+	assertOutputContains(t, attempt.Last().Stdout, "(download only)")
 
 	// Step 4: The deferred local edit still has its old remote content.
 	assert.Equal(t, "initial local-deferred", getRemoteFile(t, cfgPath, env, "/"+testFolder+"/local-deferred.txt"))
@@ -693,7 +693,7 @@ func TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges(t *testing.T) {
 		},
 		"--upload-only",
 	)
-	assertOutputContains(t, attempt.Stdout, "(upload only)")
+	assertOutputContains(t, attempt.Last().Stdout, "(upload only)")
 	// Both files were modified, not created, so their names prove nothing:
 	// wait for the new content of each.
 	waitForRemoteFileContent(t, cfgPath, env, "/"+testFolder+"/local-owned.txt", "local modification")
@@ -725,7 +725,7 @@ func TestE2E_Sync_UploadOnlyDefersRemoteOnlyChanges(t *testing.T) {
 		},
 		"--download-only",
 	)
-	assertOutputContains(t, downloadAttempt.Stdout, "(download only)")
+	assertOutputContains(t, downloadAttempt.Last().Stdout, "(download only)")
 
 	report, err := verifyBaselineReport(t, cfgPath, env)
 	require.NoError(t, err)
@@ -859,14 +859,15 @@ func TestE2E_Sync_DirectionalModes_PreserveEditDeleteConflict(t *testing.T) {
 					return downloaded && remoteData == preciousLocalContent
 				},
 			)
-			assertOutputContains(t, attempt.Stdout, mode.outputMode)
+			assertOutputContains(t, attempt.Last().Stdout, mode.outputMode)
 
 			data := mustReadFile(t, fragileFile)
 			assert.Equal(t, preciousLocalContent, string(data))
 
 			if mode.flag == flagDownloadOnly {
-				assertOutputContains(t, attempt.Stdout, "Held back by --download-only:")
-				assertOutputContains(t, attempt.Stdout, "1 upload")
+				// Held back on every pass until an upload runs: the end state.
+				assertOutputContains(t, attempt.Last().Stdout, "Held back by --download-only:")
+				assertOutputContains(t, attempt.Last().Stdout, "1 upload")
 				waitForRemoteDeleteDisappearance(t, cfgPath, env, resolveDriveSelection(env, ""), "fragile.txt", "ls", "/"+testFolder)
 				assert.Empty(t, conflictCopiesForPath(t, fragileFile), "directional edit-delete should preserve the local canonical file without a conflict copy")
 				return

@@ -23,15 +23,7 @@ type outputBoundaryViolation struct {
 	Message string
 }
 
-const (
-	verifyGitDir         = ".git"
-	verifyTestdataDir    = ".testdata"
-	verifyWorktreesDir   = ".worktrees"
-	verifyNodeModulesDir = "node_modules"
-	verifyVendorDir      = "vendor"
-
-	slogImportPath = "log/slog"
-)
+const slogImportPath = "log/slog"
 
 func runOutputBoundaries(
 	_ context.Context,
@@ -65,7 +57,7 @@ func findOutputBoundaryViolations(repoRoot string) ([]outputBoundaryViolation, e
 		}
 
 		if entry.IsDir() {
-			if shouldSkipOutputBoundaryDir(entry.Name()) {
+			if skipRepositoryRuleDir(entry.Name()) {
 				return filepath.SkipDir
 			}
 
@@ -111,15 +103,6 @@ func findOutputBoundaryViolations(repoRoot string) ([]outputBoundaryViolation, e
 	}
 
 	return violations, nil
-}
-
-func shouldSkipOutputBoundaryDir(name string) bool {
-	switch name {
-	case verifyGitDir, verifyTestdataDir, verifyVendorDir:
-		return true
-	default:
-		return false
-	}
 }
 
 func outputBoundaryFileAllowed(rel string) bool {

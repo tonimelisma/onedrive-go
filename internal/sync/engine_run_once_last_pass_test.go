@@ -91,7 +91,7 @@ func throttledUploadTestEngine(
 			}
 			select {
 			case <-bothIn:
-			case <-time.After(5 * time.Second):
+			case <-time.After(syncfixture.EventWait):
 			}
 			return nil, lastPassTestThrottle(30 * time.Second)
 		}

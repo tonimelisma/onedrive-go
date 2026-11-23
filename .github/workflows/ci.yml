@@ -68,6 +68,15 @@ permissions:
 # the PR run already exercised the change, and the nightly covers main.
 jobs:
   verify-lint:
+    # golangci-lint reads one build of the tree, one platform and one set of
+    # tags, so each lint pass of devtool (`lintPasses`) is one leg: linux,
+    # darwin with the race tag, and freebsd. The legs run side by side, so a
+    # pass adds no time to the critical path. A test holds the legs to the
+    # passes (TestCILintJobRunsEveryLintPass).
+    strategy:
+      fail-fast: false
+      matrix:
+        pass: [linux, darwin-race, freebsd]
     runs-on: ubuntu-latest
     # Above the linter's own 15-minute deadline, so a lint that hangs ends
     # with the linter's message instead of a job timeout that names no cause.
@@ -92,13 +101,16 @@ jobs:
       # dependencies, not the host. It fails the build on a vulnerability this
       # code actually reaches, which is the signal worth blocking on.
       - name: govulncheck
+        if: matrix.pass == 'linux'
         run: |
           set -euo pipefail
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           "$(go env GOPATH)/bin/govulncheck" ./...
 
       - name: Lint
-        run: go run ./cmd/devtool verify lint
+        env:
+          LINT_PASS: ${{ matrix.pass }}
+        run: go run ./cmd/devtool verify lint --lint-pass "${LINT_PASS}"
 
   # README lists Linux and macOS as primary platforms, and the tree carries
   # darwin-only sources (synctree stat identity, the non-Linux watcher path).
