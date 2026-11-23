@@ -991,12 +991,11 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 30 runs of `pairs.golden` (9 from the synced tree, 21 from the held
+The 17 runs of `pairs.golden` (9 from the synced tree, 8 from the held
 one; a run names its start, the two histories, the refused create if any,
 and the invariants it breaks) fall into the twelve shapes below, of which
-4, 5, 6, 7, 8, 9 and 11 are no longer listed: 17 runs break a rule of
-convergence, and 13 (5 pairs and their refusal variants) only the
-`duplicated` rule of shape 12. Each is an open behaviour of the planner
+4, 5, 6, 7, 8, 9, 11 and 12 are no longer listed: every one breaks a rule
+of convergence. Each is an open behaviour of the planner
 unless it says it is right as it is; a fix removes its lines from the file. The refused-create variants of a run break what
 the run itself breaks, so they belong to its shape. 58 runs of shapes 4, 7
 and 8 were the check's own: its model of OneDrive gave a remote folder
@@ -1023,7 +1022,12 @@ the file against the row at its path, which a download of OneDrive's move
 of the same item earlier in the pass had moved away, where the executor
 checks it against the baseline the plan carries (`verifyLocalDeleteContent`):
 the model refused deletes the executor runs. Both now follow the store
-and the executor. The check also counts a duplicate now (shape 12).
+and the executor. A folder delete in the model also removed the baseline
+rows below the folder, where the store's commit removes the row at the
+path alone (`commitDelete`): a synced item that had left the folder lost
+its row, and the next pass read its two copies as two new files. 10 runs
+of shape 12 were that (from the held start, `rm p` on either side while
+OneDrive moved `p/f` into `X2`); they converge now. The check also counts a duplicate now (shape 12).
 
 1. A rotation through nesting made on OneDrive (2 runs left, all held).
    One entry moves into a folder, which then takes the entry's old path
@@ -1182,7 +1186,7 @@ and the executor. The check also counts a duplicate now (shape 12).
    removals a pass ran although the other side held the moved file
    elsewhere and nothing carried it (R-2.17.11) are fixed too.
 12. One synced or written content at two plain paths of a side at the end
-   (`duplicated`, 7 pairs left: 2 synced, 5 held; a conflict copy keeps
+   (`duplicated`, no pairs left; a conflict copy keeps
    both on purpose, under a name that tells the user, and is not counted).
    Nothing is lost, so the content rules hold, but the user finds a copy
    nobody asked for, and edits to one never reach the other. Two families,
@@ -1205,9 +1209,21 @@ and the executor. The check also counts a duplicate now (shape 12).
    and synced hash (`movedOntoAnotherItemsPath`), OneDrive's copy by item ID,
    the moves compose, and the upload, download, cleanup and recreated-path
    create SQLite planned for it are dropped (`replacedByAComposedMove`,
-   `recreatedSourceCreates`). Left: from the held start, OneDrive moving
+   `recreatedSourceCreates`). Fixed too: from the held start, OneDrive moving
    `p/f` into `X2` or `z` onto `x` while here `p/f` is in the new `x` or
-   `z` took `p/f` (5 pairs), where the held folder's move is involved.
+   `z` took `p/f` (5 pairs), where the held folder's move is involved:
+   two were the model's (above), and three were the planner's. An item
+   whose move waits for a later pass keeps its synced row, which the next
+   pass needs to know it: a move of another item onto that row's path
+   waits with it, since its commit records the other item's row at the
+   path and the store removes a row of another item there
+   (`baselineRowsOfHeldItems`; OneDrive moved `p/f` into `X2` and `z` onto
+   `p/f` while `f`'s move here waited), and a download of such an item at
+   a path it never had waits too (`downloadsOntoItsOwnRow`; `z` moved onto
+   `p/f` here while OneDrive moved it into `x`, which sits at `x2` here, and
+   it was downloaded into `x2` beside its copy)
+   (`TestPlannerPairs_AnItemWhoseMoveWaitsKeepsItsRowAndIsNeverCopied`,
+   `TestRunOnce_AFileWhoseMoveWaitsKeepsItsSyncedRowAndIsNeverCopied`).
    Fixed, the two synced pairs where two moves meet at one name. Here `p`
    renamed `q` while OneDrive renamed `x` to `q` and moved `p/f` onto `x`:
    the two `q` folders merge as one made on both sides, so SQLite never read

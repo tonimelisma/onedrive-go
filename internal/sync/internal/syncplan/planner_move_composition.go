@@ -2843,9 +2843,14 @@ func dropCreatesOntoComposedItems(
 		nodeByKey[inputs.nodes[i].key] = &inputs.nodes[i]
 	}
 
+	heldRows := baselineRowsOfHeldItems(actions, inputs, composition)
 	kept = actions[:0:0]
 	for i := range actions {
 		action := &actions[i]
+		if movesOntoAHeldItemsRow(logger, action, heldRows) {
+			dropped = append(dropped, *action)
+			continue
+		}
 		side, isCreate := createSide(action)
 		if !isCreate {
 			kept = append(kept, *action)
@@ -2888,6 +2893,64 @@ func dropCreatesOntoComposedItems(
 	}
 
 	return dropCreatesBelowDroppedCreates(kept, dropped)
+}
+
+// movesOntoAHeldItemsRow reports a move of another item onto the baseline
+// path of an item whose move waits (baselineRowsOfHeldItems), logging it at
+// Debug.
+func movesOntoAHeldItemsRow(logger *slog.Logger, action *syncdomain.Action, heldRows map[string]string) bool {
+	holder, held := heldRows[action.Path]
+	if !held || !isMoveAction(action) || holder == action.ItemID {
+		return false
+	}
+	logMoveOntoAHeldItemsRow(logger, action, holder)
+
+	return true
+}
+
+// baselineRowsOfHeldItems maps the baseline path of each item whose move
+// the plan holds for a later pass, on either side, to that item, unless the
+// plan moves the item too (a swap's item parked at a temporary name, whose
+// move re-paths its row). A move of
+// another item onto such a path waits for the next pass too
+// (dropCreatesOntoComposedItems): its commit records the other item's row at
+// the path, which the store keys by path as well as by item ID, so the held
+// item lost its row, and the next pass read its two copies as two new files
+// (from the held start, OneDrive moved p/f into X2 and z onto p/f while f's
+// move here into the new x waited: f was downloaded at X2/f and uploaded
+// again from x/f).
+func baselineRowsOfHeldItems(actions []syncdomain.Action, inputs *moveInputs, composition *moveComposition) map[string]string {
+	held := keysStillToMove(actions, composition)
+	if len(held[moveCoordLocal]) == 0 && len(held[moveCoordRemote]) == 0 {
+		return nil
+	}
+	moving := map[string]bool{}
+	for i := range actions {
+		if isMoveAction(&actions[i]) {
+			moving[actions[i].ItemID] = true
+		}
+	}
+	rows := map[string]string{}
+	for i := range inputs.nodes {
+		n := &inputs.nodes[i]
+		if (held[moveCoordLocal][n.key] || held[moveCoordRemote][n.key]) && !moving[n.key] && n.paths[moveCoordBaseline] != "" {
+			rows[n.paths[moveCoordBaseline]] = n.key
+		}
+	}
+
+	return rows
+}
+
+// logMoveOntoAHeldItemsRow logs at Debug a move held for the next pass
+// because it lands on the baseline path of an item whose own move waits.
+func logMoveOntoAHeldItemsRow(logger *slog.Logger, action *syncdomain.Action, holder string) {
+	if logger == nil {
+		return
+	}
+	logger.Debug("move waits for the item whose synced path it lands on",
+		slog.String("action", action.Type.String()),
+		slog.String("path", action.Path),
+		slog.String("held_item_id", holder))
 }
 
 // dropCreatesBelowDroppedCreates removes, with the creates already dropped,
@@ -3679,6 +3742,12 @@ func dropReconciliationOfComposedMoves(
 	return kept
 }
 
+// downloadsOntoItsOwnRow reports a download at a path whose baseline row is
+// the downloaded item's own: new content for the item where it is synced.
+func downloadsOntoItsOwnRow(action *syncdomain.Action) bool {
+	return action.View != nil && action.View.Baseline != nil && action.View.Baseline.ItemID == action.ItemID
+}
+
 // replacedByAComposedMove reports a reconciliation action the plan's moves
 // replace (dropReconciliationOfComposedMoves). moved holds the keys each side
 // moves; movedOrHeld also answers a move held for a later pass in the mode.
@@ -3695,8 +3764,12 @@ func replacedByAComposedMove(
 		// second copy of it: the move puts the copy here where OneDrive
 		// holds it, or OneDrive's copy where this one is (p renamed q on
 		// both sides, q/f moved up to p here: f moves to p on OneDrive, and
-		// its download at q/f made it twice).
-		return moved[moveCoordLocal][action.ItemID] || moved[moveCoordRemote][action.ItemID]
+		// its download at q/f made it twice). So does one at a path the item
+		// never had while its move waits for a later pass: OneDrive moved z
+		// into x while this computer moved z elsewhere and x's move here
+		// waited, and z was downloaded into x beside its copy here.
+		return moved[moveCoordLocal][action.ItemID] || moved[moveCoordRemote][action.ItemID] ||
+			(movedOrHeld(action.ItemID) && !downloadsOntoItsOwnRow(action))
 	case syncdomain.ActionUpload:
 		// The file SQLite read as new content at a path another item had
 		// is a synced item found by its identity; its moves carry it

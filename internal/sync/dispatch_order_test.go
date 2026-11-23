@@ -428,6 +428,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_ThreeFoldersMovedHereInARingOfNewFoldersConverge,
 		TestRunOnce_TwoFilesMovedHereIntoNewFoldersAtEachOthersPathsWait,
 		TestRunOnce_AFolderDeletedHereStaysOnOneDriveWhileAMoveOutOfItWaits,
+		TestRunOnce_AFileWhoseMoveWaitsKeepsItsSyncedRowAndIsNeverCopied,
 		TestRunOnce_AFolderDeletedOnOneDriveStaysHereWhileAMoveOutOfItWaits,
 		TestRunOnce_AFolderRenamedHereIsRenamedOnOneDriveWhileAMoveOutOfAFolderDeletedInItWaits,
 		TestRunOnce_AFolderRenamedOnOneDriveIsRenamedHereWhileAMoveOutOfAFolderDeletedInItWaits,

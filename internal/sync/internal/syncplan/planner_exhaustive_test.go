@@ -1277,7 +1277,7 @@ func (w *exWorld) remoteFolderAt(dir string) (string, bool) {
 func (w *exWorld) exLocalDelete(a *syncdomain.Action) bool {
 	item, ok := w.local[a.Path]
 	if !ok {
-		deleteSyncedTree(w.baseline, a.Path)
+		delete(w.baseline, a.Path)
 
 		return true
 	}
@@ -1291,7 +1291,7 @@ func (w *exWorld) exLocalDelete(a *syncdomain.Action) bool {
 		return false
 	}
 	delete(w.local, a.Path)
-	deleteSyncedTree(w.baseline, a.Path)
+	delete(w.baseline, a.Path)
 
 	return true
 }
@@ -1333,7 +1333,9 @@ func (w *exWorld) exRemoteDelete(a *syncdomain.Action) bool {
 		return false
 	}
 	w.deleteTree(w.remote, at)
-	deleteSyncedTree(w.baseline, a.Path)
+	// The store's commit removes the baseline row at the path alone
+	// (commitDelete): a synced item that left the folder keeps its row.
+	delete(w.baseline, a.Path)
 
 	return true
 }
@@ -2220,6 +2222,40 @@ func TestPlannerPairs_AFileMovedOnOneDriveBesideAFolderRenamedOrRotatedHereEndsO
 			},
 			remote: []exEdit{{kind: exMoveFile, from: "p/f", to: "x/f"}},
 		},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}
+
+// Validates: R-2.17.6
+//
+// From the held start, f's move here into the new x waits, while OneDrive
+// moves f into X2 and deletes p (or p is deleted here), or moves z onto f's
+// synced path p/f, or z moves onto p/f here while OneDrive moves it into x
+// or X2. The waiting item keeps its synced row: a move of another item onto
+// that path waits with it, and a download of an item whose move waits, at a
+// path the item never had, waits too. Each file ends once on each side, on
+// every run with each create refused once.
+func TestPlannerPairs_AnItemWhoseMoveWaitsKeepsItsRowAndIsNeverCopied(t *testing.T) {
+	t.Parallel()
+
+	held := exStartNamed(t, "held")
+	for _, pair := range []exPair{
+		{start: held, remote: []exEdit{
+			{kind: exMoveFile, from: "p/f", to: "X2/f"}, {kind: exDeleteFolder, from: "p"},
+		}},
+		{start: held, local: []exEdit{{kind: exDeleteFolder, from: "p"}}, remote: []exEdit{
+			{kind: exMoveFile, from: "p/f", to: "X2/f"},
+		}},
+		{start: held, remote: []exEdit{
+			{kind: exMoveFile, from: "p/f", to: "X2/f"}, {kind: exMoveFile, from: "z", to: "p/f"},
+		}},
+		{start: held, local: []exEdit{{kind: exMoveFile, from: "z", to: "p/f"}}, remote: []exEdit{
+			{kind: exMoveFile, from: "z", to: "X2/z"},
+		}},
+		{start: held, local: []exEdit{{kind: exMoveFile, from: "z", to: "p/f"}}, remote: []exEdit{
+			{kind: exMoveFile, from: "z", to: "x/z"},
+		}},
 	} {
 		requirePairKeepsEveryInvariant(t, &pair)
 	}

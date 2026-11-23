@@ -8,23 +8,10 @@ synced L[mv x p/x, mv p/f x] R[mv p x/p] :: sides-differ left-held
 synced L[mv x p/x, mv z x] R[mv p x/p] :: sides-differ left-held
 synced L[mv x p/x, mkdir x] R[mv p x/p] :: sides-differ left-held
 held L[] R[mv p/f X2/f, mv X2 p/f] :: no-quiet-plan sides-differ
-held L[] R[mv p/f X2/f, rm p] :: duplicated
-held L[] R[mv p/f X2/f, rm p] refuse folder_create X2 (local) #1 :: duplicated
-held L[] R[mv p/f X2/f, rm p] refuse download X2/f #1 :: duplicated
-held L[] R[mv p/f X2/f, rm p] refuse folder_create x (remote) #1 :: duplicated
-held L[] R[mv p/f X2/f, rm p] refuse upload x/f #1 :: duplicated
-held L[] R[mv p/f X2/f, mv z p/f] :: duplicated
 held L[] R[mv x p/x, mv p x] :: sides-differ left-held
 held L[] R[rm x, mv p x] :: sides-differ left-held
 held L[] R[rm x, mv p x] refuse folder_create X2 (local) #1 :: sides-differ left-held
 held L[] R[rm x, mv p x] refuse folder_create x2 (remote) #1 :: sides-differ left-held
-held L[rm p] R[mv p/f X2/f] :: duplicated
-held L[rm p] R[mv p/f X2/f] refuse folder_create X2 (local) #1 :: duplicated
-held L[rm p] R[mv p/f X2/f] refuse download X2/f #1 :: duplicated
-held L[rm p] R[mv p/f X2/f] refuse folder_create x (remote) #1 :: duplicated
-held L[rm p] R[mv p/f X2/f] refuse upload x/f #1 :: duplicated
 held L[mv x2 p/x2] R[mv p x/p] :: sides-differ left-held
-held L[mv z p/f] R[mv z X2/z] :: duplicated
-held L[mv z p/f] R[mv z x/z] :: duplicated
 held L[mv p x/p, mv x2 x/p/x2] R[] :: sides-differ left-held
 held L[mv x2 p/f, mv p x/p] R[] :: sides-differ left-held
