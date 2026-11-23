@@ -1677,6 +1677,24 @@ func TestPlannerPairs_AFolderRenamedTheSameOnBothSidesWithANewFolderAtItsOldPath
 	})
 }
 
+// Validates: R-2.17.6
+//
+// From the held start, here p renamed q and the held folder moved into it as
+// q/x2: once the case collision of x2 is resolved, f, which left p for the
+// new x, moves after p's move, so x's move into q, the new x and f's move all
+// run, and the plan empties.
+func TestPlannerPairs_AHeldFolderMovedIntoARenamedFolderRunsOnceItsNameIsFree(t *testing.T) {
+	t.Parallel()
+
+	requirePairKeepsEveryInvariant(t, &exPair{
+		start: exStartNamed(t, "held"),
+		local: []exEdit{
+			{kind: exMoveFolder, from: "p", to: "q"},
+			{kind: exMoveFolder, from: "x2", to: "q/x2"},
+		},
+	})
+}
+
 // exRunPairs runs every stride-th pair, and that pair again with each of its
 // refusals (exRefusals), on exWorkers stores in parallel. It returns what
 // each run found, in pair order, a pair before its refusals.

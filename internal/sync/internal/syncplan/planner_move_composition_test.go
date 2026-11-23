@@ -2538,3 +2538,34 @@ func TestIsolateDependencyCycles_KeepsUnrelatedWork(t *testing.T) {
 	assert.Equal(t, "unrelated.txt", kept[0].Path)
 	require.NoError(t, detectDependencyCycle(deps))
 }
+
+// Validates: R-2.17.6
+//
+// Here p was renamed q, the folder x moved into it as q/x2 and a new x made,
+// and f moved out of p into the new x; OneDrive changed nothing. x's move
+// lands below p's new path, so it runs after p's; the new x waits for x to
+// leave its path, and f's move waits for the new x. Leaving p first, f's
+// move held p's move back and closed a cycle with all of them; a file
+// directly in a folder OneDrive moves leaves after the folder's move, from
+// below its new path, so every action has an order. A file further down
+// still leaves first (TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource).
+func TestComposeMoves_AFileLeavingAFolderMovedOnOneDriveMovesAfterIt(t *testing.T) {
+	t.Parallel()
+
+	nodes := []moveNode{
+		composeNode("p", syncdomain.ItemTypeFolder, "p", "q", "p"),
+		composeNode("x", syncdomain.ItemTypeFolder, "x", "q/x2", "x"),
+		composeNode("f", syncdomain.ItemTypeFile, "p/f", "x/f", "p/f"),
+	}
+	occupancy := composeOccupancy(nodes)
+	occupancy.local["x"] = true
+	c := composeMoves(nodes, occupancy, nil)
+
+	assert.ElementsMatch(t, []string{"p->q", "x->q/x2", "q/f->x/f"}, composedMovesBySide(&c, moveCoordRemote))
+	assert.Empty(t, composedMovesBySide(&c, moveCoordLocal))
+
+	actions := append(composedMoveActions(&c, nodes), syncdomain.Action{Type: syncdomain.ActionFolderCreate, Path: "x", CreateSide: syncdomain.CreateRemote})
+	kept, _, cycled := isolateDependencyCycles(actions, nil)
+	assert.Len(t, kept, len(actions))
+	assert.Empty(t, cycled)
+}

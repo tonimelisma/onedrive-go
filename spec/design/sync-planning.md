@@ -740,7 +740,16 @@ which waits for the subfolder to leave. So it is where the new folder can
 only be made after the moving folder has moved (`y` moved to `x/y` and made
 again, `x/a.txt` moved into the new `y`, and `x` moved to `x2`): `x`'s move
 waits for `a.txt` to leave, `a.txt` for the new `y`, and the new `y` for
-`y`'s move, which, composed to `x2/y`, waits for `x`'s.
+`y`'s move, which, composed to `x2/y`, waits for `x`'s. On OneDrive that last
+cycle has an order: a file directly in a folder OneDrive moves leaves after
+the folder's move, from its source rebased below the folder's new path
+(`leavesAfterItsFolder`), as OneDrive moves an item into its parent by ID
+and lands it in either order, so `x`'s move no longer waits for `a.txt`. A
+file further down still leaves first: the folders between it and the moving
+folder may be deleted or moved on their own, and their deletes wait for it
+at their paths as the plan has them
+(`TestComposeMoves_AFileLeavingAFolderMovedOnOneDriveMovesAfterIt`,
+`TestPlannerPairs_AHeldFolderMovedIntoARenamedFolderRunsOnceItsNameIsFree`).
 Anything that cannot be ordered is
 deferred, with a Debug notice, and the next pass, which observes the moves
 this one made, plans it simply. An item is decided after the item its target
@@ -1042,10 +1051,19 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    does, the next pass creates the folder and the work that waited for it,
    and the plan empties
    (`TestPlannerPairs_AFolderCreateRefusedAfterTheHeldFolderMovesAwayConverges`).
-10. A held folder moved into a folder that moves in the same pass (4 runs,
-   all held, nothing done on OneDrive): `mv p q, mv x2 q/x2` or
-   `mv x2 p/f, mv p q`. After the name collision is resolved the held move
-   is still held at the end; it should run once the collision is gone.
+10. A held folder moved into a folder that moves into the new folder made
+   in the held one's place (2 runs, all held, nothing done on OneDrive):
+   `mv p x/p, mv x2 x/p/x2` or `mv x2 p/f, mv p x/p`. The held folder must
+   go into `p` before `p` moves into the new `x`, which can only be made
+   once the held folder has left `x`, a rotation through nesting; moving the
+   held folder into `p` where `p` is now would order it, but the dependency
+   rules read a move into a path a same-side move vacates as landing in a
+   new folder that takes the path (`movesIntoVacatedPath`), and the
+   executor resolves the destination's parent by path, so the move would
+   have to name its parent by item, the device the rotations of shape 1
+   need. The two runs where `p` moves elsewhere (`mv p q, mv x2 q/x2`,
+   `mv x2 p/f, mv p q`) are fixed: `f`, leaving `p` for the new `x`, now
+   moves after `p`'s move, which no longer waits for it.
 11. Content removed from a side in a pass (4 runs: 1 synced, 3 held), the
    rule that matters most: a removal whose content's create needs the path
    the removal frees, with that create, or what it waits for, refused once.

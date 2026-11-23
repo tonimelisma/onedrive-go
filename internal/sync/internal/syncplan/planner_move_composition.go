@@ -1293,7 +1293,7 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 			continue
 		}
 		if !strings.HasPrefix(newPath, earlier.newPath+"/") {
-			if folder, lands := e.vacatingFolder(n, side, newPath); !lands || folder != earlier.key {
+			if e.leavesBeforeItsFolder(n, side, oldPath, newPath, earlier) {
 				// The earlier move waits for this one (children leave first).
 				continue
 			}
@@ -1356,6 +1356,34 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 		remotePath: remotePath,
 		displaced:  displaced,
 	}, true
+}
+
+// leavesBeforeItsFolder reports whether n, leaving the folder whose move on
+// side earlier is, moves before that move: unless it lands at or below the
+// path the folder's move vacates, or leaves after the folder on OneDrive
+// (leavesAfterItsFolder).
+func (e *moveEmitter) leavesBeforeItsFolder(n *moveNode, side moveCoord, oldPath, newPath string, earlier *composedMove) bool {
+	if folder, lands := e.vacatingFolder(n, side, newPath); lands && folder == earlier.key {
+		return false
+	}
+
+	return !leavesAfterItsFolder(n, side, oldPath, earlier)
+}
+
+// leavesAfterItsFolder reports whether n, a file directly in the folder whose
+// move on OneDrive earlier is, leaves the folder after that move, from its
+// source rebased below the folder's new path, rather than first. OneDrive
+// moves an item into its parent by ID, so either order lands it; leaving
+// first, its move into a folder made here at a path another move of the
+// plan vacates closed a cycle when that other move lands below the folder's
+// new path (from the held start, here p renamed q and the held x moved into
+// it as q/x2 while f left p for the new x: x's move waited for p's, p's for
+// f leaving, f's for the new x, and the new x for x's move). A file further
+// down leaves first: the folders between it and the moved folder may be
+// deleted or moved on their own, and their deletes wait for it at their
+// paths as the plan has them.
+func leavesAfterItsFolder(n *moveNode, side moveCoord, oldPath string, earlier *composedMove) bool {
+	return side == moveCoordRemote && n.itemType == syncdomain.ItemTypeFile && path.Dir(oldPath) == earlier.oldPath
 }
 
 // recordLanding records, for a planned OneDrive move of key into a folder made
