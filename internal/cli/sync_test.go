@@ -1210,3 +1210,63 @@ func TestRunSyncCommand_ADriveErrorWinsOverLeftWork(t *testing.T) {
 	require.NotErrorIs(t, err, errSyncLeftWork)
 	assert.Equal(t, exitSignInRequired, commandExitCode(err, false))
 }
+
+// Validates: R-2.9.4
+//
+// An owner that holds the control socket but does not answer the probe is a
+// running sync of unknown mode: the one-shot refuses before its banner, with
+// the same error a watch or one-shot owner gets, rather than announcing a
+// check and then failing on the ownership lock. A held-delete confirmation is
+// refused the same way, since an owner that does not answer cannot take it.
+func TestRunSyncCommand_UnresponsiveOwnerRefusesBeforeTheBanner(t *testing.T) {
+	tests := []struct {
+		name string
+		opts syncCommandOptions
+	}{
+		{name: "plain one-shot", opts: syncCommandOptions{Mode: syncdomain.SyncBidirectional}},
+		{name: "confirm deletes", opts: syncCommandOptions{Mode: syncdomain.SyncBidirectional, ConfirmDeletes: true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setTestDriveHome(t)
+
+			cfgPath := filepath.Join(t.TempDir(), "config.toml")
+			configBody := fmt.Sprintf(`
+["personal:test@example.com"]
+sync_dir = %q
+`, t.TempDir())
+			require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+			startCLIControlSocketWithStatusHandler(t, answerControlBusy(t), refuseControlMutation(t))
+
+			var status bytes.Buffer
+			cc := &CLIContext{
+				Logger:       slog.New(slog.DiscardHandler),
+				OutputWriter: io.Discard,
+				StatusWriter: &status,
+				CfgPath:      cfgPath,
+			}
+			called := false
+			cc.seams.syncRunOnce = func(
+				context.Context,
+				*config.Holder,
+				[]*config.ResolvedDrive,
+				syncdomain.SyncMode,
+				syncengine.RunOptions,
+				*slog.Logger,
+				string,
+			) multisync.RunOnceResult {
+				called = true
+				return multisync.RunOnceResult{}
+			}
+
+			err := runSyncCommand(t.Context(), cc, tt.opts)
+			require.Error(t, err)
+			var inUse *multisync.ControlSocketInUseError
+			require.ErrorAs(t, err, &inUse)
+			assert.Contains(t, err.Error(), "already running")
+			assert.False(t, called, "the one-shot must not start beside an owner that holds the socket")
+			assert.NotContains(t, status.String(), "Checking", "the refusal comes before the banner")
+		})
+	}
+}

@@ -461,7 +461,7 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.MountSession, erro
 			return nil, fmt.Errorf("probe account identity: %w", probeErr)
 		}
 		if result.Changed() {
-			runtime.FlushTokenCache()
+			// The probe flushed the token cache with the rename.
 			if reloadErr := cc.reloadResolvedDriveFromFlags(); reloadErr != nil {
 				return nil, reloadErr
 			}

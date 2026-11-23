@@ -173,8 +173,9 @@ func (cc *CLIContext) askAccountIdentity(
 }
 
 // applyAccountIdentity applies what OneDrive answered for the account and
-// records the next check 24 hours on,
-// under the account's name after any email change. A change it cannot apply
+// records the next check 24 hours on, under the account's name after any
+// email change; an email change also flushes the session runtime's token
+// cache, since the sign-in file moved. A change it cannot apply
 // is returned and records nothing, so the next command asks and applies
 // again.
 func (cc *CLIContext) applyAccountIdentity(
@@ -187,6 +188,13 @@ func (cc *CLIContext) applyAccountIdentity(
 		return config.EmailReconcileResult{}, err
 	}
 	cc.recordIdentityCheck(ctx, remapCanonicalIDWithResult(accountCID, &result), true)
+	if result.Changed() {
+		// A rename moved the sign-in file. A token source or bootstrap client
+		// cached under the old path would refresh into a file that no longer
+		// names the account, so every client built after the probe (a drive
+		// session, a shared target's clients) reads the moved file afresh.
+		cc.runtime().FlushTokenCache()
+	}
 
 	return result, nil
 }

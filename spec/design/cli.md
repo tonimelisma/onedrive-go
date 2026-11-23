@@ -546,6 +546,13 @@ selectors remapped (R-3.7.5,
 change applied or finished, or a file caught up, asks a running `sync
 --watch` to reload (`tellRunningWatchOfEmailChange`), except from the watch
 itself (`isWatchCommand`).
+An email change the identity probe applies (`applyAccountIdentity`, under
+every caller of `probeAccountIdentity` and `probeAccountIdentities`) also
+flushes the command's session runtime's token cache, since the sign-in file
+moved: a drive session, the shared-target clients and the shared bootstrap
+client built after the probe load the moved file, and no source cached under
+the old name lives on (`TestSharedTargetClients_FlushTheTokenCacheAfterARename`,
+`TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive`).
 A change that cannot be finished fails the command with the reason, because
 every name it would resolve may be half renamed. The commands cobra adds
 itself need no account and skip the whole CLI context
@@ -1158,7 +1165,16 @@ an `internal_error`, and every other decode or close failure stays an
 `Unwrap` (`TestDecodeControlJSONResponse_BodyTimeoutReadsAsDidNotAnswer`,
 `TestDecodeControlJSONResponse_AnInternalErrorKeepsItsCause`). Only a watch owner can be busy, since
 a one-shot owner answers status in the handler. `drive reset-sync-state`
-refuses on it as on any probe that could not tell.
+refuses on it as on any probe that could not tell. A one-shot `sync`
+refuses on it too, before its "Checking ..." banner and with the same
+"another onedrive-go sync is already running" error a watch or one-shot
+owner gets (`answerOrRefuseForRunningOwner`): it is a live sync of unknown
+mode, so starting would only fail later on the ownership lock after the
+banner read as a run that began, and a `--confirm-deletes` cannot be handed
+to an owner that does not answer
+(`TestRunSyncCommand_UnresponsiveOwnerRefusesBeforeTheBanner`). A probe that
+failed in another way is not read as a running sync; the ownership lock
+(R-2.9.4) decides.
 
 The probe sees only an owner that holds the control socket. After the
 confirmation, `drive reset-sync-state`, `drive rebind-root` and

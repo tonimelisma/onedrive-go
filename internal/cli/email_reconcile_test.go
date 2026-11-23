@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +20,9 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
@@ -316,4 +319,79 @@ func TestInitializeCLIContext_ASecondConfigFileIsCaughtUpFromAFormerEmail(t *tes
 	require.NoError(t, err)
 	assert.Contains(t, cfg.Drives, newCID)
 	assert.NotContains(t, cfg.Drives, oldCID)
+}
+
+// An identity probe that finds the account's email changed moves the sign-in
+// file; the shared-target path flushes the runtime's token cache with it, as
+// a drive session does, so no source cached under the old file name outlives
+// the rename: asking for the old path afterwards loads it from disk again
+// instead of reusing the source the probe built.
+//
+// Validates: R-3.7.2, R-6.8.27
+func TestSharedTargetClients_FlushTheTokenCacheAfterARename(t *testing.T) {
+	setTestDriveHome(t)
+
+	oldCID := driveid.MustCanonicalID("business:user@example.com")
+	newCID := driveid.MustCanonicalID("business:renamed@example.com")
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, config.AppendDriveSection(t.Context(), configPath, oldCID, "~/Business"))
+	seedCatalogAccount(t, oldCID, func(account *config.CatalogAccount) {
+		account.UserID = snapshotTestUserID123
+		account.PrimaryDriveID = rootTestDrive123
+		account.PrimaryDriveCanonical = oldCID.String()
+	})
+	seedCatalogDrive(t, oldCID, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = rootTestDrive123
+	})
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_user@example.com.json")
+
+	rawCfg, err := config.LoadOrDefault(configPath, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/me", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponse(t, w, `{
+			"id":"user-123",
+			"displayName":"Business User",
+			"mail":"renamed@example.com",
+			"userPrincipalName":"user@example.com"
+		}`)
+	}))
+	defer srv.Close()
+
+	runtime := driveops.NewSessionRuntime(config.NewHolder(rawCfg, configPath), "test-agent", slog.New(slog.DiscardHandler))
+	runtime.GraphBaseURL = srv.URL
+	var tokenPaths []string
+	runtime.TokenSourceFn = func(path string, _ *slog.Logger) (graph.TokenSource, error) {
+		tokenPaths = append(tokenPaths, path)
+		return staticTokenSource{}, nil
+	}
+
+	cc := &CLIContext{
+		Flags:        CLIFlags{ConfigPath: configPath},
+		Logger:       slog.New(slog.DiscardHandler),
+		StatusWriter: io.Discard,
+		CfgPath:      configPath,
+		Env:          config.EnvOverrides{},
+		GraphBaseURL: srv.URL,
+		Runtime:      runtime,
+	}
+
+	clients, err := cc.sharedTargetClients(t.Context(), sharedref.Ref{
+		AccountEmail:  oldCID.Email(),
+		RemoteDriveID: "remote-drive",
+		RemoteItemID:  "remote-item",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, clients)
+	assert.Equal(t, newCID, clients.Account)
+
+	_, err = runtime.BootstrapClient(config.DriveTokenPath(oldCID))
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		config.DriveTokenPath(oldCID), // the probe
+		config.DriveTokenPath(newCID), // the shared target, at the moved file
+		config.DriveTokenPath(oldCID), // the probe's source did not outlive the rename
+	}, tokenPaths)
 }

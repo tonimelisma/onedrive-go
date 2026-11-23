@@ -52,8 +52,12 @@ type syncRunOnceRunner func(
 // answerOrRefuseForRunningOwner decides a one-shot sync's start against the
 // sync already running, before anything is announced: a running watch takes
 // a held-delete confirmation itself; any other running owner refuses the
-// sync; a held set named with no watch running is refused. handled reports
-// that the sync goes no further, with err its outcome.
+// sync, and so does an owner that holds the socket but did not answer the
+// probe in time (busy, or past the client's deadline): it is a running sync
+// whose mode is unknown, so the one-shot would only fail later on the lock,
+// after its banner, and a held-delete confirmation cannot be handed to it;
+// a held set named with no watch running is refused. handled reports that
+// the sync goes no further, with err its outcome.
 func answerOrRefuseForRunningOwner(
 	ctx context.Context, cc *CLIContext, drives []*config.ResolvedDrive, opts syncCommandOptions, controlSocketPath string,
 ) (handled bool, err error) {
@@ -64,6 +68,13 @@ func answerOrRefuseForRunningOwner(
 	}
 	if probeErr == nil &&
 		(probe.state == controlOwnerStateWatchOwner || probe.state == controlOwnerStateOneShotOwner) {
+		return true, &multisync.ControlSocketInUseError{Path: controlSocketPath}
+	}
+	if probe.state == controlOwnerStateUnresponsive {
+		cc.Logger.Debug("control socket owner did not answer the probe",
+			slog.String("socket", controlSocketPath),
+			slog.Any("error", probeErr),
+		)
 		return true, &multisync.ControlSocketInUseError{Path: controlSocketPath}
 	}
 	if opts.HeldSet != "" {
