@@ -2,6 +2,7 @@ package syncfixture
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -45,11 +46,11 @@ func (u *CreatingTestUploader) GetItem(_ context.Context, _ driveid.ID, itemID s
 // manager's driveops.ItemReader; both refuse, as a create's outcome is looked
 // up by its item ID.
 func (u *CreatingTestUploader) GetChildByName(context.Context, driveid.ID, string, string) (*graph.Item, error) {
-	return nil, fmt.Errorf("a create's outcome is looked up by its item ID, never by its name")
+	return nil, errors.New("a create's outcome is looked up by its item ID, never by its name")
 }
 
 func (u *CreatingTestUploader) ListChildrenPages(context.Context, driveid.ID, string, graph.ChildrenPageFunc) error {
-	return fmt.Errorf("a create's outcome is looked up by its item ID, never by listing its folder")
+	return errors.New("a create's outcome is looked up by its item ID, never by listing its folder")
 }
 
 func (u *CreatingTestUploader) RemoveEmptyItem(_ context.Context, _ driveid.ID, itemID string) (bool, error) {

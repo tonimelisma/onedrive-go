@@ -121,7 +121,7 @@ func resolveSyncDryRun(cfgDryRun bool, override *bool, watch bool) (bool, error)
 	}
 
 	if watch && effectiveDryRun {
-		return false, fmt.Errorf("watch mode does not support dry-run; disable config dry_run or pass --dry-run=false")
+		return false, errors.New("watch mode does not support dry-run; disable config dry_run or pass --dry-run=false")
 	}
 
 	return effectiveDryRun, nil

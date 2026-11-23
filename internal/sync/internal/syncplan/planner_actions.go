@@ -472,7 +472,7 @@ func buildActionsForReconciliation(
 	views map[string]*syncdomain.PathView,
 ) ([]syncdomain.Action, error) {
 	if rec == nil || cmp == nil {
-		return nil, fmt.Errorf("sync: reconciliation row requires comparison context")
+		return nil, errors.New("sync: reconciliation row requires comparison context")
 	}
 
 	view := views[rec.Path]

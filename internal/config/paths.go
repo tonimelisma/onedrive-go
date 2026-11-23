@@ -126,7 +126,7 @@ func CheckDevSafe() error {
 func ControlSocketPath() (string, error) {
 	dir := DefaultDataDir()
 	if dir == "" {
-		return "", fmt.Errorf("resolve control socket path: no data directory available")
+		return "", errors.New("resolve control socket path: no data directory available")
 	}
 
 	return ControlSocketPathForDataDir(dir)

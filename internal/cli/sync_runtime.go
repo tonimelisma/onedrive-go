@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -37,7 +38,7 @@ func standaloneMountConfigFromResolvedDrive(
 	rd *config.ResolvedDrive,
 ) (multisync.StandaloneMountConfig, error) {
 	if rd == nil {
-		return multisync.StandaloneMountConfig{}, fmt.Errorf("resolved drive is required")
+		return multisync.StandaloneMountConfig{}, errors.New("resolved drive is required")
 	}
 
 	if !rd.Paused {

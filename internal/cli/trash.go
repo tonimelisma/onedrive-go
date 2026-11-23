@@ -338,7 +338,7 @@ type trashEmptyJSONOutput struct {
 
 func runTrashEmpty(_ context.Context, cc *CLIContext, confirm bool) error {
 	if !confirm {
-		return fmt.Errorf("trash empty permanently deletes every file in the local trash; rerun with --confirm")
+		return errors.New("trash empty permanently deletes every file in the local trash; rerun with --confirm")
 	}
 	trash, err := openDriveTrash(cc, "empty")
 	if err != nil {

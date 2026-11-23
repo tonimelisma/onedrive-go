@@ -141,7 +141,7 @@ func probeControlOwner(ctx context.Context) (controlOwnerProbe, error) {
 		return controlOwnerProbe{state: probeFailureState(decodeErr)}, fmt.Errorf("decode control status response: %w", decodeErr)
 	}
 	if decoded.OwnerMode == "" {
-		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, fmt.Errorf("decode control status response: missing owner mode")
+		return controlOwnerProbe{state: controlOwnerStateProbeFailed}, errors.New("decode control status response: missing owner mode")
 	}
 
 	client.status = decoded

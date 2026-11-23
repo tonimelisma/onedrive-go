@@ -114,7 +114,7 @@ func (c *emailChanger) reconcile(
 		return EmailReconcileResult{}, nil
 	}
 	if !currentAccount.IsPersonal() && !currentAccount.IsBusiness() {
-		return EmailReconcileResult{}, fmt.Errorf("email reconciliation requires a personal or business account CID")
+		return EmailReconcileResult{}, errors.New("email reconciliation requires a personal or business account CID")
 	}
 
 	// The common case is no change and no journal: answer it without the lock.

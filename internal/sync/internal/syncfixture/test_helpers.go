@@ -3,6 +3,7 @@ package syncfixture
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -136,7 +137,7 @@ func (m *EngineMockClient) ListChildren(ctx context.Context, driveID driveid.ID,
 		return m.ListChildrenFn(ctx, driveID, parentID)
 	}
 
-	return nil, fmt.Errorf("ListChildren not mocked")
+	return nil, errors.New("ListChildren not mocked")
 }
 
 // GetChildByName answers a read of one name from the folder ListChildren

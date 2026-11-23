@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
@@ -140,13 +141,13 @@ func (flow *engineFlow) assertWatchRuntimeInvariants() error {
 
 	if flow.inspect.isDraining() {
 		if flow.inspect.hasRetryTimer() {
-			return fmt.Errorf("draining runtime still has retry timer armed")
+			return errors.New("draining runtime still has retry timer armed")
 		}
 		if flow.inspect.hasTrialTimer() {
-			return fmt.Errorf("draining runtime still has trial timer armed")
+			return errors.New("draining runtime still has trial timer armed")
 		}
 		if flow.inspect.hasAdmitTimer() {
-			return fmt.Errorf("draining runtime still has admit timer armed")
+			return errors.New("draining runtime still has admit timer armed")
 		}
 	}
 
@@ -176,7 +177,7 @@ func (flow *engineFlow) assertRefreshBookkeepingCleared() error {
 		return nil
 	}
 
-	return fmt.Errorf("draining refresh bookkeeping must be cleared before continuing")
+	return errors.New("draining refresh bookkeeping must be cleared before continuing")
 }
 
 func (flow *engineFlow) assertObserverExitPhase(
@@ -186,7 +187,7 @@ func (flow *engineFlow) assertObserverExitPhase(
 		return nil
 	}
 
-	return fmt.Errorf("draining runtime must not treat observer exit as fatal outside shutdown")
+	return errors.New("draining runtime must not treat observer exit as fatal outside shutdown")
 }
 
 // assertPersistedInvariants checks what the database does not hold itself.

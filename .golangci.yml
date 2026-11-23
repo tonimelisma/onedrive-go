@@ -59,6 +59,7 @@ linters:
     - nilerr
     - nilnil
     - noctx
+    - perfsprint
     - nolintlint
     - rowserrcheck
     - sloglint
@@ -74,6 +75,20 @@ linters:
     - wrapcheck
 
   settings:
+    # An error whose message has no format verb is errors.New: perfsprint's
+    # errorf check alone, its other rewrites of fmt calls left off.
+    perfsprint:
+      integer-format: false
+      int-conversion: false
+      error-format: true
+      err-error: false
+      errorf: true
+      string-format: false
+      sprintf1: false
+      strconcat: false
+      bool-format: false
+      hex-format: false
+      concat-loop: false
     govet:
       enable-all: true
       disable:

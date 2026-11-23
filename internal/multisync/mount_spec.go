@@ -1,6 +1,7 @@
 package multisync
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -373,7 +374,7 @@ func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
 
 func newParentMountSpec(cfg *StandaloneMountConfig) (parentMountSpec, error) {
 	if cfg == nil || cfg.CanonicalID.IsZero() {
-		return parentMountSpec{}, fmt.Errorf("standalone mount canonical ID is required")
+		return parentMountSpec{}, errors.New("standalone mount canonical ID is required")
 	}
 	if cfg.StatePath == "" {
 		return parentMountSpec{}, fmt.Errorf("state path is required for %s", cfg.CanonicalID)
@@ -446,7 +447,7 @@ func buildChildMountFromCommand(
 	dataDir string,
 ) (*mountSpec, error) {
 	if parent == nil || command == nil {
-		return nil, fmt.Errorf("parent-declared child run command is incomplete")
+		return nil, errors.New("parent-declared child run command is incomplete")
 	}
 	childMountID, err := validateChildRunCommand(command)
 	if err != nil {

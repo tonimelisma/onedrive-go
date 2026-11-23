@@ -394,7 +394,7 @@ type Placement struct {
 // leaves a record of where the file came from.
 func (t *Trash) Reserve(syncRoot string, rel string, reason Reason) (*Placement, error) {
 	if t == nil || t.dir == "" {
-		return nil, fmt.Errorf("trash directory is not configured")
+		return nil, errors.New("trash directory is not configured")
 	}
 	now := t.now().UTC()
 	var random [idRandomBytes]byte

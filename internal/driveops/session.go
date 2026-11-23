@@ -317,7 +317,7 @@ func (r *SessionRuntime) SharedTargetClients(
 // deadline, a status budget's included.
 func (r *SessionRuntime) BootstrapClient(tokenPath string) (*graph.Client, error) {
 	if tokenPath == "" {
-		return nil, fmt.Errorf("bootstrap graph client: token path is required")
+		return nil, errors.New("bootstrap graph client: token path is required")
 	}
 
 	ts, err := r.getOrCreateTokenSource(tokenPath)

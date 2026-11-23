@@ -54,7 +54,7 @@ func (s *SyncStore) UpsertRetryWork(ctx context.Context, row *syncdomain.RetryWo
 
 func upsertRetryWorkTx(ctx context.Context, runner SqlTxRunner, row *syncdomain.RetryWorkRow) error {
 	if row == nil {
-		return fmt.Errorf("sync: upserting retry_work: nil row")
+		return errors.New("sync: upserting retry_work: nil row")
 	}
 	// Never write what scanRetryWorkRow would refuse to read.
 	if row.ConditionType != "" && !row.ConditionType.IsMember() {
@@ -222,10 +222,10 @@ func (s *SyncStore) RecordRetryWorkFailure(
 	delayFn func(int) time.Duration,
 ) (row *syncdomain.RetryWorkRow, err error) {
 	if failure == nil {
-		return nil, fmt.Errorf("sync: record retry_work failure: nil failure")
+		return nil, errors.New("sync: record retry_work failure: nil failure")
 	}
 	if failure.Work.Path == "" {
-		return nil, fmt.Errorf("sync: record retry_work failure: missing path")
+		return nil, errors.New("sync: record retry_work failure: missing path")
 	}
 	if _, valueErr := failure.Work.ActionType.Value(); valueErr != nil {
 		return nil, fmt.Errorf("sync: record retry_work failure for %s: invalid action type: %w", failure.Work.Path, valueErr)
@@ -284,7 +284,7 @@ func (s *SyncStore) RecordBlockedRetryWork(
 	activates *syncdomain.BlockScope,
 ) (row *syncdomain.RetryWorkRow, err error) {
 	if work.Path == "" {
-		return nil, fmt.Errorf("sync: record blocked retry_work: missing path")
+		return nil, errors.New("sync: record blocked retry_work: missing path")
 	}
 	if _, valueErr := work.ActionType.Value(); valueErr != nil {
 		return nil, fmt.Errorf("sync: record blocked retry_work for %s: invalid action type: %w", work.Path, valueErr)
@@ -540,7 +540,7 @@ type retryWorkScanner interface {
 
 func scanRetryWorkRow(scanner retryWorkScanner, row *syncdomain.RetryWorkRow) error {
 	if row == nil {
-		return fmt.Errorf("sync: scanning retry_work row: nil destination")
+		return errors.New("sync: scanning retry_work row: nil destination")
 	}
 
 	var scopeKey, conditionType string

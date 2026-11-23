@@ -279,7 +279,7 @@ func (rt *watchRuntime) bootstrapSync(ctx context.Context, mode syncdomain.SyncM
 	rt.deps.logger.Info("bootstrap sync starting", slog.String("mode", mode.String()))
 
 	if pipe == nil || pipe.bl == nil {
-		return fmt.Errorf("sync: bootstrap requires startup baseline")
+		return errors.New("sync: bootstrap requires startup baseline")
 	}
 
 	runtime, err := rt.runBootstrapCurrentPlan(ctx, pipe.bl, mode)

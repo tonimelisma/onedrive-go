@@ -212,7 +212,7 @@ func RunNightly(ctx context.Context, runner commandRunner, opts NightlyOptions) 
 		return releaseNightlyClaim(ctx, runner, opts.RepoRoot, opts.Branch, opts.Key, stdout)
 	case NightlyActionReport:
 		if opts.RunID <= 0 {
-			return fmt.Errorf("nightly report: --run-id is required")
+			return errors.New("nightly report: --run-id is required")
 		}
 		return plainGitHubFailure(reportNightly(ctx, gh, opts.RepoRoot, opts.RunID, opts.DryRun, stdout))
 	default:
@@ -601,7 +601,7 @@ func releaseNightlyClaim(
 	stdout io.Writer,
 ) error {
 	if owner == "" || key == "" {
-		return fmt.Errorf("nightly release: --branch and --key are required")
+		return errors.New("nightly release: --branch and --key are required")
 	}
 	claims, err := syncNightlyClaims(ctx, runner, repoRoot)
 	if err != nil {

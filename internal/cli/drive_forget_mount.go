@@ -209,7 +209,7 @@ func confirmForgetMountIntent(stdin io.Reader, output io.Writer, drive, rel stri
 		return nil
 	}
 	if !isWriterTTY(stdinAsWriter(stdin)) {
-		return fmt.Errorf("forget-mount requires confirmation; rerun with --yes or use an interactive terminal")
+		return errors.New("forget-mount requires confirmation; rerun with --yes or use an interactive terminal")
 	}
 	if err := writef(output, "Type FORGET to forget this mount point: "); err != nil {
 		return err
@@ -220,7 +220,7 @@ func confirmForgetMountIntent(stdin io.Reader, output io.Writer, drive, rel stri
 		return fmt.Errorf("read forget-mount confirmation: %w", err)
 	}
 	if strings.TrimSpace(line) != "FORGET" {
-		return fmt.Errorf("forget-mount canceled: confirmation token did not match FORGET")
+		return errors.New("forget-mount canceled: confirmation token did not match FORGET")
 	}
 
 	return nil

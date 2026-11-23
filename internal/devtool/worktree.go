@@ -55,10 +55,10 @@ func defaultWorktreeFS() worktreeFS {
 // worktree anyway would hide that its base may be stale.
 func AddWorktree(ctx context.Context, runner commandRunner, repoRoot, path, branch string) error {
 	if branch == "" {
-		return fmt.Errorf("worktree add: branch is required")
+		return errors.New("worktree add: branch is required")
 	}
 	if path == "" {
-		return fmt.Errorf("worktree add: path is required")
+		return errors.New("worktree add: path is required")
 	}
 
 	if err := runner.Run(

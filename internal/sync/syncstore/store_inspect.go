@@ -196,7 +196,7 @@ func readPathTruthStatus(
 // already-open sync store.
 func (s *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSnapshot, error) {
 	if s == nil {
-		return DriveStatusSnapshot{}, fmt.Errorf("read drive status snapshot: nil store")
+		return DriveStatusSnapshot{}, errors.New("read drive status snapshot: nil store")
 	}
 
 	inspector := &storeInspector{
@@ -214,7 +214,7 @@ func (s *SyncStore) ReadPathTruthStatus(
 	paths []string,
 ) (map[string]syncdomain.PathTruthStatus, error) {
 	if s == nil {
-		return nil, fmt.Errorf("read path truth status: nil store")
+		return nil, errors.New("read path truth status: nil store")
 	}
 
 	inspector := &storeInspector{

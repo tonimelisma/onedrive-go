@@ -126,7 +126,7 @@ func parseDuration(s string) (time.Duration, error) {
 	// Try standard Go duration first.
 	if d, err := time.ParseDuration(s); err == nil {
 		if d <= 0 {
-			return 0, fmt.Errorf("duration must be positive")
+			return 0, errors.New("duration must be positive")
 		}
 
 		return d, nil
@@ -134,7 +134,7 @@ func parseDuration(s string) (time.Duration, error) {
 
 	// Try our extended format with "d" for days.
 	if !durationPattern.MatchString(s) || s == "" {
-		return 0, fmt.Errorf("expected format like 30m, 2h, 1d, or 1h30m")
+		return 0, errors.New("expected format like 30m, 2h, 1d, or 1h30m")
 	}
 
 	var total time.Duration
@@ -159,7 +159,7 @@ func parseDuration(s string) (time.Duration, error) {
 	}
 
 	if total <= 0 {
-		return 0, fmt.Errorf("duration must be positive")
+		return 0, errors.New("duration must be positive")
 	}
 
 	return total, nil

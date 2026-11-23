@@ -3,6 +3,7 @@ package syncshortcut
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -88,11 +89,11 @@ type ShortcutChildEngineSpec struct {
 
 func ValidateShortcutChildRunCommand(command *ShortcutChildRunCommand) (string, error) {
 	if command == nil {
-		return "", fmt.Errorf("sync: shortcut child run command is incomplete")
+		return "", errors.New("sync: shortcut child run command is incomplete")
 	}
 	childMountID := command.ChildMountID
 	if childMountID == "" {
-		return "", fmt.Errorf("sync: shortcut child run command is missing a child mount ID")
+		return "", errors.New("sync: shortcut child run command is missing a child mount ID")
 	}
 	if !config.IsChildMountID(childMountID) {
 		return "", fmt.Errorf("sync: shortcut child run command has invalid child mount ID %s", childMountID)
@@ -168,7 +169,7 @@ func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
 	ack ShortcutChildDrainAck,
 ) (ShortcutChildWorkSnapshot, error) {
 	if h.ackFinalDrain == nil {
-		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: shortcut child final-drain ack requires live parent")
+		return ShortcutChildWorkSnapshot{}, errors.New("sync: shortcut child final-drain ack requires live parent")
 	}
 	return h.ackFinalDrain(ctx, ack)
 }
@@ -178,7 +179,7 @@ func (h ShortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
 	ack ShortcutChildArtifactCleanupAck,
 ) (ShortcutChildWorkSnapshot, error) {
 	if h.ackArtifactsPurged == nil {
-		return ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: shortcut child artifact cleanup ack requires live parent")
+		return ShortcutChildWorkSnapshot{}, errors.New("sync: shortcut child artifact cleanup ack requires live parent")
 	}
 	return h.ackArtifactsPurged(ctx, ack)
 }

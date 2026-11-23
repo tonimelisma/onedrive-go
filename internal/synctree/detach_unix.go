@@ -657,7 +657,7 @@ func (r *Root) copyThroughDescriptor(file *os.File, out *destination) (copyID Fi
 	}
 	copyID, ok := IdentityFromFileInfo(info)
 	if !ok {
-		return FileIdentity{}, fmt.Errorf("reading the copy's identity: no device and inode")
+		return FileIdentity{}, errors.New("reading the copy's identity: no device and inode")
 	}
 	if err = tmp.Close(); err != nil {
 		return FileIdentity{}, fmt.Errorf("closing copy: %w", err)

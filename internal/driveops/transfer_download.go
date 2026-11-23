@@ -260,11 +260,11 @@ func (tm *TransferManager) downloadToFile(
 	startedAt := time.Now()
 
 	if targetPath == "" {
-		return nil, fmt.Errorf("download: target path must not be empty")
+		return nil, errors.New("download: target path must not be empty")
 	}
 
 	if itemID == "" {
-		return nil, fmt.Errorf("download: item ID must not be empty")
+		return nil, errors.New("download: item ID must not be empty")
 	}
 
 	tm.logger.Debug("DownloadToFile",

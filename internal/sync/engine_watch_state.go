@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -374,7 +375,7 @@ func (rt *watchRuntime) advancePendingReplanDrainIdleTracking() {
 
 func (rt *watchRuntime) rescheduleReplanIntent(batch syncobserve.DirtyBatch) error {
 	if rt.resources.dirtyBuf == nil {
-		return fmt.Errorf("sync: reschedule watch replan: dirty buffer not initialized")
+		return errors.New("sync: reschedule watch replan: dirty buffer not initialized")
 	}
 	if batch.FullRefresh {
 		rt.resources.dirtyBuf.MarkFullRefresh()

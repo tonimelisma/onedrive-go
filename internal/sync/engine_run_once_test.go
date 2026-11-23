@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,11 +73,11 @@ func installDryRunContentMutationGuards(t *testing.T, mock *syncfixture.EngineMo
 
 	mock.CreateFolderFn = func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
 		fail("CreateFolder")
-		return nil, fmt.Errorf("dry-run content mutator called: CreateFolder")
+		return nil, errors.New("dry-run content mutator called: CreateFolder")
 	}
 	mock.MoveItemIfMatchFn = func(_ context.Context, _ driveid.ID, _, _, _, _ string) (*graph.Item, error) {
 		fail("MoveItemIfMatch")
-		return nil, fmt.Errorf("dry-run content mutator called: MoveItemIfMatch")
+		return nil, errors.New("dry-run content mutator called: MoveItemIfMatch")
 	}
 	mock.DeleteItemIfMatchFn = func(_ context.Context, _ driveid.ID, _, _ string) error {
 		fail("DeleteItemIfMatch")
@@ -92,11 +93,11 @@ func installDryRunContentMutationGuards(t *testing.T, mock *syncfixture.EngineMo
 	}
 	mock.UploadFn = func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 		fail("Upload")
-		return nil, fmt.Errorf("dry-run content mutator called: Upload")
+		return nil, errors.New("dry-run content mutator called: Upload")
 	}
 	mock.UploadToItemFn = func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 		fail("UploadToItem")
-		return nil, fmt.Errorf("dry-run content mutator called: UploadToItem")
+		return nil, errors.New("dry-run content mutator called: UploadToItem")
 	}
 
 	return &mutationCalls
@@ -1317,7 +1318,7 @@ func newRunOnceFailingDownloadEngine(t *testing.T) (*testEngine, context.Context
 			}, "new-token-after-observation"), nil
 		},
 		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
-			return 0, fmt.Errorf("simulated network error")
+			return 0, errors.New("simulated network error")
 		},
 	}
 

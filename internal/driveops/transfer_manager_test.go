@@ -49,7 +49,7 @@ func (m *tmMockDownloader) Download(ctx context.Context, driveID driveid.ID, ite
 		return m.downloadFn(ctx, driveID, itemID, w)
 	}
 
-	return 0, fmt.Errorf("Download not mocked")
+	return 0, errors.New("Download not mocked")
 }
 
 func (m *tmMockDownloader) DownloadRange(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer, offset int64, _ graph.DownloadVersion) (int64, error) {
@@ -57,7 +57,7 @@ func (m *tmMockDownloader) DownloadRange(ctx context.Context, driveID driveid.ID
 		return m.downloadRangeFn(ctx, driveID, itemID, w, offset)
 	}
 
-	return 0, fmt.Errorf("DownloadRange not mocked")
+	return 0, errors.New("DownloadRange not mocked")
 }
 
 // tmMockUploader implements Uploader + SessionUploader.
@@ -87,7 +87,7 @@ func (m *tmMockUploader) GetItem(ctx context.Context, driveID driveid.ID, itemID
 		return m.getItemFn(ctx, driveID, itemID)
 	}
 
-	return nil, fmt.Errorf("GetItem not mocked")
+	return nil, errors.New("GetItem not mocked")
 }
 
 func (m *tmMockUploader) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
@@ -95,7 +95,7 @@ func (m *tmMockUploader) ListChildren(ctx context.Context, driveID driveid.ID, p
 		return m.listChildrenFn(ctx, driveID, parentID)
 	}
 
-	return nil, fmt.Errorf("ListChildren not mocked")
+	return nil, errors.New("ListChildren not mocked")
 }
 
 // GetChildByName answers a read of one name from the folder listChildrenFn
@@ -133,7 +133,7 @@ func (m *tmMockUploader) Upload(ctx context.Context, driveID driveid.ID, parentI
 		return m.uploadFn(ctx, driveID, parentID, name, content, size, mtime, progress)
 	}
 
-	return nil, fmt.Errorf("Upload not mocked")
+	return nil, errors.New("Upload not mocked")
 }
 
 func (m *tmMockUploader) CreateUploadSession(ctx context.Context, driveID driveid.ID, parentID, name string, size int64, mtime time.Time) (*graph.UploadSession, error) {
@@ -141,7 +141,7 @@ func (m *tmMockUploader) CreateUploadSession(ctx context.Context, driveID drivei
 		return m.createUploadSessionFn(ctx, driveID, parentID, name, size, mtime)
 	}
 
-	return nil, fmt.Errorf("CreateUploadSession not mocked")
+	return nil, errors.New("CreateUploadSession not mocked")
 }
 
 func (m *tmMockUploader) UploadFromSession(ctx context.Context, session *graph.UploadSession, content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error) {
@@ -149,7 +149,7 @@ func (m *tmMockUploader) UploadFromSession(ctx context.Context, session *graph.U
 		return m.uploadFromSessionFn(ctx, session, content, totalSize, progress)
 	}
 
-	return nil, fmt.Errorf("UploadFromSession not mocked")
+	return nil, errors.New("UploadFromSession not mocked")
 }
 
 func (m *tmMockUploader) ResumeUpload(ctx context.Context, session *graph.UploadSession, content io.ReaderAt, totalSize int64, progress graph.ProgressFunc) (*graph.Item, error) {
@@ -157,7 +157,7 @@ func (m *tmMockUploader) ResumeUpload(ctx context.Context, session *graph.Upload
 		return m.resumeUploadFn(ctx, session, content, totalSize, progress)
 	}
 
-	return nil, fmt.Errorf("ResumeUpload not mocked")
+	return nil, errors.New("ResumeUpload not mocked")
 }
 
 // tmSimpleDownloader implements only Downloader (no RangeDownloader), used to
@@ -173,7 +173,7 @@ func (m *tmSimpleDownloader) Download(ctx context.Context, driveID driveid.ID, i
 		return m.downloadFn(ctx, driveID, itemID, w)
 	}
 
-	return 0, fmt.Errorf("Download not mocked")
+	return 0, errors.New("Download not mocked")
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +267,7 @@ func TestTransferManager_FreshDownload_Error(t *testing.T) {
 
 	dl := &tmSimpleDownloader{
 		downloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
-			return 0, fmt.Errorf("network failure")
+			return 0, errors.New("network failure")
 		},
 	}
 
@@ -1309,7 +1309,7 @@ func TestTransferManager_Upload_ErrorWrapping(t *testing.T) {
 
 	ul := &tmMockUploader{
 		uploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
-			return nil, fmt.Errorf("server error")
+			return nil, errors.New("server error")
 		},
 	}
 
@@ -1580,7 +1580,7 @@ func TestSessionUpload_NonExpiredResumeError_DeletesSession(t *testing.T) {
 
 	ul := &tmMockUploader{
 		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
-			return nil, fmt.Errorf("network error")
+			return nil, errors.New("network error")
 		},
 	}
 
@@ -1625,7 +1625,7 @@ func TestSessionUpload_NonExpiredResumeError_FreshOnRetry(t *testing.T) {
 	ul := &tmMockUploader{
 		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
 			callCount++
-			return nil, fmt.Errorf("rate limited")
+			return nil, errors.New("rate limited")
 		},
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
 			return &graph.UploadSession{UploadURL: "https://upload.example.com/fresh-retry"}, nil
@@ -2130,7 +2130,7 @@ func TestTransferManager_DiskSpaceCheck(t *testing.T) {
 			name: "StatfsError_FailOpen",
 			newTM: func() *TransferManager {
 				return newManager(WithDiskCheck(1000, func(string) (uint64, error) {
-					return 0, fmt.Errorf("simulated statfs error")
+					return 0, errors.New("simulated statfs error")
 				}))
 			},
 		},
@@ -3232,7 +3232,7 @@ func newFreshSessionUploader(t *testing.T) *freshSessionUploader {
 		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
 			fresh.resumeCalled = true
 
-			return nil, fmt.Errorf("unexpected resume")
+			return nil, errors.New("unexpected resume")
 		},
 		createUploadSessionFn: func(_ context.Context, _ driveid.ID, _, _ string, _ int64, _ time.Time) (*graph.UploadSession, error) {
 			fresh.createCalled = true

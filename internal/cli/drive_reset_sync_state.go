@@ -241,7 +241,7 @@ func confirmDriveStateResetIntent(
 	}
 
 	if !isWriterTTY(stdinAsWriter(stdin)) {
-		return fmt.Errorf("reset-sync-state requires confirmation; rerun with --yes or use an interactive terminal")
+		return errors.New("reset-sync-state requires confirmation; rerun with --yes or use an interactive terminal")
 	}
 
 	if err := writeln(output, "This deletes and recreates the sync state database for "+canonicalID.String()+"."); err != nil {
@@ -260,7 +260,7 @@ func confirmDriveStateResetIntent(
 		return fmt.Errorf("read reset confirmation: %w", err)
 	}
 	if strings.TrimSpace(line) != "RESET" {
-		return fmt.Errorf("reset-sync-state canceled: confirmation token did not match RESET")
+		return errors.New("reset-sync-state canceled: confirmation token did not match RESET")
 	}
 
 	return nil

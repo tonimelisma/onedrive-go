@@ -90,7 +90,7 @@ func expandBenchLiveFixtureGroups(groups []benchLiveFixtureGroup) ([]benchLiveFi
 
 	for _, group := range groups {
 		if group.Name == "" {
-			return nil, nil, fmt.Errorf("group name is empty")
+			return nil, nil, errors.New("group name is empty")
 		}
 		if group.FileCount <= 0 {
 			return nil, nil, fmt.Errorf("group %q file_count must be > 0", group.Name)
@@ -159,13 +159,13 @@ func selectBenchLiveMutations(
 	exclude map[string]struct{},
 ) ([]benchLiveMutationEntry, error) {
 	if selector.Modulus <= 0 {
-		return nil, fmt.Errorf("selector modulus must be > 0")
+		return nil, errors.New("selector modulus must be > 0")
 	}
 	if selector.Remainder < 0 || selector.Remainder >= selector.Modulus {
 		return nil, fmt.Errorf("selector remainder %d must be within [0,%d)", selector.Remainder, selector.Modulus)
 	}
 	if selector.Limit <= 0 {
-		return nil, fmt.Errorf("selector limit must be > 0")
+		return nil, errors.New("selector limit must be > 0")
 	}
 
 	selected := make([]benchLiveMutationEntry, 0, selector.Limit)
@@ -650,7 +650,7 @@ func truncateBenchLiveFile(path string, size int64) (err error) {
 
 func verifyBenchLiveFixture(scopeRoot string, fixture *benchLiveFixturePlan) error {
 	if fixture == nil {
-		return fmt.Errorf("fixture plan is nil")
+		return errors.New("fixture plan is nil")
 	}
 	expectedFiles := make(map[string]benchLiveFileEntry, len(fixture.Files))
 	for _, entry := range fixture.Files {

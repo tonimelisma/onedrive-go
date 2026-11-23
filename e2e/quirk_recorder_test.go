@@ -3,6 +3,7 @@ package e2e
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,7 +80,7 @@ type cliQuirkLogLine struct {
 
 func newE2EQuirkRecorder(logDir string, roles testutil.DriveRoles) (*e2eQuirkRecorder, error) {
 	if logDir == "" {
-		return nil, fmt.Errorf("quirk recorder log dir is required")
+		return nil, errors.New("quirk recorder log dir is required")
 	}
 
 	events, err := loadQuirkEvents(filepath.Join(logDir, quirkEventsFileName))

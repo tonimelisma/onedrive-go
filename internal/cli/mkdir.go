@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -27,7 +28,7 @@ type mkdirJSONOutput struct {
 func runMkdir(cmd *cobra.Command, args []string) error {
 	remotePath := driveops.CleanRemotePath(args[0])
 	if remotePath == "" {
-		return fmt.Errorf("cannot create root folder")
+		return errors.New("cannot create root folder")
 	}
 
 	ctx := cmd.Context()

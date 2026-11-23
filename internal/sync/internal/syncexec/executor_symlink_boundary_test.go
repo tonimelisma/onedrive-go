@@ -2,7 +2,7 @@ package syncexec
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -311,7 +311,7 @@ func TestExecutor_Upload_UnderFollowedDirectoryAliasDetectsChangedTarget(t *test
 	ul := &syncfixture.ExecutorMockUploader{
 		UploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			require.FailNow(t, "a changed source must not upload")
-			return nil, fmt.Errorf("unexpected upload")
+			return nil, errors.New("unexpected upload")
 		},
 	}
 

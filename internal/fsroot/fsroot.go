@@ -155,7 +155,7 @@ type Root struct {
 // exist yet; callers may create it later via MkdirAll or AtomicWrite.
 func Open(dir string) (*Root, error) {
 	if dir == "" {
-		return nil, fmt.Errorf("root directory is empty")
+		return nil, errors.New("root directory is empty")
 	}
 
 	return &Root{
@@ -168,7 +168,7 @@ func Open(dir string) (*Root, error) {
 // relative name within that root.
 func OpenPath(path string) (*Root, string, error) {
 	if path == "" {
-		return nil, "", fmt.Errorf("path is empty")
+		return nil, "", errors.New("path is empty")
 	}
 	if path != string(filepath.Separator) && os.IsPathSeparator(path[len(path)-1]) {
 		return nil, "", fmt.Errorf("path %q does not name a file", path)
@@ -189,7 +189,7 @@ func OpenPath(path string) (*Root, string, error) {
 
 func cleanRelative(name string) (string, error) {
 	if name == "" {
-		return "", fmt.Errorf("relative path is empty")
+		return "", errors.New("relative path is empty")
 	}
 	if filepath.IsAbs(name) {
 		return "", fmt.Errorf("relative path %q must not be absolute", name)

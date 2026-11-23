@@ -3,6 +3,7 @@ package devtool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -86,7 +87,7 @@ func RunCleanupAudit(ctx context.Context, runner commandRunner, opts CleanupAudi
 	}
 
 	if opts.RepoRoot == "" {
-		return fmt.Errorf("cleanup audit: missing repo root")
+		return errors.New("cleanup audit: missing repo root")
 	}
 
 	if err := runner.Run(ctx, opts.RepoRoot, os.Environ(), io.Discard, stderr, "git", "fetch", "--prune", "origin"); err != nil {

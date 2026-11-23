@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -297,16 +298,16 @@ func markBenchMutationEntriesExcluded(entries []benchLiveMutationEntry, excluded
 
 func buildBenchLiveCreateFiles(side string, group benchLiveCreateGroup) ([]benchLiveFileEntry, error) {
 	if group.Directory == "" {
-		return nil, fmt.Errorf("create directory is empty")
+		return nil, errors.New("create directory is empty")
 	}
 	if group.FileCount <= 0 {
-		return nil, fmt.Errorf("create file_count must be > 0")
+		return nil, errors.New("create file_count must be > 0")
 	}
 	if group.SizeBytes <= 0 {
-		return nil, fmt.Errorf("create size_bytes must be > 0")
+		return nil, errors.New("create size_bytes must be > 0")
 	}
 	if group.Extension == "" {
-		return nil, fmt.Errorf("create extension is empty")
+		return nil, errors.New("create extension is empty")
 	}
 
 	files := make([]benchLiveFileEntry, 0, group.FileCount)
@@ -851,7 +852,7 @@ func waitForBenchRemoteDeltaReady(
 		}
 		if clock.now().After(deadline) {
 			if lastErr == nil {
-				lastErr = fmt.Errorf("remote mutations not yet visible in dry-run plan")
+				lastErr = errors.New("remote mutations not yet visible in dry-run plan")
 			}
 
 			return benchDeltaReadyResult{}, fmt.Errorf(

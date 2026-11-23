@@ -2,6 +2,7 @@ package syncstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -67,7 +68,7 @@ func (s *SyncStore) ReleaseScopeWork(
 // the scope as evidence) keeps its attempt count and its next retry time.
 func (s *SyncStore) DiscardScope(ctx context.Context, scopeKey syncdomain.ScopeKey) (deleted []syncdomain.RetryWorkKey, err error) {
 	if scopeKey.IsZero() {
-		return nil, fmt.Errorf("sync: discard scope: missing scope key")
+		return nil, errors.New("sync: discard scope: missing scope key")
 	}
 
 	wire := scopeKey.String()

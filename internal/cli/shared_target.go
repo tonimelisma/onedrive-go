@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -127,11 +128,11 @@ func resolveRawShareAccountEmail(explicit string) (string, error) {
 
 	switch len(emails) {
 	case 0:
-		return "", fmt.Errorf("no authenticated accounts found — run 'onedrive-go login' first")
+		return "", errors.New("no authenticated accounts found — run 'onedrive-go login' first")
 	case 1:
 		return emails[0], nil
 	default:
-		return "", fmt.Errorf("multiple authenticated accounts found — use --account with the share URL")
+		return "", errors.New("multiple authenticated accounts found — use --account with the share URL")
 	}
 }
 
@@ -193,7 +194,7 @@ func (cc *CLIContext) sharedTargetClients(ctx context.Context, ref sharedref.Ref
 
 func (cc *CLIContext) resolveSharedItem(ctx context.Context) (*graph.Item, *driveops.AccountClients, error) {
 	if cc.SharedTarget == nil {
-		return nil, nil, fmt.Errorf("BUG: shared target not resolved")
+		return nil, nil, errors.New("BUG: shared target not resolved")
 	}
 
 	clients, err := cc.sharedTargetClients(ctx, cc.SharedTarget.Ref)

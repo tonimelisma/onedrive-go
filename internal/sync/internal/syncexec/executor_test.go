@@ -1488,7 +1488,7 @@ func TestExecutor_Upload_DoesNotProbeItsOwnPathAfterTheUpload(t *testing.T) {
 			return &graph.Item{ID: "uploaded1", ETag: "etag1", QuickXorHash: "abc"}, nil
 		},
 	}
-	pathConvergence := &executorPathConvergenceStub{waitErr: fmt.Errorf("metadata probe failed")}
+	pathConvergence := &executorPathConvergenceStub{waitErr: errors.New("metadata probe failed")}
 
 	cfg, syncRoot := newTestExecutorConfigWithPathConvergence(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, ul, pathConvergence)
 	e := NewExecution(cfg, syncfixture.EmptyBaseline())
@@ -1623,7 +1623,7 @@ func TestExecutor_Upload_KnownItemUsesItemOverwrite(t *testing.T) {
 	ul := &syncfixture.ExecutorMockUploader{
 		UploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			require.FailNow(t, "parent-path upload should not be used when item ID is known")
-			return nil, fmt.Errorf("unexpected Upload call")
+			return nil, errors.New("unexpected Upload call")
 		},
 		UploadToItemFn: func(_ context.Context, _ driveid.ID, itemID, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			assert.Equal(t, "known-item-id", itemID)
@@ -2530,7 +2530,7 @@ func TestExecutor_Conflict_EditDelete_RecreatesRemoteFromLocal(t *testing.T) {
 		},
 		UploadToItemFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			uploadToItemCalled = true
-			return nil, fmt.Errorf("unexpected UploadToItem call")
+			return nil, errors.New("unexpected UploadToItem call")
 		},
 	}
 
@@ -2892,7 +2892,7 @@ func TestInferFailureCapabilityFromError(t *testing.T) {
 		},
 		{
 			name:             "non permission error",
-			err:              fmt.Errorf("something else"),
+			err:              errors.New("something else"),
 			localCapability:  syncdomain.PermissionCapabilityLocalRead,
 			remoteCapability: syncdomain.PermissionCapabilityRemoteWrite,
 			want:             syncdomain.PermissionCapabilityUnknown,
@@ -3147,7 +3147,7 @@ func TestExecutor_Download_PartialFileCleanedOnMidStreamError(t *testing.T) {
 			}
 
 			// Fail mid-stream — simulates network error after partial write.
-			return int64(n), fmt.Errorf("connection reset after partial write")
+			return int64(n), errors.New("connection reset after partial write")
 		},
 	}
 
@@ -3256,7 +3256,7 @@ func TestExecutor_Upload_ETagMismatch(t *testing.T) {
 	ul := &syncfixture.ExecutorMockUploader{
 		UploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
 			require.FailNow(t, "upload should not be called when eTag mismatches")
-			return nil, fmt.Errorf("unexpected upload call")
+			return nil, errors.New("unexpected upload call")
 		},
 	}
 

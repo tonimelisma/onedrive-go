@@ -59,7 +59,7 @@ func runOnceLeftWorkError(result multisync.RunOnceResult, left map[string]syncen
 
 func runOnceDrivesError(result multisync.RunOnceResult) error {
 	if result.Startup.AllPaused() {
-		return fmt.Errorf("all selected mounts are paused — run 'onedrive-go resume' to unpause")
+		return errors.New("all selected mounts are paused — run 'onedrive-go resume' to unpause")
 	}
 
 	var firstErr error

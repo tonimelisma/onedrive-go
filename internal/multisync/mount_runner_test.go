@@ -3,7 +3,6 @@ package multisync
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"testing"
 
@@ -90,7 +89,7 @@ func TestMountRunner_Run_PanicWithError(t *testing.T) {
 		displayName: "Panic Error Drive",
 	}
 
-	errPanic := fmt.Errorf("some internal error")
+	errPanic := errors.New("some internal error")
 
 	result := dr.run(t.Context(), func(_ context.Context) (*syncengine.Report, error) {
 		panic(errPanic)

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -77,10 +78,10 @@ func matchNoDrives(logger *slog.Logger) error {
 		return fmt.Errorf("checking for saved logins: %w", err)
 	}
 	if len(tokens) > 0 {
-		return fmt.Errorf("no drives configured — run 'onedrive-go drive add' to add a drive")
+		return errors.New("no drives configured — run 'onedrive-go drive add' to add a drive")
 	}
 
-	return fmt.Errorf("no accounts configured — run 'onedrive-go login' to get started")
+	return errors.New("no accounts configured — run 'onedrive-go login' to get started")
 }
 
 // matchSingleDrive auto-selects when exactly one drive is configured.

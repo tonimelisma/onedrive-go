@@ -145,7 +145,7 @@ import (
 // it is about to upload into.
 func (s *SyncStore) RecordPendingCreateIntent(ctx context.Context, pending *syncdomain.PendingCreate) error {
 	if pending == nil || pending.Path == "" {
-		return fmt.Errorf("sync: recording a pending create intent: missing path")
+		return errors.New("sync: recording a pending create intent: missing path")
 	}
 
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO pending_creates
@@ -167,7 +167,7 @@ func (s *SyncStore) RecordPendingCreateIntent(ctx context.Context, pending *sync
 // RecordPendingCreate durably records a create whose empty item exists.
 func (s *SyncStore) RecordPendingCreate(ctx context.Context, pending *syncdomain.PendingCreate) error {
 	if pending == nil || pending.ItemID == "" || pending.Path == "" {
-		return fmt.Errorf("sync: recording a pending create: missing item ID or path")
+		return errors.New("sync: recording a pending create: missing item ID or path")
 	}
 
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO pending_creates

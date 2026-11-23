@@ -2,6 +2,7 @@ package syncfixture
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -111,7 +112,7 @@ func (m *TestMockItemClient) ListChildren(ctx context.Context, driveID driveid.I
 		return m.ListChildrenFn(ctx, driveID, parentID)
 	}
 
-	return nil, fmt.Errorf("ListChildren not mocked")
+	return nil, errors.New("ListChildren not mocked")
 }
 
 func (m *TestMockItemClient) CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
@@ -119,7 +120,7 @@ func (m *TestMockItemClient) CreateFolder(ctx context.Context, driveID driveid.I
 		return m.CreateFolderFn(ctx, driveID, parentID, name)
 	}
 
-	return nil, fmt.Errorf("CreateFolder not mocked")
+	return nil, errors.New("CreateFolder not mocked")
 }
 
 func (m *TestMockItemClient) MoveItem(
@@ -132,7 +133,7 @@ func (m *TestMockItemClient) MoveItem(
 		return m.MoveItemFn(ctx, driveID, itemID, newParentID, newName)
 	}
 
-	return nil, fmt.Errorf("MoveItem not mocked")
+	return nil, errors.New("MoveItem not mocked")
 }
 
 func (m *TestMockItemClient) MoveItemIfMatch(
@@ -150,7 +151,7 @@ func (m *TestMockItemClient) MoveItemIfMatch(
 		return m.MoveItemFn(ctx, driveID, itemID, newParentID, newName)
 	}
 
-	return nil, fmt.Errorf("MoveItemIfMatch not mocked")
+	return nil, errors.New("MoveItemIfMatch not mocked")
 }
 
 func (m *TestMockItemClient) DeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
@@ -161,7 +162,7 @@ func (m *TestMockItemClient) DeleteItem(ctx context.Context, driveID driveid.ID,
 		return m.DeleteItemFn(ctx, driveID, itemID)
 	}
 
-	return fmt.Errorf("DeleteItem not mocked")
+	return errors.New("DeleteItem not mocked")
 }
 
 func (m *TestMockItemClient) DeleteItemIfMatch(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error {
@@ -172,9 +173,9 @@ func (m *TestMockItemClient) DeleteItemIfMatch(ctx context.Context, driveID driv
 		return m.DeleteItemFn(ctx, driveID, itemID)
 	}
 
-	return fmt.Errorf("DeleteItemIfMatch not mocked")
+	return errors.New("DeleteItemIfMatch not mocked")
 }
 
 func (m *TestMockItemClient) PermanentDeleteItem(_ context.Context, _ driveid.ID, _ string) error {
-	return fmt.Errorf("PermanentDeleteItem not mocked")
+	return errors.New("PermanentDeleteItem not mocked")
 }

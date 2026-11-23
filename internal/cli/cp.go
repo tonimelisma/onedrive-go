@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -89,7 +90,7 @@ func applySourceMtime(
 // checkSelfCopy returns an error if the copy would overwrite the source item.
 func checkSelfCopy(sourceID string, dest destInfo) error {
 	if isSelfReference(sourceID, dest) {
-		return fmt.Errorf("cannot copy a file over itself")
+		return errors.New("cannot copy a file over itself")
 	}
 
 	return nil

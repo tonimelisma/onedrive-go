@@ -314,7 +314,7 @@ func waitForPostMergePushCI(
 	cfg ciWaitConfig,
 ) error {
 	if mergeCommit == "" {
-		return fmt.Errorf("dod post-merge: missing merge commit")
+		return errors.New("dod post-merge: missing merge commit")
 	}
 
 	gh := newGHClient(runner, cfg.sleep)

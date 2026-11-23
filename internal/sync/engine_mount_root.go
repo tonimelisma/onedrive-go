@@ -41,7 +41,7 @@ func (flow *observation) observeMountRootRemote(
 ) (mountRootObservation, error) {
 	if !flow.hasRemoteMountRoot() {
 		return mountRootObservation{mode: syncdomain.RemoteObservationModeEnumerate},
-			fmt.Errorf("sync: mount-root observation requires a remote root item ID")
+			errors.New("sync: mount-root observation requires a remote root item ID")
 	}
 
 	if flow.remote.preferredMountRootObservationMode() == syncdomain.RemoteObservationModeDelta {

@@ -2,6 +2,7 @@ package devtool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -71,7 +72,7 @@ func resolveVerifyShard(plan verifyPlan, spec string) (verifyShard, error) {
 		return verifyShard{}, nil
 	}
 	if !plan.runQuickChecks && !plan.runPlatformChecks {
-		return verifyShard{}, fmt.Errorf("--shard applies to the pr, quick and platform profiles only")
+		return verifyShard{}, errors.New("--shard applies to the pr, quick and platform profiles only")
 	}
 
 	return parseVerifyShard(spec)

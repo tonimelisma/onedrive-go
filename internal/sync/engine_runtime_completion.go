@@ -89,7 +89,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 			return nil, flow.failAfterControlStateError(current, err)
 		}
 		flow.sched.Finished(current)
-		return nil, fmt.Errorf("classify action completion: invalid failure class")
+		return nil, errors.New("classify action completion: invalid failure class")
 	case errclass.ClassSuccess:
 		dispatched, err := flow.applyCompletionSuccess(ctx, current, r)
 		if err != nil {

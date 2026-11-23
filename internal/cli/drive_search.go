@@ -36,7 +36,7 @@ func runDriveSearchWithContext(ctx context.Context, cc *CLIContext, query string
 			return fmt.Errorf("no business account found for %s — run 'onedrive-go login' first", cc.Flags.Account)
 		}
 
-		return fmt.Errorf("no business accounts found — SharePoint search requires a business account")
+		return errors.New("no business accounts found — SharePoint search requires a business account")
 	}
 
 	var (

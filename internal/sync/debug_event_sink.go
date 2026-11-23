@@ -2,6 +2,7 @@ package sync
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,7 +24,7 @@ type debugEventFileSink struct {
 
 func newDebugEventFileSink(path string, logger *slog.Logger) (*debugEventFileSink, error) {
 	if path == "" {
-		return nil, fmt.Errorf("debug event path is empty")
+		return nil, errors.New("debug event path is empty")
 	}
 	if logger == nil {
 		logger = slog.Default()

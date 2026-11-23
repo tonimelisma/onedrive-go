@@ -1,7 +1,7 @@
 package e2e
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -149,12 +149,12 @@ func TestSharedFolderNameProviderOmittedFixtureRequiresIndependentProviderSignal
 	assert.True(t, decision.Skippable)
 	assert.Equal(t, liveProviderSkipSharedFolderNameOmitted, decision.Reason)
 
-	decision = classifySharedFolderNameProviderSkip(noMatch, false, fmt.Errorf("shared failed"), "graph: HTTP 503 Service Unavailable")
+	decision = classifySharedFolderNameProviderSkip(noMatch, false, errors.New("shared failed"), "graph: HTTP 503 Service Unavailable")
 	assert.True(t, decision.Skippable)
 	assert.Equal(t, liveProviderSkipSharedDiscoveryGateway, decision.Reason)
 
 	assert.False(t, classifySharedFolderNameProviderSkip(noMatch, true, nil, "").Skippable)
-	assert.False(t, classifySharedFolderNameProviderSkip(noMatch, false, fmt.Errorf("decode failed"), "not json").Skippable)
+	assert.False(t, classifySharedFolderNameProviderSkip(noMatch, false, errors.New("decode failed"), "not json").Skippable)
 	assert.False(t, classifySharedFolderNameProviderSkip("graph: HTTP 503 Service Unavailable", false, nil, "").Skippable)
 }
 
@@ -230,7 +230,7 @@ func TestCanSkipMissingShortcutRootPlaceholderRequiresDecodedListingAndSharedTar
 	assert.False(t, canSkipMissingShortcutRootPlaceholder(
 		shortcutRootPlaceholderPollState{
 			RootListingDecoded: true,
-			LastErr:            fmt.Errorf("graph unavailable"),
+			LastErr:            errors.New("graph unavailable"),
 		},
 		fixture,
 	))

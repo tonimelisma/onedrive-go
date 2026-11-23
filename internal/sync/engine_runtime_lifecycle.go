@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -92,7 +93,7 @@ func (flow *engineFlow) dropStartupScopeRow(ctx context.Context, key syncdomain.
 
 func (flow *engineFlow) activateScope(ctx context.Context, block *syncdomain.ActiveScope) error {
 	if block == nil {
-		return fmt.Errorf("sync: activating scope: missing block")
+		return errors.New("sync: activating scope: missing block")
 	}
 	if err := flow.persistActiveScope(ctx, block); err != nil {
 		return fmt.Errorf("sync: activating scope %s: %w", block.Key.String(), err)

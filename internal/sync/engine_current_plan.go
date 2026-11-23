@@ -614,7 +614,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	observation *currentObservation,
 ) (*builtCurrentPlan, error) {
 	if observation == nil {
-		return nil, fmt.Errorf("sync: building current plan: missing observed state")
+		return nil, errors.New("sync: building current plan: missing observed state")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("sync: building current plan from observed state: %w", err)
@@ -683,7 +683,7 @@ func (flow *engineFlow) reconcileRuntimeStateStage(
 	observed syncstore.PassObservation,
 ) (*runtimePlan, error) {
 	if build == nil {
-		return nil, fmt.Errorf("sync: reconciling runtime state: missing current plan build")
+		return nil, errors.New("sync: reconciling runtime state: missing current plan build")
 	}
 	if err := flow.reconcileRuntimeState(ctx, build.Plan, observed); err != nil {
 		return nil, err

@@ -138,6 +138,27 @@ func TestGolangciConfig_ForbidigoReadsExampleFunctions(t *testing.T) {
 	assert.Equal(t, "false", yamlValue(t, config, "linters", "settings", "forbidigo", "exclude-godoc-examples"))
 }
 
+// Validates: R-6.10.2
+//
+// An error whose message has no format verb is errors.New: perfsprint runs
+// on every file with its errorf check alone, so the linter refuses a
+// verb-less fmt.Errorf and leaves every other fmt call as written.
+func TestGolangciConfig_PerfsprintRefusesAVerblessErrorfOnly(t *testing.T) {
+	t.Parallel()
+
+	config := golangciConfig(t)
+	assertLintReadsEveryFile(t, config, "perfsprint")
+	for _, check := range []string{"error-format", "errorf"} {
+		assert.Equal(t, "true", yamlValue(t, config, "linters", "settings", "perfsprint", check), check)
+	}
+	for _, check := range []string{
+		"integer-format", "int-conversion", "err-error", "string-format",
+		"sprintf1", "strconcat", "bool-format", "hex-format", "concat-loop",
+	} {
+		assert.Equal(t, "false", yamlValue(t, config, "linters", "settings", "perfsprint", check), check)
+	}
+}
+
 // Validates: R-6.10.22
 //
 // A lint pass with extra build tags repeats the configuration's on its

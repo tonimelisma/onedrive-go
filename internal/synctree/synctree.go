@@ -307,7 +307,7 @@ type rootedTreeEntry struct {
 // Open establishes a rooted sync-tree capability for dir.
 func Open(dir string) (*Root, error) {
 	if dir == "" {
-		return nil, fmt.Errorf("sync folder path is empty")
+		return nil, errors.New("sync folder path is empty")
 	}
 
 	clean := filepath.Clean(dir)
@@ -356,7 +356,7 @@ func cleanRelative(path string) (string, error) {
 
 func (r *Root) relativeFromAbs(path string) (string, error) {
 	if path == "" {
-		return "", fmt.Errorf("path is empty")
+		return "", errors.New("path is empty")
 	}
 
 	clean := filepath.Clean(path)
@@ -1035,7 +1035,7 @@ func (r *Root) RenameWithTemporarySibling(srcRel, dstRel, tempStem string, attem
 		attempts = 1
 	}
 	if tempStem == "" {
-		return fmt.Errorf("temporary rename stem is empty")
+		return errors.New("temporary rename stem is empty")
 	}
 
 	dstClean, err := cleanRelative(dstRel)

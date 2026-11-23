@@ -2,7 +2,7 @@ package multisync
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 )
@@ -14,7 +14,7 @@ func (o *Orchestrator) buildRuntimeWorkSet(
 	childWork *parentChildWorkSnapshots,
 ) (*runtimeWorkSet, error) {
 	if ctx == nil {
-		return nil, fmt.Errorf("building runtime work: context is required")
+		return nil, errors.New("building runtime work: context is required")
 	}
 
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
@@ -40,7 +40,7 @@ func (o *Orchestrator) buildStandaloneRuntimeWorkSet(
 	initialStartup []MountStartupResult,
 ) (*runtimeWorkSet, error) {
 	if ctx == nil {
-		return nil, fmt.Errorf("building runtime work: context is required")
+		return nil, errors.New("building runtime work: context is required")
 	}
 
 	parents, err := buildStandaloneMountSpecs(standaloneMounts)
@@ -68,7 +68,7 @@ func (o *Orchestrator) buildRuntimeWorkForParentSnapshot(
 	snapshot syncshortcut.ShortcutChildWorkSnapshot,
 ) (*runtimeWorkSet, error) {
 	if parent == nil {
-		return nil, fmt.Errorf("building parent child runtime work: parent mount is required")
+		return nil, errors.New("building parent child runtime work: parent mount is required")
 	}
 	parentCopy := cloneMountSpec(parent)
 	parentSnapshots := map[mountID]syncshortcut.ShortcutChildWorkSnapshot{

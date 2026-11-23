@@ -444,16 +444,16 @@ func resolveBenchInvocation(opts BenchOptions) (benchInvocation, error) {
 //nolint:gocritic // BenchOptions is a CLI boundary value; validation does not retain it.
 func validateBenchOptions(opts BenchOptions) error {
 	if opts.RepoRoot == "" {
-		return fmt.Errorf("bench: missing repo root")
+		return errors.New("bench: missing repo root")
 	}
 	if opts.Scenario == "" {
-		return fmt.Errorf("bench: missing scenario")
+		return errors.New("bench: missing scenario")
 	}
 	if opts.Runs < -1 {
-		return fmt.Errorf("bench: runs must be >= -1")
+		return errors.New("bench: runs must be >= -1")
 	}
 	if opts.Warmup < -1 {
-		return fmt.Errorf("bench: warmup must be >= -1")
+		return errors.New("bench: warmup must be >= -1")
 	}
 
 	return nil
@@ -467,7 +467,7 @@ func prepareBenchScenario(
 	fixtureSlot string,
 ) (preparedBenchScenario, error) {
 	if def == nil {
-		return preparedBenchScenario{}, fmt.Errorf("scenario definition is nil")
+		return preparedBenchScenario{}, errors.New("scenario definition is nil")
 	}
 	if def.Prepare == nil {
 		return preparedBenchScenario{
@@ -762,10 +762,10 @@ func validateStartupEmptyConfigOutput(stdout []byte) error {
 	}
 
 	if _, ok := raw["configured"]; !ok {
-		return fmt.Errorf("drive list json missing configured array")
+		return errors.New("drive list json missing configured array")
 	}
 	if _, ok := raw["available"]; !ok {
-		return fmt.Errorf("drive list json missing available array")
+		return errors.New("drive list json missing available array")
 	}
 	if len(decoded.Configured) != 0 {
 		return fmt.Errorf("expected configured to be empty, got %d entries", len(decoded.Configured))
@@ -775,18 +775,18 @@ func validateStartupEmptyConfigOutput(stdout []byte) error {
 	}
 	if authRaw, ok := raw["accounts_requiring_auth"]; ok {
 		if len(bytes.TrimSpace(authRaw)) == 0 {
-			return fmt.Errorf("accounts_requiring_auth present but empty payload")
+			return errors.New("accounts_requiring_auth present but empty payload")
 		}
 		if len(decoded.AccountsRequiringAuth) != 0 {
-			return fmt.Errorf("expected accounts_requiring_auth to be empty when present")
+			return errors.New("expected accounts_requiring_auth to be empty when present")
 		}
 	}
 	if degradedRaw, ok := raw["accounts_degraded"]; ok {
 		if len(bytes.TrimSpace(degradedRaw)) == 0 {
-			return fmt.Errorf("accounts_degraded present but empty payload")
+			return errors.New("accounts_degraded present but empty payload")
 		}
 		if len(decoded.AccountsDegraded) != 0 {
-			return fmt.Errorf("expected accounts_degraded to be empty when present")
+			return errors.New("expected accounts_degraded to be empty when present")
 		}
 	}
 
@@ -808,7 +808,7 @@ func readPerformanceSummary(logPath string, stderr []byte) (*benchPerfSummary, e
 		return nil, fmt.Errorf("read perf summary: log file unavailable and stderr summary not found: %w", err)
 	}
 
-	return nil, fmt.Errorf("read perf summary: no performance summary found in log file or stderr")
+	return nil, errors.New("read perf summary: no performance summary found in log file or stderr")
 }
 
 func readPerformanceSummaryFromJSONLog(data []byte) (*benchPerfSummary, error) {
@@ -832,7 +832,7 @@ func readPerformanceSummaryFromJSONLog(data []byte) (*benchPerfSummary, error) {
 		return nil, fmt.Errorf("scan perf log: %w", err)
 	}
 
-	return nil, fmt.Errorf("performance summary not found in JSON log")
+	return nil, errors.New("performance summary not found in JSON log")
 }
 
 func readPerformanceSummaryFromTextLog(data []byte) (*benchPerfSummary, error) {
@@ -892,7 +892,7 @@ func readPerformanceSummaryFromTextLog(data []byte) (*benchPerfSummary, error) {
 		return nil, fmt.Errorf("scan perf stderr: %w", err)
 	}
 
-	return nil, fmt.Errorf("performance summary not found in stderr")
+	return nil, errors.New("performance summary not found in stderr")
 }
 
 func extractLogfmtValue(line, key string) (string, bool) {

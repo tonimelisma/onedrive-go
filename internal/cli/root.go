@@ -111,7 +111,7 @@ func (f CLIFlags) SingleDrive() (string, error) {
 	}
 
 	if len(f.Drive) > 1 {
-		return "", fmt.Errorf("multiple --drive values not allowed for this command (use 'sync' for multi-drive)")
+		return "", errors.New("multiple --drive values not allowed for this command (use 'sync' for multi-drive)")
 	}
 
 	return f.Drive[0], nil
@@ -472,7 +472,7 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.MountSession, erro
 
 func interactiveMountSessionConfigFromResolvedDrive(rd *config.ResolvedDrive) (*driveops.MountSessionConfig, error) {
 	if rd == nil {
-		return nil, fmt.Errorf("resolved drive is required")
+		return nil, errors.New("resolved drive is required")
 	}
 
 	tokenOwnerCanonical, err := config.TokenAccountCanonicalID(rd.CanonicalID)
@@ -1023,7 +1023,7 @@ func loadAndResolve(
 	// valid for the sync command (which handles resolution itself).
 	if cmd.Flags().Changed("drive") {
 		if len(flags.Drive) > 1 {
-			return nil, nil, fmt.Errorf("--drive can only be specified once for this command (use 'sync' for multi-drive)")
+			return nil, nil, errors.New("--drive can only be specified once for this command (use 'sync' for multi-drive)")
 		}
 
 		if len(flags.Drive) == 1 {

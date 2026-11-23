@@ -1,6 +1,7 @@
 package multisync
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
@@ -16,7 +17,7 @@ import (
 // synthesized by multisync.
 func engineMountConfigForMount(mount *mountSpec, dataDir string) (*syncengine.EngineMountConfig, error) {
 	if mount == nil {
-		return nil, fmt.Errorf("mount is required")
+		return nil, errors.New("mount is required")
 	}
 
 	cfg := &syncengine.EngineMountConfig{

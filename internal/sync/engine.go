@@ -128,7 +128,7 @@ type Engine struct {
 // DriveID is zero.
 func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	if cfg.DriveID.IsZero() {
-		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
+		return nil, errors.New("sync: engine requires non-zero drive ID")
 	}
 
 	if !syncobserve.SyncRootExists(cfg.SyncRoot) {
@@ -494,7 +494,7 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 		return nil
 	}
 	if !proof.attempted {
-		return fmt.Errorf("sync: revalidating catalog auth requirement: drive verifier required")
+		return errors.New("sync: revalidating catalog auth requirement: drive verifier required")
 	}
 	if proofErr != nil {
 		return proofErr

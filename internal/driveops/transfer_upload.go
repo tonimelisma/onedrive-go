@@ -80,15 +80,15 @@ func (r validatingReaderAt) ReadAt(p []byte, off int64) (int, error) {
 // clear error messages instead of confusing downstream failures.
 func validateUploadParams(parentID, name, localPath string) error {
 	if parentID == "" {
-		return fmt.Errorf("upload: parent ID must not be empty")
+		return errors.New("upload: parent ID must not be empty")
 	}
 
 	if name == "" {
-		return fmt.Errorf("upload: file name must not be empty")
+		return errors.New("upload: file name must not be empty")
 	}
 
 	if localPath == "" {
-		return fmt.Errorf("upload: local path must not be empty")
+		return errors.New("upload: local path must not be empty")
 	}
 
 	return nil
@@ -96,11 +96,11 @@ func validateUploadParams(parentID, name, localPath string) error {
 
 func validateUploadToItemParams(itemID, localPath string) error {
 	if itemID == "" {
-		return fmt.Errorf("upload: item ID must not be empty")
+		return errors.New("upload: item ID must not be empty")
 	}
 
 	if localPath == "" {
-		return fmt.Errorf("upload: local path must not be empty")
+		return errors.New("upload: local path must not be empty")
 	}
 
 	return nil
@@ -168,7 +168,7 @@ func (tm *TransferManager) uploadGraphItem(
 			createForCreated: func(itemID, createdETag string) (*graph.UploadSession, error) {
 				isu, ok := tm.uploads.(ItemSessionUploader)
 				if !ok {
-					return nil, fmt.Errorf("uploader cannot open a session for an existing item")
+					return nil, errors.New("uploader cannot open a session for an existing item")
 				}
 				return isu.CreateUploadSessionForItem(ctx, driveID, itemID, createdETag, size, mtime)
 			},

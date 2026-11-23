@@ -87,7 +87,7 @@ func (s *localSource) commitSnapshotBinding(
 	ctx context.Context, commit *syncstore.LocalSnapshotCommit, expected *synctree.RootIdentity,
 ) (syncstore.LocalSnapshotCommitResult, *synctree.RootIdentity, error) {
 	if expected == nil {
-		return syncstore.LocalSnapshotCommitResult{}, nil, fmt.Errorf("sync: binding sync folder: no identity was taken at startup")
+		return syncstore.LocalSnapshotCommitResult{}, nil, errors.New("sync: binding sync folder: no identity was taken at startup")
 	}
 	bind := *expected
 	bind.Token = ""

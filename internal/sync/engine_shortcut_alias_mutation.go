@@ -15,19 +15,19 @@ import (
 // shortcut-root state; multisync is never a caller.
 func (s *shortcutRoots) applyShortcutAliasMutation(ctx context.Context, mutation syncshortcut.ShortcutAliasMutation) error {
 	if ctx == nil {
-		return fmt.Errorf("sync: shortcut alias mutation context is required")
+		return errors.New("sync: shortcut alias mutation context is required")
 	}
 	if s == nil || s.items == nil {
-		return fmt.Errorf("sync: shortcut alias mutation requires parent item client")
+		return errors.New("sync: shortcut alias mutation requires parent item client")
 	}
 	if mutation.BindingItemID == "" {
-		return fmt.Errorf("sync: shortcut alias mutation requires binding item ID")
+		return errors.New("sync: shortcut alias mutation requires binding item ID")
 	}
 
 	switch mutation.Kind {
 	case syncshortcut.ShortcutAliasMutationRename:
 		if mutation.LocalAlias == "" {
-			return fmt.Errorf("sync: shortcut alias rename requires local alias")
+			return errors.New("sync: shortcut alias rename requires local alias")
 		}
 		// No time to keep: a shortcut's own modification time is never
 		// compared or synced.

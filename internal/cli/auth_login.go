@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -145,24 +146,24 @@ func validateBrowserAuthURL(raw string) (string, error) {
 	}
 
 	if parsed.User != nil {
-		return "", fmt.Errorf("browser auth URL must not contain userinfo")
+		return "", errors.New("browser auth URL must not contain userinfo")
 	}
 
 	host := strings.ToLower(parsed.Hostname())
 	if host == "" {
-		return "", fmt.Errorf("browser auth URL host is empty")
+		return "", errors.New("browser auth URL host is empty")
 	}
 
 	if isLoopbackBrowserHost(host) {
 		if parsed.Scheme != httpScheme && parsed.Scheme != httpsScheme {
-			return "", fmt.Errorf("browser auth URL loopback host must use http or https")
+			return "", errors.New("browser auth URL loopback host must use http or https")
 		}
 
 		return parsed.String(), nil
 	}
 
 	if parsed.Scheme != httpsScheme {
-		return "", fmt.Errorf("browser auth URL must use https")
+		return "", errors.New("browser auth URL must use https")
 	}
 
 	if !browserHostAllowed(host) {
