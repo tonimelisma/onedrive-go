@@ -41,9 +41,6 @@ const (
 	fullE2ESerialParallel       = 1
 	fastE2EParallel             = 5
 
-	verifySummaryFilePerm = 0o600
-	verifySummaryDirPerm  = 0o700
-
 	verifySummaryStatusPass = "pass"
 	verifySummaryStatusFail = "fail"
 	// verifySummaryStatusNotRun is a step or bucket the profile did not start
@@ -135,7 +132,6 @@ type VerifyOptions struct {
 	DODPR              int
 	DODRecentMerged    int
 	DODCommentManifest string
-	DODWorktree        string
 	DODBranch          string
 	// DODCITimeout is the hard cap on one DoD CI wait. Zero allows one stall
 	// window for the first attempt and one for every rerun.

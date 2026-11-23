@@ -506,9 +506,9 @@ func TestDODPrePRRunsThePRProfileByDefault(t *testing.T) {
 
 // Validates: R-6.10.16, R-6.10.23
 //
-// post-merge marks the nightly claims of --branch fixed and removes that
-// branch, so a --branch that is not the pull request's head is refused
-// before anything is merged.
+// post-merge marks the nightly claims of --branch fixed and restarts that
+// branch from main, so a --branch that is not the pull request's head is
+// refused before anything is merged.
 func TestDODPostMergeRefusesABranchThatIsNotThePRsHead(t *testing.T) {
 	t.Parallel()
 
@@ -516,21 +516,79 @@ func TestDODPostMergeRefusesABranchThatIsNotThePRsHead(t *testing.T) {
 		"gh api " + githubRepoPath + "/pulls/7": []byte(`{"state":"open","head":{"ref":"fix/the-head","sha":"head-sha"}}`),
 	}}
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
-		RepoRoot:    writeWorkflowFixture(t, nightlyBoundWorkflow),
-		DOD:         true,
-		DODStage:    DODStagePostMerge,
-		DODPR:       7,
-		DODWorktree: "/worktrees/other",
-		DODBranch:   "fix/another-branch",
-		Stdout:      &bytes.Buffer{},
-		Stderr:      &bytes.Buffer{},
+		RepoRoot:  writeWorkflowFixture(t, nightlyBoundWorkflow),
+		DOD:       true,
+		DODStage:  DODStagePostMerge,
+		DODPR:     7,
+		DODBranch: "fix/another-branch",
+		Stdout:    &bytes.Buffer{},
+		Stderr:    &bytes.Buffer{},
 	})
 	require.Error(t, err)
 
 	assert.Contains(t, err.Error(), "fix/another-branch")
 	assert.Contains(t, err.Error(), "fix/the-head")
-	assert.Empty(t, runner.combinedCommands, "nothing is merged")
-	assert.Empty(t, runner.runCommands, "no claim is touched and no branch removed")
+	assertNoMergeRequest(t, runner)
+	assert.Empty(t, runner.runCommands, "no branch is touched")
+}
+
+// Validates: R-6.10.16
+//
+// The branch is reset to main after the merge, so a checkout holding a
+// change, tracked or not, is refused before anything is merged.
+func TestDODPostMergeRefusesACheckoutWithChanges(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"git rev-parse --abbrev-ref HEAD":              []byte("fix/the-head\n"),
+		"gh api " + githubRepoPath + "/pulls/7":        []byte(`{"state":"open","head":{"ref":"fix/the-head","sha":"head-sha"}}`),
+		"git status --porcelain --untracked-files=all": []byte("?? notes.txt\n"),
+	}}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot: writeWorkflowFixture(t, nightlyBoundWorkflow),
+		DOD:      true,
+		DODStage: DODStagePostMerge,
+		DODPR:    7,
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	})
+	require.Error(t, err)
+
+	assert.Contains(t, err.Error(), "notes.txt")
+	assertNoMergeRequest(t, runner)
+	assert.Empty(t, runner.runCommands, "no branch is touched")
+}
+
+// Validates: R-6.10.16
+//
+// After the merge the branch restarts from the new origin/main, as a
+// session's branch starts its next increment, and is pushed with a lease.
+// The fetch prunes every ref: a merge that deleted the remote branch left a
+// remote-tracking ref behind, and a lease read from it would refuse the push.
+func TestRestartBranchFromMainPointsTheBranchAtMainAndPushesIt(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	require.NoError(t, restartBranchFromMain(context.Background(), runner, testCleanupRepoRoot, "fix/the-head", io.Discard))
+
+	got := make([]string, 0, len(runner.runCommands))
+	for _, command := range runner.runCommands {
+		got = append(got, command.name+" "+strings.Join(command.args, " "))
+	}
+	assert.Equal(t, []string{
+		"git fetch --prune origin",
+		"git checkout -B fix/the-head origin/main",
+		"git push --force-with-lease -u origin fix/the-head",
+	}, got)
+}
+
+// assertNoMergeRequest fails when runner sent a merge request.
+func assertNoMergeRequest(t *testing.T, runner *fakeRunner) {
+	t.Helper()
+
+	for _, command := range runner.outputCommands {
+		assert.NotContains(t, strings.Join(command.args, " "), "/merge", "nothing is merged")
+	}
 }
 
 // Validates: R-6.10.16
@@ -561,108 +619,68 @@ func TestDODPrePRKeepsTheFullTierSelectable(t *testing.T) {
 	assert.Equal(t, "-race", runner.runCommands[cmdUnitTests].args[1])
 }
 
-// Validates: R-6.10.16
-func TestDODMergeWrapperTreatsMainWorktreeFailureAsServerSideMerge(t *testing.T) {
+// mergeRequestKey is the REST merge request mergePR sends for PR 682 at
+// head-sha.
+const mergeRequestKey = "gh api -X PUT " + githubRepoPath + "/pulls/682/merge -f merge_method=squash -f sha=head-sha"
+
+// Validates: R-6.10.16, R-6.10.40
+//
+// The merge is a REST squash merge pinned to the head the stage checked, and
+// the server's merge state decides the outcome, also when the request failed
+// after GitHub carried it out or found the pull request merged already.
+func TestDODMergeSquashesOverRESTAndReadsTheServerState(t *testing.T) {
 	t.Parallel()
 
-	requireMergedPRAfterMergeError(t, "failed to run git: fatal: 'main' is already used by worktree\n")
-}
+	for _, tc := range []struct {
+		name     string
+		mergeErr error
+	}{
+		{name: "merged by the request"},
+		{name: "merged already, the request refused", mergeErr: ghFailure("HTTP 405: Pull Request is not mergeable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-// Validates: R-6.10.16
-func TestDODMergeWrapperTreatsAlreadyMergedPRAsServerSideMerge(t *testing.T) {
-	t.Parallel()
+			runner := &fakeRunner{outputFunc: func(_ string, _ []string, name string, args ...string) ([]byte, error) {
+				switch key := name + " " + strings.Join(args, " "); key {
+				case mergeRequestKey:
+					return []byte(`{"merged":true}`), tc.mergeErr
+				case "gh api " + githubRepoPath + "/pulls/682":
+					return []byte(`{"state":"closed","merged":true,"merged_at":"2026-04-30T04:15:18Z","merge_commit_sha":"merge-sha"}`), nil
+				default:
+					return nil, errors.New("unscripted: " + key)
+				}
+			}}
 
-	requireMergedPRAfterMergeError(t, "Pull request #682 was already merged\n")
-}
-
-// Validates: R-6.10.16
-func TestDODMergeWrapperTreatsAttachedBranchDeleteFailureAsServerSideMerge(t *testing.T) {
-	t.Parallel()
-
-	requireMergedPRAfterMergeError(t, "Pull request merged, but local branch fix/dod is checked out at a worktree\n")
-}
-
-func requireMergedPRAfterMergeError(t *testing.T, mergeOutput string) {
-	t.Helper()
-
-	runner := &fakeRunner{
-		combinedOutputs: map[string][]byte{
-			"gh pr merge 682 --squash --delete-branch": []byte(mergeOutput),
-		},
-		combinedErrByKey: map[string]error{
-			"gh pr merge 682 --squash --delete-branch": errors.New("exit status 1"),
-		},
-		outputs: map[string][]byte{
-			"gh api " + githubRepoPath + "/pulls/682": []byte(`{"state":"closed","merged":true,"merged_at":"2026-04-30T04:15:18Z","merge_commit_sha":"merge-sha"}`),
-		},
+			state, err := mergePR(context.Background(), newGHClient(runner, nil), testCleanupRepoRoot, 682, "head-sha")
+			require.NoError(t, err)
+			assert.True(t, state.Merged)
+			assert.Equal(t, "merge-sha", state.MergeCommitSHA)
+		})
 	}
-
-	state, err := mergePR(context.Background(), runner, newGHClient(runner, nil), testCleanupRepoRoot, 682)
-	require.NoError(t, err)
-	assert.True(t, state.Merged)
-	assert.Equal(t, "merge-sha", state.MergeCommitSHA)
 }
 
 // Validates: R-6.10.16
-func TestDODMergeWrapperFailsWhenServerSideMergeDidNotComplete(t *testing.T) {
+func TestDODMergeFailsWhenTheServerSaysItIsNotMerged(t *testing.T) {
 	t.Parallel()
 
-	runner := &fakeRunner{
-		combinedOutputs: map[string][]byte{
-			"gh pr merge 682 --squash --delete-branch": []byte("failed to run git: fatal: 'main' is already used by worktree\n"),
-		},
-		combinedErrByKey: map[string]error{
-			"gh pr merge 682 --squash --delete-branch": errors.New("exit status 1"),
-		},
-		outputs: map[string][]byte{
+	runner := &fakeRunner{outputFunc: func(_ string, _ []string, name string, args ...string) ([]byte, error) {
+		switch key := name + " " + strings.Join(args, " "); key {
+		case mergeRequestKey:
+			return nil, ghFailure("HTTP 409: Head branch was modified. Review and try the merge again.")
+		case "gh api " + githubRepoPath + "/pulls/682":
 			// An open pull request carries the merge commit of its test merge:
 			// that alone does not make it merged.
-			"gh api " + githubRepoPath + "/pulls/682": []byte(`{"state":"open","merged":false,"merge_commit_sha":"test-merge-sha"}`),
-		},
-	}
+			return []byte(`{"state":"open","merged":false,"merge_commit_sha":"test-merge-sha"}`), nil
+		default:
+			return nil, errors.New("unscripted: " + key)
+		}
+	}}
 
-	_, err := mergePR(context.Background(), runner, newGHClient(runner, nil), testCleanupRepoRoot, 682)
+	_, err := mergePR(context.Background(), newGHClient(runner, nil), testCleanupRepoRoot, 682, "head-sha")
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Head branch was modified")
 	assert.Contains(t, err.Error(), "server state is not merged")
-}
-
-// Validates: R-6.10.16
-func TestDODBranchCleanupToleratesAlreadyDeletedBranches(t *testing.T) {
-	t.Parallel()
-
-	runner := &fakeRunner{
-		combinedOutputs: map[string][]byte{
-			"git branch -D feat/dod":            []byte("error: branch 'feat/dod' not found\n"),
-			"git push origin --delete feat/dod": []byte("error: unable to delete 'feat/dod': remote ref does not exist\n"),
-		},
-		combinedErrByKey: map[string]error{
-			"git branch -D feat/dod":            errors.New("exit status 1"),
-			"git push origin --delete feat/dod": errors.New("exit status 1"),
-		},
-	}
-
-	err := deleteDODIncrementBranches(context.Background(), runner, testCleanupRepoRoot, "feat/dod")
-
-	require.NoError(t, err)
-}
-
-// Validates: R-6.10.16
-func TestDODBranchCleanupRejectsAmbiguousRemoteDeleteFailure(t *testing.T) {
-	t.Parallel()
-
-	runner := &fakeRunner{
-		combinedOutputs: map[string][]byte{
-			"git push origin --delete feat/dod": []byte("error: unable to delete 'feat/dod': protected branch\n"),
-		},
-		combinedErrByKey: map[string]error{
-			"git push origin --delete feat/dod": errors.New("exit status 1"),
-		},
-	}
-
-	err := deleteDODIncrementBranches(context.Background(), runner, testCleanupRepoRoot, "feat/dod")
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "protected branch")
 }
 
 func jsonUnmarshalString(data string, v any) error {

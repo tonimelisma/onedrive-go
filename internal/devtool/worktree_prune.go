@@ -86,7 +86,7 @@ type worktreePruneDecision struct {
 // nothing (`git merge-tree --write-tree` yields origin/main's own tree). Only
 // a clean worktree goes, and only through `git worktree remove` without
 // --force, so git itself refuses anything with local changes; ignored files
-// (build output, the .worktreeinclude adjuncts) go with the directory, as git
+// (build output) go with the directory, as git
 // removes them. A worktree locked by a running agent, or locked by hand, is
 // kept: the lock is someone saying "in use". Every other worktree is reported
 // with the reason it stays. A removal that fails is reported and the rest go
@@ -328,7 +328,7 @@ func parseAgentLock(lockReason string) (int, string, bool) {
 // a pid the kernel has since given to another process does not hold a dead
 // agent's lock. Without /proc (macOS) it cannot tell and says it runs.
 func procProcessRunning(pid int, startTicks string) bool {
-	if _, err := stat(filepath.Join(procRoot, "self", "stat")); err != nil {
+	if err := statPath(filepath.Join(procRoot, "self", "stat")); err != nil {
 		return true
 	}
 	data, err := readFile(filepath.Join(procRoot, strconv.Itoa(pid), "stat"))

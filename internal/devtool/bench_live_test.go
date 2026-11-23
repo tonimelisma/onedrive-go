@@ -326,7 +326,7 @@ func TestFinalizeBenchLiveSampleRuntimeReportsARootItCannotRemove(t *testing.T) 
 
 	parent := t.TempDir()
 	runtimeRoot := filepath.Join(parent, "runtime")
-	require.NoError(t, mkdirAll(filepath.Join(runtimeRoot, "sync-root"), 0o700))
+	require.NoError(t, mkdirAll(filepath.Join(runtimeRoot, "sync-root")))
 	//nolint:gosec // directories need execute bits; the test makes the parent read-only on purpose.
 	require.NoError(t, os.Chmod(parent, 0o500))
 	t.Cleanup(func() {

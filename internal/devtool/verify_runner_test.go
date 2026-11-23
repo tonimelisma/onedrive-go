@@ -1472,7 +1472,7 @@ func TestWriteVerifySummaryRoundTripsJSON(t *testing.T) {
 
 	data, err := json.Marshal(expected)
 	require.NoError(t, err)
-	require.NoError(t, atomicWrite(summaryPath, append(data, '\n'), 0o600, 0o700, ".verify-summary-*.tmp"))
+	require.NoError(t, atomicWrite(summaryPath, append(data, '\n'), ".verify-summary-*.tmp"))
 
 	var actual VerifySummary
 	readVerifySummaryFile(t, summaryPath, &actual)

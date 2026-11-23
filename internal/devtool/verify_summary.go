@@ -345,8 +345,6 @@ func (c *verifySummaryCollector) finalize(runErr error) error {
 	if err := atomicWrite(
 		c.summaryJSONPath,
 		data,
-		verifySummaryFilePerm,
-		verifySummaryDirPerm,
 		".verify-summary-*.tmp",
 	); err != nil {
 		return fmt.Errorf("write verify summary json: %w", err)

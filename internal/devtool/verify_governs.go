@@ -265,7 +265,7 @@ func collectProductionGoFiles(repoRoot string) ([]string, error) {
 
 	for _, root := range governedRoots() {
 		rootPath := filepath.Join(repoRoot, root)
-		if _, statErr := stat(rootPath); errors.Is(statErr, os.ErrNotExist) {
+		if statErr := statPath(rootPath); errors.Is(statErr, os.ErrNotExist) {
 			// Not every repo layout has all three roots; absence is not a defect.
 			continue
 		}

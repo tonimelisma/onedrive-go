@@ -21,7 +21,6 @@ func repoWalkSkippedDirs() []string {
 	return []string{
 		"internal/" + verifyGitDir,
 		"internal/" + verifyTestdataDir,
-		"internal/" + verifyWorktreesDir,
 		"internal/" + verifyClaudeDir,
 		"internal/" + verifyNodeModulesDir,
 		"internal/" + verifyVendorDir,

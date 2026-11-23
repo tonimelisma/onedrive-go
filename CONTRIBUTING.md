@@ -85,14 +85,12 @@ measured.
 
 ## How a change is made
 
-Work is done in PR-backed increments from isolated worktrees, each started
-from current `origin/main` (the command fetches it first):
-
-```bash
-go run ./cmd/devtool worktree add --path <path> --branch <type>/<task-name>
-```
-
-Branch types are `feat`, `fix`, `refactor`, `test`, `docs` and `chore`.
+Work is done in Claude Code cloud sessions, one PR-backed increment at a
+time on the session's assigned branch, each started from the current
+`origin/main` (`spec/reference/cloud-development.md` explains the setup).
+Builder subagents work in worktrees the harness makes under
+`.claude/worktrees`; once their work is in `origin/main`,
+`go run ./cmd/devtool worktree prune-merged` removes them.
 
 Every change keeps the specs honest:
 
@@ -113,7 +111,7 @@ The Definition of Done is automated through staged verifier runs:
 go run ./cmd/devtool verify --dod --stage start
 go run ./cmd/devtool verify --dod --stage pre-pr
 go run ./cmd/devtool verify --dod --stage pre-merge --pr <number>
-go run ./cmd/devtool verify --dod --stage post-merge --pr <number> --worktree <path> --branch <branch>
+go run ./cmd/devtool verify --dod --stage post-merge --pr <number>
 ```
 
 `start` audits unresolved review threads from recent merged PRs and writes the
@@ -128,11 +126,12 @@ the branch is based on latest `origin/main`, and rejects undecided PR-comment
 carryover. `pre-merge` waits for PR CI (`verify`, `integration`, and `e2e`; PR
 `stress` may be skipped), posts the manifest's templated replies, resolves
 handled review threads, and requires zero unresolved review threads.
-`post-merge` performs the squash merge, handles already-completed
-multi-worktree merge and cleanup cases, fast-forwards root `main`, removes the
-`.worktreeinclude` entries and then the increment worktree and branch, waits
-for the push-to-`main` CI run of the merge commit to succeed (every push to
-`main` runs the quick lane), and runs `cleanup-audit`. Both CI waits go on
+`post-merge`, run on the increment's branch with a clean checkout, squash-merges
+the pull request over REST pinned to the head it checked (a pull request merged
+already is no failure), marks the branch's nightly claims fixed, restarts the
+branch from the new `origin/main` and pushes it, waits for the push-to-`main`
+CI run of the merge commit to succeed (every push to `main` runs the quick
+lane), prunes the merged builder worktrees, and runs `cleanup-audit`. Both CI waits go on
 while any check changes state and fail after the longest timeout of the jobs
 that run for the awaited event (a pull request, or a push after merge) plus 10
 minutes without a change; a job the runner cancelled in the run of the commit
