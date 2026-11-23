@@ -466,7 +466,14 @@ Static verification is a first-class architectural constraint, not a best-effort
   1 and 2 and the race seed; its one `-race` seed (79) is chosen to draw both
   faults of a create that took effect, a lost create answer and a session
   that timed out once the empty item existed, and the run asserts that it
-  still does. The large-file session client
+  still does. A storm can show a remote wipe in part: a pass keeps
+  the items OneDrive no longer lists that it could not confirm gone, so it
+  does not see the side vanish and may run the deletes it did see, as few as
+  the proportional rule lets through. The chaos model's wipe check therefore
+  moves to the next pass until one holds the rest or nothing is left,
+  holding the unheld deletes of the wipe below `DeleteSafetyMinItems`
+  (`requireWipeHeld`; chaos seeds 172, 222, 245 and 325 failed the stricter
+  first-pass check). The large-file session client
   (`scenarioSessionClient`) passes through the chaos layer too
   (`TestChaosGraph_SessionRouteDrawsFaults`). The scenario fake's session
   takes fragments, keeps what it accepted across a failed request and answers
