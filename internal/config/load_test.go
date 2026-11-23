@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -829,7 +830,7 @@ paused_until = "`+expired+`"
 	cfg, err := LoadOrDefault(cfgPath, testLogger(t))
 	require.NoError(t, err)
 
-	ClearExpiredPauses(cfgPath, cfg, now, testLogger(t))
+	ClearExpiredPauses(t.Context(), cfgPath, cfg, now, testLogger(t))
 
 	// In-memory config should have paused fields cleared.
 	d := cfg.Drives[cid]
@@ -859,7 +860,7 @@ paused_until = "`+future+`"
 	cfg, err := LoadOrDefault(cfgPath, testLogger(t))
 	require.NoError(t, err)
 
-	ClearExpiredPauses(cfgPath, cfg, now, testLogger(t))
+	ClearExpiredPauses(t.Context(), cfgPath, cfg, now, testLogger(t))
 
 	// Active timed pause should be preserved.
 	d := cfg.Drives[cid]
@@ -882,7 +883,7 @@ paused = true
 	cfg, err := LoadOrDefault(cfgPath, testLogger(t))
 	require.NoError(t, err)
 
-	ClearExpiredPauses(cfgPath, cfg, now, testLogger(t))
+	ClearExpiredPauses(t.Context(), cfgPath, cfg, now, testLogger(t))
 
 	// Indefinite pause should be preserved.
 	d := cfg.Drives[cid]
@@ -902,10 +903,55 @@ sync_dir = "~/OneDrive"
 	require.NoError(t, err)
 
 	// Should be a no-op, no errors.
-	ClearExpiredPauses(cfgPath, cfg, now, testLogger(t))
+	ClearExpiredPauses(t.Context(), cfgPath, cfg, now, testLogger(t))
 
 	// Drive should still be present and unmodified.
 	assert.Len(t, cfg.Drives, 1)
+}
+
+// Validates: R-2.6.1, R-4.4.4
+func TestClearExpiredPauses_OneLockedWritePerDrive(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	expired := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	first := driveid.MustCanonicalID("personal:first-expired@example.com")
+	second := driveid.MustCanonicalID("personal:second-expired@example.com")
+	cfgPath := writeTestConfig(t, `
+["personal:first-expired@example.com"]
+sync_dir = "~/OneDrive"
+paused = true
+paused_until = "`+expired+`"
+
+["personal:second-expired@example.com"]
+sync_dir = "~/OneDrive - Second"
+paused = true
+paused_until = "`+expired+`"
+`)
+	cfg, err := LoadOrDefault(cfgPath, testLogger(t))
+	require.NoError(t, err)
+
+	// Count every granted lock: each one is one locked write.
+	acquisitions := 0
+	locker := defaultConfigLocker()
+	locker.flock = func(fd int, how int) error {
+		err := syscall.Flock(fd, how)
+		if err == nil && how == syscall.LOCK_EX|syscall.LOCK_NB {
+			acquisitions++
+		}
+		return err //nolint:wrapcheck // the seam returns flock's errno as flock does
+	}
+
+	clearExpiredPauses(t.Context(), locker, cfgPath, cfg, now, testLogger(t))
+
+	assert.Equal(t, 2, acquisitions, "one locked write per expired drive, for both of its keys")
+	reloaded := loadWrittenConfig(t, cfgPath)
+	for _, cid := range []driveid.CanonicalID{first, second} {
+		require.Contains(t, reloaded.Drives, cid)
+		assert.Nil(t, reloaded.Drives[cid].Paused, "%s: paused is removed from the file", cid)
+		assert.Nil(t, reloaded.Drives[cid].PausedUntil, "%s: paused_until is removed from the file", cid)
+		assert.Nil(t, cfg.Drives[cid].Paused, "%s: paused is cleared in memory", cid)
+	}
 }
 
 // TestDriveSectionDecoder_StrictAndLenient_IdenticalOutput verifies that valid

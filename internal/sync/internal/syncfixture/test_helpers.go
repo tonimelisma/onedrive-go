@@ -22,7 +22,6 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
-	"github.com/tonimelisma/onedrive-go/internal/namekey"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -64,6 +63,9 @@ type EngineMockClient struct {
 	// with its hook; nil delegates to Upload and never calls the hook.
 	UploadCreatingFn func(ctx context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc) (*graph.Item, error)
 }
+
+// EngineMockClient is pinned to the sync item client it stands in for.
+var _ syncdomain.ItemClient = (*EngineMockClient)(nil)
 
 func (m *EngineMockClient) Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
 	if m.DeltaFn != nil {
@@ -138,21 +140,16 @@ func (m *EngineMockClient) ListChildren(ctx context.Context, driveID driveid.ID,
 }
 
 // GetChildByName answers a read of one name from the folder ListChildren
-// holds, as Graph answers it: the child of that name under OneDrive's name
-// equivalence, or graph.ErrNotFound. With ListChildrenPages it makes the mock
-// the transfer manager's driveops.ItemReader.
+// holds, as Graph answers it (ChildNamed). With ListChildrenPages it makes
+// the mock the transfer manager's driveops.ItemReader and the sync item
+// client.
 func (m *EngineMockClient) GetChildByName(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
 	children, err := m.ListChildren(ctx, driveID, parentID)
 	if err != nil {
 		return nil, err
 	}
-	for i := range children {
-		if namekey.Equal(children[i].Name, name) {
-			return &children[i], nil
-		}
-	}
 
-	return nil, fmt.Errorf("reading %q: %w", name, graph.ErrNotFound)
+	return ChildNamed(children, name)
 }
 
 // ListChildrenPages hands the folder ListChildren holds over as one page.

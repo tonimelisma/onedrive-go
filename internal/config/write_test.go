@@ -44,10 +44,10 @@ func TestAppendDriveSection_AppendsToExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
-	err := AppendDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
 	require.NoError(t, err)
 
-	err = AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/OneDrive - Contoso")
+	err = AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/OneDrive - Contoso")
 	require.NoError(t, err)
 
 	data, err := localpath.ReadFile(path)
@@ -63,10 +63,10 @@ func TestAppendDriveSection_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
-	err := AppendDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
 	require.NoError(t, err)
 
-	err = AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/OneDrive - Contoso")
+	err = AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/OneDrive - Contoso")
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -87,7 +87,7 @@ func TestAppendDriveSection_FileWithoutTrailingNewline(t *testing.T) {
 	writeConfigFixture(t, path, []byte(`["personal:toni@outlook.com"]
 sync_dir = "~/OneDrive"`))
 
-	err := AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
+	err := AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -100,7 +100,7 @@ func TestAppendDriveSection_CreatesFileWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
-	err := AppendDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
 	require.NoError(t, err)
 
 	data, err := localpath.ReadFile(path)
@@ -137,7 +137,7 @@ func TestAppendDriveSection_ConcurrentCreatesPreserveAllSections(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			errs <- AppendDriveSection(path, cid, "~/"+cid.Email())
+			errs <- AppendDriveSection(t.Context(), path, cid, "~/"+cid.Email())
 		}()
 	}
 
@@ -217,7 +217,7 @@ func TestAppendDriveSection_CrossProcessWorker(t *testing.T) {
 	require.NoError(t, err)
 
 	cid := driveid.MustCanonicalID(os.Getenv("ONEDRIVE_GO_CONFIG_WRITE_CID"))
-	require.NoError(t, AppendDriveSection(
+	require.NoError(t, AppendDriveSection(t.Context(),
 		os.Getenv("ONEDRIVE_GO_CONFIG_WRITE_PATH"),
 		cid,
 		os.Getenv("ONEDRIVE_GO_CONFIG_WRITE_SYNC_DIR"),
@@ -228,11 +228,11 @@ func TestAppendDriveSection_CrossProcessWorker(t *testing.T) {
 func TestAppendDriveSection_RefusesASectionThatIsThere(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:refuse@example.com")
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
+	require.NoError(t, AppendDriveSection(t.Context(), path, cid, "~/OneDrive"))
 	before, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 
-	err = AppendDriveSection(path, cid, "~/Elsewhere")
+	err = AppendDriveSection(t.Context(), path, cid, "~/Elsewhere")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already in the config")
 
@@ -273,10 +273,10 @@ func TestConfigWrites_DoNotUseAmbientLogger(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
-	require.NoError(t, SetDriveKey(path, cid, "sync_dir", "~/OneDrive Local"))
-	require.NoError(t, DeleteDriveKey(path, cid, "sync_dir"))
-	require.NoError(t, DeleteDriveSection(path, cid))
+	require.NoError(t, AppendDriveSection(t.Context(), path, cid, "~/OneDrive"))
+	require.NoError(t, SetDriveKey(t.Context(), path, cid, "sync_dir", "~/OneDrive Local"))
+	require.NoError(t, DeleteDriveKeys(t.Context(), path, cid, "sync_dir"))
+	require.NoError(t, DeleteDriveSection(t.Context(), path, cid))
 
 	assert.Empty(t, logOutput.String())
 }
@@ -297,7 +297,7 @@ func TestAppendDriveSection_CreatesParentDirectoryWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "deep", "config.toml")
 
-	err := AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/OneDrive - Contoso")
+	err := AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/OneDrive - Contoso")
 	require.NoError(t, err)
 
 	_, err = os.Stat(path)
@@ -310,7 +310,7 @@ func TestAppendDriveSection_FileNotFoundUnwritablePath(t *testing.T) {
 	blocker := filepath.Join(dir, "blocker")
 	require.NoError(t, os.WriteFile(blocker, []byte("I'm a file"), 0o600))
 
-	err := AppendDriveSection(filepath.Join(blocker, "sub", "config.toml"),
+	err := AppendDriveSection(t.Context(), filepath.Join(blocker, "sub", "config.toml"),
 		driveid.MustCanonicalID("personal:test@test.com"), "~/OneDrive")
 	require.Error(t, err)
 }
@@ -323,10 +323,10 @@ func TestSetDriveKey_InsertNewKey(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	err := AppendDriveSection(path, cid, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "display_name", "home")
+	err = SetDriveKey(t.Context(), path, cid, "display_name", "home")
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -337,9 +337,9 @@ func TestSetDriveKey_InsertNewKey(t *testing.T) {
 func TestSetDriveKey_StringKeyGivenTrueLoadsBackAsAString(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:typed@example.com")
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
+	require.NoError(t, AppendDriveSection(t.Context(), path, cid, "~/OneDrive"))
 
-	require.NoError(t, SetDriveKey(path, cid, "display_name", "true"))
+	require.NoError(t, SetDriveKey(t.Context(), path, cid, "display_name", "true"))
 
 	cfg := loadWrittenConfig(t, path)
 	assert.Equal(t, "true", cfg.Drives[cid].DisplayName)
@@ -361,11 +361,11 @@ func TestSetDriveKey_RefusesAValueItsKeyCannotHold(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.toml")
 			cid := driveid.MustCanonicalID("personal:typed@example.com")
-			require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
+			require.NoError(t, AppendDriveSection(t.Context(), path, cid, "~/OneDrive"))
 			before, err := localpath.ReadFile(path)
 			require.NoError(t, err)
 
-			err = SetDriveKey(path, cid, tc.key, tc.value)
+			err = SetDriveKey(t.Context(), path, cid, tc.key, tc.value)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.key)
 
@@ -381,22 +381,22 @@ func TestDriveSection_NameWithQuoteAndBackslashRoundTrips(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	other := driveid.MustCanonicalID("personal:other@example.com")
 	cid := driveid.MustCanonicalID(`sharepoint:alice@contoso.com:site:Docs "Q1" \ Archive`)
-	require.NoError(t, AppendDriveSection(path, other, "~/Other"))
+	require.NoError(t, AppendDriveSection(t.Context(), path, other, "~/Other"))
 
-	require.NoError(t, AppendDriveSection(path, cid, "~/Archive"))
+	require.NoError(t, AppendDriveSection(t.Context(), path, cid, "~/Archive"))
 	cfg := loadWrittenConfig(t, path)
 	require.Contains(t, cfg.Drives, cid)
 	assert.Equal(t, "~/Archive", cfg.Drives[cid].SyncDir)
 
-	err := AppendDriveSection(path, cid, "~/Elsewhere")
+	err := AppendDriveSection(t.Context(), path, cid, "~/Elsewhere")
 	require.Error(t, err, "the section must be found under its own name")
 	assert.Contains(t, err.Error(), "already in the config")
 
-	require.NoError(t, SetDriveKey(path, cid, "display_name", "Archive"))
+	require.NoError(t, SetDriveKey(t.Context(), path, cid, "display_name", "Archive"))
 	cfg = loadWrittenConfig(t, path)
 	assert.Equal(t, "Archive", cfg.Drives[cid].DisplayName)
 
-	require.NoError(t, DeleteDriveSection(path, cid))
+	require.NoError(t, DeleteDriveSection(t.Context(), path, cid))
 	cfg = loadWrittenConfig(t, path)
 	assert.NotContains(t, cfg.Drives, cid)
 	assert.Contains(t, cfg.Drives, other)
@@ -435,15 +435,15 @@ func TestSetDriveKey_UpdateExistingKey(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	err := AppendDriveSection(path, cid, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
 	// First set
-	err = SetDriveKey(path, cid, "display_name", "home")
+	err = SetDriveKey(t.Context(), path, cid, "display_name", "home")
 	require.NoError(t, err)
 
 	// Update
-	err = SetDriveKey(path, cid, "display_name", "personal")
+	err = SetDriveKey(t.Context(), path, cid, "display_name", "personal")
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -456,10 +456,10 @@ func TestSetDriveKey_BooleanFormatting(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	err := AppendDriveSection(path, cid, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "paused", "true")
+	err = SetDriveKey(t.Context(), path, cid, "paused", "true")
 	require.NoError(t, err)
 
 	// Verify the raw file content has bare true (not "true")
@@ -480,10 +480,10 @@ func TestSetDriveKey_StringFormatting(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	err := AppendDriveSection(path, cid, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "display_name", "work")
+	err = SetDriveKey(t.Context(), path, cid, "display_name", "work")
 	require.NoError(t, err)
 
 	data, err := localpath.ReadFile(path)
@@ -497,10 +497,10 @@ func TestSetDriveKey_RoundTrip(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	err := AppendDriveSection(path, cid, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "paused", "false")
+	err = SetDriveKey(t.Context(), path, cid, "paused", "false")
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -513,16 +513,16 @@ func TestSetDriveKey_SectionNotFound(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
-	err := AppendDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, driveid.MustCanonicalID("business:nobody@example.com"), "paused", "true")
+	err = SetDriveKey(t.Context(), path, driveid.MustCanonicalID("business:nobody@example.com"), "paused", "true")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
 
 func TestSetDriveKey_FileNotFound(t *testing.T) {
-	err := SetDriveKey("/nonexistent/config.toml", driveid.MustCanonicalID("personal:test@test.com"), "paused", "true")
+	err := SetDriveKey(t.Context(), "/nonexistent/config.toml", driveid.MustCanonicalID("personal:test@test.com"), "paused", "true")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reading config file")
 }
@@ -534,14 +534,14 @@ func TestSetDriveKey_MultipleSections(t *testing.T) {
 	personalCID := driveid.MustCanonicalID("personal:toni@outlook.com")
 	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
 
-	err := AppendDriveSection(path, personalCID, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, personalCID, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = AppendDriveSection(path, businessCID, "~/Work")
+	err = AppendDriveSection(t.Context(), path, businessCID, "~/Work")
 	require.NoError(t, err)
 
 	// Set key on the second section only
-	err = SetDriveKey(path, businessCID, "paused", "true")
+	err = SetDriveKey(t.Context(), path, businessCID, "paused", "true")
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -556,15 +556,15 @@ func TestSetDriveKey_MultipleSections(t *testing.T) {
 	assert.True(t, *business.Paused)
 }
 
-// --- DeleteDriveKey tests ---
+// --- DeleteDriveKeys tests ---
 
-func TestDeleteDriveKey_KeyExists(t *testing.T) {
+func TestDeleteDriveKeys_KeyExists(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
-	require.NoError(t, SetDriveKey(path, cid, "paused", "true"))
+	require.NoError(t, AppendDriveSection(t.Context(), path, cid, "~/OneDrive"))
+	require.NoError(t, SetDriveKey(t.Context(), path, cid, "paused", "true"))
 
 	// Verify key exists before deletion.
 	data, err := localpath.ReadFile(path)
@@ -572,7 +572,7 @@ func TestDeleteDriveKey_KeyExists(t *testing.T) {
 	assert.Contains(t, string(data), "paused = true")
 
 	// Delete the key.
-	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+	require.NoError(t, DeleteDriveKeys(t.Context(), path, cid, "paused"))
 
 	data, err = localpath.ReadFile(path)
 	require.NoError(t, err)
@@ -584,59 +584,59 @@ func TestDeleteDriveKey_KeyExists(t *testing.T) {
 	assert.Nil(t, d.Paused)
 }
 
-func TestDeleteDriveKey_KeyAbsent(t *testing.T) {
+func TestDeleteDriveKeys_KeyAbsent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
+	require.NoError(t, AppendDriveSection(t.Context(), path, cid, "~/OneDrive"))
 
 	// Deleting a key that doesn't exist should be idempotent.
-	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+	require.NoError(t, DeleteDriveKeys(t.Context(), path, cid, "paused"))
 
 	cfg := loadWrittenConfig(t, path)
 	d := cfg.Drives[cid]
 	assert.Nil(t, d.Paused)
 }
 
-func TestDeleteDriveKey_SectionNotFound(t *testing.T) {
+func TestDeleteDriveKeys_SectionNotFound(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 	otherCID := driveid.MustCanonicalID("personal:other@outlook.com")
 
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
+	require.NoError(t, AppendDriveSection(t.Context(), path, cid, "~/OneDrive"))
 
-	err := DeleteDriveKey(path, otherCID, "paused")
+	err := DeleteDriveKeys(t.Context(), path, otherCID, "paused")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
 
-func TestDeleteDriveKey_IdempotentDoubleDelete(t *testing.T) {
+func TestDeleteDriveKeys_IdempotentDoubleDelete(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
-	require.NoError(t, SetDriveKey(path, cid, "paused", "true"))
+	require.NoError(t, AppendDriveSection(t.Context(), path, cid, "~/OneDrive"))
+	require.NoError(t, SetDriveKey(t.Context(), path, cid, "paused", "true"))
 
 	// Delete twice — second should be no-op.
-	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
-	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+	require.NoError(t, DeleteDriveKeys(t.Context(), path, cid, "paused"))
+	require.NoError(t, DeleteDriveKeys(t.Context(), path, cid, "paused"))
 
 	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "paused")
 }
 
-func TestDeleteDriveKey_PausedUntilRoundTrip(t *testing.T) {
+func TestDeleteDriveKeys_PausedUntilRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
-	require.NoError(t, SetDriveKey(path, cid, "paused", "true"))
-	require.NoError(t, SetDriveKey(path, cid, "paused_until", "2026-03-01T00:00:00Z"))
+	require.NoError(t, AppendDriveSection(t.Context(), path, cid, "~/OneDrive"))
+	require.NoError(t, SetDriveKey(t.Context(), path, cid, "paused", "true"))
+	require.NoError(t, SetDriveKey(t.Context(), path, cid, "paused_until", "2026-03-01T00:00:00Z"))
 
 	// Verify both keys load.
 	cfg := loadWrittenConfig(t, path)
@@ -647,8 +647,8 @@ func TestDeleteDriveKey_PausedUntilRoundTrip(t *testing.T) {
 	assert.Equal(t, "2026-03-01T00:00:00Z", *d.PausedUntil)
 
 	// Delete both keys.
-	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
-	require.NoError(t, DeleteDriveKey(path, cid, "paused_until"))
+	require.NoError(t, DeleteDriveKeys(t.Context(), path, cid, "paused"))
+	require.NoError(t, DeleteDriveKeys(t.Context(), path, cid, "paused_until"))
 
 	cfg = loadWrittenConfig(t, path)
 	d = cfg.Drives[cid]
@@ -666,17 +666,17 @@ func TestDeleteDriveSection_DeleteFromMiddle(t *testing.T) {
 	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
 	spCID := driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents")
 
-	err := AppendDriveSection(path, personalCID, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, personalCID, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = AppendDriveSection(path, businessCID, "~/Work")
+	err = AppendDriveSection(t.Context(), path, businessCID, "~/Work")
 	require.NoError(t, err)
 
-	err = AppendDriveSection(path, spCID, "~/Marketing")
+	err = AppendDriveSection(t.Context(), path, spCID, "~/Marketing")
 	require.NoError(t, err)
 
 	// Delete the middle section
-	err = DeleteDriveSection(path, businessCID)
+	err = DeleteDriveSection(t.Context(), path, businessCID)
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -693,13 +693,13 @@ func TestDeleteDriveSection_RoundTrip(t *testing.T) {
 	personalCID := driveid.MustCanonicalID("personal:toni@outlook.com")
 	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
 
-	err := AppendDriveSection(path, personalCID, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, personalCID, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = AppendDriveSection(path, businessCID, "~/Work")
+	err = AppendDriveSection(t.Context(), path, businessCID, "~/Work")
 	require.NoError(t, err)
 
-	err = DeleteDriveSection(path, personalCID)
+	err = DeleteDriveSection(t.Context(), path, personalCID)
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -711,16 +711,16 @@ func TestDeleteDriveSection_SectionNotFound(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
-	err := AppendDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
 	require.NoError(t, err)
 
-	err = DeleteDriveSection(path, driveid.MustCanonicalID("business:nobody@example.com"))
+	err = DeleteDriveSection(t.Context(), path, driveid.MustCanonicalID("business:nobody@example.com"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
 
 func TestDeleteDriveSection_FileNotFound(t *testing.T) {
-	err := DeleteDriveSection("/nonexistent/config.toml", driveid.MustCanonicalID("personal:test@test.com"))
+	err := DeleteDriveSection(t.Context(), "/nonexistent/config.toml", driveid.MustCanonicalID("personal:test@test.com"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reading config file")
 }
@@ -857,7 +857,7 @@ func TestCommentPreservation_AppendDriveSection(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
-	err := AppendDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("personal:toni@outlook.com"), "~/OneDrive")
 	require.NoError(t, err)
 
 	// Add a user comment by directly modifying the file
@@ -871,7 +871,7 @@ func TestCommentPreservation_AppendDriveSection(t *testing.T) {
 	writeConfigFixture(t, path, []byte(content))
 
 	// Now append a new section
-	err = AppendDriveSection(path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
+	err = AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("business:alice@contoso.com"), "~/Work")
 	require.NoError(t, err)
 
 	result, err := localpath.ReadFile(path)
@@ -903,7 +903,7 @@ sync_dir = "~/Work"
 `
 	writeConfigFixture(t, path, []byte(content))
 
-	err := SetDriveKey(path, driveid.MustCanonicalID("business:alice@contoso.com"), "paused", "true")
+	err := SetDriveKey(t.Context(), path, driveid.MustCanonicalID("business:alice@contoso.com"), "paused", "true")
 	require.NoError(t, err)
 
 	result, err := localpath.ReadFile(path)
@@ -933,7 +933,7 @@ sync_dir = "~/Work"
 `
 	writeConfigFixture(t, path, []byte(content))
 
-	err := DeleteDriveSection(path, driveid.MustCanonicalID("personal:toni@outlook.com"))
+	err := DeleteDriveSection(t.Context(), path, driveid.MustCanonicalID("personal:toni@outlook.com"))
 	require.NoError(t, err)
 
 	result, err := localpath.ReadFile(path)
@@ -1022,7 +1022,7 @@ func TestAtomicWriteFile_CreatesItsFoldersOwnerOnly(t *testing.T) {
 
 		dir := filepath.Join(t.TempDir(), "onedrive-go")
 		path := filepath.Join(dir, "config.toml")
-		require.NoError(t, AppendDriveSection(path, driveid.MustCanonicalID("personal:user@example.com"), "~/OneDrive"))
+		require.NoError(t, AppendDriveSection(t.Context(), path, driveid.MustCanonicalID("personal:user@example.com"), "~/OneDrive"))
 
 		info, err := os.Stat(dir)
 		require.NoError(t, err)
@@ -1100,7 +1100,7 @@ paused = true # temporarily paused
 	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
-	require.NoError(t, SetDriveKey(path, cid, "paused", "false"))
+	require.NoError(t, SetDriveKey(t.Context(), path, cid, "paused", "false"))
 
 	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
@@ -1109,7 +1109,7 @@ paused = true # temporarily paused
 	assert.Contains(t, resultStr, "paused = false # temporarily paused")
 }
 
-func TestDeleteDriveKey_PausedDoesNotMatchPausedUntil(t *testing.T) {
+func TestDeleteDriveKeys_PausedDoesNotMatchPausedUntil(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
@@ -1123,7 +1123,7 @@ paused = true
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
 	// Deleting "paused" must NOT delete "paused_until".
-	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+	require.NoError(t, DeleteDriveKeys(t.Context(), path, cid, "paused"))
 
 	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
@@ -1150,13 +1150,13 @@ sync_dir="~/OneDrive"
 	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
-	require.NoError(t, SetDriveKey(path, cid, "sync_dir", "~/NewPath"))
+	require.NoError(t, SetDriveKey(t.Context(), path, cid, "sync_dir", "~/NewPath"))
 
 	cfg := loadWrittenConfig(t, path)
 	assert.Equal(t, "~/NewPath", cfg.Drives[cid].SyncDir)
 }
 
-func TestDeleteDriveKey_NoSpacesAroundEquals(t *testing.T) {
+func TestDeleteDriveKeys_NoSpacesAroundEquals(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
@@ -1167,7 +1167,7 @@ paused=true
 	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
-	require.NoError(t, DeleteDriveKey(path, cid, "paused"))
+	require.NoError(t, DeleteDriveKeys(t.Context(), path, cid, "paused"))
 
 	data, err := localpath.ReadFile(path)
 	require.NoError(t, err)
@@ -1184,7 +1184,7 @@ sync_dir = "~/path#with#hash"
 	writeConfigFixture(t, path, []byte(content))
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
-	require.NoError(t, SetDriveKey(path, cid, "display_name", "my drive"))
+	require.NoError(t, SetDriveKey(t.Context(), path, cid, "display_name", "my drive"))
 
 	cfg := loadWrittenConfig(t, path)
 	// Original value with # should be preserved.
@@ -1203,11 +1203,11 @@ func TestScenario_FirstLoginThenSecondLogin(t *testing.T) {
 	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
 
 	// First login
-	err := AppendDriveSection(path, personalCID, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, personalCID, "~/OneDrive")
 	require.NoError(t, err)
 
 	// Second login
-	err = AppendDriveSection(path, businessCID, "~/OneDrive - Contoso")
+	err = AppendDriveSection(t.Context(), path, businessCID, "~/OneDrive - Contoso")
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -1225,13 +1225,13 @@ func TestScenario_DriveRemove(t *testing.T) {
 	personalCID := driveid.MustCanonicalID("personal:toni@outlook.com")
 	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
 
-	err := AppendDriveSection(path, personalCID, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, personalCID, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = AppendDriveSection(path, businessCID, "~/Work")
+	err = AppendDriveSection(t.Context(), path, businessCID, "~/Work")
 	require.NoError(t, err)
 
-	err = DeleteDriveSection(path, businessCID)
+	err = DeleteDriveSection(t.Context(), path, businessCID)
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -1249,20 +1249,20 @@ func TestScenario_LogoutPurge_AllDrives(t *testing.T) {
 	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
 	spCID := driveid.MustCanonicalID("sharepoint:alice@contoso.com:marketing:Documents")
 
-	err := AppendDriveSection(path, personalCID, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, personalCID, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = AppendDriveSection(path, businessCID, "~/Work")
+	err = AppendDriveSection(t.Context(), path, businessCID, "~/Work")
 	require.NoError(t, err)
 
-	err = AppendDriveSection(path, spCID, "~/Marketing")
+	err = AppendDriveSection(t.Context(), path, spCID, "~/Marketing")
 	require.NoError(t, err)
 
 	// Purge all alice drives
-	err = DeleteDriveSection(path, businessCID)
+	err = DeleteDriveSection(t.Context(), path, businessCID)
 	require.NoError(t, err)
 
-	err = DeleteDriveSection(path, spCID)
+	err = DeleteDriveSection(t.Context(), path, spCID)
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -1277,13 +1277,13 @@ func TestScenario_SetKeyThenDeleteSection(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	err := AppendDriveSection(path, cid, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "display_name", "home")
+	err = SetDriveKey(t.Context(), path, cid, "display_name", "home")
 	require.NoError(t, err)
 
-	err = DeleteDriveSection(path, cid)
+	err = DeleteDriveSection(t.Context(), path, cid)
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -1297,10 +1297,10 @@ func TestSetDriveKey_UpdateSyncDir(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
-	err := AppendDriveSection(path, cid, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "sync_dir", "~/NewDrive")
+	err = SetDriveKey(t.Context(), path, cid, "sync_dir", "~/NewDrive")
 	require.NoError(t, err)
 
 	cfg := loadWrittenConfig(t, path)
@@ -1316,10 +1316,10 @@ func TestScenario_LogoutRegular(t *testing.T) {
 	personalCID := driveid.MustCanonicalID("personal:toni@outlook.com")
 	businessCID := driveid.MustCanonicalID("business:alice@contoso.com")
 
-	err := AppendDriveSection(path, personalCID, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, personalCID, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = AppendDriveSection(path, businessCID, "~/Work")
+	err = AppendDriveSection(t.Context(), path, businessCID, "~/Work")
 	require.NoError(t, err)
 
 	// Simulate state DB files that would exist on disk.
@@ -1329,10 +1329,10 @@ func TestScenario_LogoutRegular(t *testing.T) {
 	require.NoError(t, os.WriteFile(stateDB2, []byte("fake-state-2"), 0o600))
 
 	// Delete both config sections (simulating regular logout).
-	err = DeleteDriveSection(path, personalCID)
+	err = DeleteDriveSection(t.Context(), path, personalCID)
 	require.NoError(t, err)
 
-	err = DeleteDriveSection(path, businessCID)
+	err = DeleteDriveSection(t.Context(), path, businessCID)
 	require.NoError(t, err)
 
 	// Verify config has 0 drives.
@@ -1354,10 +1354,10 @@ func TestScenario_DriveRemoveThenReAdd(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:toni@outlook.com")
 
 	// Create config with drive and customize it.
-	err := AppendDriveSection(path, cid, "~/OneDrive")
+	err := AppendDriveSection(t.Context(), path, cid, "~/OneDrive")
 	require.NoError(t, err)
 
-	err = SetDriveKey(path, cid, "paused", "true")
+	err = SetDriveKey(t.Context(), path, cid, "paused", "true")
 	require.NoError(t, err)
 
 	// Verify paused is set before removal.
@@ -1366,14 +1366,14 @@ func TestScenario_DriveRemoveThenReAdd(t *testing.T) {
 	assert.True(t, *cfg.Drives[cid].Paused)
 
 	// Remove the drive.
-	err = DeleteDriveSection(path, cid)
+	err = DeleteDriveSection(t.Context(), path, cid)
 	require.NoError(t, err)
 
 	cfg = loadWrittenConfig(t, path)
 	assert.Empty(t, cfg.Drives)
 
 	// Re-add the drive with a different sync_dir.
-	err = AppendDriveSection(path, cid, "~/OneDrive-Fresh")
+	err = AppendDriveSection(t.Context(), path, cid, "~/OneDrive-Fresh")
 	require.NoError(t, err)
 
 	// Reload and verify fresh defaults (Paused should be nil, new sync_dir).
@@ -1398,7 +1398,7 @@ sync_dir = "~/Business"
 display_name = "Work"
 `))
 
-	err := RenameDriveSections(path, map[driveid.CanonicalID]driveid.CanonicalID{
+	err := RenameDriveSections(t.Context(), path, map[driveid.CanonicalID]driveid.CanonicalID{
 		driveid.MustCanonicalID("business:user@example.com"): driveid.MustCanonicalID("business:renamed@example.com"),
 	})
 	require.NoError(t, err)
@@ -1430,7 +1430,7 @@ sync_dir = "~/Renamed"
 `)
 	writeConfigFixture(t, path, original)
 
-	err := RenameDriveSections(path, map[driveid.CanonicalID]driveid.CanonicalID{
+	err := RenameDriveSections(t.Context(), path, map[driveid.CanonicalID]driveid.CanonicalID{
 		driveid.MustCanonicalID("business:user@example.com"): driveid.MustCanonicalID("business:renamed@example.com"),
 	})
 	var collision *driveSectionCollisionError
@@ -1458,7 +1458,7 @@ sync_dir = "~/Business"
 	before, err := os.Stat(path)
 	require.NoError(t, err)
 
-	require.NoError(t, RenameDriveSections(path, map[driveid.CanonicalID]driveid.CanonicalID{
+	require.NoError(t, RenameDriveSections(t.Context(), path, map[driveid.CanonicalID]driveid.CanonicalID{
 		driveid.MustCanonicalID("business:user@example.com"): driveid.MustCanonicalID("business:renamed@example.com"),
 	}))
 

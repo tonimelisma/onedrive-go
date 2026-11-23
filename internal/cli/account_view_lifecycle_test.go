@@ -70,7 +70,7 @@ func TestLoadAccountViewSnapshot_UsesValidatedStateInvariantErrors(t *testing.T)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.UserID = snapshotTestUserID123
 		account.DisplayName = accountViewLifecycleTestUser

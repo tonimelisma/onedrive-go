@@ -197,6 +197,7 @@ func stressSyncWatchMembers() []string {
 		"TestAckHandle_ConcurrentWithFullRefresh_IsRaceFree",
 		"TestRemoteObserverWatch_AFailedBatchEndsTheWatchUnlessItsRunEnded",
 		"TestWatchDirtyScheduling_PathFanoutStillProducesOneCoarseDirtySignal",
+		"TestWatchHeldDeleteConfirm_AcceptsOnlyTheHeldSet",
 		"TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff",
 		"TestWatchLoop_ServicesOnlyThePhasesEnabledInputs",
 		"TestWatchObserver_SeesBindingMadeAfterItWasBuilt",
@@ -372,6 +373,8 @@ func stressSyncShutdownAndCancellationMembers() []string {
 		"TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError",
 		"TestStartObservers_RefusalDuringDrainClassifiesAsShutdown",
 		"TestWaitForQuiescence_ContextCancel",
+		"TestWatchRuntime_AScanAfterTheStopIsStillCommitted",
+		"TestWatchRuntime_AScanCommitTheStopsDeadlineCutsIsSaidNotAnError",
 	}
 }
 

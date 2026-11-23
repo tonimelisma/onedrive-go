@@ -56,7 +56,7 @@ type engineHooks struct {
 	// clearAccountAuthRequirement replaces config.ClearAccountAuthRequirement
 	// for the startup proof's clear. Tests return a held catalog lock
 	// through it without waiting out the lock's timeout.
-	clearAccountAuthRequirement func(dataDir string, account driveid.CanonicalID) error
+	clearAccountAuthRequirement func(ctx context.Context, dataDir string, account driveid.CanonicalID) error
 	// clock replaces the engine's run clock (runClock); nil runs on the
 	// engine's real clock. Observers the engine builds stay on the real
 	// clock either way (buildLocalObserver).

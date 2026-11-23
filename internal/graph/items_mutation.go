@@ -29,7 +29,10 @@ func (c *Client) CreateFolder(ctx context.Context, driveID driveid.ID, parentID,
 		slog.String("name", name),
 	)
 
-	path := itemRoute(driveID, parentID, "/children")
+	path, err := itemRoute(driveID, parentID, "/children")
+	if err != nil {
+		return nil, err
+	}
 
 	reqBody := createFolderRequest{
 		Name:             name,
@@ -79,7 +82,7 @@ func (c *Client) readCreatedFolderAfterEmptySuccessBody(
 	parentID string,
 	name string,
 ) (*Item, error) {
-	c.logger.Debug("create folder returned empty success body, confirming by parent listing",
+	c.logger.Debug("create folder returned empty success body, reading the folder back by its name",
 		slog.String("drive_id", driveID.String()),
 		slog.String("parent_id", parentID),
 		slog.String("name", name),
@@ -88,16 +91,11 @@ func (c *Client) readCreatedFolderAfterEmptySuccessBody(
 	var lastErr error
 
 	for attempt := range c.policies.createFolderReadback.MaxAttempts {
-		children, err := c.ListChildren(ctx, driveID, parentID)
+		item, err := c.createdFolderNamed(ctx, driveID, parentID, name)
 		if err == nil {
-			if item, ok := findCreatedFolder(children, name); ok {
-				return &item, nil
-			}
-
-			lastErr = ErrNotFound
-		} else {
-			lastErr = err
+			return item, nil
 		}
+		lastErr = err
 
 		if attempt >= c.policies.createFolderReadback.MaxAttempts-1 {
 			break
@@ -125,10 +123,40 @@ func (c *Client) readCreatedFolderAfterEmptySuccessBody(
 	return nil, fmt.Errorf("graph: create folder empty success response: %w", lastErr)
 }
 
-// findCreatedFolder picks the folder a create of name made from its
-// parent's listing (namekey.Find): the folder spelled as asked, else the only
-// one OneDrive treats as that name. Two such folders and none spelled as
-// asked are not found. A folder the listing repeats counts once.
+// createdFolderNamed is one attempt to find the folder a create of name made
+// in parentID: one read of the name (GetChildByName), and the parent's
+// listing, a page at a time up to the page that holds the name as spelled
+// (NameSeek), only when that read cannot settle it (ReadCannotSettleName).
+// A file the read answers settles it: OneDrive holds one item per name, so
+// the folder is not there yet. Not there is ErrNotFound.
+func (c *Client) createdFolderNamed(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
+	item, err := c.GetChildByName(ctx, driveID, parentID, name)
+	switch {
+	case err == nil && item.IsFolder:
+		return item, nil
+	case err == nil:
+		return nil, ErrNotFound
+	case !ReadCannotSettleName(err):
+		return nil, err
+	}
+
+	seek := NewNameSeek(name)
+	if err := c.ListChildrenPages(ctx, driveID, parentID, seek.Visit); err != nil {
+		return nil, err
+	}
+	folder, ok := findCreatedFolder(seek.Candidates(), name)
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	return &folder, nil
+}
+
+// findCreatedFolder picks the folder a create of name made from the children
+// of its parent's listing that hold the name (namekey.Find): the folder
+// spelled as asked, else the only one OneDrive treats as that name. Two such
+// folders and none spelled as asked are not found. A folder the listing
+// repeats counts once.
 func findCreatedFolder(children []Item, name string) (Item, bool) {
 	children = WithoutRepeats(children)
 	match := namekey.Find(children, name, func(child *Item) (string, bool) { return child.Name, child.IsFolder })
@@ -185,7 +213,10 @@ func (c *Client) MoveItemIfMatch(
 		slog.Time("keep_modified", opts.KeepModified),
 	)
 
-	path := itemRoute(driveID, itemID, "")
+	path, err := itemRoute(driveID, itemID, "")
+	if err != nil {
+		return nil, err
+	}
 
 	req := moveItemRequest{}
 	if newParentID != "" {
@@ -250,7 +281,10 @@ func (c *Client) UpdateFileSystemInfo(
 		slog.Time("mtime", mtime),
 	)
 
-	path := itemRoute(driveID, itemID, "")
+	path, err := itemRoute(driveID, itemID, "")
+	if err != nil {
+		return nil, err
+	}
 
 	sent := c.sendableMtime(mtime)
 	info := c.newFileSystemInfo(sent)
@@ -367,8 +401,12 @@ func (c *Client) PermanentDeleteItem(ctx context.Context, driveID driveid.ID, it
 		slog.String("item_id", itemID),
 	)
 
-	return c.deleteAndDrain(ctx, http.MethodPost,
-		itemRoute(driveID, itemID, "/permanentDelete"))
+	route, err := itemRoute(driveID, itemID, "/permanentDelete")
+	if err != nil {
+		return err
+	}
+
+	return c.deleteAndDrain(ctx, http.MethodPost, route)
 }
 
 // DeleteItem deletes a drive item. Returns nil on success (HTTP 204).
@@ -385,8 +423,12 @@ func (c *Client) DeleteItemIfMatch(ctx context.Context, driveID driveid.ID, item
 		slog.String("item_id", itemID),
 	)
 
-	return c.deleteAndDrainWithHeaders(ctx, http.MethodDelete,
-		itemRoute(driveID, itemID, ""), ifMatchHeaders(ifMatch))
+	route, err := itemRoute(driveID, itemID, "")
+	if err != nil {
+		return err
+	}
+
+	return c.deleteAndDrainWithHeaders(ctx, http.MethodDelete, route, ifMatchHeaders(ifMatch))
 }
 
 // deleteAndDrain sends a request and drains the response body to reuse the connection.

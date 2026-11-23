@@ -190,7 +190,7 @@ func runSyncDaemonWithFactory(
 	standaloneSelection := standaloneMountSelectionFromResolvedDrives(drives)
 
 	cc := cliContextFrom(ctx)
-	runtime := cc.newSessionRuntime(holder, logger)
+	runtime := cc.syncSessionRuntime(holder, logger)
 
 	debugEventHook, closeDebugEvents, err := openSyncDebugEventHookFromEnv(logger)
 	if err != nil {
@@ -265,7 +265,9 @@ func runSyncDaemonWithFactory(
 
 	console.Stopped()
 
-	return nil
+	// A watch that stopped cleanly but could not write its output fails, as
+	// a one-shot run does: the warning said so when it happened.
+	return console.OutputError()
 }
 
 func reloadStandaloneMountsFunc(

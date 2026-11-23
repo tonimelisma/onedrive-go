@@ -13,8 +13,8 @@ import (
 
 // removeDrive deletes the config section for the drive, preserving token,
 // state database, and sync directory.
-func removeDrive(w io.Writer, cfgPath string, driveID driveid.CanonicalID, syncDir string, logger *slog.Logger) error {
-	if err := config.DeleteDriveSection(cfgPath, driveID); err != nil {
+func removeDrive(ctx context.Context, w io.Writer, cfgPath string, driveID driveid.CanonicalID, syncDir string, logger *slog.Logger) error {
+	if err := config.DeleteDriveSection(ctx, cfgPath, driveID); err != nil {
 		return fmt.Errorf("removing drive: %w", err)
 	}
 
@@ -41,7 +41,7 @@ func removeDrive(w io.Writer, cfgPath string, driveID driveid.CanonicalID, syncD
 // shared with other drives (SharePoint). A store an engine still has open is
 // kept and the returned error says how to finish.
 func purgeConfiguredDrive(ctx context.Context, cc *CLIContext, cid driveid.CanonicalID, syncDir string) error {
-	if err := config.DeleteDriveSection(cc.CfgPath, cid); err != nil {
+	if err := config.DeleteDriveSection(ctx, cc.CfgPath, cid); err != nil {
 		return fmt.Errorf("removing drive: %w", err)
 	}
 	cc.Logger.Info("removed drive config section", "drive", cid.String())
@@ -130,6 +130,7 @@ func deleteAccountDriveStates(
 // state databases are left to the caller, which purges only those drives':
 // a drive still in the config keeps its state.
 func removeAccountDriveConfigs(
+	ctx context.Context,
 	cfgPath string,
 	affected []driveid.CanonicalID,
 	logger *slog.Logger,
@@ -138,7 +139,7 @@ func removeAccountDriveConfigs(
 	var errs []error
 
 	for _, cid := range affected {
-		if err := config.DeleteDriveSection(cfgPath, cid); err != nil {
+		if err := config.DeleteDriveSection(ctx, cfgPath, cid); err != nil {
 			errs = append(errs, fmt.Errorf("removing drive %s: %w", cid.String(), err))
 			continue
 		}

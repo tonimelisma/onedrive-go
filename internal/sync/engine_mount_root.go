@@ -57,8 +57,8 @@ func (flow *observation) observeMountRootRemote(
 
 		items, newToken, err := flow.remote.folderDelta.DeltaFolderAll(ctx, flow.cfg.driveID, flow.cfg.remoteRootItemID, token)
 		orphanKind := syncdomain.ResyncKindApplyDifferences
-		if err != nil && errors.Is(err, graph.ErrGone) && !fullReconcile {
-			orphanKind = syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(err))
+		if kind, unusable := unusableMountRootCursor(err); unusable && !fullReconcile {
+			orphanKind = kind
 			// Self-healing: the next call re-enumerates the shared folder from
 			// scratch, so nothing needs the user's attention.
 			flow.deps.logger.Info("Change history for a shared folder expired; rescanning the folder",
@@ -117,6 +117,21 @@ func (flow *observation) observeMountRootRemote(
 	events, _ := flow.remote.mountRootEvents(ctx, items, bl, true, syncdomain.ResyncKindApplyDifferences)
 
 	return mountRootObservation{events: events, mode: syncdomain.RemoteObservationModeEnumerate, complete: true}, nil
+}
+
+// unusableMountRootCursor reports whether err says the saved change-list
+// position of a shared folder cannot be continued, and the resync it is
+// recovered as: an expired one as expired, one that is not a link as a
+// cursor this client gave up on.
+func unusableMountRootCursor(err error) (syncdomain.ResyncKind, bool) {
+	switch {
+	case errors.Is(err, graph.ErrDeltaTokenNotALink):
+		return syncdomain.ResyncKindOf(syncdomain.NewCursorUnusableError("the saved position is not a link", err)), true
+	case errors.Is(err, graph.ErrGone):
+		return syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(err)), true
+	default:
+		return syncdomain.ResyncKindApplyDifferences, false
+	}
 }
 
 func convertMountRootItems(

@@ -2,7 +2,7 @@ package config
 
 import (
 	"cmp"
-	"errors"
+	"context"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -162,7 +162,20 @@ func (r driveResolver) resolveConfigPath(env EnvOverrides, cli CLIOverrides) str
 // pause has expired. This allows the drive to participate in the next resolve.
 // Operates on both the in-memory config (so ResolveDrives sees the change
 // immediately) and the on-disk config file (so the stale keys don't persist).
-func ClearExpiredPauses(cfgPath string, cfg *Config, now time.Time, logger *slog.Logger) {
+// Both keys of a drive go in one locked write, so a stuck lock holder delays
+// a reload by one bounded wait per expired drive, and ctx ending ends it.
+func ClearExpiredPauses(ctx context.Context, cfgPath string, cfg *Config, now time.Time, logger *slog.Logger) {
+	clearExpiredPauses(ctx, defaultConfigLocker(), cfgPath, cfg, now, logger)
+}
+
+func clearExpiredPauses(
+	ctx context.Context,
+	locker configLocker,
+	cfgPath string,
+	cfg *Config,
+	now time.Time,
+	logger *slog.Logger,
+) {
 	for cid := range cfg.Drives {
 		d := cfg.Drives[cid]
 
@@ -175,9 +188,7 @@ func ClearExpiredPauses(cfgPath string, cfg *Config, now time.Time, logger *slog
 			slog.String("drive", cid.String()),
 		)
 
-		pausedErr := DeleteDriveKey(cfgPath, cid, "paused")
-		untilErr := DeleteDriveKey(cfgPath, cid, "paused_until")
-		if err := errors.Join(pausedErr, untilErr); err != nil {
+		if err := locker.deleteDriveKeys(ctx, cfgPath, cid, pausedKey, pausedUntilKey); err != nil {
 			// The in-memory pause is cleared below either way; only the file
 			// still says paused, so name the drive and the file to fix.
 			logger.Warn("could not remove an expired pause from "+cfgPath+"; the drive syncs again, "+

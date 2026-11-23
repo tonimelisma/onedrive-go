@@ -38,7 +38,7 @@ func TestRunDriveRebindRoot_KeepsStateAndReportsRebind(t *testing.T) {
 	cid := driveid.MustCanonicalID("personal:rebind@example.com")
 	syncDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(syncDir, "a.txt"), []byte("a"), 0o600))
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
 
 	statePath := config.DriveStatePath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
@@ -89,7 +89,7 @@ func TestRunDriveRebindRoot_RequiresConfirmationWithoutYes(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:rebind@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 	statePath := config.DriveStatePath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
 	store, err := syncstore.NewSyncStore(t.Context(), statePath, testDriveLogger(t))
@@ -117,7 +117,7 @@ func TestRunDriveRebindRoot_UnreadableStateStillRebindsWithYes(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:rebind@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 	statePath := config.DriveStatePath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
 	require.NoError(t, os.WriteFile(statePath, []byte("not a sqlite database"), 0o600))
@@ -152,7 +152,7 @@ func TestRunDriveRebindRoot_CountsFilesInATildeSyncDir(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(home, "sync", "sub"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(home, "sync", "a.txt"), []byte("a"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(home, "sync", "sub", "b.txt"), []byte("b"), 0o600))
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/sync"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/sync"))
 
 	statePath := config.DriveStatePath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))

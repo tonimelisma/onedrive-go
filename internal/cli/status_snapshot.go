@@ -46,31 +46,30 @@ const (
 	statusDriveKindSharePoint       = "sharepoint_library"
 	statusDriveKindSharedFolder     = "shared_folder"
 	statusDriveKindGeneric          = "drive"
-	statusDriveNameOneDrive         = "OneDrive"
 	statusDriveNameSharedFolder     = "Shared folder"
 )
 
-const (
-	statusProjectionStandalone = "standalone"
-	statusProjectionChild      = "child"
-)
-
-// statusAccount groups configured drives under a single account email.
+// statusAccount is one account's row: its configured drives, under its
+// address. A personal and a work or school account at one address are two
+// rows.
 type statusAccount struct {
+	// AccountKey names the account the row is for (accountViewKey). JSON
+	// must not show it (R-3.1.6: it is the canonical ID); the live overlay
+	// finds the row's answer by it.
+	AccountKey     string                `json:"-"`
 	Email          string                `json:"email"`
 	DisplayName    string                `json:"display_name,omitempty"`
 	OrgName        string                `json:"org_name,omitempty"`
 	SignInRequired *statusSignInRequired `json:"sign_in_required,omitempty"`
 	Drives         []statusDrive         `json:"drives"`
 
-	DriveType      string        `json:"-"`
-	UserID         string        `json:"-"`
-	AuthState      string        `json:"-"`
-	AuthReason     string        `json:"-"`
-	AuthAction     string        `json:"-"`
-	DegradedReason string        `json:"-"`
-	DegradedAction string        `json:"-"`
-	Mounts         []statusDrive `json:"-"`
+	DriveType      string `json:"-"`
+	UserID         string `json:"-"`
+	AuthState      string `json:"-"`
+	AuthReason     string `json:"-"`
+	AuthAction     string `json:"-"`
+	DegradedReason string `json:"-"`
+	DegradedAction string `json:"-"`
 }
 
 type statusSignInRequired struct {
@@ -86,9 +85,17 @@ type statusStorage struct {
 }
 
 // statusDrive holds status information for one configured drive or shared
-// folder shortcut. InternalID and NamespaceID are private runtime lookup keys.
+// folder shortcut. Every field holds one fact; the builder fills it, the
+// overlays update it, and the printers only read it.
 type statusDrive struct {
-	InternalID  string `json:"-"`
+	// InternalID is the drive's mount ID (a configured drive's canonical ID,
+	// or a shortcut child's mount ID). Status JSON must not show it
+	// (R-3.1.6); the live, runtime and perf overlays read it to find the
+	// drive's storage, engine and perf snapshot.
+	InternalID string `json:"-"`
+	// NamespaceID is the parent drive's canonical ID for a shortcut child,
+	// empty for a configured drive. JSON must not show it (R-3.1.6); the
+	// text printer reads it to say the folder is managed through its parent.
 	NamespaceID string `json:"-"`
 	// MountRef is the only identity published in status JSON. R-3.1.6 keeps
 	// canonical, mount, namespace and remote drive IDs out of the public
@@ -119,13 +126,6 @@ type statusDrive struct {
 	RuntimeState           string         `json:"-"`
 	SyncState              *syncStateInfo `json:"sync_state,omitempty"`
 	SharedFolders          []statusDrive  `json:"shared_folders,omitempty"`
-
-	MountID        string        `json:"-"`
-	ProjectionKind string        `json:"-"`
-	CanonicalID    string        `json:"-"`
-	DisplayName    string        `json:"-"`
-	SyncDir        string        `json:"-"`
-	ChildMounts    []statusDrive `json:"-"`
 	// StateLabel is the plain status label for a State that is a lifecycle
 	// token (a shared folder's state) rather than one of the drive states.
 	StateLabel string `json:"-"`
@@ -154,7 +154,6 @@ type syncStateInfo struct {
 
 // statusSummary aggregates health info across displayed drives and shared folders.
 type statusSummary struct {
-	TotalMounts           int    `json:"-"`
 	TotalDrives           int    `json:"total_drives"`
 	TotalSharedFolders    int    `json:"total_shared_folders,omitempty"`
 	Ready                 int    `json:"up_to_date,omitempty"`
@@ -170,7 +169,6 @@ type statusSummary struct {
 	TotalRetrying         int    `json:"total_retrying,omitempty"`
 	RuntimeOwner          string `json:"runtime_owner,omitempty"`
 	RuntimeActiveDrives   int    `json:"runtime_active_drives,omitempty"`
-	RuntimeActiveMounts   int    `json:"-"`
 }
 
 // statusOutput wraps the full status response for JSON output.
@@ -212,13 +210,16 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, showPerf bool) error 
 	liveOverlays := liveOverlayLoader(ctx, cc, filteredSnapshot)
 	applyStatusLiveOverlay(accounts, liveOverlays)
 	printStatusLiveNotes(cc, accounts, liveOverlays)
-	runtimeOverlay := loadStatusRuntimeOverlay(ctx)
+	// One probe of the control socket feeds both overlays: a watch too busy
+	// to answer costs one probe timeout, not one per overlay.
+	probe, probeErr := probeControlOwner(ctx)
+	runtimeOverlay := loadStatusRuntimeOverlay(ctx, probe, probeErr)
 	applyStatusRuntimeOverlay(accounts, runtimeOverlay)
 	if runtimeOverlay.unavailableNote != "" {
 		// stderr, so --json output stays one document.
 		cc.Statusf("%s", runtimeOverlay.unavailableNote)
 	}
-	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(ctx, showPerf))
+	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(ctx, showPerf, probe, probeErr))
 	if !cc.Flags.Verbose && !cc.Flags.Debug {
 		dropStatusDebugDetail(accounts)
 	}
@@ -235,7 +236,6 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, showPerf bool) error 
 func dropStatusDebugDetail(accounts []statusAccount) {
 	for i := range accounts {
 		dropStatusDriveDebugDetail(accounts[i].Drives)
-		dropStatusDriveDebugDetail(accounts[i].Mounts)
 	}
 }
 
@@ -243,7 +243,6 @@ func dropStatusDriveDebugDetail(drives []statusDrive) {
 	for i := range drives {
 		drives[i].StateDebugDetail = ""
 		dropStatusDriveDebugDetail(drives[i].SharedFolders)
-		dropStatusDriveDebugDetail(drives[i].ChildMounts)
 	}
 }
 
@@ -421,6 +420,7 @@ func buildStatusAccountsFromViews(
 		driveIDs := append([]driveid.CanonicalID(nil), view.ConfiguredDriveIDs...)
 		sort.Slice(driveIDs, func(i, j int) bool { return driveIDs[i].String() < driveIDs[j].String() })
 		acct := statusAccount{
+			AccountKey:  accountViewKey(&view),
 			Email:       view.Email,
 			DriveType:   view.DriveType,
 			AuthState:   view.AuthHealth.State,
@@ -444,36 +444,14 @@ func buildStatusAccountsFromViews(
 					syncQ,
 				)
 				drive.SharedFolders = append(drive.SharedFolders, childDrive)
-				drive.ChildMounts = append(drive.ChildMounts, childDrive)
 			}
 			acct.Drives = append(acct.Drives, drive)
-			acct.Mounts = append(acct.Mounts, drive)
 		}
 
 		accounts = append(accounts, acct)
 	}
 
 	return accounts
-}
-
-// groupDrivesByAccount collects drive IDs keyed by account email and returns
-// a stable ordering of unique emails.
-func groupDrivesByAccount(cfg *config.Config) (map[string][]driveid.CanonicalID, []string) {
-	grouped := make(map[string][]driveid.CanonicalID)
-	var order []string
-
-	for id := range cfg.Drives {
-		email := id.Email()
-		if _, seen := grouped[email]; !seen {
-			order = append(order, email)
-		}
-
-		grouped[email] = append(grouped[email], id)
-	}
-
-	sort.Strings(order)
-
-	return grouped, order
 }
 
 // readAccountMeta reads display name and org name from catalog account fields.
@@ -679,18 +657,13 @@ func buildConfiguredStatusDrive(
 
 	state, syncState := configuredDriveState(ctx, cid, drive, syncQ)
 	status := statusDrive{
-		InternalID:     cid.String(),
-		Kind:           statusDriveKind(cid),
-		Name:           statusConfiguredDriveName(cid, drive, acct),
-		Folder:         config.EffectiveSyncDir(cfg, cid, drive.SyncDir, slog.New(slog.DiscardHandler)),
-		State:          state,
-		SyncState:      syncState,
-		MountID:        cid.String(),
-		MountRef:       config.MountRef(cid.String()),
-		ProjectionKind: statusProjectionStandalone,
-		CanonicalID:    cid.String(),
-		DisplayName:    statusConfiguredDriveName(cid, drive, acct),
-		SyncDir:        drive.SyncDir,
+		InternalID: cid.String(),
+		Kind:       statusDriveKind(cid),
+		Name:       statusConfiguredDriveName(cid, drive, acct),
+		Folder:     config.EffectiveSyncDir(cfg, cid, drive.SyncDir, slog.New(slog.DiscardHandler)),
+		State:      state,
+		SyncState:  syncState,
+		MountRef:   config.MountRef(cid.String()),
 	}
 	if syncState != nil && syncState.ReadError != "" {
 		markStatusDriveSyncStateUnreadable(&status, syncState.ReadError)
@@ -753,11 +726,15 @@ func buildChildStatusDrive(
 		state = metadata.DisplayState
 	}
 
+	name := root.DisplayName
+	if name == "" {
+		name = statusDriveNameSharedFolder
+	}
 	status := statusDrive{
 		InternalID:       root.MountID,
 		NamespaceID:      child.ParentID.String(),
 		Kind:             statusDriveKindSharedFolder,
-		Name:             root.DisplayName,
+		Name:             name,
 		Folder:           root.DisplayLocalRoot,
 		State:            state,
 		StateLabel:       metadata.StatusLabel,
@@ -767,11 +744,7 @@ func buildChildStatusDrive(
 		StateDebugDetail: root.Detail,
 		RecoveryClass:    string(metadata.RecoveryClass),
 		RecoveryAction:   metadata.RecoveryAction,
-		MountID:          root.MountID,
 		MountRef:         config.MountRef(root.MountID),
-		ProjectionKind:   statusProjectionChild,
-		DisplayName:      root.DisplayName,
-		SyncDir:          root.DisplayLocalRoot,
 	}
 	status.WaitingReplacement = root.WaitingReplacementPath
 	if metadata.ProtectsPath {

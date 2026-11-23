@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/internal/syncexec/action_freshness.go, internal/sync/internal/syncexec/executor.go, internal/sync/internal/syncexec/executor_conflict.go, internal/sync/internal/syncexec/executor_delete.go, internal/sync/internal/syncexec/executor_parent_checks.go, internal/sync/internal/syncexec/executor_preconditions.go, internal/sync/internal/syncexec/executor_transfer.go, internal/sync/internal/syncexec/worker.go, internal/sync/internal/syncexec/executor_test_seams.go, internal/sync/internal/syncexec/doc.go, internal/sync/internal/syncsched/*.go
 
-Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.4.12 [verified], R-6.4.13 [verified], R-6.10.30 [verified]
+Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.4.12 [verified], R-6.4.13 [verified], R-6.10.30 [verified], R-6.7.37 [verified]
 
 ## Overview
 
@@ -56,7 +56,7 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 | On a byte-exact filesystem every local operation addresses an existing entry by its spelling on disk: an NFD-named file uploads in one pass, a remote edit replaces it in place, a remote delete, rename or move removes or moves it, a conflict copy preserves it, an NFD-named folder receives remote additions inside itself and is deleted, a remote delete is superseded when the NFD-named file is back, and the permission probe reports the stored boundary (R-2.13.2). | `TestRunOnce_LocalNFDNamedFileUploadsInOnePass`, `TestRunOnce_RemoteEditReplacesTheNFDNamedLocalFile`, `TestRunOnce_RemoteDeleteRemovesTheNFDNamedLocalFile`, `TestRunOnce_RemoteMoveMovesTheNFDNamedLocalFile`, `TestRunOnce_ConflictingEditsOfAnNFDNamedFileKeepBoth`, `TestRunOnce_NFDNamedLocalFolderReceivesAdditionsAndIsDeleted`, `TestExecuteRemoteDelete_NFDNamedLocalFileBackIsSuperseded`, `TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder` |
 | Workers preserve executor failure capability on completions and record worker-start/live-precondition superseded counters by local-vs-remote source. | `TestWorkerStartFreshness_LocalUploadMismatchIsSupersededBeforeExecution`, `TestWorkerStartFreshness_RemoteDownloadMismatchRecordsRemoteTruthCounter`, `TestWorkerPool_SendResultCountsLivePreconditionSupersededByCapability`, `TestWorkerPool_SendResultDoesNotGuessLivePreconditionSourceWithoutCapability` |
 | A worker commits a successful action's outcome on a context detached from the pool's cancellation and bounded by `OutcomeCommitTimeout`, so a shutdown landing between the transfer and its commit still records the finished work, and after the cancel it still hands the engine every completion its channel has room for, so the stopping run's drain records that result too; one it has no room for is dropped and said at Debug. | `TestWorkerPool_CommitsCompletedOutcomeAfterPoolCancellation`, `TestWorkerPool_AStoppedPoolDeliversEveryCompletionItHasRoomFor`, `TestWorkerPool_ACompletionDroppedAfterTheStopIsLogged` |
-| Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_BaselineFallback`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
+| Publication-only planner actions commit baseline mutations without worker dispatch and release dependents through the engine-owned publication-drain stage. | `TestPublicationMutation_SyncedUpdate`, `TestPublicationMutation_SyncedUpdate_TypeFromObservedSide`, `TestPublicationMutation_Cleanup`, `TestPublicationMutation_Cleanup_FolderType`, `TestRunPublicationDrainStage_DoesNotReleaseUnrelatedHeldWork` |
 | Watch-mode replan keeps old-runtime work out of dispatch once it is no longer current and preserves dirty intent across recoverable local-observation failure. | `TestWatchRuntime_RunNonDrainingWatchStepPrioritizesReadyReplanOverDispatch`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`, `TestWatchRuntime_PendingReplanLocalObservationFailureReschedulesDirtySignal`, `TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal` |
 
 ## Worker And Dependency Model
@@ -233,7 +233,16 @@ earlier attempt left one (`priorCreateIntent`: no item ID, within
 `pendingCreateIntentTTL`).
 
 A 409 on the create is resolved, not retried as is (`resolveCreateConflict`).
-One function reads the folder's listing and says what holds the name
+The children that hold the name come from one read of the name
+(`childrenHoldingName`: `GetChildByName`, as OneDrive holds one item per
+name), and from the folder's listing only when that read cannot settle it
+(`graph.ReadCannotSettleName`: not found, as the path route can lag behind the
+listing, not addressable, or 400), read a page at a time up to the page that
+holds the name as spelled (`graph.NameSeek`), so a refused create costs one
+request instead of every page of a large folder (R-6.7.37,
+`TestExecutor_Upload_CreateConflictReadsTheNameBeforeListing`,
+`TestExecutor_CreateRemoteFolder_ConflictReadsTheNameBeforeListing`). A twin
+is in neither answer. One function says what holds the name
 (`classifyCreateConflict`, by `namekey.Find`; a child without an item ID is
 no candidate and a repeated child counts once): the item the create wanted
 (the same OneDrive name and the same stored form), a rival (the same OneDrive
@@ -279,7 +288,7 @@ resolved:
   (`TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt`).
 
 A read that fails while resolving the 409 (the pending-create row, the read
-of the placeholder, the folder listing, the record of a claim) is that read's
+of the placeholder, the read of the name, the folder listing, the record of a claim) is that read's
 failure, classified by its own answer: a throttled or failing listing proves
 nothing about the plan. Joined to the 409, it read as a stale precondition
 under the 409's status
@@ -300,7 +309,7 @@ is the same durable collision (as a stale precondition it was
 replanned and refused on every pass;
 `TestRunOnce_UploadOnlyFolderCreateOntoADifferentlySpelledRemoteNameIsADurableCollision`,
 `TestExecutor_CreateRemoteFolder_ConflictWithAnotherSpellingIsADurableCollision`),
-and a listing that fails is the listing's failure, not recorded under the 409
+and a read of the name or a listing that fails is that request's failure, not recorded under the 409
 (`TestExecutor_CreateRemoteFolder_ListingFailureAfterAConflictIsClassifiedByItsOwnAnswer`).
 
 A spelling-only local move (the old and new names are one OneDrive name:

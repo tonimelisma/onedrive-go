@@ -829,11 +829,14 @@ func markUsageErrors(root *cobra.Command) {
 // status stream refused a write.
 const statusStreamFailedMessage = "could not write to stderr"
 
-// mainWithWriters runs the command and returns the process exit status. Its
-// own last lines (the warning that the log file did not close, the final
-// error) are written only for a command whose exit status is not 0 already,
-// and after the log file closed, so a write of theirs that fails has nowhere
-// left to be reported and is dropped.
+// mainWithWriters runs the command and returns the process exit status. The
+// final error of a failed command is written while the log file is still
+// open, so a stderr that refuses it leaves one warn record there
+// (statusStreamFailure); the exit status stays the command's. What is
+// written after the log file closed has nowhere left to be recorded and a
+// refused write of it is dropped: the warning that the log file did not
+// close, and the final error of a command whose only failure was that close.
+// Both are written only for a command whose exit status is not 0 already.
 func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) (exitCode int) {
 	cmd := newRootCmdWithWriters(outputWriter, statusWriter)
 	cmd.SetArgs(args)
@@ -861,31 +864,41 @@ func mainWithWriters(args []string, outputWriter, statusWriter io.Writer) (exitC
 	err = withCommandPanic(cmd.Context(), err)
 	err = withTokenSaveFailure(rootCLIContext(cmd).tokenSaveFailure(), err)
 	completeRootCommandPerf(cmd, err)
+	stopRequested := ctx.Err() != nil
+	exitCode = commandExitCode(err, stopRequested)
+	if writeErr := writeFinalCommandError(cmd, statusWriter, exitCode, err); writeErr != nil {
+		if cc := rootCLIContext(cmd); cc != nil {
+			cc.recordStatusError(fmt.Errorf("write final error: %w", writeErr))
+		}
+	}
 	// Read while the log file is open, so the failure reaches it.
 	statusErr := statusStreamFailure(cmd)
-	closeErr := closeRootCommandLogger(cmd)
-	if closeErr != nil {
+	if closeErr := closeRootCommandLogger(cmd); closeErr != nil {
 		if err == nil {
-			err = closeErr
+			exitCode = commandExitCode(closeErr, stopRequested)
+			_ = writeFinalCommandError(cmd, statusWriter, exitCode, closeErr) //nolint:errcheck // see the doc comment
 		} else {
 			_ = writeWarningf(statusWriter, "Warning: could not close the log file: %v\n", closeErr) //nolint:errcheck // see the doc comment
 		}
 	}
 
-	exitCode = commandExitCode(err, ctx.Err() != nil)
-	switch exitCode {
-	case exitSuccess:
-	case exitInterrupted:
-		// Only a stop the user asked for (Ctrl-C, SIGTERM) ends silently; the
-		// signal handler already said "Stopping...". A timeout or an internal
-		// cancellation is a failure and must say so.
-	case exitUsage:
-		_ = writeCommandError(statusWriter, commandErrorText(err, false)) //nolint:errcheck // see the doc comment
-	default:
-		_ = writeCommandError(statusWriter, commandFailureText(err, commandWantsErrorDetails(cmd))) //nolint:errcheck // see the doc comment
-	}
-
 	return exitCodeAfterStatusStream(exitCode, statusErr)
+}
+
+// writeFinalCommandError writes main's last line for a command that ended
+// with exitCode and err, and returns the write's error. A command that
+// worked writes nothing, and so does one the user stopped (Ctrl-C,
+// SIGTERM): the signal handler already said "Stopping...". A timeout or an
+// internal cancellation is a failure and says so.
+func writeFinalCommandError(cmd *cobra.Command, statusWriter io.Writer, exitCode int, err error) error {
+	switch exitCode {
+	case exitSuccess, exitInterrupted:
+		return nil
+	case exitUsage:
+		return writeCommandError(statusWriter, commandErrorText(err, false))
+	default:
+		return writeCommandError(statusWriter, commandFailureText(err, commandWantsErrorDetails(cmd)))
+	}
 }
 
 // statusStreamFailure returns the first write the command's status stream
@@ -933,10 +946,14 @@ func commandFailureText(err error, details bool) string {
 // reportMainPanic handles a panic on the command's goroutine that nothing
 // below recovered. It is logged once, with its stack, through the command
 // logger, which reaches the log file when there is one (before the command
-// logger exists, through fallback); the log file is then closed so the record
-// is on disk; and the error and the stack go to stderr, as for any command
-// that ends with a recovered panic. A write of those last lines that fails is
-// dropped: the exit status is 1 already and the log file is closed.
+// logger exists, through fallback); the command's performance session is
+// completed with the panic's error, so the summary reads "error" as for a
+// helper goroutine's panic (a session already completed, by main or by the
+// panic's own path through Complete, is left as it is); the log file is then
+// closed so both records are on disk; and the error and the stack go to
+// stderr, as for any command that ends with a recovered panic. A write of
+// those last lines that fails is dropped: the exit status is 1 already and
+// the log file is closed.
 func reportMainPanic(cmd *cobra.Command, statusWriter io.Writer, fallback *slog.Logger, r any) int {
 	logger := fallback
 	if cc := rootCLIContext(cmd); cc != nil && cc.Logger != nil {
@@ -944,6 +961,7 @@ func reportMainPanic(cmd *cobra.Command, statusWriter io.Writer, fallback *slog.
 	}
 
 	err := panicguard.Recovered(logger, "in onedrive-go", r)
+	completeRootCommandPerf(cmd, err)
 	if closeErr := closeRootCommandLogger(cmd); closeErr != nil {
 		_ = writeWarningf(statusWriter, "Warning: could not close the log file: %v\n", closeErr) //nolint:errcheck // see the doc comment
 	}

@@ -219,7 +219,7 @@ func TestLogoutCommand_PurgeRemovesCatalogAccountAndDrive(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive - Contoso"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive - Contoso"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = snapshotTestDisplayNameAliceSmith
 		account.OrgName = workflowTestOrgContoso
@@ -232,7 +232,7 @@ func TestLogoutCommand_PurgeRemovesCatalogAccountAndDrive(t *testing.T) {
 
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "sync_dir", syncDir))
 
 	var out bytes.Buffer
 	cc := newCommandContext(&out, cfgPath)
@@ -287,8 +287,8 @@ func TestLogoutCommand_PurgeFallsBackWhenValidatedStateIsBroken(t *testing.T) {
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
 	syncDir := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncDir, 0o700))
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "sync_dir", syncDir))
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_business_alice@contoso.com.json")
 	require.NoError(t, os.WriteFile(config.DriveStatePath(cid), []byte("fake-db"), 0o600))
 
@@ -323,7 +323,7 @@ func TestDriveRemove_PurgePreservesCatalogAccount(t *testing.T) {
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("business:alice@contoso.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive - Contoso"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive - Contoso"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = snapshotTestDisplayNameAliceSmith
 		account.OrgName = workflowTestOrgContoso
@@ -376,7 +376,7 @@ func TestPauseCommand_PersistsTimedPause(t *testing.T) {
 	var out bytes.Buffer
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:pause@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 
 	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
@@ -402,7 +402,7 @@ func TestPauseCommand_BadDurationLeavesDriveUnpaused(t *testing.T) {
 	var out bytes.Buffer
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:pause@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 
 	cc := newCommandContext(&out, cfgPath)
 	err := runPauseCommand(t.Context(), cc, time.Now, []string{"2 hours"})
@@ -422,7 +422,7 @@ func TestPauseCommand_SelectsTheOnlyDriveAndAcceptsDisplayNames(t *testing.T) {
 	var out bytes.Buffer
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:pause@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 
 	cc := newCommandContext(&out, cfgPath)
 	require.NoError(t, runPauseCommand(t.Context(), cc, time.Now, nil), "a single configured drive needs no --drive")
@@ -443,8 +443,8 @@ func TestResumeCommand_ClearsPausedKeys(t *testing.T) {
 	var out bytes.Buffer
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:resume@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "paused", "true"))
 
 	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}
@@ -468,9 +468,9 @@ func TestResumeCommand_NamesDriveByDisplayName(t *testing.T) {
 	var out bytes.Buffer
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:resume@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "display_name", "Home"))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "paused", "true"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "display_name", "Home"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "paused", "true"))
 
 	cc := newCommandContext(&out, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}

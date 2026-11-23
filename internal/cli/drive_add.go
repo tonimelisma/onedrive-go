@@ -54,7 +54,7 @@ func runDriveAddWithContext(ctx context.Context, cc *CLIContext, args []string) 
 		return finishDriveAdd(ctx, cc, result, addErr)
 	}
 
-	result, addErr := addOwnDrive(cc.resultWriter(), cc.CfgPath, cid, cc.Logger)
+	result, addErr := addOwnDrive(ctx, cc.resultWriter(), cc.CfgPath, cid, cc.Logger)
 	return finishDriveAdd(ctx, cc, result, addErr)
 }
 
@@ -140,12 +140,12 @@ func finishDriveAdd(ctx context.Context, cc *CLIContext, result driveAddResult, 
 // addOwnDrive enrolls one of a signed-in account's own drives (its primary
 // drive or a SharePoint library) through config.AddDrive. The account's
 // token must exist.
-func addOwnDrive(w io.Writer, cfgPath string, cid driveid.CanonicalID, logger *slog.Logger) (driveAddResult, error) {
+func addOwnDrive(ctx context.Context, w io.Writer, cfgPath string, cid driveid.CanonicalID, logger *slog.Logger) (driveAddResult, error) {
 	if err := requireSavedLogin(config.DriveTokenPath(cid), cid.Email()); err != nil {
 		return driveAddResult{}, err
 	}
 
-	enrolled, err := config.AddDrive(&config.AddDriveRequest{
+	enrolled, err := config.AddDrive(ctx, &config.AddDriveRequest{
 		ConfigPath:  cfgPath,
 		DataDir:     config.DefaultDataDir(),
 		Drive:       cid,
@@ -241,7 +241,7 @@ func addSharedDrive(
 		return driveAddResult{}, err
 	}
 
-	enrolled, err := config.AddDrive(&config.AddDriveRequest{
+	enrolled, err := config.AddDrive(ctx, &config.AddDriveRequest{
 		ConfigPath:  cfgPath,
 		DataDir:     config.DefaultDataDir(),
 		Drive:       cid,

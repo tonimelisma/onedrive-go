@@ -170,9 +170,23 @@ Important properties:
   `sync-engine.md` "An Expired Token Is A Full Refresh", R-2.15.3)
 - a cursor the client cannot continue takes the same recovery, through
   `NewCursorUnusableError` (R-2.15.2): `deltaLoopGuard` stops a window whose
-  nextLink returns to a page already fetched or whose non-empty page repeats
-  an earlier page's items (followed, such a list ran to the 10,000-page guard
-  with every item in memory); `fetchPageRetryingRejection` retries a token
+  next link returns to a page already asked for, the window's first request
+  included with or without a saved token, or whose non-empty page repeats an
+  earlier page's items (followed, such a list ran to the 10,000-page guard
+  with every item in memory). It keys pages by the paths the graph client
+  resolved each request and next link to (`graph.DeltaPage.Path`,
+  `NextPath`), so two spellings of one link are one page, and checks before
+  the page is asked for again; a fetcher that does not say (a test fake)
+  falls back to the token as spelled
+  (`TestFullDelta_ALinkBackToAPageAskedForIsCursorUnusable`). A saved token
+  that is not a link (`graph.ErrDeltaTokenNotALink`) is the same recovery, on
+  the drive root and for a shared folder's folder delta
+  (`TestFullDelta_ASavedTokenThatIsNotALinkIsCursorUnusable`,
+  `TestRunOnce_ASavedPositionThatIsNotALinkIsRecoveredByAFullEnumeration`,
+  `TestRunOnce_AMountRootPositionThatIsNotALinkIsRecoveredByAFullEnumeration`).
+  A shared folder's folder delta follows its pages inside the graph client,
+  whose loop error wraps no sentinel, so such a loop fails the pass and is
+  retried until the periodic full refresh; `fetchPageRetryingRejection` retries a token
   refused with a non-transient 4xx once and gives up on the second refusal;
   and watch mode's `cursorServerErrorTracker` gives up on a token that has
   failed with 5xx for `cursorServerErrorResetAfter` (6 h). Every other failure

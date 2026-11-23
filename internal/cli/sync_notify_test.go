@@ -107,8 +107,8 @@ func writeNotifyTestConfig(t *testing.T) (*config.Holder, string) {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
 	syncDir := t.TempDir()
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
-	require.NoError(t, config.SetDriveKey(cfgPath, cid, "sync_dir", syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "sync_dir", syncDir))
 
 	return loadSyncTestHolder(t, cfgPath), syncDir
 }

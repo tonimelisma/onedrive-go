@@ -554,9 +554,11 @@ func interactiveSharedKey(account, remoteDriveID, remoteItemID string) string {
 
 // ResolveItem resolves a remote path to an Item. For root (""), uses GetItem
 // with the mount's root item. Below a mounted folder it walks the path a name
-// at a time (resolveItemFromMountRoot); below a drive's root it uses
-// GetItemByPath. The path is cleaned first (CleanRemotePath), so "/" and ""
-// both mean root and "a//b/" is "a/b".
+// at a time (resolveItemFromMountRoot); below a drive's root it reads the path
+// (resolveDrivePath), walking by name only the part the path route cannot
+// resolve. The path is cleaned first (CleanRemotePath), so "/" and "" both
+// mean root and "a//b/" is "a/b". Every command that resolves a remote path,
+// and WaitPathVisible, resolves it here.
 func (s *MountSession) ResolveItem(ctx context.Context, remotePath string) (*graph.Item, error) {
 	clean := CleanRemotePath(remotePath)
 	if clean == "" {
@@ -582,12 +584,49 @@ func (s *MountSession) ResolveItem(ctx context.Context, remotePath string) (*gra
 		return item, nil
 	}
 
-	item, err := s.Meta.GetItemByPath(ctx, s.DriveID, clean)
+	item, err := s.resolveDrivePath(ctx, clean)
 	if err != nil {
 		return nil, fmt.Errorf("resolve item path %q: %w", clean, err)
 	}
 
 	return item, nil
+}
+
+// resolveDrivePath resolves clean, a cleaned path below a drive's root. A path
+// the route can resolve is read by path (GetItemByPath): one request, and a
+// genuine miss is its ErrNotFound. A path holding a name the route is known
+// not to resolve (graph.NameIsPathAddressable: a colon, a name starting with
+// v1.0, $value) is never read by path: the folder above the first such name
+// is resolved here in turn, and the rest of the path is walked by name from
+// it (walkByName), so that name is found in its folder's listing and every
+// name after it by one read under its parent's ID. A path read answered 400
+// (graph.ErrBadRequest), whose cause is no name known in advance, is walked
+// by name from the drive root.
+func (s *MountSession) resolveDrivePath(ctx context.Context, clean string) (*graph.Item, error) {
+	segments := strings.Split(clean, "/")
+	first := slices.IndexFunc(segments, func(name string) bool { return !graph.NameIsPathAddressable(name) })
+	if first < 0 {
+		item, err := s.Meta.GetItemByPath(ctx, s.DriveID, clean)
+		if err == nil || !errors.Is(err, graph.ErrBadRequest) {
+			return item, err //nolint:wrapcheck // ResolveItem names the path
+		}
+		return s.walkByName(ctx, graphDriveRootItemID, segments)
+	}
+
+	parentID := graphDriveRootItemID
+	if first > 0 {
+		parentPath := strings.Join(segments[:first], "/")
+		parent, err := s.resolveDrivePath(ctx, parentPath)
+		if err != nil {
+			return nil, fmt.Errorf("folder %q: %w", parentPath, err)
+		}
+		if !parent.IsFolder {
+			return nil, fmt.Errorf("%q is not a folder: %w", parentPath, graph.ErrNotFound)
+		}
+		parentID = parent.ID
+	}
+
+	return s.walkByName(ctx, parentID, segments[first:])
 }
 
 // ResolveDeleteTarget resolves a delete-intended remote path to an item.
@@ -690,7 +729,22 @@ func (s *MountSession) ListChildrenPages(ctx context.Context, remotePath string,
 		return nil
 	}
 
-	if err := s.Meta.ListChildrenByPathPages(ctx, s.DriveID, clean, visit); err != nil {
+	// A folder the path route cannot resolve is resolved by resolveDrivePath
+	// and listed by ID. A refused name fails before any request, and a 400
+	// answers the first page, so no page was handed on before the fallback.
+	handedOn := false
+	err := s.Meta.ListChildrenByPathPages(ctx, s.DriveID, clean, func(page []graph.Item) bool {
+		handedOn = true
+		return visit(page)
+	})
+	if err != nil && !handedOn && (errors.Is(err, graph.ErrNameNotPathAddressable) || errors.Is(err, graph.ErrBadRequest)) {
+		var folder *graph.Item
+		folder, err = s.resolveDrivePath(ctx, clean)
+		if err == nil {
+			err = s.Meta.ListChildrenPages(ctx, s.DriveID, folder.ID, visit)
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("list children for %q: %w", clean, err)
 	}
 
@@ -905,12 +959,17 @@ func (s *MountSession) remoteRootItemID() string {
 }
 
 // resolveItemFromMountRoot walks remotePath, a path CleanRemotePath has
-// cleaned, down from the mount's root item a name at a time, each found in the
-// folder before it by FindExistingChild: one read of the name, a listing only
-// for a name the read cannot settle.
+// cleaned, down from the mount's root item a name at a time (walkByName).
 func (s *MountSession) resolveItemFromMountRoot(ctx context.Context, remotePath string) (*graph.Item, error) {
-	currentID := s.remoteRootItemID()
-	segments := strings.Split(remotePath, "/")
+	return s.walkByName(ctx, s.remoteRootItemID(), strings.Split(remotePath, "/"))
+}
+
+// walkByName walks segments down from the folder startID a name at a time,
+// each found in the folder before it by FindExistingChild: one read of the
+// name, a listing only for a name the read cannot settle (one the route
+// cannot resolve is listed without a read).
+func (s *MountSession) walkByName(ctx context.Context, startID string, segments []string) (*graph.Item, error) {
+	currentID := startID
 	var current *graph.Item
 
 	for idx, segment := range segments {
@@ -932,7 +991,7 @@ func (s *MountSession) resolveItemFromMountRoot(ctx context.Context, remotePath 
 	}
 
 	if current == nil {
-		return nil, fmt.Errorf("resolve mount-root item %q: %w", remotePath, graph.ErrNotFound)
+		return nil, fmt.Errorf("resolve %q by name: %w", strings.Join(segments, "/"), graph.ErrNotFound)
 	}
 
 	return current, nil
@@ -1125,7 +1184,7 @@ func FindExistingChild(
 		return ChildByName{}, fmt.Errorf("the read of %q in its folder answered without an item ID", item.Name)
 	case err == nil:
 		return ChildByName{Item: item}, nil
-	case !readCannotSettleName(err):
+	case !graph.ReadCannotSettleName(err):
 		return ChildByName{}, fmt.Errorf("reading the name in its folder: %w", err)
 	}
 
@@ -1139,13 +1198,4 @@ func FindExistingChild(
 	}
 
 	return child, nil
-}
-
-// readCannotSettleName reports whether a failed read of one name leaves the
-// name to the listing of its folder: the read found nothing, the route cannot
-// carry the name, or Graph answered 400.
-func readCannotSettleName(err error) bool {
-	return errors.Is(err, graph.ErrNotFound) ||
-		errors.Is(err, graph.ErrNameNotPathAddressable) ||
-		errors.Is(err, graph.ErrBadRequest)
 }

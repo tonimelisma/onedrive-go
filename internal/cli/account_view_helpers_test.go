@@ -48,3 +48,15 @@ func TestAccountViewDriveType_PreferenceOrder(t *testing.T) {
 	}))
 	assert.Empty(t, accountViewDriveType(&accountView{}))
 }
+
+// accountViewByEmail finds the view of the one account at email, for a test
+// whose catalog holds one account per address.
+func accountViewByEmail(views []accountView, email string) (accountView, bool) {
+	for i := range views {
+		if views[i].Email == email {
+			return views[i], true
+		}
+	}
+
+	return accountView{}, false
+}

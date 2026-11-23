@@ -85,7 +85,7 @@ intent; multisync receives only that child work intent.
 | Type changes with content on both sides keep both (`conflict_keep_both`, and type-mismatched create/create): a type-aware conflict copy of the local entry, then OneDrive's item at the path; a folder's change includes its subtree; nothing below the path is deleted on either side (R-2.17.10). Both sides replacing the item with the same new type are two creates at one path: equal content (or two folders) only updates the baseline, different files keep both as a create/create conflict.  A new filesystem identity alone is never a local change (D-057): a folder rebuilt, restored from a copy or on a renumbered disk, with nothing changed below it, accepts OneDrive's delete or replacement, and the executor's folder delete checks the identity the plan saw rather than the baseline's (R-2.8.10). | `TestRunOnce_RemoteFolderDeleteAcceptsAContentIdenticalLocalRestore`, `TestRunOnce_RemoteFolderDeleteAfterDeviceRenumberingIsApplied`, `TestRunOnce_RemoteDeleteOfALocallyRecreatedEmptyFolderIsApplied`, `TestRunOnce_RemoteReplaceOfALocallyRecreatedFolderConverges`, `TestRunOnce_FolderReplacedByFilesOnBothSidesKeepsBoth`, `TestRunOnce_FileReplacedByFoldersOnBothSidesMergesThem`, `TestRunOnce_RemoteFileReplacedByNonEmptyFolderWithLocalEditKeepsBoth`, `TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth`, `TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth`, `TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth`, `TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth`, `TestExecutor_ConflictCopy_DirectorySourceIsRenamed`, `TestExecutor_ConflictCopy_DirectoryNeverReplacesAnEmptyDirectoryAtItsName`, `TestExecutor_DirectoryConflictCopy_ParentSwappedForSymlinkStaysInside`, `TestExecutor_ConflictCopy_UncheckableSourceFailsWithItsReason` |
 | Type changes on either side are replacements ordered delete-then-create, never a silent stall. | `TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem`, `TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem`, `TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem`, `TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem`, `TestRunOnce_LocalFileReplacedByFolderConverges`, `TestRunOnce_LocalFolderWithChildrenReplacedByFileConverges` |
 | Deletes toward one side are held for confirmation when the other side is empty while the baseline holds files, or when they exceed max(50, 30% of baseline files); moves never count, non-delete work continues, and `sync --confirm-deletes` releases them. | `TestPlanner_MassRemoteDeleteIsHeldForConfirmation`, `TestPlanner_MassLocalDeleteAfterAnomalousFullRefreshIsHeld`, `TestPlanner_EmptiedLocalSideHoldsEvenFewDeletes`, `TestDeleteSafetyHold_RecentUnconfirmedDeletesCountTowardTheThreshold`, `TestDeleteSafetyHold_ConfirmedDeletesAreMarkedForTheLedger`, `TestRunOnce_SlowDeletionAcrossPassesIsHeldWithinTheWindow`, `TestRunOnce_DeletesOlderThanTheWindowStopCounting`, `TestPlanner_DeleteGuardBelowThresholdProceeds`, `TestPlanner_DeleteGuardIgnoresMoves`, `TestDeleteSafetyHold_FolderDeletesCountTowardThreshold`, `TestDeleteSafetyHold_LostAndFoundDoesNotMakeASideNonEmpty`, `TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`, `TestDeleteSafetyHold_ConfirmReleasesExactlyTheHeldSet`, `TestDeleteSafetyHold_HeldRowWithoutItemIDDoesNotApproveAKnownItem`, `TestRunOnce_ConfirmDeletesKeepsDeletesThatAppearedAfterTheUserLooked` |
-| A dependency cycle drops only its members and their dependents; the rest of the plan runs (R-2.17.6), and a one-shot run that ends on such a plan counts the dropped actions as work left for the next sync, so it exits 1 (R-6.6.28). | `TestIsolateDependencyCycles_KeepsUnrelatedWork`, `TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync` |
+| A dependency cycle drops only its members and their dependents; the rest of the plan runs (R-2.17.6), and a one-shot run that ends on such a plan counts the dropped actions as work left for the next sync, so it exits 1 (R-6.6.28). A folder delete that closes a cycle through the move of a folder above it waits for the next pass instead, so the rest of that cycle runs and the next pass deletes the folder at its new path (R-2.17.2). | `TestIsolateDependencyCycles_KeepsUnrelatedWork`, `TestPassWithoutActions_ActionsDroppedAsACycleAreLeftForTheNextSync`, `TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle`, `TestRunOnce_FileMovedOutOfASubfolderIntoTheRemadeFolderWithTheSubfolderRemovedConverges` |
 | A delete waits for the create on its side that writes the deleted file's content at another path, so a failed create, or a failure of what it waits for, skips the delete and the content stays on that side; an edge that would close a cycle, given the edges kept before it, is left out (R-2.17.2). | `TestBuildDependencies_ADeleteWaitsForTheCreateThatWritesItsContent`, `TestBuildDependencies_ADeleteDoesNotWaitForACreateThatWaitsForIt`, `TestBuildDependencies_OfTwoContentEdgesThatCloseACycleOnlyTogetherTheFirstIsKept`, `TestRunOnce_AFileRenamedHereOntoAPathAWaitingMoveLeavesStaysOnOneDriveWhileACreateBeforeItsUploadFails` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/internal/syncplan/planner_actions_test.go`, `internal/sync/internal/syncplan/planner_move_composition_test.go` (`TestBuildDependencies_NestedMoveEdges`, `TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove`), `internal/sync/internal/syncplan/planner_delete_safety_test.go` (`TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`) |
 | Every single-path combination of baseline, local and remote state (absent, file A/B/C, folder), and the move combinations of one synced file, has its plan checked in as `testdata/reconcile/matrix.golden` (refresh with `-update`); with `ONEDRIVE_GO_RECONCILE_CONVERGE=1` each cell is also run to convergence on a pure model and must end at the reference planner's content set. A planner-level model test applies random edits to both sides of a pure model, plans it through the real comparison SQL and planner, applies the plan without an executor (items addressed by ID, a create onto a taken name failing as a 409), and must converge with every written content kept (D-093). | `TestReconcileMatrix_Golden`, `TestPlannerModel_RandomTriplesConverge` |
@@ -626,24 +626,23 @@ folder above the item moves on that side in the same plan, the item waits a
 pass instead. While such an item is deferred, parked or not, nothing is made
 at or below the new folder's path on its side, compared as OneDrive compares
 names (`ownLandings`), wherever that side's snapshot has the item at the
-folder's path as the item's target names it, which on OneDrive is looked up
-back through the plan's earlier OneDrive moves: nothing orders such a create
-after the move aside, so it went into the item while the item still had the
-path, and when that move failed, a folder made so between the new folder and
-the item's target held the item's own landing, which it cannot move into,
-and the syncs stalled; below a folder whose OneDrive move carries the item
-there, the create of the new folder collided with it
+folder's path as the item's target names it, looked up back through the
+plan's earlier moves on that side; on this computer the path held is the one
+in the snapshot, where writes here are addressed until the folders above
+them have moved. Nothing orders such a create after the move aside, so it
+went into the item while the item still had the path, and when that move
+failed, a folder made so between the new folder and the item's target held
+the item's own landing, which it cannot move into, and the syncs stalled;
+below a folder whose OneDrive move carries the item there, the create of the
+new folder collided with it; and when OneDrive renamed `Y` to `Z` and moved
+`Z/f` into a new `Z/f/a/f`, the create of `Z/f/a`, addressed here at `Y/f/a`
+until `Y` has moved, went into the old `f`, which could then never move into
+its own subfolder, and every later sync waited with only Debug lines. Now the
+item waits for the pass after `Y`'s move, which moves it aside there
 (`TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst`,
 `TestRunOnce_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst`,
 `TestRunOnce_AFolderMovedIntoTheFolderThatTakesItsPathConvergesWithAnEditInIt`,
 `TestRunOnce_NothingIsMadeInAFolderMovingAsideForTheNewFolderAtItsPath`).
-Known limit: on this computer the lookup is not taken back through the
-plan's local moves, so below a folder that moves here in the same plan the
-item is not found and nothing is held. When OneDrive renames `Y` to `Z` and
-moves `Z/f` into a new `Z/f/a/f`, the create of `Z/f/a` here lands inside
-the old `f` once `Y` has moved, the old `f` cannot move into its own
-subfolder, and every later sync waits for the next pass with only Debug
-lines.
 On both sides a move into a chain of new folders (`x` and `x/sub`) is held by the
 item at the first path above its new folders that a synced item holds: looked
 for at `x/sub` alone, `f`'s move into it would be planned after `x`'s and
@@ -701,9 +700,19 @@ move to leave it (named from where the folder move puts it, the move would
 not hold the delete back, and the folder would be deleted online with the
 file still inside), the folder move waits for the delete, and the move waits
 for the folder made at the vacated path, which waits for the folder move: a
-cycle the planner drops on every pass, so nothing is deleted and every sync
-reports the work unfinished
-(`TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource`). Where the
+cycle. Dropped, nothing ran on any pass and every sync reported the work
+unfinished. A folder delete that closes a cycle through the move of a folder
+above it on its side waits for the next pass instead
+(`withholdDeletesInsideFolderMoveCycles`, before the cycles are isolated): the
+folder move carries the one-sided folder with the item in it, the folder is
+made at the vacated path, the item's move, whose source the folder move took
+away, is superseded, and the next pass moves the item and then deletes the
+folder at its new path, so one sync converges and nothing is deleted before
+the item has left (`mv docs archive; mkdir docs; mv archive/sub/inner.txt
+docs/inner.txt; rmdir archive/sub`, here or on OneDrive)
+(`TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource`,
+`TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle`,
+`TestRunOnce_FileMovedOutOfASubfolderIntoTheRemadeFolderWithTheSubfolderRemovedConverges`). Where the
 plan makes no folder at the vacated path, because the move lands on that path
 itself or in a folder moved onto it (on OneDrive, `docs/sub` renamed
 `docs/sub2`, `docs` moved to `archive`, and `archive/sub2/inner.txt` moved to
@@ -730,9 +739,19 @@ the decision of the item waited for. An item also waits while another item
 holds its destination, whatever that item does: until a move of the plan
 vacates the destination, until one item of a swap or rotation is parked
 beside its source, or until the end of composition defers it. So the pending
-items are decided in turn unless their waits loop. Nothing breaks the loop of
-a folder whose target hangs off an entry that waits for it: every pass defers
-its items, and a one-shot sync ends with them unfinished. The loop of a
+items are decided in turn unless their waits loop. The loop of a folder
+whose target hangs off an entry that waits for it, as one that lands below
+the path the folder's move vacates (a folder moved into its own former child:
+`mv docs tmp; mkdir docs; mv tmp/sub docs/sub; mv tmp docs/sub/docs2`, here or
+on OneDrive), has no order of plain moves: the new folder takes the path only
+once the folder has left it, and the folder lands below the entry. The folder
+moves aside first, to a free `<name>.swap-N` beside its source on that side
+as a swap's parked item does, carrying the entry, and both wait; the next
+pass makes the new folder, moves the entry into it and the folder below the
+entry (`parkOneVacatingLoop`,
+`TestComposeMoves_FolderMovedIntoItsOwnFormerChildMovesAsideFirst`,
+`TestRunOnce_FolderMovedIntoItsOwnFormerChildConverges`). Before, both were
+deferred on every pass and a one-shot sync ended with them unfinished. The loop of a
 folder whose destination is held by a file that waits for it, as one of the
 folders OneDrive relocates, lasts until the move that vacates the file's
 target commits: the pass defers both, and a pass in which the file lands
@@ -1057,8 +1076,10 @@ The hold is re-derived from current truth on every plan, so it stays while
 the evidence is unchanged and lifts by itself when the user restores the
 files. The engine records the held deletes in `held_deletes` for `status`
 (condition `deletes_held`, scope `delete_safety:{local|remote}`) and in the
-pass report. `sync --confirm-deletes` (one-shot only) releases exactly the
-recorded held set, matched by path, side and item ID (a delete that knows its
+pass report. `sync --confirm-deletes` releases exactly the recorded held set
+(a one-shot run), or the set a running watch's user confirmed by its count and
+token (R-6.2.17, `sync-engine.md` "Confirming Held Deletes in a Running
+Watch"), matched by path, side and item ID (a delete that knows its
 item is approved only by a row naming the same item); the rules are then
 applied to every other delete in that pass, so a batch that appeared after the
 user looked is held again rather than waved through. The approved deletes

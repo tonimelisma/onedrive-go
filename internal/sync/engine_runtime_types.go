@@ -68,6 +68,12 @@ type engineFlow struct {
 	// silently (a folder move once did, on a churning folder eTag).
 	supersedeStreaks map[string]int
 
+	// confirmedHeldDeletes is the held set a running watch's user confirmed
+	// (acceptHeldDeleteConfirmation), which the run's next plan releases and
+	// takes (approvedHeldDeletes); nil while no confirmation waits. Owned by
+	// the goroutine that runs the flow.
+	confirmedHeldDeletes []syncdomain.HeldDelete
+
 	// stop is the one bound a stopping run records the results of its
 	// completions under (beginStopDrain); nil while the run goes on.
 	stop *stopDrain

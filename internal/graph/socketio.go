@@ -24,7 +24,12 @@ type socketIOEndpointResponse struct {
 // Content-Type: nothing recorded shows the endpoint needs one, and on
 // Personal it answered 200 without one (2026-11-12, LI-20261112-01).
 func (c *Client) SocketIOEndpoint(ctx context.Context, driveID driveid.ID) (*SocketIOEndpoint, error) {
-	resp, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/drives/%s/root/subscriptions/socketIo", driveID), nil)
+	route, err := driveRoute(driveID, "/root/subscriptions/socketIo")
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.do(ctx, http.MethodGet, route, nil)
 	if err != nil {
 		return nil, err
 	}

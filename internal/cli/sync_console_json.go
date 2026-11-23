@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"io"
+
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -23,7 +25,9 @@ type syncJSONEvent struct {
 	Path    string `json:"path,omitempty"`
 	OldPath string `json:"old_path,omitempty"`
 	Size    *int64 `json:"size,omitempty"`
-	Status  string `json:"status,omitempty"`
+	// Folder marks an activity whose item is a folder.
+	Folder bool   `json:"folder,omitempty"`
+	Status string `json:"status,omitempty"`
 	// Condition is, for an activity a condition only the user can clear
 	// refused, that condition as `status --json` names it in its `type`.
 	Condition string `json:"condition,omitempty"`
@@ -32,9 +36,12 @@ type syncJSONEvent struct {
 	// Summary fields.
 	DurationMS *int64         `json:"duration_ms,omitempty"`
 	Counts     map[string]int `json:"counts,omitempty"`
-	Failed     *int           `json:"failed,omitempty"`
-	WillRetry  *int           `json:"will_retry,omitempty"`
-	StillOpen  *int           `json:"still_open,omitempty"`
+	// FolderCounts is, by action, how many of Counts were folders; an
+	// action with no folder is left out (counts keeps meaning every item).
+	FolderCounts map[string]int `json:"folder_counts,omitempty"`
+	Failed       *int           `json:"failed,omitempty"`
+	WillRetry    *int           `json:"will_retry,omitempty"`
+	StillOpen    *int           `json:"still_open,omitempty"`
 }
 
 const (
@@ -82,30 +89,13 @@ func syncModeJSON(mode syncdomain.SyncMode) string {
 	return ""
 }
 
-// emitJSON writes event as one line of stdout. A line that cannot be written
-// does not stop the sync: the failure is said once on stderr, and the lines
-// after it are still attempted.
+// emitJSON writes event as one line of stdout through writeOut, which owns
+// what a refused line does: the sync goes on, the first failure is said
+// once on stderr, and the lines after it are still attempted.
 func (c *syncConsole) emitJSON(event *syncJSONEvent) {
-	if err := c.writeJSONEvent(event); err != nil {
-		c.printErr("", "Warning: sync --json output is incomplete: "+err.Error())
-	}
-}
-
-// writeJSONEvent writes event under mu, so lines from several mounts never
-// interleave. It returns only the first failure and drops the rest on
-// purpose: one warning says the stream is incomplete, and a stdout that is
-// gone (a closed pipe) must not repeat it for every later line.
-func (c *syncConsole) writeJSONEvent(event *syncJSONEvent) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	err := writeJSONLine(c.out, event)
-	if err == nil || c.jsonFailureReported {
-		return nil
-	}
-	c.jsonFailureReported = true
-
-	return err
+	c.writeOut(func(w io.Writer) error {
+		return writeJSONLine(w, event)
+	})
 }
 
 func (c *syncConsole) jsonMountEvents(event string, mounts []multisync.StandaloneMountConfig, mode syncdomain.SyncMode, dryRun bool) {
@@ -132,6 +122,7 @@ func (c *syncConsole) jsonActivity(ma multisync.MountActivity) {
 		Action:  activityJSONAction(a.Kind),
 		Path:    a.Path,
 		OldPath: a.OldPath,
+		Folder:  a.Folder,
 	}
 	if a.SizeKnown {
 		size := a.Size
@@ -197,6 +188,14 @@ func (c *syncConsole) jsonSummary(result multisync.RunOnceResult, left map[strin
 		for kind, n := range tally.counts {
 			if n > 0 {
 				event.Counts[activityJSONAction(kind)] = n
+			}
+		}
+		for kind, n := range tally.folders {
+			if n > 0 {
+				if event.FolderCounts == nil {
+					event.FolderCounts = make(map[string]int, len(tally.folders))
+				}
+				event.FolderCounts[activityJSONAction(kind)] = n
 			}
 		}
 		c.emitJSON(event)

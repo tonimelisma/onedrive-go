@@ -85,7 +85,7 @@ func newLoginFixtureFor(t *testing.T, account driveid.CanonicalID, withPreviousT
 	fixture.tokenPath = config.DriveTokenPath(fixture.cid)
 
 	other := driveid.MustCanonicalID("business:other@contoso.com")
-	require.NoError(t, config.AppendDriveSection(fixture.cfgPath, other, filepath.Join(t.TempDir(), "Other")))
+	require.NoError(t, config.AppendDriveSection(t.Context(), fixture.cfgPath, other, filepath.Join(t.TempDir(), "Other")))
 	seedCatalogAccount(t, fixture.cid, func(account *config.CatalogAccount) {
 		account.UserID = loginTestUserID
 		account.DisplayName = loginTestDisplayName
@@ -161,11 +161,11 @@ func offlineStatusAccounts(t *testing.T, cfgPath string) []statusAccount {
 // requirement is written on the account whose sign-in was refused, by the
 // writer sync and status use, and a login that works ends the requirement of
 // the account it signed in alone, whichever of the two sorts first: the other
-// account's requirement stands. status lists the address once, for the work
-// or school account, the first by canonical ID and the one whose saved login
-// it checks, so it shows that account's requirement and only that one's.
+// account's requirement stands. status lists each account at the address on
+// a row of its own, each with its own requirement, so the rows show exactly
+// the requirements that stand (R-3.5.2).
 //
-// Validates: R-3.3.1, R-2.10.45, R-2.10.47
+// Validates: R-3.3.1, R-2.10.45, R-2.10.47, R-3.5.2
 func TestLogin_EndsTheSignInRequirementOfTheAccountItSignedIn(t *testing.T) {
 	personal := driveid.MustCanonicalID("personal:user@example.com")
 	business := driveid.MustCanonicalID("business:user@example.com")
@@ -198,7 +198,7 @@ func TestLogin_EndsTheSignInRequirementOfTheAccountItSignedIn(t *testing.T) {
 			}
 			seedCatalogAccount(t, other, nil)
 			writeAccessTokenFile(t, other, "other-token")
-			require.NoError(t, config.MarkAccountAuthRequired(config.DefaultDataDir(), tc.marked, authReasonSyncAuthRejected))
+			require.NoError(t, config.MarkAccountAuthRequired(t.Context(), config.DefaultDataDir(), tc.marked, authReasonSyncAuthRejected))
 
 			require.NoError(t, f.runLogin(t))
 
@@ -213,9 +213,20 @@ func TestLogin_EndsTheSignInRequirementOfTheAccountItSignedIn(t *testing.T) {
 					listed = append(listed, accounts[i])
 				}
 			}
-			require.Len(t, listed, 1, "status lists the address once")
-			assert.Equal(t, want[business] != "", listed[0].SignInRequired != nil,
-				"status shows the work account's requirement: %+v", listed[0].SignInRequired)
+			require.Len(t, listed, 2, "status lists each account at the address")
+			standing := 0
+			for _, reason := range want {
+				if reason != "" {
+					standing++
+				}
+			}
+			shown := 0
+			for i := range listed {
+				if listed[i].SignInRequired != nil {
+					shown++
+				}
+			}
+			assert.Equal(t, standing, shown, "each row shows its own account's requirement: %+v", listed)
 		})
 	}
 }

@@ -152,6 +152,7 @@ func describeStoredStatusCondition(
 	return describeStatusCondition(group.ConditionKey)
 }
 
+//nolint:funlen // one case per condition key, held together by the exhaustive switch
 func describeStatusCondition(key syncdomain.ConditionKey) statusConditionDescriptor {
 	switch key {
 	case syncdomain.ConditionLocalUnsyncable:
@@ -209,7 +210,8 @@ func describeStatusCondition(key syncdomain.ConditionKey) statusConditionDescrip
 			"More was deleted than looks intended (a whole side is empty, more than 30% of synced files and at least "+
 				"50, or the folder of a disk sync crossed into is gone), so sync held these deletes. Everything else keeps syncing.",
 			"Check the sync folder and OneDrive. If the deletes are intended, run 'onedrive-go sync --confirm-deletes'; "+
-				"otherwise restore the missing files.",
+				"while 'sync --watch' runs, it keeps running, and that command shows the held set and the command that "+
+				"confirms exactly that set. Otherwise restore the missing files.",
 		)
 	case syncdomain.ConditionAuthenticationRequired:
 		presentation := authstate.UnauthorizedIssuePresentation()
@@ -449,7 +451,7 @@ func describeLocalRuntimeStatusCondition(key syncdomain.ConditionKey) statusCond
 	case syncdomain.ConditionLocalBusy:
 		return newStatusConditionDescriptor(
 			"Local file busy",
-			"The local file is in use or its network handle went stale.",
+			"The local file is in use, its network handle went stale, or a read of it timed out.",
 			"Wait for the program using it to finish (automatic retry in progress).",
 		)
 	case syncdomain.ConditionUnsupportedOperation:

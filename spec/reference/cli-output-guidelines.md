@@ -47,6 +47,10 @@ At any moment a person looking at the output must be able to tell:
   decided once at startup. Never interleave `key=value` lines, JSON objects
   and prose on the same stream.
 - **Print each error once.** The command layer reports; lower layers return.
+- **A report that could not be written is a failure.** A stdout that refuses
+  a line of a streaming report (`sync`) is said once on stderr, the work goes
+  on, and the command exits non-zero when nothing else failed; a stderr line
+  that could not be written turns a success into exit 1.
 - **`--json` makes stdout a single valid JSON document** (or JSON lines for
   streaming commands) and nothing else.
 

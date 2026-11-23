@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -15,6 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
@@ -689,9 +693,11 @@ func (w *flakyWriter) Write(p []byte) (int, error) {
 }
 
 // A sync --json line that cannot be written is reported on stderr, once
-// however many lines fail, and the sync goes on writing the lines after it.
+// however many lines fail, and the sync goes on writing the lines after it;
+// the first failure is the console's output error, for the command to exit 1
+// on.
 //
-// Validates: R-6.6.28, R-6.6.33
+// Validates: R-6.6.28, R-6.6.33, R-6.6.37
 func TestSyncConsole_EmitJSONFailureIsReported(t *testing.T) {
 	t.Parallel()
 
@@ -704,10 +710,13 @@ func TestSyncConsole_EmitJSONFailureIsReported(t *testing.T) {
 	c.emitJSON(&syncJSONEvent{Event: "activity", Drive: "Personal"})
 	c.emitJSON(&syncJSONEvent{Event: "stopped"})
 
-	assert.Equal(t, "Warning: sync --json output is incomplete: write JSON output: broken pipe\n", errOut.String(),
+	assert.Equal(t, "Warning: sync output is incomplete: write JSON output: broken pipe\n", errOut.String(),
 		"two failed lines are reported once")
 	//nolint:testifylint // byte-exact on purpose: the one line written after the failures, newline included
 	assert.Equal(t, "{\"event\":\"stopped\"}\n", out.written.String(), "the lines after a failure are still written")
+	var outputErr *syncOutputError
+	require.ErrorAs(t, c.OutputError(), &outputErr)
+	assert.ErrorContains(t, outputErr, "broken pipe")
 }
 
 // A pass that waits out a throttle and then uploads the file (R-2.1.7) ends
@@ -756,4 +765,309 @@ func TestSyncConsole_SummaryWithAWiredFeedAndNoActivityDoesNotUsePlannerCounts(t
 
 	assert.Contains(t, out.String(), "Done in 1.9 s; 1 will be retried on the next sync.")
 	assert.NotContains(t, out.String(), "uploaded")
+}
+
+// A text line stdout refuses is said once on stderr however many lines
+// fail, the lines after it are still written, and the first failure is the
+// console's output error.
+//
+// Validates: R-6.6.37
+func TestSyncConsole_ATextLineStdoutRefusesIsSaidOnceAndIsTheOutputError(t *testing.T) {
+	t.Parallel()
+
+	c, _, errOut := testSyncConsole()
+	out := &flakyWriter{failures: 2, err: errors.New("no space left on device")}
+	c.out = out
+
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: name, Success: true}))
+	}
+
+	assert.Equal(t, "Warning: sync output is incomplete: write sync output: no space left on device\n", errOut.String())
+	assert.Equal(t, "Uploaded c.txt\n", out.written.String(), "the line after the failures is still written")
+	var outputErr *syncOutputError
+	require.ErrorAs(t, c.OutputError(), &outputErr)
+	assert.Equal(t, "Error: sync output is incomplete: write sync output: no space left on device",
+		commandErrorText(c.OutputError(), false), "main names the stdout, not the disk the sync writes to")
+}
+
+// A console whose stdout took every line has no output error, and a nil
+// console has none either.
+//
+// Validates: R-6.6.37
+func TestSyncConsole_NoOutputErrorWhenStdoutTookEveryLine(t *testing.T) {
+	t.Parallel()
+
+	c, _, _ := testSyncConsole()
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "a.txt", Success: true}))
+
+	require.NoError(t, c.OutputError())
+	var nilConsole *syncConsole
+	require.NoError(t, nilConsole.OutputError())
+}
+
+// A stderr line the console cannot write, a failed file action and the held
+// deletes here, is recorded through the command context, so main fails a
+// sync that otherwise worked: the user never read either line.
+//
+// Validates: R-6.6.31, R-6.6.37
+func TestSyncConsole_AStderrLineThatCannotBeWrittenIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	cc := &CLIContext{OutputWriter: io.Discard, StatusWriter: errWriter{}}
+	c := newSyncConsole(cc, false)
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityUpload, Path: "b.txt", Err: os.ErrPermission}))
+	require.ErrorContains(t, cc.StatusError(), "write failed", "the failed action's line")
+
+	cc = &CLIContext{OutputWriter: io.Discard, StatusWriter: errWriter{}}
+	c = newSyncConsole(cc, false)
+	c.Summary(singleMountResult(&syncengine.Report{Duration: time.Second, HeldLocalDeletes: 2}))
+	require.ErrorContains(t, cc.StatusError(), "write failed", "the held deletes' line")
+	require.NoError(t, c.OutputError(), "stdout took the summary")
+}
+
+// syncOutputTestConfig writes a dry-run config with one drive, for
+// installDryRunSuccessRunner.
+func syncOutputTestConfig(t *testing.T) string {
+	t.Helper()
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	configBody := fmt.Sprintf("dry_run = true\n\n[\"personal:test@example.com\"]\nsync_dir = %q\n", t.TempDir())
+	require.NoError(t, os.WriteFile(cfgPath, []byte(configBody), 0o600))
+
+	return cfgPath
+}
+
+// A one-shot sync that did its work but whose stdout refused its report
+// returns the write as its error, in text and in --json, so it exits 1; the
+// warning is on stderr once.
+//
+// Validates: R-6.6.37
+func TestRunSyncCommand_AStdoutThatRefusesTheReportFailsAWorkingRun(t *testing.T) {
+	for _, jsonMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("json=%v", jsonMode), func(t *testing.T) {
+			setTestDriveHome(t)
+
+			var status bytes.Buffer
+			cc := &CLIContext{
+				Logger:       slog.New(slog.DiscardHandler),
+				OutputWriter: errWriter{},
+				StatusWriter: &status,
+				CfgPath:      syncOutputTestConfig(t),
+			}
+			cc.Flags.JSON = jsonMode
+			called := installDryRunSuccessRunner(t, cc)
+
+			err := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncdomain.SyncBidirectional})
+
+			assert.True(t, *called, "the run went on past the refused line")
+			var outputErr *syncOutputError
+			require.ErrorAs(t, err, &outputErr)
+			assert.Equal(t, exitFailure, commandExitCode(err, false))
+			assert.Equal(t, 1, strings.Count(status.String(), "Warning: sync output is incomplete"), status.String())
+		})
+	}
+}
+
+// The same run with stdout on /dev/full, where a write fails with ENOSPC as
+// on a redirect to a full disk: the error says the output is incomplete,
+// never that the sync's own disk is full.
+//
+// Validates: R-6.6.37
+func TestRunSyncCommand_StdoutOnDevFullFailsTheRun(t *testing.T) {
+	setTestDriveHome(t)
+
+	full, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
+	if err != nil {
+		t.Skip("this platform has no /dev/full")
+	}
+	t.Cleanup(func() { assert.NoError(t, full.Close()) })
+
+	var status bytes.Buffer
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: full,
+		StatusWriter: &status,
+		CfgPath:      syncOutputTestConfig(t),
+	}
+	installDryRunSuccessRunner(t, cc)
+
+	runErr := runSyncCommand(t.Context(), cc, syncCommandOptions{Mode: syncdomain.SyncBidirectional})
+
+	var outputErr *syncOutputError
+	require.ErrorAs(t, runErr, &outputErr)
+	text := commandErrorText(runErr, false)
+	assert.Contains(t, text, "sync output is incomplete")
+	assert.NotContains(t, text, "local disk is full")
+}
+
+// A watch that stops cleanly but whose stdout refused a line fails with the
+// write, as a one-shot run does, and keeps watching until it is stopped.
+//
+// Validates: R-6.6.37
+func TestRunSyncDaemonWithFactory_AStdoutThatRefusesALineFailsAWatchThatStopsCleanly(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:watch@example.com")
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
+	holder := loadSyncTestHolder(t, cfgPath)
+
+	c, _, errOut := testSyncConsole()
+	c.out = &flakyWriter{failures: 1, err: errors.New("input/output error")}
+	orch := &testSyncDaemonOrchestrator{}
+
+	err := runSyncDaemonWithFactory(
+		t.Context(),
+		holder,
+		nil,
+		syncdomain.SyncBidirectional,
+		syncengine.WatchOptions{},
+		slog.New(slog.DiscardHandler),
+		io.Discard,
+		"/tmp/control.sock",
+		c,
+		nil,
+		func(*multisync.OrchestratorConfig) syncDaemonOrchestrator { return orch },
+	)
+
+	assert.True(t, orch.called, "the watch ran past the refused line")
+	var outputErr *syncOutputError
+	require.ErrorAs(t, err, &outputErr)
+	assert.Equal(t, 1, strings.Count(errOut.String(), "Warning: sync output is incomplete"), errOut.String())
+}
+
+// A summary counts what each delete removed: files and folders apart, on
+// each side, in a live run from the activity feed and in a dry run from the
+// planner's counts, so a deleted empty folder is never "1 file".
+//
+// Validates: R-6.6.19
+func TestSyncConsole_SummaryCountsDeletedFoldersAsFolders(t *testing.T) {
+	t.Parallel()
+
+	type deleted struct {
+		kind   syncengine.ActivityKind
+		folder bool
+	}
+	local, remote := syncengine.ActivityLocalDelete, syncengine.ActivityRemoteDelete
+	tests := []struct {
+		name    string
+		deletes []deleted
+		want    string
+		dryRun  string
+	}{
+		{
+			name:    "one file locally",
+			deletes: []deleted{{kind: local}},
+			want:    "deleted 1 file locally",
+			dryRun:  "Would delete 1 file locally.",
+		},
+		{
+			name:    "one folder locally",
+			deletes: []deleted{{kind: local, folder: true}},
+			want:    "deleted 1 folder locally",
+			dryRun:  "Would delete 1 folder locally.",
+		},
+		{
+			name:    "files and a folder locally",
+			deletes: []deleted{{kind: local}, {kind: local}, {kind: local}, {kind: local, folder: true}},
+			want:    "deleted 3 files and 1 folder locally",
+			dryRun:  "Would delete 3 files and 1 folder locally.",
+		},
+		{
+			name:    "one folder on OneDrive",
+			deletes: []deleted{{kind: remote, folder: true}},
+			want:    "deleted 1 folder on OneDrive",
+			dryRun:  "Would delete 1 folder on OneDrive.",
+		},
+		{
+			name:    "a file and two folders on OneDrive",
+			deletes: []deleted{{kind: remote}, {kind: remote, folder: true}, {kind: remote, folder: true}},
+			want:    "deleted 1 file and 2 folders on OneDrive",
+			dryRun:  "Would delete 1 file and 2 folders on OneDrive.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c, out, _ := testSyncConsole()
+			c.ActivityHook()
+			report := &syncengine.Report{Duration: time.Second}
+			for i, d := range tt.deletes {
+				c.Activity(mountActivity(&syncengine.Activity{
+					Kind: d.kind, Path: fmt.Sprintf("item%d", i), Folder: d.folder, Success: true,
+				}))
+				report.Succeeded++
+				switch {
+				case d.kind == local && d.folder:
+					report.LocalDeletes++
+					report.LocalFolderDeletes++
+				case d.kind == local:
+					report.LocalDeletes++
+				case d.folder:
+					report.RemoteDeletes++
+					report.RemoteFolderDeletes++
+				default:
+					report.RemoteDeletes++
+				}
+			}
+			out.Reset()
+
+			c.Summary(singleMountResult(report))
+			assert.Equal(t, "Done in 1.0 s: "+tt.want+".\n", out.String())
+
+			dry, dryOut, _ := testSyncConsole()
+			dryReport := *report
+			dryReport.DryRun = true
+			dry.Summary(singleMountResult(&dryReport))
+			assert.Equal(t, "Dry run, nothing was changed. "+tt.dryRun+"\n", dryOut.String())
+		})
+	}
+}
+
+// A deleted folder's own line marks it as a folder with a trailing slash,
+// done and planned; a file's line is unchanged.
+//
+// Validates: R-6.6.18
+func TestSyncConsole_ADeletedFolderLineEndsWithASlash(t *testing.T) {
+	t.Parallel()
+
+	c, out, _ := testSyncConsole()
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityLocalDelete, Path: "Docs/old", Folder: true, Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityRemoteDelete, Path: "Docs/a.txt", Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityRemoteDelete, Path: "Docs/new", Folder: true, Planned: true}))
+
+	assert.Equal(t, "Deleted locally Docs/old/\nDeleted on OneDrive Docs/a.txt\nWould delete on OneDrive Docs/new/\n", out.String())
+}
+
+// The --json twin: an activity of a folder says "folder": true, and the
+// summary's folder_counts says how many of counts were folders, with counts
+// keeping its meaning of every item.
+//
+// Validates: R-6.6.19, R-6.6.33
+func TestSyncConsole_JSONSummaryCountsDeletedFoldersApart(t *testing.T) {
+	t.Parallel()
+
+	c, out, _ := testSyncConsole()
+	c.json = true
+	c.ActivityHook()
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityLocalDelete, Path: "a.txt", Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityLocalDelete, Path: "old", Folder: true, Success: true}))
+	c.Summary(singleMountResult(&syncengine.Report{
+		Duration: time.Second, LocalDeletes: 2, LocalFolderDeletes: 1, Succeeded: 2,
+	}))
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	require.Len(t, lines, 3)
+	var file, folder, summary syncJSONEvent
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &file))
+	require.NoError(t, json.Unmarshal([]byte(lines[1]), &folder))
+	require.NoError(t, json.Unmarshal([]byte(lines[2]), &summary))
+	assert.False(t, file.Folder)
+	assert.NotContains(t, lines[0], `"folder"`, "a file's line carries no folder field")
+	assert.True(t, folder.Folder)
+	assert.Equal(t, map[string]int{"delete_local": 2}, summary.Counts)
+	assert.Equal(t, map[string]int{"delete_local": 1}, summary.FolderCounts)
 }

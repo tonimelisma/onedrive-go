@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,11 +16,13 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
-// resolveLogoutAccountWithCatalog determines the account email for logout
-// from the offline account view: --account when given; otherwise plain
-// logout auto-selects only when exactly one known account still has a usable
-// saved login, and purge-only cleanup may auto-select a single known account
-// even when its saved login is already gone.
+// resolveLogoutAccountWithCatalog determines the account selector for logout
+// from the offline account view: --account when given, after
+// resolveLogoutTarget accepts it; otherwise plain logout auto-selects only
+// when exactly one known account still has a usable saved login, and
+// purge-only cleanup may auto-select a single known account even when its
+// saved login is already gone. The selector is the account's email, or its
+// canonical ID when a second account shares that email.
 func resolveLogoutAccountWithCatalog(
 	ctx context.Context,
 	cfg *config.Config,
@@ -29,6 +32,10 @@ func resolveLogoutAccountWithCatalog(
 	logger *slog.Logger,
 ) (string, error) {
 	if accountFlag != "" {
+		if _, err := resolveLogoutTarget(stored, accountFlag); err != nil {
+			return "", err
+		}
+
 		return accountFlag, nil
 	}
 
@@ -43,36 +50,178 @@ func resolveLogoutAccountWithCatalog(
 
 	selectable := logoutSelectableAccountViews(views)
 	if len(selectable) == 1 {
-		return selectable[0].Email, nil
+		return accountViewSelector(views, &selectable[0]), nil
 	}
 
 	if len(selectable) > 1 {
 		return "", fmt.Errorf(
 			"multiple accounts with saved logins — specify with --account:\n  %s",
-			joinAccountViewEmails(selectable),
+			joinAccountViewSelectors(views, selectable),
 		)
 	}
 
 	if purge && len(known) == 1 {
-		return known[0].Email, nil
+		return accountViewSelector(views, &known[0]), nil
 	}
 
 	return "", fmt.Errorf(
 		"no accounts with saved logins are available for plain logout.\n"+
 			"Retained data remains for:\n  %s\n"+
 			"Run 'onedrive-go logout --purge --account <email>' to remove retained state",
-		joinAccountViewEmails(known),
+		joinAccountViewSelectors(views, known),
 	)
 }
 
-// joinAccountViewEmails lists the accounts' emails, one per indented line.
-func joinAccountViewEmails(entries []accountView) string {
-	emails := make([]string, 0, len(entries))
-	for i := range entries {
-		emails = append(emails, entries[i].Email)
+// accountViewSelector is what --account takes to name the view's account:
+// its email, or its canonical ID when another of the views has the same
+// email (a personal and a work or school account at one address).
+func accountViewSelector(views []accountView, view *accountView) string {
+	for i := range views {
+		if views[i].Email == view.Email && !views[i].AccountCanonicalID.Equal(view.AccountCanonicalID) &&
+			!view.AccountCanonicalID.IsZero() {
+			return view.AccountCanonicalID.String()
+		}
 	}
 
-	return strings.Join(emails, "\n  ")
+	return view.Email
+}
+
+// joinAccountViewSelectors lists the accounts' selectors, one per indented
+// line.
+func joinAccountViewSelectors(views, entries []accountView) string {
+	selectors := make([]string, 0, len(entries))
+	for i := range entries {
+		selectors = append(selectors, accountViewSelector(views, &entries[i]))
+	}
+
+	return strings.Join(selectors, "\n  ")
+}
+
+// logoutTarget is the account a logout acts on.
+type logoutTarget struct {
+	// Selector is what --account names it by, as the user gave it or as
+	// accountViewSelector chose it; the purge's rerun command repeats it.
+	Selector string
+	Email    string
+	// Account is the catalog account, zero when the catalog holds none at
+	// Email (a purge of what an account left behind).
+	Account driveid.CanonicalID
+	// SharedAddress means a second catalog account has the same email, so
+	// a drive or a state database under the address belongs to only one of
+	// them.
+	SharedAddress bool
+}
+
+// resolveLogoutTarget reads an --account selector: an email, or the
+// canonical ID of a personal or work or school account. An email that two
+// catalog accounts share is refused, naming the canonical IDs that tell them
+// apart: logout deletes a saved login and drive sections, and guessing which
+// account was meant could delete the other one's.
+func resolveLogoutTarget(stored *config.Catalog, selector string) (logoutTarget, error) {
+	if strings.Contains(selector, ":") {
+		cid, err := driveid.NewCanonicalID(selector)
+		if err != nil || (!cid.IsPersonal() && !cid.IsBusiness()) {
+			return logoutTarget{}, fmt.Errorf(
+				"--account %q is neither an email nor an account ID such as personal:<email> or business:<email>",
+				selector)
+		}
+
+		return logoutTarget{
+			Selector:      selector,
+			Email:         cid.Email(),
+			Account:       cid,
+			SharedAddress: len(catalogAccountsAtEmail(stored, cid.Email())) > 1,
+		}, nil
+	}
+
+	accounts := catalogAccountsAtEmail(stored, selector)
+	switch len(accounts) {
+	case 0:
+		return logoutTarget{Selector: selector, Email: selector}, nil
+	case 1:
+		return logoutTarget{Selector: selector, Email: selector, Account: accounts[0]}, nil
+	default:
+		names := make([]string, 0, len(accounts))
+		for _, cid := range accounts {
+			names = append(names, "--account "+cid.String())
+		}
+
+		return logoutTarget{}, fmt.Errorf(
+			"%s is the email of more than one account; name the account to log out:\n  %s",
+			selector, strings.Join(names, "\n  "))
+	}
+}
+
+// catalogAccountsAtEmail lists the canonical IDs of the catalog accounts
+// with email, sorted.
+func catalogAccountsAtEmail(stored *config.Catalog, email string) []driveid.CanonicalID {
+	if stored == nil || email == "" {
+		return nil
+	}
+
+	var accounts []driveid.CanonicalID
+	for _, key := range stored.SortedAccountKeys() {
+		account := stored.Accounts[key]
+		if account.Email != email {
+			continue
+		}
+		if cid, hasID := account.ID(); hasID {
+			accounts = append(accounts, cid)
+		}
+	}
+
+	return accounts
+}
+
+// drives is the configured drives the logout removes: every drive under the
+// address, or, when a second account shares it, those of the named account
+// alone. A drive goes with the owner its catalog record names; without one
+// a personal drive is the personal account's and a work or SharePoint
+// drive the work or school account's, and a shared folder is neither's, so
+// its section stays.
+func (t *logoutTarget) drives(cfg *config.Config, stored *config.Catalog) []driveid.CanonicalID {
+	all := drivesForAccount(cfg, t.Email)
+	if !t.SharedAddress || t.Account.IsZero() {
+		return all
+	}
+
+	owned := make([]driveid.CanonicalID, 0, len(all))
+	for _, cid := range all {
+		if driveBelongsToAccount(cid, t.Account, stored) {
+			owned = append(owned, cid)
+		}
+	}
+
+	return owned
+}
+
+// ownsStateDB reports whether the state database at path is one the logout
+// may purge (accountStateDBs).
+func (t *logoutTarget) ownsStateDB(stored *config.Catalog) func(string) bool {
+	if !t.SharedAddress || t.Account.IsZero() {
+		return nil
+	}
+
+	return func(path string) bool {
+		return stateDBBelongsToAccount(path, t.Account, stored)
+	}
+}
+
+func driveBelongsToAccount(cid, account driveid.CanonicalID, stored *config.Catalog) bool {
+	if record, found := stored.DriveByCanonicalID(cid); found {
+		if owner, hasOwner := record.Owner(); hasOwner {
+			return owner.Equal(account)
+		}
+	}
+
+	switch {
+	case cid.IsPersonal():
+		return account.IsPersonal()
+	case cid.IsBusiness(), cid.IsSharePoint():
+		return account.IsBusiness()
+	default:
+		return false
+	}
 }
 
 // logoutJSONOutput is `logout --json`: the account signed out, the drives
@@ -106,13 +255,17 @@ func executeLogout(
 ) (logoutJSONOutput, error) {
 	w := cc.resultWriter()
 	logger := cc.Logger
-	affected := drivesForAccount(cfg, account)
-	result := logoutJSONOutput{Account: account, Purged: purge}
+	target, err := resolveLogoutTarget(stored, account)
+	if err != nil {
+		return logoutJSONOutput{Account: account, Purged: purge}, err
+	}
+	affected := target.drives(cfg, stored)
+	result := logoutJSONOutput{Account: target.Email, Purged: purge}
 	for _, cid := range affected {
 		result.Drives = append(result.Drives, cid.String())
 	}
 
-	removedToken, err := removeLogoutToken(ctx, w, stored, account, affected, purge, logger)
+	removedToken, err := removeLogoutToken(ctx, w, stored, &target, affected, purge, logger)
 	if err != nil {
 		return result, err
 	}
@@ -129,7 +282,7 @@ func executeLogout(
 		return result, err
 	}
 
-	removedDrives, configErr := removeAccountDriveConfigs(cc.CfgPath, affected, logger)
+	removedDrives, configErr := removeAccountDriveConfigs(ctx, cc.CfgPath, affected, logger)
 	if len(removedDrives) > 0 || result.TokenRemoved {
 		// The reload retires the drives' runners, which closes their stores
 		// before a purge deletes them, and drops the running watch's token
@@ -138,13 +291,13 @@ func executeLogout(
 	}
 
 	if purge {
-		return result, executePurgeLogout(ctx, w, account, affected, removedDrives, syncDirs, configErr, logger)
+		return result, executePurgeLogout(ctx, w, stored, &target, affected, removedDrives, syncDirs, configErr, logger)
 	}
 	if configErr != nil {
 		return result, fmt.Errorf("removing drive configs: %w", configErr)
 	}
 
-	return result, executePlainLogout(w, removedToken, logger)
+	return result, executePlainLogout(ctx, w, removedToken, logger)
 }
 
 // logoutPurgeCommand is the command that finishes a purge logout whose
@@ -155,18 +308,23 @@ func logoutPurgeCommand(account string) string {
 }
 
 // removeLogoutToken deletes the account's saved login. It returns the
-// canonical ID the token was found by, a drive of the account or the account
-// itself, or zero when there was no token to delete.
+// canonical ID the token was found by, the account itself or a drive of it,
+// or zero when there was no token to delete. A named catalog account's token
+// is its own, whichever drives share its address.
 func removeLogoutToken(
 	ctx context.Context,
 	w io.Writer,
 	stored *config.Catalog,
-	account string,
+	target *logoutTarget,
 	affected []driveid.CanonicalID,
 	purge bool,
 	logger *slog.Logger,
 ) (driveid.CanonicalID, error) {
-	tokenCanonicalID := canonicalIDForToken(account, affected)
+	account := target.Email
+	tokenCanonicalID := target.Account
+	if tokenCanonicalID.IsZero() {
+		tokenCanonicalID = canonicalIDForToken(account, affected)
+	}
 	if tokenCanonicalID.IsZero() {
 		storedCID, err := config.AccountCanonicalIDByEmail(stored, account)
 		if err != nil {
@@ -192,7 +350,7 @@ func removeLogoutToken(
 		return driveid.CanonicalID{}, fmt.Errorf(
 			"no saved login was found for %s — run 'onedrive-go logout --purge --account %s' to remove retained state",
 			account,
-			account,
+			target.Selector,
 		)
 	}
 
@@ -209,7 +367,8 @@ func removeLogoutToken(
 func executePurgeLogout(
 	ctx context.Context,
 	w io.Writer,
-	account string,
+	stored *config.Catalog,
+	target *logoutTarget,
 	affected []driveid.CanonicalID,
 	removedDrives []driveid.CanonicalID,
 	syncDirs map[driveid.CanonicalID]string,
@@ -220,7 +379,7 @@ func executePurgeLogout(
 	if configErr != nil {
 		errs = append(errs, fmt.Errorf("removing drive configs: %w", configErr))
 	}
-	rerun := logoutPurgeCommand(account)
+	rerun := logoutPurgeCommand(target.Selector)
 	if err := deleteAccountDriveStates(ctx, w, removedDrives, syncDirs, rerun, logger); err != nil {
 		errs = append(errs, fmt.Errorf("purging account drives: %w", err))
 	}
@@ -228,10 +387,11 @@ func executePurgeLogout(
 	for _, cid := range affected {
 		handled[config.DriveStatePath(cid)] = true
 	}
-	if err := purgeOrphanedFiles(ctx, w, account, handled, logger); err != nil {
+	orphans := purgeScope{email: target.Email, rerunSelector: target.Selector, owns: target.ownsStateDB(stored)}
+	if err := purgeOrphanedFiles(ctx, w, orphans, handled, logger); err != nil {
 		errs = append(errs, fmt.Errorf("purging orphaned files: %w", err))
 	}
-	if err := config.ApplyPurgeLogout(config.DefaultDataDir(), account); err != nil {
+	if err := config.ApplyPurgeLogout(ctx, config.DefaultDataDir(), target.Account); err != nil {
 		errs = append(errs, fmt.Errorf("updating catalog after purge logout: %w", err))
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -244,7 +404,7 @@ func executePurgeLogout(
 // executePlainLogout finishes a logout without --purge, after the drives'
 // config sections were removed: their state databases are kept. removedToken
 // is what removeLogoutToken found the deleted token by.
-func executePlainLogout(w io.Writer, removedToken driveid.CanonicalID, logger *slog.Logger) error {
+func executePlainLogout(ctx context.Context, w io.Writer, removedToken driveid.CanonicalID, logger *slog.Logger) error {
 	if err := writeln(w, "\nState databases kept. Run 'onedrive-go login' to re-authenticate."); err != nil {
 		return err
 	}
@@ -257,7 +417,7 @@ func executePlainLogout(w io.Writer, removedToken driveid.CanonicalID, logger *s
 	if err != nil {
 		return fmt.Errorf("updating catalog after logout: %w", err)
 	}
-	if err := clearAccountAuthRequirementForSource(account, config.AuthClearSourceLogout, logger); err != nil {
+	if err := clearAccountAuthRequirementForSource(ctx, account, config.AuthClearSourceLogout, logger); err != nil {
 		return fmt.Errorf("updating catalog after logout: %w", err)
 	}
 
@@ -276,19 +436,19 @@ func executePlainLogout(w io.Writer, removedToken driveid.CanonicalID, logger *s
 func purgeOrphanedFiles(
 	ctx context.Context,
 	w io.Writer,
-	email string,
+	scope purgeScope,
 	handled map[string]bool,
 	logger *slog.Logger,
 ) error {
-	paths, err := config.DiscoverStateDBsForEmail(email, logger)
+	paths, err := config.DiscoverStateDBsForEmail(scope.email, logger)
 	if err != nil {
 		return fmt.Errorf("finding state databases to purge: %w", err)
 	}
 
 	var errs []error
-	rerun := logoutPurgeCommand(email)
+	rerun := logoutPurgeCommand(cmp.Or(scope.rerunSelector, scope.email))
 	for _, path := range paths {
-		if handled[path] {
+		if handled[path] || (scope.owns != nil && !scope.owns(path)) {
 			continue
 		}
 		removed, deleteErr := deleteStateDB(ctx, path, "", rerun, logger)
@@ -304,6 +464,15 @@ func purgeOrphanedFiles(
 	}
 
 	return errors.Join(errs...)
+}
+
+// purgeScope is the state databases a purge logout looks for under an
+// address: all of them, or, when owns is set, those owns accepts (the named
+// account's, when a second account shares the address).
+type purgeScope struct {
+	email         string
+	rerunSelector string
+	owns          func(path string) bool
 }
 
 // drivesForAccount returns all canonical IDs whose email matches the given account.

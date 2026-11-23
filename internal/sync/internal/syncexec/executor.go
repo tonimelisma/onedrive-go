@@ -171,6 +171,39 @@ func (cfg *ExecutorConfig) SyncTree() *synctree.Root {
 	return cfg.syncTree
 }
 
+// DropUploadSessions ends the recorded upload sessions of the uploads of
+// relPaths (sync-root relative) that sync gave up, under every absolute path
+// an upload of them could have used: the stored path and its spelling on
+// disk, where the file still is, or its parent's spelling, where it is gone.
+// It returns how many records went. It calls Graph, so it never runs under a
+// store transaction.
+func (cfg *ExecutorConfig) DropUploadSessions(ctx context.Context, relPaths []string) (int, error) {
+	if cfg == nil || cfg.transferMgr == nil || len(relPaths) == 0 {
+		return 0, nil
+	}
+	candidates := make([]string, 0, len(relPaths)*uploadPathSpellings)
+	for _, rel := range relPaths {
+		for _, spelled := range []string{rel, cfg.syncTree.Spelling(rel), cfg.syncTree.SpellingOfParent(rel)} {
+			abs, err := cfg.syncTree.Abs(spelled)
+			if err != nil {
+				continue
+			}
+			candidates = append(candidates, abs)
+		}
+	}
+
+	dropped, err := cfg.transferMgr.DropUploadSessions(ctx, candidates)
+	if err != nil {
+		return dropped, fmt.Errorf("drop upload sessions: %w", err)
+	}
+
+	return dropped, nil
+}
+
+// uploadPathSpellings is how many absolute paths DropUploadSessions tries for
+// one relative path.
+const uploadPathSpellings = 3
+
 func (e *Executor) confirmRemotePathVisible(ctx context.Context, action *syncdomain.Action) {
 	pathConvergence, remotePath, ok := e.pathConvergenceForAction(action)
 	if !ok {
@@ -337,7 +370,8 @@ func (e *Executor) resolvedParentIDForOutcome(action *syncdomain.Action, item *g
 }
 
 // adoptExistingRemoteFolder handles a 409 on a folder create, by what the
-// listing holds under the name (classifyCreateConflict). A folder of the
+// parent holds under the name (childrenHoldingName, classifyCreateConflict).
+// A folder of the
 // wanted name is the outcome the create wanted (a lost response to our own
 // earlier create, or another device creating the same folder): adopt it, as
 // observing it would have. A sibling spelled differently that OneDrive treats
@@ -346,15 +380,16 @@ func (e *Executor) resolvedParentIDForOutcome(action *syncdomain.Action, item *g
 // nothing listed yet) is a stale precondition for the planner to resolve.
 // Retried as it is, the create would meet the same 409 every time.
 //
-// A listing that fails is the listing's failure, classified by its own
-// answer: it proves nothing about the name. Joined to the 409, an outage or a
-// throttle would be recorded under the 409's status as a per-item refusal.
+// A read or listing that fails is that request's failure, classified by its
+// own answer: it proves nothing about the name. Joined to the 409, an outage
+// or a throttle would be recorded under the 409's status as a per-item
+// refusal.
 func (e *Executor) adoptExistingRemoteFolder(
 	ctx context.Context, driveID driveid.ID, parentID, name string, conflictErr error,
 ) (*graph.Item, error) {
-	children, err := e.items.ListChildren(ctx, driveID, parentID)
+	children, err := e.childrenHoldingName(ctx, driveID, parentID, name)
 	if err != nil {
-		return nil, fmt.Errorf("resolving the refused create of folder %s: listing its parent: %w", name, err)
+		return nil, fmt.Errorf("resolving the refused create of folder %s: %w", name, err)
 	}
 
 	child, found := classifyCreateConflict(children, name)

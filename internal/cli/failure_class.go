@@ -96,6 +96,29 @@ func commandPanicCause(ctx context.Context) error {
 	return nil
 }
 
+// panicCarriedBy returns the recovered panic err carries, or nil: err
+// itself when it answers to panicguard.ErrPanic and joins nothing, else the
+// first element of the join in its chain (withCommandPanic's) that carries
+// one. A caller
+// that rebuilds an error from part of err keeps the panic with it.
+func panicCarriedBy(err error) error {
+	if !errors.Is(err, panicguard.ErrPanic) {
+		return nil
+	}
+
+	var joined interface{ Unwrap() []error }
+	if !errors.As(err, &joined) {
+		return err
+	}
+	for _, element := range joined.Unwrap() {
+		if recovered := panicCarriedBy(element); recovered != nil {
+			return recovered
+		}
+	}
+
+	return err
+}
+
 // withCommandPanic is the command's final error once a helper's panic is
 // counted: the panic replaces the cancellation it caused, or the nil result
 // of a command that finished regardless, and joins any other failure.

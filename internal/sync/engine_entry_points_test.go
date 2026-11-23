@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -129,8 +130,8 @@ func TestEngineStartup_LockedCatalogWarnsAndStarts(t *testing.T) {
 		inputs.Logger = logger
 	})
 	account := testEngineAccountCanonicalID()
-	require.NoError(t, config.MarkAccountAuthRequired(eng.dataDir, account, authstate.ReasonSyncAuthRejected))
-	eng.hooks.clearAccountAuthRequirement = func(string, driveid.CanonicalID) error {
+	require.NoError(t, config.MarkAccountAuthRequired(t.Context(), eng.dataDir, account, authstate.ReasonSyncAuthRejected))
+	eng.hooks.clearAccountAuthRequirement = func(context.Context, string, driveid.CanonicalID) error {
 		return fmt.Errorf("updating catalog: %w", config.ErrConfigLocked)
 	}
 

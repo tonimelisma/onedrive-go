@@ -113,7 +113,12 @@ func (c *Client) GetItem(ctx context.Context, driveID driveid.ID, itemID string)
 		slog.String("item_id", itemID),
 	)
 
-	return c.fetchItem(ctx, itemRoute(driveID, itemID, ""))
+	route, err := itemRoute(driveID, itemID, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return c.fetchItem(ctx, route)
 }
 
 // GetItemByPath retrieves the item at remotePath, relative to the drive root.
@@ -347,20 +352,42 @@ func placedByFolderAnswer(driveID driveid.ID, remotePath, folderPath string, ite
 const driveRootAlias = "root"
 
 // ErrNameNotPathAddressable reports a name a path-addressed request cannot
-// carry: one holding ':', which ends the path in a path route and which
-// url.PathEscape leaves as it is (measured on a Personal drive: Graph answers
-// 400 "Resource not found for the segment" for the path cut at the colon), or,
-// for a read of one name, one whose escaped form is longer than
-// maxPathAddressedLength. A caller that must still find such a name lists its
-// folder.
+// carry (NameIsPathAddressable), or, for a read of one name, one whose
+// escaped form is longer than maxPathAddressedLength. A caller that must
+// still find such a name lists its folder.
 var ErrNameNotPathAddressable = errors.New("graph: name cannot be carried in a path-addressed request")
 
+// Names the path route is known not to resolve, measured on a Personal drive
+// on 2026-11-15 (graph-api-quirks.md): a name that starts with the lowercase
+// "v1.0" (v1.0, v1.0x, v1.0.zip, v1.0.3; V1.0 and v2.0 resolve) answers 404
+// at its own path and at every path through it, and the name "$value" exactly
+// answers 400. Both are listed by their folder.
+const (
+	unresolvedNamePrefix = "v1.0"
+	unresolvedName       = "$value"
+)
+
+// NameIsPathAddressable reports whether the path route can resolve the name:
+// not one holding ':', which ends the path in a path route and which
+// url.PathEscape leaves as it is (measured on a Personal drive: Graph answers
+// 400 "Resource not found for the segment" for the path cut at the colon),
+// not one starting with "v1.0", and not "$value". A caller that walks a path
+// by name lists the folder of a name this refuses instead of reading it.
+func NameIsPathAddressable(name string) bool {
+	return !strings.Contains(name, ":") &&
+		!strings.HasPrefix(name, unresolvedNamePrefix) &&
+		name != unresolvedName
+}
+
 // refuseUnaddressableNames is ErrNameNotPathAddressable for a path, or one
-// name, holding ':' in any of its names, and nil otherwise. Every read by
-// path or by name calls it before its first request.
+// name, any of whose names the path route cannot resolve
+// (NameIsPathAddressable), and nil otherwise. Every read by path or by name
+// calls it before its first request.
 func refuseUnaddressableNames(remotePath string) error {
-	if strings.Contains(remotePath, ":") {
-		return fmt.Errorf("graph: reading %q: %w", remotePath, ErrNameNotPathAddressable)
+	for _, name := range strings.Split(remotePath, "/") {
+		if !NameIsPathAddressable(name) {
+			return fmt.Errorf("graph: reading %q: %w", remotePath, ErrNameNotPathAddressable)
+		}
 	}
 
 	return nil
@@ -393,7 +420,11 @@ func (c *Client) GetChildByName(ctx context.Context, driveID driveid.ID, parentI
 		slog.String("name", name),
 	)
 
-	item, err := c.fetchItem(ctx, childPathRoute(driveID, parentID, encoded))
+	route, err := childPathRoute(driveID, parentID, encoded)
+	if err != nil {
+		return nil, err
+	}
+	item, err := c.fetchItem(ctx, route)
 	if err != nil {
 		return nil, err
 	}
@@ -421,13 +452,13 @@ func itemSitsIn(item *Item, driveID driveid.ID, parentID string) bool {
 
 // childPathRoute is the route of the item at encodedPath, a path of escaped
 // segments, below the item parentID.
-func childPathRoute(driveID driveid.ID, parentID, encodedPath string) string {
+func childPathRoute(driveID driveid.ID, parentID, encodedPath string) (string, error) {
 	return itemRoute(driveID, parentID, ":/"+encodedPath+":")
 }
 
 // childrenRoute is the route of the first page of the folder parentID's
 // children.
-func childrenRoute(driveID driveid.ID, parentID string) string {
+func childrenRoute(driveID driveid.ID, parentID string) (string, error) {
 	return itemRoute(driveID, parentID, fmt.Sprintf("/children?$top=%d", listChildrenPageSize))
 }
 
@@ -445,12 +476,20 @@ const maxPathAddressedLength = 240
 func (c *Client) fetchItemByPathChunks(ctx context.Context, driveID driveid.ID, remotePath string) (*Item, error) {
 	chunks := pathAddressChunks(remotePath, maxPathAddressedLength)
 
-	item, err := c.fetchItem(ctx, fmt.Sprintf("/drives/%s/root:/%s:", driveID, chunks[0]))
+	route, err := driveRoute(driveID, "/root:/"+chunks[0]+":")
+	if err != nil {
+		return nil, err
+	}
+	item, err := c.fetchItem(ctx, route)
 	if err != nil {
 		return nil, err
 	}
 	for _, chunk := range chunks[1:] {
-		item, err = c.fetchItem(ctx, childPathRoute(driveID, item.ID, chunk))
+		route, err = childPathRoute(driveID, item.ID, chunk)
+		if err != nil {
+			return nil, err
+		}
+		item, err = c.fetchItem(ctx, route)
 		if err != nil {
 			return nil, err
 		}
@@ -487,9 +526,14 @@ func pathAddressChunks(remotePath string, limit int) []string {
 // ends the listing without an error. A page that fails ends it with that
 // page's error after the pages before it were handed on.
 func (c *Client) ListChildrenPages(ctx context.Context, driveID driveid.ID, parentID string, visit ChildrenPageFunc) error {
+	route, err := childrenRoute(driveID, parentID)
+	if err != nil {
+		return err
+	}
+
 	return c.visitChildPages(
 		ctx,
-		childrenRoute(driveID, parentID),
+		route,
 		"listing children",
 		"listed children complete",
 		[]slog.Attr{
@@ -568,6 +612,13 @@ func (s *NameSeek) Visit(page []Item) bool {
 	return !s.exact
 }
 
+// Candidates are the children that hold the name, a name OneDrive treats as
+// the same, in the order listed, each once: for a caller whose own rule picks
+// among them (the create conflict of sync, a created folder's read-back).
+func (s *NameSeek) Candidates() []Item {
+	return s.candidates
+}
+
 // Match returns the child that holds the name, when one does, and the
 // lookup's answer: Ambiguous when more than one child holds it and none is
 // spelled as asked.
@@ -611,14 +662,23 @@ func (c *Client) ListChildrenByPathPages(ctx context.Context, driveID driveid.ID
 			return err
 		}
 
-		return c.visitChildPages(ctx, childrenRoute(driveID, folder.ID),
+		route, err := childrenRoute(driveID, folder.ID)
+		if err != nil {
+			return err
+		}
+
+		return c.visitChildPages(ctx, route,
 			"listing children by path", "listed children by path complete", logAttrs, visit)
+	}
+
+	route, err := driveRoute(driveID, fmt.Sprintf("/root:/%s:/children?$top=%d", encodedPath, listChildrenPageSize))
+	if err != nil {
+		return err
 	}
 
 	listed := listedPath{driveID: driveID, path: remotePath}
 	var misplaced error
-	err := c.visitChildPages(ctx,
-		fmt.Sprintf("/drives/%s/root:/%s:/children?$top=%d", driveID, encodedPath, listChildrenPageSize),
+	err = c.visitChildPages(ctx, route,
 		"listing children by path", "listed children by path complete", logAttrs,
 		func(page []Item) bool {
 			if misplaced = c.heldToListedPath(ctx, &listed, page); misplaced != nil {
@@ -867,15 +927,63 @@ func (c *Client) listChildrenPage(ctx context.Context, path string, page int) ([
 	return result.items, result.nextPath, nil
 }
 
-// stripBaseURL removes the client's base URL prefix from a full URL,
-// returning the path + query string for use with do().
-// Returns an error if the URL doesn't start with the expected base.
-func (c *Client) stripBaseURL(fullURL string) (string, error) {
-	if !strings.HasPrefix(fullURL, c.baseURL) {
-		return "", fmt.Errorf("graph: nextLink URL %q does not match base URL %q", fullURL, c.baseURL)
+// stripBaseURL makes a continuation link (an @odata.nextLink, a delta link
+// or a saved delta token) the path and query do() asks with: the link below
+// the client's base URL, with the base removed. Every paged listing makes
+// its links paths here, so a page has one key however it was spelled: the
+// scheme and host compare without letter case (RFC 3986 section 6.2.2.1), and
+// a relative link is resolved against the base URL as a folder, so
+// "drives/d/root/delta?token=x" and "/v1.0/drives/..." name the page they
+// name below "https://graph.microsoft.com/v1.0". A link that does not lead
+// below the base URL, another host or another version included, is refused:
+// a continuation off the Graph host would carry the bearer there.
+func (c *Client) stripBaseURL(link string) (string, error) {
+	resolved, err := c.resolveLink(link)
+	if err != nil {
+		return "", err
+	}
+	base := lowerSchemeAndHost(c.baseURL)
+	rest, below := strings.CutPrefix(resolved, base)
+	if !below || (rest != "" && rest[0] != '/' && rest[0] != '?') {
+		return "", fmt.Errorf("graph: nextLink URL %q does not match base URL %q", link, c.baseURL)
 	}
 
-	return fullURL[len(c.baseURL):], nil
+	return rest, nil
+}
+
+// resolveLink is link as an absolute URL with its scheme and host in lower
+// case: a relative link resolved against the base URL taken as a folder.
+func (c *Client) resolveLink(link string) (string, error) {
+	ref, err := url.Parse(link)
+	if err != nil {
+		return "", fmt.Errorf("graph: reading continuation link %q: %w", link, err)
+	}
+	if ref.IsAbs() {
+		return lowerSchemeAndHost(link), nil
+	}
+
+	base, err := url.Parse(c.baseURL + "/")
+	if err != nil {
+		return "", fmt.Errorf("graph: reading base URL %q: %w", c.baseURL, err)
+	}
+
+	return lowerSchemeAndHost(base.ResolveReference(ref).String()), nil
+}
+
+// lowerSchemeAndHost is rawURL with the scheme and the authority before its
+// path in lower case, the path and query as they are; a string without
+// "://" is returned unchanged.
+func lowerSchemeAndHost(rawURL string) string {
+	scheme, rest, found := strings.Cut(rawURL, "://")
+	if !found {
+		return rawURL
+	}
+	authorityEnd := strings.IndexAny(rest, "/?#")
+	if authorityEnd < 0 {
+		authorityEnd = len(rest)
+	}
+
+	return strings.ToLower(scheme) + "://" + strings.ToLower(rest[:authorityEnd]) + rest[authorityEnd:]
 }
 
 // askedPages counts the pages one paged listing asks for, delta enumeration

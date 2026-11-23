@@ -1,24 +1,5 @@
 package syncdomain
 
-func ActionItemType(action *Action) ItemType {
-	if action == nil {
-		return ItemTypeFile
-	}
-	if action.View != nil {
-		if action.View.Remote != nil && action.View.Remote.ItemType != ItemTypeFile {
-			return action.View.Remote.ItemType
-		}
-		if action.View.Baseline != nil && action.View.Baseline.ItemType != ItemTypeFile {
-			return action.View.Baseline.ItemType
-		}
-		if action.View.Local != nil && action.View.Local.ItemType != ItemTypeFile {
-			return action.View.Local.ItemType
-		}
-	}
-
-	return ItemTypeFile
-}
-
 func MutationFromActionOutcome(o *ActionOutcome) *BaselineMutation {
 	if o == nil {
 		return nil

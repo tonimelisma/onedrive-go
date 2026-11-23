@@ -110,6 +110,23 @@ known to clear by itself. Each key's console label is a switch over every key
 too (`conditionLabelText`, sync-engine.md). Their tests read the keys from
 `condition_keys.go` (`stringConstantsOfType`).
 
+An action's item type has one rule (`domain_item_type.go`). `ResolveItemType`
+reads the view's observed side: the remote observation, then the local one,
+then the baseline, the type the item had when it was last synced, which
+decides only for a path neither side holds (a cleanup). A file is a type like
+any other: an observed file never yields to a folder the baseline recorded,
+so a folder both sides replaced with the same file publishes as that file.
+`DeletedItemType` narrows it for a delete to the side the delete removes the
+item from, which differs across a type change. The baseline-mutation
+publication, a delete's outcome and a move with no baseline all read these
+two; a move with a baseline is typed by that baseline, the item it moves
+(`movedItemIsFolder`, sync-planning.md). Until 2026-11-23 a second rule took
+the first non-file type among remote, baseline and local, reading a file as
+"unknown", and `ResolveItemType` preferred the baseline over a deleted remote
+observation, a shape no planner view carries: remote truth comes from
+`remote_state` rows, which hold live items only
+(`TestResolveItemType_ReadsTheObservedSideOverTheProducersShapes`).
+
 `hash_error` is what the scanner records for a panic in a hash worker and for
 a file it could not read to hash, and users see it as the condition of the
 same name (`ConditionHashError`). Before store generation 29 the stored value
@@ -151,6 +168,7 @@ section in [system.md](system.md).
 
 | Behavior | Evidence |
 | --- | --- |
+| An action's item type is read from the observed side, remote then local then baseline, and a delete's from the side it deletes; a file never reads as "unknown". | `TestResolveItemType_ReadsTheObservedSideOverTheProducersShapes`, `TestPublicationMutation_SyncedUpdate_TypeFromObservedSide` |
 | Scope keys own their own blocking, path-coverage, and rendering policy rather than exporting raw fields for callers to interpret. | `TestScopeKey_BlocksAction`, `TestScopeKey_CoveredPath`, `TestScopeKey_CoveredPathMatchesFamilyAccessors`, `TestScopeKey_Humanize`, `TestScopeKey_IsGlobal`, `TestDescribeScopeKey_Service` |
 | Every decision on the action type panics on a value outside the enum instead of answering it, and every one that returns an error refuses such a value with one (the row value, mutation classification, the publication mutation, the delete ledger, the remote mirror, worker dispatch). | `TestActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestPlannerActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestExecutorActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestEngineActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestActionTypeRefusals_ATypeOutsideTheEnumIsAnError`, `TestActionTypeSwitches_EveryDefaultRefuses` |
 | Every declared `IssueType` constant is a member and parses back to itself, with no two sharing a value; any other stored string, the empty one included, does not parse. | `TestIssueType_EveryDeclaredConstantIsAMemberAndParses`, `TestParseIssueType_RefusesAValueNoMemberHas` |

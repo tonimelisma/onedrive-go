@@ -727,17 +727,24 @@ func TestCreateFolder_Conflict(t *testing.T) {
 
 // Validates: R-1.5.2
 func TestCreateFolder_EmptySuccessBodyReadsBackCreatedFolder(t *testing.T) {
-	var listCalls atomic.Int32
+	var listCalls, nameReads atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		switch r.Method {
-		case http.MethodPost:
+		switch {
+		case r.Method == http.MethodPost:
 			assert.Equal(t, "/drives/000000000000000d/items/parent/children", r.URL.Path)
 			w.WriteHeader(http.StatusOK)
 
-		case http.MethodGet:
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, ":/"):
+			// The path route lags behind the listing: the read of the name
+			// finds nothing, and each attempt lists the parent.
+			nameReads.Add(1)
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not yet"}}`)
+
+		case r.Method == http.MethodGet:
 			assert.Equal(t, "/drives/000000000000000d/items/parent/children", r.URL.Path)
 			assert.Equal(t, "$top=200", r.URL.RawQuery)
 
@@ -774,6 +781,7 @@ func TestCreateFolder_EmptySuccessBodyReadsBackCreatedFolder(t *testing.T) {
 	item, err := client.CreateFolder(t.Context(), driveid.New("d"), "parent", "New Folder")
 	require.NoError(t, err)
 	require.NotNil(t, item)
+	assert.Equal(t, int32(2), nameReads.Load())
 	assert.Equal(t, int32(2), listCalls.Load())
 	assert.Equal(t, "new-folder-id", item.ID)
 	assert.Equal(t, "New Folder", item.Name)
@@ -786,11 +794,15 @@ func TestCreateFolder_EmptySuccessBodyReadbackFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		switch r.Method {
-		case http.MethodPost:
+		switch {
+		case r.Method == http.MethodPost:
 			w.WriteHeader(http.StatusOK)
 
-		case http.MethodGet:
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, ":/"):
+			w.WriteHeader(http.StatusNotFound)
+			writeTestResponse(t, w, `{"error":{"code":"itemNotFound","message":"not yet"}}`)
+
+		case r.Method == http.MethodGet:
 			listCalls.Add(1)
 			w.WriteHeader(http.StatusOK)
 			writeTestResponse(t, w, `{"value":[]}`)
@@ -809,6 +821,64 @@ func TestCreateFolder_EmptySuccessBodyReadbackFailure(t *testing.T) {
 	assert.Nil(t, item)
 	assert.Equal(t, int32(testRetryPolicy().MaxAttempts), listCalls.Load())
 	assert.ErrorContains(t, err, "create folder empty success response")
+}
+
+// A folder create answered with an empty body reads the folder back by its
+// name: one read and no listing when the read answers it, and the parent's
+// listing, stopped at the page that holds the name, only when the read cannot
+// settle the name. A file of the name is not the created folder.
+//
+// Validates: R-1.5.2, R-6.7.33
+func TestCreateFolder_EmptySuccessBodyReadsTheFolderBackByItsName(t *testing.T) {
+	t.Parallel()
+
+	const createdOnPage = 2
+
+	for _, tc := range []struct {
+		label, name string
+		readMisses  bool
+		nameIsFile  bool
+		wantFound   bool
+		wantReads   int32
+		wantPages   int32
+	}{
+		{label: "the read answers", name: "New Folder", wantFound: true, wantReads: 1},
+		{
+			label: "the read finds nothing yet", name: "New Folder", readMisses: true,
+			wantFound: true, wantReads: 1, wantPages: createdOnPage,
+		},
+		{label: "a name the read cannot carry", name: "a:b", wantFound: true, wantPages: createdOnPage},
+		{
+			label: "a file of the name", name: "New Folder", nameIsFile: true,
+			wantReads: int32(testRetryPolicy().MaxAttempts),
+		},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			folder := &createdFileFolder{
+				t: t, name: tc.name, nameIsFolder: !tc.nameIsFile, readMisses: tc.readMisses,
+				createdOnPage: createdOnPage,
+			}
+			srv := httptest.NewServer(http.HandlerFunc(folder.serve))
+			t.Cleanup(srv.Close)
+
+			client := newNoRetryTestClient(t, srv.URL)
+			client.policies.createFolderReadback = testRetryPolicy()
+
+			item, err := client.CreateFolder(t.Context(), driveid.New("d"), "parent", tc.name)
+			assert.Equal(t, tc.wantReads, folder.reads.Load())
+			assert.Equal(t, tc.wantPages, folder.pages.Load(), "the listing stops at the page that holds the name")
+			if !tc.wantFound {
+				require.ErrorIs(t, err, ErrNotFound)
+				assert.Nil(t, item)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "created-id", item.ID)
+			assert.True(t, item.IsFolder)
+		})
+	}
 }
 
 // --- MoveItem tests ---

@@ -29,6 +29,11 @@ const (
 	// reload_in_progress instead of giving up first and guessing.
 	controlReloadClientTimeout = synccontrol.LoopAcceptTimeout + synccontrol.ReloadAnswerTimeout +
 		synccontrol.ReplyWriteTimeout + controlReloadClientMargin
+	// controlConfirmClientTimeout outlasts every wait the watch owner may
+	// spend before it answers a confirmation of held deletes: its loop taking
+	// the request and naming the drive, then the drive's own loop taking it.
+	controlConfirmClientTimeout = 2*synccontrol.LoopAcceptTimeout + synccontrol.ConfirmTakeTimeout +
+		synccontrol.ReplyWriteTimeout + controlReloadClientMargin
 )
 
 type controlOwnerState string
@@ -55,7 +60,14 @@ func controlOwnerDidNotAnswer(err error) bool {
 		return true
 	}
 
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded)
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+
+	// A read the transport timed out (a body cut short by the request's
+	// deadline) need not name either sentinel.
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 type controlSocketClient struct {
@@ -72,7 +84,13 @@ type controlDaemonError struct {
 	statusCode int
 	code       synccontrol.ErrorCode
 	message    string
+	// err is what went wrong reading an answer the client could not use
+	// (controlResponseReadError), kept so a caller can branch on it; nil for
+	// an error the owner itself answered.
+	err error
 }
+
+func (e *controlDaemonError) Unwrap() error { return e.err }
 
 func (e *controlDaemonError) Error() string {
 	if e.code != "" && e.message != "" {
@@ -228,6 +246,19 @@ func (c *controlSocketClient) reload(ctx context.Context) (synccontrol.Status, e
 	return response.Status, nil
 }
 
+// confirmDeletes asks a watch owner to apply the held set request names. A
+// set the drive no longer holds, a drive that holds none and a busy owner are
+// errors (controlDaemonError); nothing is confirmed then.
+func (c *controlSocketClient) confirmDeletes(ctx context.Context, request synccontrol.ConfirmDeletesRequest) error {
+	payload, encodeErr := encodeControlRequest(request)
+	if encodeErr != nil {
+		return encodeErr
+	}
+
+	var response synccontrol.MutationResponse
+	return c.postJSONInto(ctx, synccontrol.PathConfirmDeletes, payload, controlConfirmClientTimeout, &response)
+}
+
 func (c *controlSocketClient) getJSON(ctx context.Context, path string, timeout time.Duration, target any) error {
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -303,9 +334,21 @@ func decodeControlJSONResponse(resp *http.Response, target any) error {
 
 // controlResponseReadError is the internal_error for an owner's answer that
 // did not decode or whose body did not close, or nil when both went well. A
-// decode failure names the close failure too when there is one. The callers
-// close the body themselves, where the bodyclose linter can see it.
+// decode failure names the close failure too when there is one, and every
+// cause stays reachable with errors.Is and errors.As. A decode cut short by
+// the request's deadline is not an internal error: the owner did not answer
+// in time (controlOwnerDidNotAnswer), as when the deadline passes before the
+// headers. The callers close the body themselves, where the bodyclose linter
+// can see it.
 func controlResponseReadError(resp *http.Response, decodeErr, closeErr error) error {
+	if decodeErr != nil && controlOwnerDidNotAnswer(decodeErr) {
+		if closeErr != nil {
+			return fmt.Errorf("decode control response: %w (close: %w)", decodeErr, closeErr)
+		}
+
+		return fmt.Errorf("decode control response: %w", decodeErr)
+	}
+
 	var message string
 	switch {
 	case decodeErr != nil && closeErr != nil:
@@ -322,5 +365,6 @@ func controlResponseReadError(resp *http.Response, decodeErr, closeErr error) er
 		statusCode: resp.StatusCode,
 		code:       synccontrol.ErrorInternal,
 		message:    message,
+		err:        errors.Join(decodeErr, closeErr),
 	}
 }

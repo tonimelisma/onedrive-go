@@ -8,8 +8,8 @@ import (
 	synccontrol "github.com/tonimelisma/onedrive-go/internal/synccontrol"
 )
 
-// computeSummary aggregates health information across accounts that
-// normalizeStatusAccounts has normalized.
+// computeSummary aggregates health information across the accounts the
+// status builder made.
 func computeSummary(accounts []statusAccount) statusSummary {
 	var s statusSummary
 
@@ -37,7 +37,6 @@ func addDriveToSummary(s *statusSummary, drive *statusDrive, sharedFolder bool) 
 	} else {
 		s.TotalDrives++
 	}
-	s.TotalMounts++
 
 	switch drive.State {
 	case driveStateReady:
@@ -65,7 +64,6 @@ func addDriveToSummary(s *statusSummary, drive *statusDrive, sharedFolder bool) 
 	}
 	if drive.RuntimeState == statusRuntimeStateActive {
 		s.RuntimeActiveDrives++
-		s.RuntimeActiveMounts++
 	}
 
 	for i := range drive.SharedFolders {
@@ -73,13 +71,21 @@ func addDriveToSummary(s *statusSummary, drive *statusDrive, sharedFolder bool) 
 	}
 }
 
-// newStatusOutput is the status document for accounts, normalized once:
-// normalizeStatusAccounts fills each account and leaves no list nil, and the
-// summary counts the normalized accounts. Both printers start from it.
+// newStatusOutput is the status document for the accounts the builder made,
+// with their summary. Both printers start from it. The two lists status
+// prints without omitempty are never nil, so an empty one prints [] rather
+// than null: the accounts, and each account's drives.
 func newStatusOutput(accounts []statusAccount) statusOutput {
-	normalized := normalizeStatusAccounts(accounts)
+	if accounts == nil {
+		accounts = []statusAccount{}
+	}
+	for i := range accounts {
+		if accounts[i].Drives == nil {
+			accounts[i].Drives = []statusDrive{}
+		}
+	}
 
-	return statusOutput{Accounts: normalized, Summary: computeSummary(normalized)}
+	return statusOutput{Accounts: accounts, Summary: computeSummary(accounts)}
 }
 
 func printStatusJSON(w io.Writer, accounts []statusAccount) error {
@@ -106,63 +112,6 @@ func printStatusText(w io.Writer, accounts []statusAccount) error {
 	return nil
 }
 
-// normalizeStatusAccounts returns a copy of accounts with each account and
-// drive filled in, and with the two lists status prints without omitempty
-// never nil: the accounts, and each account's drives, so an empty one prints
-// [] rather than null.
-func normalizeStatusAccounts(accounts []statusAccount) []statusAccount {
-	normalized := make([]statusAccount, len(accounts))
-	copy(normalized, accounts)
-	for i := range normalized {
-		drives := normalized[i].Drives
-		if len(drives) == 0 {
-			drives = normalized[i].Mounts
-		}
-		normalized[i].Drives = make([]statusDrive, len(drives))
-		copy(normalized[i].Drives, drives)
-		normalizeStatusDrives(normalized[i].Drives)
-		if normalized[i].SignInRequired == nil {
-			setAccountSignInRequired(&normalized[i])
-		}
-	}
-	return normalized
-}
-
-func normalizeStatusDrives(drives []statusDrive) {
-	for i := range drives {
-		if drives[i].InternalID == "" {
-			if drives[i].CanonicalID != "" {
-				drives[i].InternalID = drives[i].CanonicalID
-			} else {
-				drives[i].InternalID = drives[i].MountID
-			}
-		}
-		if drives[i].Name == "" {
-			drives[i].Name = drives[i].DisplayName
-		}
-		if drives[i].Name == "" {
-			drives[i].Name = statusFallbackDriveName(&drives[i])
-		}
-		if drives[i].Folder == "" {
-			drives[i].Folder = drives[i].SyncDir
-		}
-		if drives[i].Kind == "" {
-			if drives[i].NamespaceID != "" || drives[i].ProjectionKind == statusProjectionChild {
-				drives[i].Kind = statusDriveKindSharedFolder
-			} else {
-				drives[i].Kind = statusDriveKindGeneric
-			}
-		}
-		if len(drives[i].SharedFolders) == 0 && len(drives[i].ChildMounts) > 0 {
-			drives[i].SharedFolders = append([]statusDrive(nil), drives[i].ChildMounts...)
-		} else {
-			drives[i].SharedFolders = append([]statusDrive(nil), drives[i].SharedFolders...)
-		}
-		normalizeStatusDrives(drives[i].SharedFolders)
-		finalizeStatusDriveState(&drives[i])
-	}
-}
-
 func shouldPrintStatusSummary(summary *statusSummary, accountCount int) bool {
 	if summary == nil {
 		return false
@@ -184,9 +133,6 @@ func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool) err
 			return err
 		}
 	}
-	if acct.SignInRequired == nil {
-		setAccountSignInRequired(acct)
-	}
 
 	if err := printAccountHeading(w, acct); err != nil {
 		return err
@@ -195,13 +141,8 @@ func printAccountStatus(w io.Writer, acct *statusAccount, leadingBlank bool) err
 		return err
 	}
 
-	drives := acct.Drives
-	if len(drives) == 0 && len(acct.Mounts) > 0 {
-		drives = append([]statusDrive(nil), acct.Mounts...)
-		normalizeStatusDrives(drives)
-	}
-	for i := range drives {
-		if err := printDriveStatus(w, &drives[i], 0); err != nil {
+	for i := range acct.Drives {
+		if err := printDriveStatus(w, &acct.Drives[i], 0); err != nil {
 			return err
 		}
 	}
@@ -256,7 +197,7 @@ func printDriveStatus(w io.Writer, drive *statusDrive, depth int) error {
 	}
 
 	layout := statusDriveTextLayoutFor(depth)
-	if err := writef(w, "%s%s\n", layout.headingIndent, statusDriveLabel(drive)); err != nil {
+	if err := writef(w, "%s%s\n", layout.headingIndent, drive.Name); err != nil {
 		return err
 	}
 	if err := printDriveFolder(w, layout, drive); err != nil {
@@ -398,42 +339,6 @@ func statusDriveTextLayoutFor(depth int) statusDriveTextLayout {
 		headingIndent: headingSpaces,
 		detailIndent:  detailSpaces,
 	}
-}
-
-func statusDriveLabel(drive *statusDrive) string {
-	if drive == nil {
-		return ""
-	}
-	if drive.Name != "" {
-		return drive.Name
-	}
-	if drive.DisplayName != "" {
-		return drive.DisplayName
-	}
-	return statusFallbackDriveName(drive)
-}
-
-func statusFallbackDriveName(drive *statusDrive) string {
-	if drive == nil {
-		return statusDriveNameOneDrive
-	}
-	identity := drive.CanonicalID
-	if identity == "" {
-		identity = drive.InternalID
-	}
-	switch {
-	case drive.Kind == statusDriveKindPersonalOneDrive || strings.HasPrefix(identity, "personal:"):
-		return "Personal OneDrive"
-	case drive.Kind == statusDriveKindBusinessOneDrive || strings.HasPrefix(identity, "business:"):
-		return "Work OneDrive"
-	case drive.Kind == statusDriveKindSharePoint || strings.HasPrefix(identity, "sharepoint:"):
-		return "SharePoint library"
-	case drive.Kind == statusDriveKindSharedFolder ||
-		drive.ProjectionKind == statusProjectionChild ||
-		strings.HasPrefix(identity, "shared:"):
-		return statusDriveNameSharedFolder
-	}
-	return statusDriveNameOneDrive
 }
 
 func printSyncStateText(w io.Writer, indent string, ss *syncStateInfo) error {

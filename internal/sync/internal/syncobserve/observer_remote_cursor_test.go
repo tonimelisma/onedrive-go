@@ -34,6 +34,89 @@ func TestFullDelta_RepeatedNextLinkIsCursorUnusable(t *testing.T) {
 	assert.Equal(t, []string{"saved-token", "page-2"}, fetcher.Seen(), "the loop is noticed after two fetches")
 }
 
+// The loop guard keys a page by the path the graph client resolves its
+// request and its next link to, so it sees a link back however the link is
+// spelled: to the page of the saved token, to the first request of a window
+// read without a token, and around a two-page cycle. Each is refused before
+// the page is asked for again, and takes the expired-token recovery.
+//
+// Validates: R-2.15.2
+func TestFullDelta_ALinkBackToAPageAskedForIsCursorUnusable(t *testing.T) {
+	t.Parallel()
+
+	const (
+		initialPath = "/drives/d/root/delta"
+		savedPath   = "/drives/d/root/delta?token=a"
+		otherPath   = "/drives/d/root/delta?token=b"
+		graphRoot   = "HTTPS://GRAPH.MICROSOFT.COM/v1.0"
+	)
+	for _, tc := range []struct {
+		label     string
+		saved     string
+		pages     []graph.DeltaPage
+		wantSeens int
+	}{
+		{
+			label: "a link back to the saved token's page", saved: "https://graph.microsoft.com/v1.0" + savedPath,
+			pages:     []graph.DeltaPage{{Path: savedPath, NextLink: graphRoot + savedPath, NextPath: savedPath}},
+			wantSeens: 1,
+		},
+		{
+			label:     "a self-link on the first request of a window without a token",
+			pages:     []graph.DeltaPage{{Path: initialPath, NextLink: graphRoot + initialPath, NextPath: initialPath}},
+			wantSeens: 1,
+		},
+		{
+			label: "a two-page cycle", saved: "https://graph.microsoft.com/v1.0" + savedPath,
+			pages: []graph.DeltaPage{
+				{Path: savedPath, NextLink: graphRoot + otherPath, NextPath: otherPath},
+				{Path: otherPath, NextLink: graphRoot + savedPath, NextPath: savedPath},
+			},
+			wantSeens: 2,
+		},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			fetcher := &syncfixture.ScriptedDeltaFetcher{Answer: func(call int, _ string) (*graph.DeltaPage, error) {
+				if call > len(tc.pages) {
+					return nil, errors.New("a page linked back to was asked for again")
+				}
+				page := tc.pages[call-1]
+				page.Items = []graph.Item{syncfixture.CursorTestItem(fmt.Sprintf("i%d", call))}
+
+				return &page, nil
+			}}
+			obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+
+			_, _, err := obs.FullDelta(t.Context(), tc.saved)
+
+			require.ErrorIs(t, err, syncdomain.ErrDeltaExpired, "a looping change list takes the expired-token recovery")
+			assert.Len(t, fetcher.Seen(), tc.wantSeens, "no page is asked for twice")
+		})
+	}
+}
+
+// A saved token that is not a link, which the graph client refuses, is a
+// cursor that cannot be continued: the drive is enumerated again, not read
+// from the initial path as if it were the changes since the token.
+//
+// Validates: R-2.15.2
+func TestFullDelta_ASavedTokenThatIsNotALinkIsCursorUnusable(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &syncfixture.ScriptedDeltaFetcher{Answer: func(int, string) (*graph.DeltaPage, error) {
+		return nil, fmt.Errorf("graph: reading delta token: %w", graph.ErrDeltaTokenNotALink)
+	}}
+	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+
+	_, _, err := obs.FullDelta(t.Context(), "not-a-link")
+
+	require.ErrorIs(t, err, syncdomain.ErrDeltaExpired)
+	require.ErrorIs(t, err, graph.ErrDeltaTokenNotALink)
+	assert.Equal(t, []string{"not-a-link"}, fetcher.Seen(), "refused once, not retried")
+}
+
 // Validates: R-2.15.2
 func TestFullDelta_RepeatedPageItemsIsCursorUnusable(t *testing.T) {
 	t.Parallel()

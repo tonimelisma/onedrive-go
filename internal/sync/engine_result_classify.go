@@ -46,23 +46,29 @@ func classifyResult(r *syncdomain.ActionCompletion) syncdomain.ResultDecision {
 		})
 	}
 
-	// A request that timed out while the run goes on is the service's silence:
-	// retry work and the outage evidence an answered 5xx is, by the scope its
-	// server answer names (ServerAnswerServiceOutage). Its issue names the
-	// timeout. One that lands once the run has ended is retry work but no
-	// evidence, whatever its shape: a stop is never read as the service's
-	// silence.
-	if syncdomain.IsRequestTimeout(r.Err) {
+	// A request that did not reach OneDrive or got no answer while the run
+	// goes on is the service's silence: retry work and the outage evidence an
+	// answered 5xx is, by the scope its server answer names
+	// (ServerAnswerServiceOutage), never an issue that names the file. A
+	// timeout's condition names the timeout; a name that does not resolve or
+	// a connection refused, unroutable or reset is the outage itself. One that
+	// lands once the run has ended is retry work but no evidence, whatever its
+	// shape: a stop is never read as the service's silence.
+	if syncdomain.IsServiceUnreached(r.Err) {
+		conditionType := syncdomain.IssueServiceOutage
+		if syncdomain.IsRequestTimeout(r.Err) {
+			conditionType = syncdomain.IssueRequestTimeout
+		}
 		if r.RunEnded {
 			return withRuntimeSummary(&syncdomain.ResultDecision{
 				Class:         resultRequeue,
 				Persistence:   syncdomain.PersistRetryWork,
 				TrialHint:     syncdomain.TrialHintReclassify,
-				ConditionType: syncdomain.IssueRequestTimeout,
+				ConditionType: conditionType,
 			})
 		}
 
-		return retryWithScopeEvidence(deriveScopeKey(r), syncdomain.IssueRequestTimeout)
+		return retryWithScopeEvidence(deriveScopeKey(r), conditionType)
 	}
 
 	// A create refused because OneDrive holds a differently spelled sibling

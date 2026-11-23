@@ -160,6 +160,33 @@ func TestMainWithWriters_AFailedCommandKeepsItsStatusWhenTheStatusStreamFails(t 
 	assert.Empty(t, stdout.String())
 }
 
+// A failed command whose stderr refuses main's final error keeps its own
+// exit status, and the refusal is in the log file once at warn level: the
+// final error is written while the log file is still open.
+//
+// Validates: R-6.6.31
+func TestMainWithWriters_ARefusedFinalErrorIsRecordedInTheLogFile(t *testing.T) {
+	setTestDriveHome(t)
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "onedrive-go.log")
+	cfgPath := filepath.Join(dir, "config.toml")
+	content := fmt.Sprintf("log_file = %q\n\n", logPath) +
+		`["personal:user@example.com"]` + "\n" +
+		fmt.Sprintf("sync_dir = %q\n", filepath.Join(dir, "OneDrive"))
+	require.NoError(t, os.WriteFile(cfgPath, []byte(content), 0o600))
+
+	var stdout bytes.Buffer
+	exitCode := mainWithWriters([]string{"--config", cfgPath, "ls", "/"}, &stdout, errWriter{})
+
+	assert.Equal(t, exitSignInRequired, exitCode, "the command's own status")
+	contents := readLogFile(t, logPath)
+	assert.Equal(t, 1, strings.Count(contents, `"msg":"`+statusStreamFailedMessage+`"`), contents)
+	record := logFileRecord(t, contents, statusStreamFailedMessage)
+	assert.Equal(t, "WARN", record["level"])
+	assert.Contains(t, record["error"], "write failed")
+}
+
 // runWatchThatWarnsAtStart runs a watch on ctx whose orchestrator delivers
 // the warning that a drive did not start, on a status stream that refuses
 // every write.
@@ -169,7 +196,7 @@ func runWatchThatWarnsAtStart(t *testing.T, ctx context.Context, logger *slog.Lo
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:watch@example.com")
 	syncDir := t.TempDir()
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+	require.NoError(t, config.AppendDriveSection(ctx, cfgPath, cid, syncDir))
 	holder := loadSyncTestHolder(t, cfgPath)
 
 	return runSyncDaemonWithFactory(

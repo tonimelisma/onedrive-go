@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"syscall"
 	"testing"
@@ -550,6 +551,11 @@ func TestClassifyResult_LocalErrnoTable(t *testing.T) {
 	pathErr := func(errno syscall.Errno) error {
 		return &os.PathError{Op: "write", Path: "/sync/docs/report.pdf", Err: errno}
 	}
+	// An upload's body read fails inside the request, so the read's
+	// *fs.PathError arrives wrapped in the request's *url.Error.
+	readErr := func(errno syscall.Errno) error {
+		return &url.Error{Op: "Put", URL: "https://upload.example/session", Err: &os.PathError{Op: "read", Path: "/sync/docs/report.pdf", Err: errno}}
+	}
 	testCases := []struct {
 		name      string
 		err       error
@@ -565,6 +571,8 @@ func TestClassifyResult_LocalErrnoTable(t *testing.T) {
 		{name: "ebusy is retried", err: pathErr(syscall.EBUSY), class: resultRequeue, issueType: syncdomain.IssueLocalBusy},
 		{name: "etxtbsy is retried", err: pathErr(syscall.ETXTBSY), class: resultRequeue, issueType: syncdomain.IssueLocalBusy},
 		{name: "estale is retried", err: pathErr(syscall.ESTALE), class: resultRequeue, issueType: syncdomain.IssueLocalBusy},
+		{name: "a timed-out local read is retried, not outage evidence", err: readErr(syscall.ETIMEDOUT), class: resultRequeue, issueType: syncdomain.IssueLocalBusy},
+		{name: "eagain of a local read is retried", err: readErr(syscall.EAGAIN), class: resultRequeue, issueType: syncdomain.IssueLocalBusy},
 	}
 
 	for _, tc := range testCases {

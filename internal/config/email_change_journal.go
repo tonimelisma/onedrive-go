@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -120,20 +121,20 @@ func newEmailChanger(moveStateDBs StateDBMover, logger *slog.Logger) *emailChang
 // its config: completing needs the state DB mover of internal/sync, and a
 // config read that renames files is a side effect no reader expects. With no
 // journal it is one stat: no lock is taken and nothing is created.
-func CompleteEmailChange(moveStateDBs StateDBMover, logger *slog.Logger) (EmailReconcileResult, error) {
-	return newEmailChanger(moveStateDBs, logger).complete()
+func CompleteEmailChange(ctx context.Context, moveStateDBs StateDBMover, logger *slog.Logger) (EmailReconcileResult, error) {
+	return newEmailChanger(moveStateDBs, logger).complete(ctx)
 }
 
-func (c *emailChanger) complete() (EmailReconcileResult, error) {
+func (c *emailChanger) complete(ctx context.Context) (EmailReconcileResult, error) {
 	pending, err := c.journalExists()
 	if err != nil || !pending {
 		return EmailReconcileResult{}, err
 	}
 
 	var result EmailReconcileResult
-	err = c.withLock(func() error {
+	err = c.withLock(ctx, func() error {
 		var finishErr error
-		result, finishErr = c.finishLocked()
+		result, finishErr = c.finishLocked(ctx)
 
 		return finishErr
 	})
@@ -185,19 +186,19 @@ func (c *emailChanger) journalExists() (bool, error) {
 // exclusive lock on the journal's folder, with the bounded wait of every
 // config and catalog change. Lock order: this lock, then the store locks
 // the state DB mover takes, then the config and catalog locks the later
-// steps take; never the reverse.
-func (c *emailChanger) withLock(fn func() error) error {
+// steps take; never the reverse. The wait for the lock ends when ctx does.
+func (c *emailChanger) withLock(ctx context.Context, fn func() error) error {
 	path := emailChangeJournalPath(c.dataDir)
 	if path == "" {
 		return errors.New("account email change: no data directory")
 	}
 
-	return defaultConfigLocker().withMutationLock(path, true, fn)
+	return defaultConfigLocker().withMutationLock(ctx, path, true, fn)
 }
 
 // finishLocked finishes the change the journal records, if there is one.
 // The caller holds the email change lock.
-func (c *emailChanger) finishLocked() (EmailReconcileResult, error) {
+func (c *emailChanger) finishLocked(ctx context.Context) (EmailReconcileResult, error) {
 	journal, found, err := readEmailChangeJournal(c.dataDir)
 	if err != nil || !found {
 		return EmailReconcileResult{}, err
@@ -209,7 +210,7 @@ func (c *emailChanger) finishLocked() (EmailReconcileResult, error) {
 			slog.String("to", journal.AccountRenames[i].To.String()),
 		)
 	}
-	if applyErr := c.apply(&journal, nil); applyErr != nil {
+	if applyErr := c.apply(ctx, &journal, nil); applyErr != nil {
 		return EmailReconcileResult{}, applyErr
 	}
 
@@ -221,7 +222,7 @@ func (c *emailChanger) finishLocked() (EmailReconcileResult, error) {
 // it holds every store and before its first rename. A nil begin finishes a
 // change the journal on disk already records. Every step is idempotent, so a
 // resumed change runs them all again.
-func (c *emailChanger) apply(journal *emailChangeJournal, begin func() error) error {
+func (c *emailChanger) apply(ctx context.Context, journal *emailChangeJournal, begin func() error) error {
 	if err := c.moveJournalStateDBs(journal, begin); err != nil {
 		return err
 	}
@@ -238,14 +239,14 @@ func (c *emailChanger) apply(journal *emailChangeJournal, begin func() error) er
 		return err
 	}
 
-	if err := renameJournalDriveSections(journal); err != nil {
+	if err := renameJournalDriveSections(ctx, journal); err != nil {
 		return err
 	}
 	if err := c.reached(emailChangeStepConfigSections); err != nil {
 		return err
 	}
 
-	if err := renameCatalogAccounts(c.dataDir, journal.AccountRenames); err != nil {
+	if err := renameCatalogAccounts(ctx, c.dataDir, journal.AccountRenames); err != nil {
 		return fmt.Errorf("rename catalog accounts: %w", err)
 	}
 	if err := c.reached(emailChangeStepCatalog); err != nil {
@@ -566,13 +567,13 @@ func rootFileExists(root *fsroot.Root, name string) (bool, error) {
 // renameJournalDriveSections renames the change's config sections. A
 // section at both names when a change is resumed was added under the old
 // name after the change renamed it; the file is left as it is.
-func renameJournalDriveSections(journal *emailChangeJournal) error {
+func renameJournalDriveSections(ctx context.Context, journal *emailChangeJournal) error {
 	renames := make(map[driveid.CanonicalID]driveid.CanonicalID, len(journal.DriveRenames))
 	for i := range journal.DriveRenames {
 		renames[journal.DriveRenames[i].From] = journal.DriveRenames[i].To
 	}
 
-	err := RenameDriveSections(journal.ConfigPath, renames)
+	err := RenameDriveSections(ctx, journal.ConfigPath, renames)
 	var collision *driveSectionCollisionError
 	if errors.As(err, &collision) {
 		return fmt.Errorf("finish the account email change: config sections %q and %q both exist in %s; the change "+

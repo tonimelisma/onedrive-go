@@ -246,7 +246,7 @@ func TestUpdateCatalog_RefusesToStoreAMalformedCanonicalID(t *testing.T) {
 			before, err := localpath.ReadFile(path)
 			require.NoError(t, err)
 
-			err = UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
+			err = UpdateCatalogForDataDir(t.Context(), dataDir, func(catalog *Catalog) error {
 				tc.spoil(catalog)
 				return nil
 			})

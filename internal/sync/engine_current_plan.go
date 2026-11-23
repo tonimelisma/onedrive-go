@@ -604,12 +604,9 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
-	var approved []syncdomain.HeldDelete
-	if opts.ConfirmDeletes {
-		approved, err = flow.deps.store.ListHeldDeletes(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("sync: reading the held deletes to confirm: %w", err)
-		}
+	approved, err := flow.approvedHeldDeletes(ctx, opts)
+	if err != nil {
+		return nil, err
 	}
 	recentDeletes, err := flow.deps.store.RecentUnconfirmedDeletes(ctx, flow.deps.now().Add(-syncdomain.DeleteSafetyWindow))
 	if err != nil {
@@ -644,6 +641,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 
 	counts := syncplan.CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
+	report.LocalFolderDeletes, report.RemoteFolderDeletes = countFolderDeletes(plan.Actions)
 	report.HeldLocalDeletes, report.HeldRemoteDeletes = syncdomain.CountHeldDeletesBySide(plan.HeldDeletes)
 
 	return &builtCurrentPlan{
@@ -704,9 +702,11 @@ func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *syncdom
 	if err := flow.deps.store.ReplaceHeldDeletes(ctx, plan.HeldDeletes); err != nil {
 		return fmt.Errorf("sync: recording held deletes: %w", err)
 	}
-	if err := flow.retryWork.prune(ctx, flow.deps.store, retryWorkKeysForActions(plan.Actions)); err != nil {
+	prunedUploads, err := flow.retryWork.prune(ctx, flow.deps.store, retryWorkKeysForActions(plan.Actions))
+	if err != nil {
 		return fmt.Errorf("sync: pruning retry_work to current actions: %w", err)
 	}
+	flow.dropGivenUpUploadSessions(ctx, plan, prunedUploads)
 
 	if err := flow.deps.store.PruneBlockScopesWithoutBlockedWork(ctx); err != nil {
 		return fmt.Errorf("sync: pruning block scopes without blocked work: %w", err)
@@ -723,6 +723,35 @@ func (flow *engineFlow) reconcileRuntimeState(ctx context.Context, plan *syncdom
 	}
 
 	return nil
+}
+
+// dropGivenUpUploadSessions ends the upload sessions of the uploads whose
+// retry rows the prune just deleted: no current action names them, so sync
+// gave them up (a conflict took the path, the file moved or was deleted), and
+// a session record kept for a resume would only hold the server session until
+// it expired (R-5.6.13). It runs after the prune's transaction, never under
+// it, since a cancel is a Graph call. A plan that deferred uploads by its mode
+// (download-only) still wants them on the next run in both directions, so it
+// drops nothing. An upload still in the plan keeps its row and its record, so
+// its retry resumes. A failure to read the session store is logged and costs
+// only the server session's quota until it expires: it is no reason to fail
+// the pass.
+func (flow *engineFlow) dropGivenUpUploadSessions(ctx context.Context, plan *syncdomain.ActionPlan, prunedUploads []string) {
+	if len(prunedUploads) == 0 || plan.DeferredByMode.Uploads > 0 {
+		return
+	}
+	dropped, err := flow.exec.DropUploadSessions(ctx, prunedUploads)
+	if err != nil {
+		flow.deps.logger.Warn("could not end the upload sessions of uploads sync gave up; they expire on their own",
+			slog.Int("uploads", len(prunedUploads)),
+			slog.Any("error", err),
+		)
+	}
+	if dropped > 0 {
+		flow.deps.logger.Debug("ended the upload sessions of uploads sync gave up",
+			slog.Int("sessions", dropped),
+		)
+	}
 }
 
 // localScanCoverage returns the test of whether a full local scan visits a

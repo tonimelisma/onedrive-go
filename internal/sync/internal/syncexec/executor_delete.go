@@ -440,7 +440,8 @@ func (e *Executor) ExecuteRemoteDelete(ctx context.Context, action *syncdomain.A
 	return e.DeleteOutcome(action, syncdomain.ActionRemoteDelete)
 }
 
-// DeleteOutcome builds a successful ActionOutcome for a delete action.
+// DeleteOutcome builds a successful ActionOutcome for a delete action. Its
+// type is the deleted item's, read from the side the delete removed it from.
 func (e *Executor) DeleteOutcome(action *syncdomain.Action, actionType syncdomain.ActionType) syncdomain.ActionOutcome {
 	return syncdomain.ActionOutcome{
 		Action:          actionType,
@@ -448,7 +449,7 @@ func (e *Executor) DeleteOutcome(action *syncdomain.Action, actionType syncdomai
 		Path:            action.Path,
 		DriveID:         e.resolveDriveID(action),
 		ItemID:          action.ItemID,
-		ItemType:        syncdomain.ActionItemType(action),
+		ItemType:        syncdomain.DeletedItemType(action),
 		DeleteConfirmed: action.DeleteConfirmed,
 	}
 }

@@ -6,9 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -21,6 +23,9 @@ type syncCommandOptions struct {
 	DryRun         *bool
 	FullReconcile  bool
 	ConfirmDeletes bool
+	// HeldSet names the held set ConfirmDeletes confirms to a running watch
+	// (confirmDeletesToRunningWatch); empty without one.
+	HeldSet string
 }
 
 type syncWatchRunner func(
@@ -44,6 +49,30 @@ type syncRunOnceRunner func(
 	controlSocketPath string,
 ) multisync.RunOnceResult
 
+// answerOrRefuseForRunningOwner decides a one-shot sync's start against the
+// sync already running, before anything is announced: a running watch takes
+// a held-delete confirmation itself; any other running owner refuses the
+// sync; a held set named with no watch running is refused. handled reports
+// that the sync goes no further, with err its outcome.
+func answerOrRefuseForRunningOwner(
+	ctx context.Context, cc *CLIContext, drives []*config.ResolvedDrive, opts syncCommandOptions, controlSocketPath string,
+) (handled bool, err error) {
+	probe, probeErr := probeControlOwner(ctx)
+	if probeErr == nil && opts.ConfirmDeletes && probe.state == controlOwnerStateWatchOwner {
+		// The watch keeps running and takes the confirmation itself.
+		return true, confirmDeletesToRunningWatch(ctx, cc, probe.client, drives, opts.HeldSet)
+	}
+	if probeErr == nil &&
+		(probe.state == controlOwnerStateWatchOwner || probe.state == controlOwnerStateOneShotOwner) {
+		return true, &multisync.ControlSocketInUseError{Path: controlSocketPath}
+	}
+	if opts.HeldSet != "" {
+		return true, errHeldSetWithoutWatch
+	}
+
+	return false, nil
+}
+
 func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions) error {
 	logger := cc.Logger
 	rawCfg, err := loadSyncConfig(cc, logger)
@@ -57,23 +86,31 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 		return err
 	}
 
-	rawCfg, err = reconcileLoadedSyncConfig(ctx, cc, rawCfg, logger)
-	if err != nil {
-		return err
-	}
-
 	// Usually a no-op: the root already attached these logging settings.
 	if logErr := cc.useLoggingConfig(rawCfg.LoggingConfig); logErr != nil {
 		return logErr
 	}
 	logger = cc.Logger
 
+	// One session runtime serves the sync's identity probe and its engines
+	// (R-6.8.27), so the process keeps one token source per sign-in file.
+	// It is built before the probe, with the logger the engines log
+	// through, and its holder is the one the engines and the control plane
+	// read.
+	holder := config.NewHolder(rawCfg, cc.CfgPath)
+	cc.syncSessionRuntime(holder, syncRuntimeLogger(cc, logger, opts.Watch))
+
+	rawCfg, err = reconcileLoadedSyncConfig(ctx, cc, rawCfg, logger)
+	if err != nil {
+		return err
+	}
+	holder.Update(rawCfg)
+
 	controlSocketPath, err := config.ControlSocketPath()
 	if err != nil {
 		return fmt.Errorf("resolve control socket path: %w", err)
 	}
 
-	holder := config.NewHolder(rawCfg, cc.CfgPath)
 	if opts.Watch {
 		return runSyncWatch(ctx, cc, holder, selectors, opts.Mode, syncengine.WatchOptions{
 			PollInterval: parsePollInterval(rawCfg.PollInterval),
@@ -92,9 +129,8 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	// Refuse before announcing: "Checking (dry run) ~/OneDrive..." followed
 	// by "another onedrive-go sync is already running" read as a run that
 	// started and then broke.
-	if probe, probeErr := probeControlOwner(ctx); probeErr == nil &&
-		(probe.state == controlOwnerStateWatchOwner || probe.state == controlOwnerStateOneShotOwner) {
-		return &multisync.ControlSocketInUseError{Path: controlSocketPath}
+	if handled, ownerErr := answerOrRefuseForRunningOwner(ctx, cc, drives, opts, controlSocketPath); handled {
+		return ownerErr
 	}
 
 	console := newSyncConsole(cc, false)
@@ -110,8 +146,13 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 	// lines just printed, so the exit status cannot say done while a summary
 	// line (or `status`) says otherwise (R-6.6.28).
 	left := console.Summary(result)
+	if err := runOnceResultError(result, left); err != nil {
+		// The run's own failure is the one returned; a stdout that also
+		// refused a line already said so on stderr.
+		return err
+	}
 
-	return runOnceResultError(result, left)
+	return console.OutputError()
 }
 
 func runSyncWatch(
@@ -180,7 +221,7 @@ func runSyncOnce(
 		return cc.seams.syncRunOnce(ctx, holder, drives, mode, opts, logger, controlSocketPath)
 	}
 
-	runtime := cc.newSessionRuntime(holder, logger)
+	runtime := cc.syncSessionRuntime(holder, logger)
 	standaloneSelection := standaloneMountSelectionFromResolvedDrives(drives)
 
 	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
@@ -197,6 +238,34 @@ func runSyncOnce(
 	})
 
 	return orch.RunOnce(ctx, mode, opts)
+}
+
+// syncSessionRuntime is the one session runtime of a sync command: the
+// command's own (CLIContext.Runtime) once there is one, else a new one over
+// holder logging through logger, which becomes the command's. A nil cc (a
+// test of the daemon without a command context) gets a runtime nobody keeps.
+// Call it from the command goroutine.
+func (cc *CLIContext) syncSessionRuntime(holder *config.Holder, logger *slog.Logger) *driveops.SessionRuntime {
+	if cc == nil {
+		return cc.newSessionRuntime(holder, logger)
+	}
+	if cc.Runtime == nil {
+		cc.Runtime = cc.newSessionRuntime(holder, logger)
+	}
+
+	return cc.runtime()
+}
+
+// syncRuntimeLogger is the logger a sync's session runtime logs through:
+// for a watch on a terminal, the one that stamps its console lines with the
+// time of day (newSyncConsole), so a retry warning in a long watch says
+// when it happened like the watch's own lines.
+func syncRuntimeLogger(cc *CLIContext, logger *slog.Logger, watch bool) *slog.Logger {
+	if watch && !isWriterJournal(cc.Status()) {
+		return withConsoleTimestamps(logger, time.Now)
+	}
+
+	return logger
 }
 
 func loadSyncConfig(

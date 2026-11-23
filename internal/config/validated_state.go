@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -125,12 +126,12 @@ func validatePrimaryDriveOwnership(stored *Catalog) error {
 // work or school account can share an address, and the requirement belongs to
 // the one whose sign-in was refused. The same holds for every reader and
 // clear of it.
-func MarkAccountAuthRequired(dataDir string, account driveid.CanonicalID, reason authstate.Reason) error {
+func MarkAccountAuthRequired(ctx context.Context, dataDir string, account driveid.CanonicalID, reason authstate.Reason) error {
 	if account.IsZero() {
 		return nil
 	}
 
-	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
+	return UpdateCatalogForDataDir(ctx, dataDir, func(catalog *Catalog) error {
 		record, found := catalog.AccountByCanonicalID(account)
 		if !found {
 			return nil
@@ -147,12 +148,12 @@ func MarkAccountAuthRequired(dataDir string, account driveid.CanonicalID, reason
 // records the login (recordLogin). Callers name the reason they are clearing
 // it in their own logging, because the catalog records only whether a
 // requirement stands, not how it ended.
-func ClearAccountAuthRequirement(dataDir string, account driveid.CanonicalID) error {
+func ClearAccountAuthRequirement(ctx context.Context, dataDir string, account driveid.CanonicalID) error {
 	if account.IsZero() {
 		return nil
 	}
 
-	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
+	return UpdateCatalogForDataDir(ctx, dataDir, func(catalog *Catalog) error {
 		record, found := catalog.AccountByCanonicalID(account)
 		if !found {
 			return nil

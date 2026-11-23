@@ -191,7 +191,7 @@ func TestReconcileAccountEmail_RenamesOwnedArtifacts(t *testing.T) {
 	fixture := seedEmailReconcileFixture(t)
 
 	var moved []StateDBMove
-	result, err := ReconcileAccountEmail(
+	result, err := ReconcileAccountEmail(t.Context(),
 		fixture.configPath,
 		fixture.newBusiness,
 		emailReconcileTestUser123,
@@ -229,7 +229,7 @@ func TestReconcileAccountEmail_CatalogDefaultDriveNameFollowsTheAddress(t *testi
 	})
 
 	var moved []StateDBMove
-	_, err := ReconcileAccountEmail(
+	_, err := ReconcileAccountEmail(t.Context(),
 		fixture.configPath,
 		fixture.newBusiness,
 		emailReconcileTestUser123,
@@ -265,7 +265,7 @@ func TestReconcileAccountEmail_AStateDBInUseChangesNothing(t *testing.T) {
 	fixture := seedEmailReconcileFixture(t)
 	inUse := errors.New("another onedrive-go sync is already using this sync state")
 
-	_, err := ReconcileAccountEmail(fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+	_, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
 		"renamed@example.com", func([]StateDBMove, func() error) error { return inUse }, logger)
 	require.ErrorIs(t, err, inUse)
 
@@ -300,7 +300,7 @@ sync_dir = "~/Business"
 `))
 
 	var moved []StateDBMove
-	result, err := ReconcileAccountEmail(configPath, current, emailReconcileTestUser123, "user@example.com",
+	result, err := ReconcileAccountEmail(t.Context(), configPath, current, emailReconcileTestUser123, "user@example.com",
 		stateDBMoverForTest(t, &moved), logger)
 	require.NoError(t, err)
 	assert.False(t, result.Changed())
@@ -329,11 +329,11 @@ sync_dir = "~/Business"
 
 	var moved []StateDBMove
 	mover := stateDBMoverForTest(t, &moved)
-	first, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", mover, logger)
+	first, err := ReconcileAccountEmail(t.Context(), configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", mover, logger)
 	require.NoError(t, err)
 	require.True(t, first.Changed())
 
-	second, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", mover, logger)
+	second, err := ReconcileAccountEmail(t.Context(), configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com", mover, logger)
 	require.NoError(t, err)
 	assert.False(t, second.Changed())
 }
@@ -364,7 +364,7 @@ sync_dir = "~/Business"
 `))
 
 	var moved []StateDBMove
-	_, err := ReconcileAccountEmail(configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com",
+	_, err := ReconcileAccountEmail(t.Context(), configPath, newBusiness, emailReconcileTestUser123, "renamed@example.com",
 		stateDBMoverForTest(t, &moved), logger)
 	require.ErrorContains(t, err, "target already exists: "+DriveTokenPath(newBusiness))
 	require.ErrorContains(t, err, "remove "+DriveTokenPath(newBusiness))
@@ -374,4 +374,115 @@ sync_dir = "~/Business"
 	cfg := loadWrittenConfig(t, configPath)
 	assert.Contains(t, cfg.Drives, oldBusiness)
 	assert.NotContains(t, cfg.Drives, newBusiness)
+}
+
+// reconcileRenamedForTest runs the business account's change of the fixture
+// from user@example.com to renamed@example.com.
+func reconcileRenamedForTest(t *testing.T, configPath string, newBusiness driveid.CanonicalID) EmailReconcileResult {
+	t.Helper()
+
+	var moved []StateDBMove
+	result, err := ReconcileAccountEmail(t.Context(), configPath, newBusiness, emailReconcileTestUser123,
+		"renamed@example.com", stateDBMoverForTest(t, &moved), testLogger(t))
+	require.NoError(t, err)
+	require.True(t, result.Changed())
+
+	return result
+}
+
+// drive add stores the default name derived from a shared folder's ID when
+// it cannot resolve the shared name. That stored default holds the address,
+// so it follows the address with the section's header.
+//
+// Validates: R-3.7.2
+func TestReconcileAccountEmail_AConfigSectionsDefaultNameFollowsTheAddress(t *testing.T) {
+	setTestDataDir(t)
+	fixture := seedEmailReconcileFixture(t)
+	writeConfigFixture(t, fixture.configPath, []byte(`["shared:user@example.com:drv123:item456"]
+sync_dir = "~/Shared"
+display_name = "Shared from user@example.com" # set by drive add
+`))
+
+	reconcileRenamedForTest(t, fixture.configPath, fixture.newBusiness)
+
+	raw, err := localpath.ReadFile(fixture.configPath)
+	require.NoError(t, err)
+	content := string(raw)
+	assert.Contains(t, content, `["shared:renamed@example.com:drv123:item456"]`)
+	assert.Contains(t, content, `display_name = "Shared from renamed@example.com" # set by drive add`,
+		"the stored default follows the address and keeps its comment")
+	assert.NotContains(t, content, "user@example.com")
+}
+
+// A name the user typed stays, even one that contains the old address: only
+// the exact default follows it.
+//
+// Validates: R-3.7.2
+func TestReconcileAccountEmail_AConfigSectionsOwnNameStays(t *testing.T) {
+	setTestDataDir(t)
+	fixture := seedEmailReconcileFixture(t)
+	writeConfigFixture(t, fixture.configPath, []byte(`["shared:user@example.com:drv123:item456"]
+sync_dir = "~/Shared"
+display_name = "Shared from user@example.com, the team copy"
+
+["business:user@example.com"]
+sync_dir = "~/Business"
+display_name = "Work"
+`))
+
+	reconcileRenamedForTest(t, fixture.configPath, fixture.newBusiness)
+
+	raw, err := localpath.ReadFile(fixture.configPath)
+	require.NoError(t, err)
+	content := string(raw)
+	assert.Contains(t, content, `["shared:renamed@example.com:drv123:item456"]`)
+	assert.Contains(t, content, `display_name = "Shared from user@example.com, the team copy"`)
+	assert.Contains(t, content, `display_name = "Work"`)
+}
+
+// A shared folder's store the catalog has no record of is the account's when
+// it was the only account at the old email: its name is the evidence, and it
+// moves with the rest.
+//
+// Validates: R-3.7.2
+func TestReconcileAccountEmail_MovesASharedStoreWithNoCatalogRecordWhenOneAccountHadTheEmail(t *testing.T) {
+	setTestDataDir(t)
+
+	oldBusiness := driveid.MustCanonicalID("business:user@example.com")
+	newBusiness := driveid.MustCanonicalID("business:renamed@example.com")
+	oldShared := driveid.MustCanonicalID("shared:user@example.com:drvNoRecord:itemNoRecord")
+	newShared := driveid.MustCanonicalID("shared:renamed@example.com:drvNoRecord:itemNoRecord")
+	seedCatalogAccount(t, oldBusiness, func(account *CatalogAccount) {
+		account.UserID = emailReconcileTestUser123
+		account.PrimaryDriveCanonical = oldBusiness.String()
+	})
+	writeManagedFixture(t, DriveTokenPath(oldBusiness), []byte(`{"token":"old-business"}`))
+	writeManagedFixture(t, DriveStatePath(oldShared), []byte("shared-state"))
+
+	result := reconcileRenamedForTest(t, filepath.Join(t.TempDir(), "config.toml"), newBusiness)
+
+	assert.Empty(t, result.KeptStateDBs)
+	assert.NoFileExists(t, DriveStatePath(oldShared))
+	data, err := localpath.ReadFile(DriveStatePath(newShared))
+	require.NoError(t, err, "the store moved to the new email")
+	assert.Equal(t, "shared-state", string(data), "with its content")
+}
+
+// When a personal and a work or school account both had the old email and no
+// catalog record says which of them a shared folder's store belongs to, the
+// store stays under the old email and the result names it, so the user is
+// told; it is never moved to the wrong account.
+//
+// Validates: R-3.7.2
+func TestReconcileAccountEmail_ReportsASharedStoreItCannotAssign(t *testing.T) {
+	setTestDataDir(t)
+	fixture := seedEmailReconcileFixture(t)
+	unassigned := driveid.MustCanonicalID("shared:user@example.com:drvNoRecord:itemNoRecord")
+	writeManagedFixture(t, DriveStatePath(unassigned), []byte("unassigned-state"))
+
+	result := reconcileRenamedForTest(t, fixture.configPath, fixture.newBusiness)
+
+	assert.Equal(t, []string{DriveStatePath(unassigned)}, result.KeptStateDBs)
+	assert.FileExists(t, DriveStatePath(unassigned), "the store stays under the old email")
+	assert.FileExists(t, DriveStatePath(fixture.newShared), "a store with a catalog record still moves")
 }

@@ -71,11 +71,31 @@ func (flow *engineFlow) beginStopDrain() {
 		return
 	}
 
+	flow.stop = &stopDrain{deadline: flow.stopDeadline()}
+}
+
+// stopDeadline is the stop's one deadline: the running drain's, or, while no
+// drain runs, stopBound after the cancel (canceledAt), or after now for a stop
+// no cancel caused. Reading it starts nothing.
+func (flow *engineFlow) stopDeadline() time.Time {
+	if flow.stop != nil {
+		return flow.stop.deadline
+	}
+
 	start := syncdomain.WallNow()
 	if canceled := flow.canceledAt.Load(); canceled != nil && canceled.Before(start) {
 		start = *canceled
 	}
-	flow.stop = &stopDrain{deadline: start.Add(flow.stopBound)}
+
+	return start.Add(flow.stopBound)
+}
+
+// runStoppedStoreAccess runs a store wait that comes after the run's context
+// ended, on the run's goroutine, through the one detached-access helper and
+// under the stop's one deadline (stopDeadline), never under a bound of its
+// own: an expired deadline carries ErrStoreAccessTimedOut.
+func (flow *engineFlow) runStoppedStoreAccess(ctx context.Context, access func(context.Context) error) error {
+	return syncexec.RunDetachedStoreAccessUntil(ctx, flow.stopDeadline(), access)
 }
 
 // endStopDrain ends the stop's bound once the drain is over and says, once,

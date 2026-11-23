@@ -50,7 +50,7 @@ func newTrashTestContext(t *testing.T) (*CLIContext, *bytes.Buffer, driveid.Cano
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 
 	var out bytes.Buffer
 	return &CLIContext{

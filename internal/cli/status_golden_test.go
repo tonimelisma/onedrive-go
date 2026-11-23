@@ -16,7 +16,7 @@ func goldenStatusAccounts() []statusAccount {
 	authDescriptor := describeStatusCondition(syncdomain.ConditionAuthenticationRequired)
 	sharedDescriptor := describeStatusCondition(syncdomain.ConditionRemoteWriteDenied)
 
-	return []statusAccount{
+	return asBuiltStatusAccounts([]statusAccount{
 		{
 			Email:       "alice@example.com",
 			DriveType:   "personal",
@@ -25,14 +25,14 @@ func goldenStatusAccounts() []statusAccount {
 			OrgName:     "Contoso",
 			Drives: []statusDrive{
 				{
-					// A realistic MountID so the golden shows a real mount_ref
+					// A realistic mount ID so the golden shows a real mount_ref
 					// digest rather than an empty string.
-					MountID:  "personal:alice@example.com",
-					MountRef: config.MountRef("personal:alice@example.com"),
-					Kind:     statusDriveKindPersonalOneDrive,
-					Name:     "Alice Example's personal OneDrive",
-					Folder:   "/Users/alice/OneDrive",
-					State:    driveStateReady,
+					InternalID: "personal:alice@example.com",
+					MountRef:   config.MountRef("personal:alice@example.com"),
+					Kind:       statusDriveKindPersonalOneDrive,
+					Name:       "Alice Example's personal OneDrive",
+					Folder:     "/Users/alice/OneDrive",
+					State:      driveStateReady,
 					SyncState: &syncStateInfo{
 						FileCount:      42,
 						ConditionCount: 3,
@@ -87,16 +87,16 @@ func goldenStatusAccounts() []statusAccount {
 			AuthAction:  authAction(authReasonInvalidSavedLogin),
 			Drives: []statusDrive{
 				{
-					MountID:  "business:bob@example.com",
-					MountRef: config.MountRef("business:bob@example.com"),
-					Kind:     statusDriveKindBusinessOneDrive,
-					Name:     "OneDrive - Example Corp",
-					Folder:   "/Users/bob/WorkDrive",
-					State:    driveStatePaused,
+					InternalID: "business:bob@example.com",
+					MountRef:   config.MountRef("business:bob@example.com"),
+					Kind:       statusDriveKindBusinessOneDrive,
+					Name:       "OneDrive - Example Corp",
+					Folder:     "/Users/bob/WorkDrive",
+					State:      driveStatePaused,
 				},
 			},
 		},
-	}
+	})
 }
 
 // goldenBlockedSharedFolder is a removed shared folder whose local cleanup
@@ -105,10 +105,9 @@ func goldenBlockedSharedFolder() statusDrive {
 	metadata := syncshortcut.ShortcutRootStatus(syncshortcut.ShortcutRootStateRemovedCleanupBlocked)
 	autoRetry := metadata.AutoRetry
 	return statusDrive{
-		MountID:              "personal:alice@example.com|binding-docs",
+		InternalID:           "personal:alice@example.com|binding-docs",
 		MountRef:             config.MountRef("personal:alice@example.com|binding-docs"),
 		NamespaceID:          "personal:alice@example.com",
-		ProjectionKind:       statusProjectionChild,
 		Kind:                 statusDriveKindSharedFolder,
 		Name:                 "Docs",
 		Folder:               "/Users/alice/OneDrive/Shared/Docs",

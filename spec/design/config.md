@@ -39,15 +39,26 @@ a login its own account
 `TestLogout_EndsTheSignInRequirementOfTheAccountWhoseTokenItDeleted`,
 `TestExecutePlainLogout_ClearsPersistedAuthRequirement`).
 
-CLI account views are one per address, however. With two accounts at one
-address, the view (and so the `status` row, `drive list`'s
-`accounts_requiring_auth` and logout's account choice) speaks for the first of
-them by canonical ID, the account whose saved login it checks and signs in
-with: its names, its drive type and its requirement
-(`TestBuildAccountViews_TwoAccountsAtOneAddressShowTheFirstOnesRequirement`).
-The second account's requirement is written and cleared on its own record,
-but no account surface shows it, and `--account` cannot choose between the
-two, since it takes an email (R-3.5.2).
+CLI account views are one per catalog account, named by canonical ID
+(`buildAccountViews`). With two accounts at one address, each has its own
+view, and so its own `status` row, `drive list` `accounts_requiring_auth`
+entry (merged per address and drive type) and logout choice: its names,
+saved login, requirement, configured drives (grouped by the owner their
+catalog record names) and state databases (a personal store is the personal
+account's, a work or SharePoint store the work or school account's, a store
+whose record names an owner that owner's; a shared folder's store with no
+owner on record is neither's)
+(`TestBuildAccountViews_TwoAccountsAtOneAddressHaveAViewEach`,
+`TestStatus_TwoAccountsAtOneAddressAreTwoRowsAndTwoAuthEntries`). The live
+`status` overlay asks each view's drives with that view's own token, so a
+drive never shows the other account's quota. `--account` takes an email or
+an account's canonical ID; logout refuses an email two accounts share and
+names the canonical IDs, and with a canonical ID removes that account's token,
+drive sections, purged stores and catalog records alone
+(`TestLogout_RefusesAnEmailTwoAccountsShare`,
+`TestLogout_ACanonicalIDSelectorRemovesOnlyThatAccount`,
+`TestApplyPurgeLogout_LeavesTheOtherAccountAtTheSameAddress`; R-3.5.2).
+`ApplyPurgeLogout` takes the account's canonical ID, never an email.
 
 ## Overview
 
@@ -81,6 +92,8 @@ TOML configuration with flat global settings and per-drive sections. Drive secti
 | Drive-section values are written as the kind the drive-key schema gives their key, a value the key cannot hold is refused with the file unchanged, and a section name keeps a quote or a backslash through append, find, set and delete (R-4.2.2). | `TestSetDriveKey_StringKeyGivenTrueLoadsBackAsAString`, `TestSetDriveKey_RefusesAValueItsKeyCannotHold`, `TestConfigSchema_DriveKeyKindsMatchTheDriveStruct`, `TestDriveSection_NameWithQuoteAndBackslashRoundTrips`, `TestParseSectionHeader_ReadsEveryHeaderForm`, `TestTOMLString_EveryValueLoadsBackUnchanged` |
 | Enrolling a drive (`AddDrive`, for `drive add` and `login`) is one transaction under the config lock and then the catalog lock: a failure at any step, a held lock included, leaves config and catalog as they were; a failed catalog restore is reported and leaves what a rerun completes; a rerun completes each partial state and reports it; a complete enrollment writes nothing; a shared folder's section is one write; two processes adding one drive add one section; one directory for config and data is one lock; a config that would not load is never written (R-3.3.5, R-3.3.1, R-4.4.4). | `TestAddDrive_FailureAtEachStepLeavesConfigAndCatalogUnchanged`, `TestAddDrive_FailedCatalogRestoreLeavesWhatARerunCompletes`, `TestAddDrive_RerunCompletesEachPartialState`, `TestAddDrive_CompleteEnrollmentWritesNothing`, `TestAddDrive_SharedSectionIsOneWrite`, `TestAddDrive_CrossProcessSameDriveAddsOneSection`, `TestAddDrive_SameDirectoryForConfigAndDataDoesNotSelfDeadlock`, `TestAddDrive_RefusesAConfigThatWouldNotLoad` |
 | A config or catalog change waits at most `configLockTimeout` (10 s, polled every 50 ms) for another holder and then fails with `ErrConfigLocked` naming the locked directory, without running the change; a holder that lets go within the wait is waited for; catalog read-modify-writes run under the same lock, so concurrent updates from two processes both survive (R-4.4.4). | `TestWithConfigMutationLock_HeldLockTimesOutWithTheDirectoryNamed`, `TestWithConfigMutationLock_AcquiresWhenTheHolderReleases`, `TestSetDriveKey_CrossProcessHolderIsNotWaitedForForever`, `TestUpdateCatalog_CrossProcessUpdatesAreNotLost` |
+| Every config and catalog writer takes the caller's context, and the lock wait ends as soon as it ends (a context already ended makes no attempt), without running the change (R-4.4.4). | `TestWithConfigMutationLock_CanceledContextEndsTheWait`, `TestWithConfigMutationLock_EndedContextMakesNoAttempt` |
+| An expired timed pause leaves the file in one locked write per drive for both `paused` and `paused_until` (R-2.6.1, R-4.4.4). | `TestClearExpiredPauses_OneLockedWritePerDrive` |
 
 Transfer validation behavior is not user-disableable. The config surface intentionally has no `disable_download_validation` or `disable_upload_validation` escape hatches; transfer correctness policy lives in the transfer and observation layers, not in mutable config toggles.
 
@@ -375,7 +388,7 @@ the fallback poll cadence even when websocket is enabled.
 
 `ResolvedDrive.Paused` is expiry-aware: `buildResolvedDrive` calls `IsPaused(time.Now())`, so `ResolveDrives(includePaused=false)` correctly includes drives with expired timed pauses.
 
-`ClearExpiredPauses(cfgPath, cfg, now, logger)` is config-level housekeeping: removes stale `paused`/`paused_until` keys from config for drives whose timed pause has expired. Updates both in-memory config and on-disk file. Called by the control-plane reload path before resolving drives. Each key delete waits at most the bounded config-lock wait; when it fails, including with `ErrConfigLocked`, the pause still ends in memory, a Warn names the file that still lists it, and the next reload tries the delete again.
+`ClearExpiredPauses(ctx, cfgPath, cfg, now, logger)` is config-level housekeeping: removes stale `paused`/`paused_until` keys from config for drives whose timed pause has expired. Updates both in-memory config and on-disk file. Called by the control-plane reload path before resolving drives, with the watch's context. Both keys of a drive go in one locked write (`DeleteDriveKeys`, which `resume` uses too), so a stuck holder delays a reload by one bounded wait per expired drive, not two; the wait ends early when the watch stops; when it fails, including with `ErrConfigLocked`, the pause still ends in memory, a Warn names the file that still lists it, and the next reload tries the delete again.
 
 Default sync directories are computed deterministically from the canonical ID + cached metadata using a two-level collision scheme: base name → + display_name → + email. `DefaultSyncDir()` is the single entry point.
 
@@ -404,16 +417,40 @@ email, it:
   recorded
 - records the whole change in a journal, then runs four steps in this order:
   1. moves owned state DBs (`state_*`), through the `StateDBMover` its caller
-     passes in
+     passes in. A personal store follows a renamed personal account, a work
+     or SharePoint store a renamed work or school account, and a shared
+     folder's store the owner its catalog record names. A shared folder's
+     store with no catalog record moves when one account had the old email
+     (its name is the evidence); when a personal and a work or school account
+     both had it, the store stays under the old email and the result names it
+     (`EmailReconcileResult.KeptStateDBs`), which the CLI tells the user in
+     one line, never a log Warn
+     (`TestReconcileAccountEmail_MovesASharedStoreWithNoCatalogRecordWhenOneAccountHadTheEmail`,
+     `TestReconcileAccountEmail_ReportsASharedStoreItCannotAssign`)
   2. renames owned token files (`token_*`)
-  3. rewrites config section headers in place through `RenameDriveSections()`
+  3. rewrites config section headers in place through `RenameDriveSections()`;
+     in the same locked write a renamed section's `display_name` that is
+     exactly the default derived from the old ID (`drive add` stores it when
+     it cannot resolve a shared folder's name) becomes the new ID's default,
+     by the same rule as the catalog step (`followedDisplayName`); a name the
+     user typed stays, even one that contains the old address
+     (`TestReconcileAccountEmail_AConfigSectionsDefaultNameFollowsTheAddress`,
+     `TestReconcileAccountEmail_AConfigSectionsOwnNameStays`)
   4. rewrites catalog account IDs and the drives those accounts own, in one
      catalog write; a drive of any other account keeps its ID, even one under
      the same old address with another account type
      (`TestReconcileAccountEmail_LeavesAnotherAccountsCatalogDrivesAlone`).
      A re-keyed drive's stored name follows the address only when it is the
      default derived from the old ID; a name Graph or the user supplied stays
-     (`TestReconcileAccountEmail_CatalogDefaultDriveNameFollowsTheAddress`)
+     (`TestReconcileAccountEmail_CatalogDefaultDriveNameFollowsTheAddress`).
+     A drive record whose key does not parse stops the step with an error:
+     the catalog decoder and encoder refuse one, so it cannot be on disk
+
+Not covered yet (planned): a shortcut child's store (`state_mount_<digest of
+the mount ID>.db`, whose mount ID holds the parent's ID and so the email)
+does not move with its parent; a running `sync --watch` is not told at once
+about a change another command made; and a second config file sharing the
+data directory keeps sections under the old email. [planned]
 
 Commands learn of a change from the CLI's account identity check, which is
 a freshness step and never a precondition (R-6.8.31). The catalog account
@@ -676,7 +713,7 @@ manager stops restarting a run that would fail the same way (R-6.6.31).
 
 ## Auto-Creation
 
-`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content, and repair an existing drive section that is missing `sync_dir` by writing the deterministic default. Config read-modify-write mutations run under an advisory `flock` on the config directory when that parent directory exists, while config creation paths create the parent directory before taking the same lock; concurrent processes must preserve all successfully appended sections. The lock is taken by polling a non-blocking `flock` every `configLockPollInterval` (50 ms) for at most `configLockTimeout` (10 s), never by a blocking `flock`: a stopped or stuck holder (SIGSTOP, a hung filesystem, a foreign program holding the lock) would otherwise hang every config-writing command, and the watch daemon's reload, for as long as it lived. When the wait runs out the change is not made, and the error wraps `ErrConfigLocked` and names the directory (R-4.4.4). No caller has a context to give, so the wait is bounded rather than cancelable. The catalog takes the same lock on its own directory, the data directory; on macOS that is also the config directory, so there the two are one lock. `flock` locks belong to an open file description and every acquisition opens the directory afresh, so a locked callback must never call another locking function: it would wait on its own caller and fail after the timeout. Every locked callback only reads and rewrites its own file, with one exception: drive enrollment (`AddDrive`, used by login and `drive add`) holds the config lock and, inside it, the catalog lock (`withConfigAndCatalogLocks`), always in that order and as one lock when both files are in one directory (see Persisted Facts And Lifecycle). Nothing takes them in the other order; email reconciliation takes them one after the other. An account email change holds one more lock around them, on its own folder `<data dir>/email-change/` (a directory no other lock names), and takes it first, so the nesting cannot wait on itself. Enrollment reads account names from the catalog snapshot it read under the lock, never token files.
+`login` creates the config file from a template string with all global settings as commented-out defaults. Drive sections are appended. Subsequent `login` calls add new drive sections without disturbing existing content, and repair an existing drive section that is missing `sync_dir` by writing the deterministic default. Config read-modify-write mutations run under an advisory `flock` on the config directory when that parent directory exists, while config creation paths create the parent directory before taking the same lock; concurrent processes must preserve all successfully appended sections. The lock is taken by polling a non-blocking `flock` every `configLockPollInterval` (50 ms) for at most `configLockTimeout` (10 s), never by a blocking `flock`: a stopped or stuck holder (SIGSTOP, a hung filesystem, a foreign program holding the lock) would otherwise hang every config-writing command, and the watch daemon's reload, for as long as it lived. When the wait runs out the change is not made, and the error wraps `ErrConfigLocked` and names the directory (R-4.4.4). Every config and catalog writer (`AppendDriveSection`, `SetDriveKey`, `DeleteDriveKeys`, `DeleteDriveSection`, `RenameDriveSections`, `UpdateCatalog`, `UpdateCatalogForDataDir` and the catalog helpers over it, `AddDrive`, `ClearExpiredPauses`, `ReconcileAccountEmail`, `CompleteEmailChange`) takes the caller's context, and the wait also ends when it does: an ended context is checked before every attempt and ends the pause between attempts, and the error then wraps the context's error, not `ErrConfigLocked`. The 10 s bound stays for callers whose context lives on. A writer that records what already happened (the sync engine's mark that sign-in is required after a 401) passes a context detached from the run's cancel (`context.WithoutCancel`), so a shutdown does not lose the record; it is still bounded by the timeout. The lock is a `flock` on the directory's descriptor; whether a FUSE or NFS mount refuses it has not been probed on a host with such a mount, so there is no lock-file fallback (a refused lock fails the change with the errno). The catalog takes the same lock on its own directory, the data directory; on macOS that is also the config directory, so there the two are one lock. `flock` locks belong to an open file description and every acquisition opens the directory afresh, so a locked callback must never call another locking function: it would wait on its own caller and fail after the timeout. Every locked callback only reads and rewrites its own file, with one exception: drive enrollment (`AddDrive`, used by login and `drive add`) holds the config lock and, inside it, the catalog lock (`withConfigAndCatalogLocks`), always in that order and as one lock when both files are in one directory (see Persisted Facts And Lifecycle). Nothing takes them in the other order; email reconciliation takes them one after the other. An account email change holds one more lock around them, on its own folder `<data dir>/email-change/` (a directory no other lock names), and takes it first, so the nesting cannot wait on itself. Enrollment reads account names from the catalog snapshot it read under the lock, never token files.
 
 Removing a drive or logging out an account deletes the relevant drive sections
 through `DeleteDriveSection()`, but it does not delete `config.toml` itself.

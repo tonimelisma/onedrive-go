@@ -29,9 +29,14 @@ const (
 	// LocalErrorFileTooLarge is EFBIG: the file is larger than the local
 	// filesystem can store (4 GiB on FAT32). Retrying cannot help.
 	LocalErrorFileTooLarge
-	// LocalErrorBusy is EBUSY, ETXTBSY or ESTALE: the path is in use, is a
-	// running executable, or is a stale network-filesystem handle. Each
-	// clears on its own, so the item is retried.
+	// LocalErrorBusy is EBUSY, ETXTBSY, ESTALE, ETIMEDOUT or EAGAIN: the
+	// path is in use, is a running executable, is a stale network-filesystem
+	// handle, or a read on a network mount or FUSE folder timed out or was
+	// told to try again (EAGAIN can reach a regular file there, or from a
+	// lock another process holds, although regular files on a local disk
+	// ignore O_NONBLOCK). Each clears on its own, so the item is retried
+	// with backoff, not at once. A network timeout never lands here: the
+	// sync classifier reads it first, and it holds no *fs.PathError.
 	LocalErrorBusy
 	// LocalErrorCrossDevice is EXDEV: a rename tried to cross a mount point
 	// inside the sync folder.
@@ -55,7 +60,8 @@ func ClassifyLocalError(err error) LocalErrorKind {
 		return LocalErrorReadOnly
 	case errors.Is(err, syscall.EFBIG):
 		return LocalErrorFileTooLarge
-	case errors.Is(err, syscall.EBUSY), errors.Is(err, syscall.ETXTBSY), errors.Is(err, syscall.ESTALE):
+	case errors.Is(err, syscall.EBUSY), errors.Is(err, syscall.ETXTBSY), errors.Is(err, syscall.ESTALE),
+		errors.Is(err, syscall.ETIMEDOUT), errors.Is(err, syscall.EAGAIN):
 		return LocalErrorBusy
 	case errors.Is(err, syscall.EXDEV):
 		return LocalErrorCrossDevice

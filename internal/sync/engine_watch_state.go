@@ -139,6 +139,10 @@ type watchResources struct {
 	refreshTimer   syncdomain.SyncTimer
 	refreshCh      chan time.Time
 	refreshResults chan syncobserve.RemoteObservationBatch
+
+	// heldDeleteConfirms is the engine's confirmation channel
+	// (Engine.ConfirmHeldDeletes), read while running.
+	heldDeleteConfirms <-chan heldDeleteConfirmRequest
 }
 
 // watchRuntime owns all mutable watch-mode state. It is created by RunWatch
@@ -169,8 +173,9 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 			admitCh:      make(chan struct{}, 1),
 		},
 		resources: watchResources{
-			refreshCh:      make(chan time.Time, 1),
-			refreshResults: make(chan syncobserve.RemoteObservationBatch, 1),
+			refreshCh:          make(chan time.Time, 1),
+			refreshResults:     make(chan syncobserve.RemoteObservationBatch, 1),
+			heldDeleteConfirms: engine.heldDeleteConfirms,
 		},
 	}
 

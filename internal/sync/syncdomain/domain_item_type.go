@@ -1,43 +1,26 @@
 package syncdomain
 
-// ResolveItemType determines the item type by checking Remote, Local,
-// then Baseline. Defaults to ItemTypeFile if none provide a type.
-//
-// Special case: when the delta API reports a deleted item, it may strip
-// the folder facet — making item.IsFolder=false even for folders. When
-// Remote is deleted and its ItemType is the default (ItemTypeFile), we
-// fall through to Baseline which has the correct type from when the item
-// was alive. This ensures folder deletes are correctly identified for
-// dependency ordering in buildDependencies/addChildDeleteDeps.
+// ResolveItemType is the type of the item a view describes, read from the
+// side known to be observed: the remote observation, then the local one, then
+// the baseline (the type the item had when it was last synced, for a path
+// neither side holds any more, such as a cleanup's). ItemTypeFile is a type
+// like any other here, never "unknown": a side that is present was observed
+// with its type. No planner view carries a remote tombstone (the planner reads
+// remote truth from remote_state rows, which hold live items only), so a
+// deleted remote observation needs no rule of its own. A nil view is a file.
 func ResolveItemType(view *PathView) ItemType {
-	if view == nil {
+	switch {
+	case view == nil:
+		return ItemTypeFile
+	case view.Remote != nil:
+		return view.Remote.ItemType
+	case view.Local != nil:
+		return view.Local.ItemType
+	case view.Baseline != nil:
+		return view.Baseline.ItemType
+	default:
 		return ItemTypeFile
 	}
-
-	if view.Remote != nil {
-		// When the remote item is deleted, the delta API may omit the folder
-		// facet, causing ItemType to default to ItemTypeFile. If a baseline
-		// exists with a non-file type, prefer it — the baseline recorded the
-		// correct type when the item was still alive.
-		if view.Remote.IsDeleted &&
-			view.Remote.ItemType == ItemTypeFile &&
-			view.Baseline != nil &&
-			view.Baseline.ItemType != ItemTypeFile {
-			return view.Baseline.ItemType
-		}
-
-		return view.Remote.ItemType
-	}
-
-	if view.Local != nil {
-		return view.Local.ItemType
-	}
-
-	if view.Baseline != nil {
-		return view.Baseline.ItemType
-	}
-
-	return ItemTypeFile
 }
 
 // DeletedItemType is the type of the item a delete removes: the side it

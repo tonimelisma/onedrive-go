@@ -492,11 +492,13 @@ func (s *SyncStore) ListBlockedRetryWork(ctx context.Context) ([]syncdomain.Retr
 }
 
 // PruneRetryWorkToCurrentActions deletes every retry_work row whose work is
-// not in work, in one transaction: a failure part way leaves every row.
+// not in work, in one transaction: a failure part way leaves every row. It
+// returns the keys it deleted, once committed, so the caller can end what the
+// given-up work held outside the store (an upload's session).
 func (s *SyncStore) PruneRetryWorkToCurrentActions(
 	ctx context.Context,
 	work []syncdomain.RetryWorkKey,
-) (err error) {
+) (pruned []syncdomain.RetryWorkKey, err error) {
 	keep := make(map[syncdomain.RetryWorkKey]struct{}, len(work))
 	for i := range work {
 		keep[work[i]] = struct{}{}
@@ -504,7 +506,7 @@ func (s *SyncStore) PruneRetryWorkToCurrentActions(
 
 	tx, err := BeginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning retry_work prune: %w", err)
+		return nil, fmt.Errorf("sync: beginning retry_work prune: %w", err)
 	}
 	defer func() {
 		err = finalizeTxRollback(err, tx, "sync: rollback retry_work prune")
@@ -512,7 +514,7 @@ func (s *SyncStore) PruneRetryWorkToCurrentActions(
 
 	rows, err := listRetryWorkWithRunner(ctx, tx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for i := range rows {
 		key := rows[i].WorkKey()
@@ -520,15 +522,16 @@ func (s *SyncStore) PruneRetryWorkToCurrentActions(
 			continue
 		}
 		if deleteErr := deleteRetryWorkByWorkTx(ctx, tx, key); deleteErr != nil {
-			return deleteErr
+			return nil, deleteErr
 		}
+		pruned = append(pruned, key)
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing retry_work prune: %w", err)
+		return nil, fmt.Errorf("sync: committing retry_work prune: %w", err)
 	}
 
-	return nil
+	return pruned, nil
 }
 
 type retryWorkScanner interface {

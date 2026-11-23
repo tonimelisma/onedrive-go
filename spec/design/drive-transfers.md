@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/folder_transfer.go, internal/cli/get.go, internal/cli/put.go, internal/driveops/cleanup.go, internal/driveops/disk_unix.go, internal/driveops/doc.go, internal/driveops/errors.go, internal/driveops/hash.go, internal/driveops/interfaces.go, internal/driveops/local_errors.go, internal/driveops/session.go, internal/driveops/session_store.go, internal/driveops/stale_partials.go, internal/driveops/transfer_download.go, internal/driveops/transfer_manager.go, internal/driveops/transfer_session.go, internal/driveops/transfer_target.go, internal/driveops/transfer_upload.go, internal/driveops/transfer_verify.go, internal/driveops/tree.go, internal/driveops/tree_download.go, internal/driveops/tree_upload.go, pkg/quickxorhash/quickxorhash.go
 
-Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-5.5.2 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.2.7 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-5.8.2 [verified], R-5.10 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified]
+Implements: R-5.1 [verified], R-5.2 [verified], R-5.3 [verified], R-5.5 [verified], R-5.5.2 [verified], R-1.2 [verified], R-1.2.5 [verified], R-1.2.7 [verified], R-1.3 [verified], R-1.3.5 [verified], R-1.3.6 [verified], R-1.4.4 [verified], R-2.8.10 [verified], R-5.6 [verified], R-5.7 [verified], R-5.8 [verified], R-5.8.2 [verified], R-5.10 [verified], R-6.7.14 [verified], R-6.8.3 [verified], R-6.2.6 [verified], R-6.4.7 [verified], R-6.2.10 [verified], R-6.10.6 [verified], R-6.7.38 [verified]
 
 ## TransferManager
 
@@ -160,7 +160,21 @@ resolution, the transfer manager it builds, and put's overwrite rule.
   path below a mounted folder (`MountSession.resolveItemFromMountRoot`), so
   neither lists a folder whose name one read answers
   (`TestLookupUploadTarget_ReadsTheNameAndListsOnlyWhenTheReadCannotSettleIt`,
-  `TestMountSession_ResolveItem_MountRootReadsEachNameOnce`). Every path a
+  `TestMountSession_ResolveItem_MountRootReadsEachNameOnce`). A path below
+  a drive's root is resolved by one rule (`MountSession.resolveDrivePath`),
+  which `ResolveItem` and so every command, the delete target and
+  `WaitPathVisible` use, and which `ListChildrenPages` falls back to for a
+  folder the listing by path cannot reach: a path the route can resolve is
+  read by path, one request, and a genuine miss is not found; a path holding
+  a name the route is known not to resolve (`graph.NameIsPathAddressable`: a
+  colon, a name starting with `v1.0`, `$value`, measured in
+  `graph-api-quirks.md`) has the folder above the first such name resolved
+  by the same rule and the rest walked by name from it (`walkByName`, shared
+  with the walk below a mounted folder), so that name is found in its
+  folder's listing; a path read answered 400 for a name no rule knows is
+  walked by name from the drive root (R-6.7.38,
+  `TestMountSession_ANameThePathRouteDoesNotResolveIsFoundThroughItsParent`,
+  `TestMountSession_AGenuineMissCostsOneRequest`). Every path a
   session is given is first cleaned by `CleanRemotePath`, which drops the
   slashes at its ends and the empty names between doubled slashes (OneDrive
   holds no empty name), so `a//b` is `a/b` below a mounted folder as on a
@@ -432,7 +446,31 @@ shape, so sync engine construction receives mount-root scope from
 ## Session Lifecycle
 
 `persistedSessionUpload` (`transfer_session.go`) owns one resumable upload
-for create and overwrite alike. A record for other content is canceled on
+for create and overwrite alike.
+
+An interrupted upload keeps its record so that its next attempt resumes.
+When sync gives the upload up instead (a conflict takes the path, the file
+moves or is deleted), the record has nothing left to resume, so sync ends it
+in the step in which it ends the upload's retry work: the prune of retry rows
+no current action names returns the keys it deleted
+(`SyncStore.PruneRetryWorkToCurrentActions`), and after that transaction, never
+under it, the engine hands the paths of the pruned uploads to
+`TransferManager.DropUploadSessions` (through `ExecutorConfig`, which tries
+the stored path, its spelling on disk and its parent's spelling). That reads
+every record of the path under either key an upload holds, the create key
+(the absolute path) and the overwrite key (`item::<id>::<path>`), and drops
+each with `dropSession`: the record goes first, then the server session is
+canceled best-effort on a detached, bounded context, so a failed cancel still
+drops the record (`TestTransferManager_DropUploadSessions_DropsBothKeysAndCancelsEachOnce`,
+`TestTransferManager_DropUploadSessions_AFailedCancelStillDropsTheRecord`,
+`TestRunOnce_ConflictOverAnInterruptedLargeUploadDropsItsSession`). An upload
+still in the plan keeps its row and its record
+(`TestChaosGraph_FragmentFaultLeavesAPartUploadedSessionToResume`), and a
+plan that deferred uploads by its mode (download-only) drops nothing, since
+the next run in both directions still wants them. A replan runs only while no
+action runs, so no record of an upload in flight is dropped. Before
+2026-11-23 such a record stayed until `CleanStale` removed it after 7 days,
+and its server session was never canceled. A record for other content is canceled on
 the server before it is dropped, and so is one whose resume fails for any
 reason but shutdown (D-037, R-5.6.13); records carry the session's
 `ExpiresAt`. A failed final fragment (`graph.FinalFragmentError`), a resume
@@ -746,12 +784,24 @@ same thing whichever call (download, mkdir, rename, conflict copy) hit it
 | `LocalErrorNoSpace` | `ErrDiskFull`, `ENOSPC`, `EDQUOT` | one `disk:local` block scope (R-2.10.60) |
 | `LocalErrorReadOnly` | `EROFS` | one `local:read-only:<path>` scope at the read-only mount (R-2.10.61) |
 | `LocalErrorFileTooLarge` | `EFBIG` | per-item `local_file_too_large` (R-2.10.62) |
-| `LocalErrorBusy` | `EBUSY`, `ETXTBSY`, `ESTALE` | retryable `local_busy` (R-2.10.62) |
+| `LocalErrorBusy` | `EBUSY`, `ETXTBSY`, `ESTALE`, `ETIMEDOUT`, `EAGAIN` | retryable `local_busy` (R-2.10.62) |
 | `LocalErrorCrossDevice` | `EXDEV` | per-item `local_cross_device` (R-2.10.62) |
 | `LocalErrorNameTooLong` | `ENAMETOOLONG` | per-item `local_name_too_long` (R-2.11.8) |
 
 `EACCES`/`EPERM` are deliberately not in the table: `os.ErrPermission` already
 names them and the sync permission probe owns their boundary decision.
+
+`ETIMEDOUT` and `EAGAIN` are local only when a local file operation returned
+them: a read on a network mount or a FUSE folder that timed out, or was told
+to try again (a regular file on a local disk ignores the `O_NONBLOCK` that
+`localpath.OpenRegular` opens with, but a network or FUSE filesystem and a
+lock another process holds can still return `EAGAIN`). Both clear on their own
+like `ESTALE` from the same mount, so they are retried with the retry work's
+backoff rather than at once. A network timeout never reaches this table: the
+sync classifier reads a request timeout first, and a chain that holds an
+`*fs.PathError` is never one (`syncdomain.IsRequestTimeout`), so a timed-out
+local read is per-file retry work and never outage evidence
+(`TestClassifyResult_LocalErrnoTable`).
 
 ## Where a Local Path Enters an Error
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -64,11 +65,12 @@ type AddDriveResult struct {
 // that is already complete writes nothing but, for a login, the catalog
 // records it refreshes. A login also ends the account's sign-in requirement,
 // in that same catalog write.
-func AddDrive(req *AddDriveRequest, logger *slog.Logger) (AddDriveResult, error) {
-	return addDrive(req, defaultConfigIO(), defaultConfigLocker(), time.Now(), logger)
+func AddDrive(ctx context.Context, req *AddDriveRequest, logger *slog.Logger) (AddDriveResult, error) {
+	return addDrive(ctx, req, defaultConfigIO(), defaultConfigLocker(), time.Now(), logger)
 }
 
 func addDrive(
+	ctx context.Context,
 	req *AddDriveRequest,
 	io configIO,
 	locker configLocker,
@@ -80,7 +82,7 @@ func addDrive(
 	}
 
 	var result AddDriveResult
-	err := locker.withConfigAndCatalogLocks(req.ConfigPath, CatalogPathForDataDir(req.DataDir), func() error {
+	err := locker.withConfigAndCatalogLocks(ctx, req.ConfigPath, CatalogPathForDataDir(req.DataDir), func() error {
 		var enrollErr error
 		result, enrollErr = enrollLocked(req, io, now)
 		return enrollErr

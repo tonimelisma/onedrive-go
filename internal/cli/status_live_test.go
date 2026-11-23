@@ -142,7 +142,7 @@ func newStatusLiveRun(t *testing.T, graphURL string, budget *statusLiveTestBudge
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	for i, email := range emails {
 		cid := driveid.MustCanonicalID("personal:" + email)
-		require.NoError(t, config.AppendDriveSection(cfgPath, cid, fmt.Sprintf("~/OneDrive-%d", i)))
+		require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, fmt.Sprintf("~/OneDrive-%d", i)))
 		seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 			account.DisplayName = statusLiveTestLocalName
 		})

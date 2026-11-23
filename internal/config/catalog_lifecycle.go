@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -62,8 +63,8 @@ func (a *CatalogAccount) recordIdentityCheck(now time.Time, answered bool) {
 // catalog, under the catalog lock, so checks of several accounts that end
 // together keep each other's record. An account the catalog no longer holds
 // is left alone.
-func RecordAccountIdentityCheck(accountCID driveid.CanonicalID, now time.Time, answered bool) error {
-	err := UpdateCatalog(func(catalog *Catalog) error {
+func RecordAccountIdentityCheck(ctx context.Context, accountCID driveid.CanonicalID, now time.Time, answered bool) error {
+	err := UpdateCatalog(ctx, func(catalog *Catalog) error {
 		account, found := catalog.AccountByCanonicalID(accountCID)
 		if !found {
 			return nil
@@ -154,18 +155,18 @@ func (c *Catalog) registerSharedDrive(cid, ownerCID driveid.CanonicalID, display
 	c.UpsertDrive(&drive)
 }
 
-// ApplyPurgeLogout removes the catalog account and every owned drive record.
-func ApplyPurgeLogout(dataDir, email string) error {
-	if email == "" {
+// ApplyPurgeLogout removes the catalog account, named by its canonical ID,
+// and every drive record it owns. The account is never named by email: a
+// personal and a work or school account can share one, and a purge of one
+// must leave the other. A zero account, or one the catalog does not hold,
+// changes nothing.
+func ApplyPurgeLogout(ctx context.Context, dataDir string, accountCID driveid.CanonicalID) error {
+	if accountCID.IsZero() {
 		return nil
 	}
 
-	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
-		accountCID, err := AccountCanonicalIDByEmail(catalog, email)
-		if err != nil {
-			return err
-		}
-		if accountCID.IsZero() {
+	return UpdateCatalogForDataDir(ctx, dataDir, func(catalog *Catalog) error {
+		if _, found := catalog.AccountByCanonicalID(accountCID); !found {
 			return nil
 		}
 
@@ -181,12 +182,12 @@ func ApplyPurgeLogout(dataDir, email string) error {
 // PruneDriveAfterPurge removes non-primary retained drive records once local
 // purge cleanup has completed, while preserving primary drives as durable
 // inventory anchors.
-func PruneDriveAfterPurge(dataDir string, cid driveid.CanonicalID) error {
+func PruneDriveAfterPurge(ctx context.Context, dataDir string, cid driveid.CanonicalID) error {
 	if cid.IsZero() {
 		return nil
 	}
 
-	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
+	return UpdateCatalogForDataDir(ctx, dataDir, func(catalog *Catalog) error {
 		drive, found := catalog.DriveByCanonicalID(cid)
 		if !found {
 			return nil

@@ -81,7 +81,10 @@ func (c *Client) fetchSitesPage(ctx context.Context, path string) (*sitesListRes
 func (c *Client) SiteDrives(ctx context.Context, siteID string) ([]Drive, error) {
 	c.logger.Debug("listing site drives", slog.String("site_id", siteID))
 
-	path := fmt.Sprintf("/sites/%s/drives?$select=id,name,driveType,quota", siteID)
+	path, err := siteRoute(siteID, "/drives?$select=id,name,driveType,quota")
+	if err != nil {
+		return nil, err
+	}
 
 	drives, err := c.fetchAllDrives(ctx, path, "site drives")
 	if err != nil {

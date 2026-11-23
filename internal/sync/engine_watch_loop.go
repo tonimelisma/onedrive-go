@@ -269,6 +269,9 @@ func (rt *watchRuntime) runNonDrainingWatchStep(
 	case <-rt.admitTimerChan():
 		// A parked outbox entry is due; the next step dispatches it.
 		return false, nil
+	case request := <-recvIf(watchInputOn(phase, watchInputHeldDeleteConfirm), rt.resources.heldDeleteConfirms):
+		rt.handleHeldDeleteConfirm(ctx, request)
+		return false, nil
 	case <-recvIf(watchInputOn(phase, watchInputBootstrapLog), logC):
 		rt.logBootstrapWait(ctx)
 		return false, nil

@@ -24,7 +24,7 @@ them on later passes, and `sync --watch` keeps trying in the background.
 
 | Shown as | What it means | What to do |
 | --- | --- | --- |
-| Sign-in required | The saved login is missing, unreadable, expired or was revoked, or OneDrive rejected the last sync. | Run `onedrive-go login` (with `--account` if you have several). |
+| Sign-in required | The saved login is missing, unreadable, expired or was revoked, or OneDrive rejected the last sync. | Run `onedrive-go login` (with `--account` if you have several). A personal and a work or school account at the same email are named `personal:<email>` and `business:<email>`, for example `onedrive-go logout --account business:user@example.com`. |
 | Storage full | The OneDrive storage quota for this drive (or the owner's, for a shared folder) is full. | Free up space on OneDrive, or ask the shared folder's owner to. |
 | Service outage | OneDrive is temporarily unavailable. | Nothing; onedrive-go retries automatically. |
 | Rate limited | OneDrive asked onedrive-go to slow down. | Nothing; it waits for the time OneDrive asked for, then retries. |
@@ -146,7 +146,8 @@ Commands that change `config.toml` or the drive inventory (`catalog.json`)
 take a short lock on its folder so two of them cannot overwrite each other.
 A command waits up to 10 seconds for another one to finish; if the lock is
 still held, it gives up without changing anything and names the folder. Let
-the other command finish and run yours again. If nothing else is running,
+the other command finish and run yours again; Ctrl-C ends the wait at once.
+If nothing else is running,
 look for a stopped onedrive-go process (one suspended with Ctrl-Z, or paused
 in a debugger) and end it. A running `sync --watch` that meets the lock
 reports it and keeps running.

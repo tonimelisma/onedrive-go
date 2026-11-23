@@ -22,9 +22,9 @@ func sharedFolderCID(t *testing.T) driveid.CanonicalID {
 // Validates: R-2.3.8
 //
 // A separately configured shared folder is its own drive, not a scope nested
-// inside the drive that happens to share it. The projection kind is what keeps
-// its issues grouped under itself in status output rather than folded into a
-// parent's scopes.
+// inside the drive that happens to share it. Its own mount identity, and no
+// parent namespace, is what keeps its issues grouped under itself in status
+// output rather than folded into a parent's scopes.
 func TestBuildConfiguredStatusDrive_StandaloneSharedFolderIsItsOwnDrive(t *testing.T) {
 	t.Parallel()
 
@@ -33,11 +33,12 @@ func TestBuildConfiguredStatusDrive_StandaloneSharedFolderIsItsOwnDrive(t *testi
 
 	status := buildConfiguredStatusDrive(t.Context(), &config.Config{}, cid, drive, nil, nil)
 
-	assert.Equal(t, statusProjectionStandalone, status.ProjectionKind,
+	assert.Empty(t, status.NamespaceID,
 		"a separately configured shared folder is a standalone drive, not a nested child projection")
-	assert.Equal(t, cid.String(), status.MountID,
+	assert.Equal(t, cid.String(), status.InternalID,
 		"its scopes group under its own mount, so the mount identity must be the drive's own")
-	assert.Equal(t, cid.String(), status.CanonicalID)
+	assert.Equal(t, config.MountRef(cid.String()), status.MountRef)
+	assert.Equal(t, statusDriveKindSharedFolder, status.Kind)
 }
 
 // Validates: R-2.3.9
@@ -54,7 +55,6 @@ func TestBuildConfiguredStatusDrive_StandaloneSharedFolderShowsUserFacingIdentit
 	status := buildConfiguredStatusDrive(t.Context(), &config.Config{}, cid, drive, nil, nil)
 
 	assert.Equal(t, "Alice Smith", status.Name)
-	assert.Equal(t, "Alice Smith", status.DisplayName)
 	assert.NotContains(t, status.Name, "srcdrive",
 		"the source drive id is an internal identifier and must not surface as the name")
 	assert.NotContains(t, status.Name, "srcitem")

@@ -274,10 +274,9 @@ func TestStatusPerfOverlayApplyAndUnavailableBranches(t *testing.T) {
 	assert.Equal(t, statusPerfUnavailableNoOwner, noOwnerReason)
 
 	accounts := []statusAccount{{
-		Mounts: []statusDrive{{
-			MountID:     "drive:a",
-			CanonicalID: "drive:a",
-			SyncState:   nil,
+		Drives: []statusDrive{{
+			InternalID: "drive:a",
+			SyncState:  nil,
 		}},
 	}}
 	applyStatusPerfOverlay(accounts, statusPerfOverlay{
@@ -288,9 +287,9 @@ func TestStatusPerfOverlayApplyAndUnavailableBranches(t *testing.T) {
 			"drive:a": {DurationMS: 1500},
 		},
 	})
-	require.NotNil(t, accounts[0].Mounts[0].SyncState)
-	require.NotNil(t, accounts[0].Mounts[0].SyncState.Perf)
-	assert.Equal(t, int64(1500), accounts[0].Mounts[0].SyncState.Perf.DurationMS)
+	require.NotNil(t, accounts[0].Drives[0].SyncState)
+	require.NotNil(t, accounts[0].Drives[0].SyncState.Perf)
+	assert.Equal(t, int64(1500), accounts[0].Drives[0].SyncState.Perf.DurationMS)
 
 	var nilState *syncStateInfo
 	assert.False(t, nilState.hasPersistentStatusData())
@@ -300,7 +299,7 @@ func writeStatusPerfConfig(t *testing.T, cid driveid.CanonicalID) string {
 	t.Helper()
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = "Perf User"
 	})

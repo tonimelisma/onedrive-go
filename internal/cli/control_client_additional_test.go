@@ -247,3 +247,66 @@ func TestDecodeControlJSONResponse_ClosesOnceAndNamesEachFailure(t *testing.T) {
 		})
 	}
 }
+
+// controlTestTimeoutError is a read the transport timed out, as net.Error
+// says it: it names neither context.DeadlineExceeded nor
+// os.ErrDeadlineExceeded.
+type controlTestTimeoutError struct{}
+
+func (controlTestTimeoutError) Error() string   { return "i/o timeout" }
+func (controlTestTimeoutError) Timeout() bool   { return true }
+func (controlTestTimeoutError) Temporary() bool { return true }
+
+// controlTestFailingReader fails every read with err.
+type controlTestFailingReader struct {
+	err error
+}
+
+func (r controlTestFailingReader) Read([]byte) (int, error) { return 0, r.err }
+
+// A 2xx answer whose body the request's deadline cut short is an owner that
+// did not answer in time, never an internal error, and the timeout stays
+// reachable as the cause.
+//
+// Validates: R-2.9.3
+func TestDecodeControlJSONResponse_BodyTimeoutReadsAsDidNotAnswer(t *testing.T) {
+	t.Parallel()
+
+	for _, cause := range []error{controlTestTimeoutError{}, context.DeadlineExceeded, os.ErrDeadlineExceeded} {
+		err := decodeControlJSONResponse(&http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(controlTestFailingReader{err: cause}),
+		}, &synccontrol.PerfStatusResponse{})
+
+		require.Error(t, err, cause.Error())
+		require.ErrorIs(t, err, cause)
+		var daemonErr *controlDaemonError
+		assert.NotErrorAs(t, err, &daemonErr, "a timeout is not an internal_error")
+		assert.True(t, controlOwnerDidNotAnswer(err), cause.Error())
+		assert.Equal(t, controlOwnerStateUnresponsive, probeFailureState(err), cause.Error())
+	}
+}
+
+// An answer that does not decode for another reason is still an
+// internal_error, and its cause stays reachable with errors.Is.
+//
+// Validates: R-2.9.3
+func TestDecodeControlJSONResponse_AnInternalErrorKeepsItsCause(t *testing.T) {
+	t.Parallel()
+
+	errClose := errors.New("close refused")
+	err := decodeControlJSONResponse(&http.Response{
+		StatusCode: http.StatusOK,
+		Body: struct {
+			io.Reader
+			io.Closer
+		}{Reader: strings.NewReader(`{`), Closer: &countingCloser{err: errClose}},
+	}, &synccontrol.MutationResponse{})
+
+	var daemonErr *controlDaemonError
+	require.ErrorAs(t, err, &daemonErr)
+	assert.Equal(t, synccontrol.ErrorInternal, daemonErr.code)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.ErrorIs(t, err, errClose)
+	assert.False(t, controlOwnerDidNotAnswer(err))
+}

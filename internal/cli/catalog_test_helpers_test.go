@@ -19,7 +19,7 @@ func seedCatalogAccount(
 ) {
 	t.Helper()
 
-	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalog(t.Context(), func(catalog *config.Catalog) error {
 		account := config.CatalogAccount{
 			CanonicalID: cid.String(),
 			Email:       cid.Email(),
@@ -43,7 +43,7 @@ func seedCatalogDrive(
 ) {
 	t.Helper()
 
-	require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalog(t.Context(), func(catalog *config.Catalog) error {
 		drive := config.CatalogDrive{
 			CanonicalID: cid.String(),
 			DriveType:   cid.DriveType(),

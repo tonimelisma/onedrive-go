@@ -360,10 +360,12 @@ func TestPrintDriveStatus_WithoutSyncStateUsesSyncDirFallback(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printMountStatus(&buf, &statusDrive{
-		CanonicalID: "personal:blank@example.com",
-		State:       driveStatePaused,
-	}))
+	require.NoError(t, printDriveStatus(&buf, asBuiltStatusDrive(&statusDrive{
+		InternalID: "personal:blank@example.com",
+		Kind:       statusDriveKindPersonalOneDrive,
+		Name:       "Personal OneDrive",
+		State:      driveStatePaused,
+	}), 0))
 
 	assert.Equal(t, ""+
 		"  Personal OneDrive\n"+
@@ -378,11 +380,13 @@ func TestPrintDriveStatus_UpToDateIsNamedAndWatchIsShown(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printMountStatus(&buf, &statusDrive{
-		CanonicalID: "personal:user@example.com",
-		Folder:      "~/OneDrive",
-		State:       driveStateReady,
-	}))
+	require.NoError(t, printDriveStatus(&buf, asBuiltStatusDrive(&statusDrive{
+		InternalID: "personal:user@example.com",
+		Kind:       statusDriveKindPersonalOneDrive,
+		Name:       "Personal OneDrive",
+		Folder:     "~/OneDrive",
+		State:      driveStateReady,
+	}), 0))
 	assert.Equal(t, ""+
 		"  Personal OneDrive\n"+
 		"    Folder: ~/OneDrive\n"+
@@ -392,13 +396,15 @@ func TestPrintDriveStatus_UpToDateIsNamedAndWatchIsShown(t *testing.T) {
 	)
 
 	buf.Reset()
-	require.NoError(t, printMountStatus(&buf, &statusDrive{
-		CanonicalID:  "personal:user@example.com",
+	require.NoError(t, printDriveStatus(&buf, asBuiltStatusDrive(&statusDrive{
+		InternalID:   "personal:user@example.com",
+		Kind:         statusDriveKindPersonalOneDrive,
+		Name:         "Personal OneDrive",
 		Folder:       "~/OneDrive",
 		State:        driveStateReady,
 		RuntimeOwner: "watch",
 		RuntimeState: statusRuntimeStateActive,
-	}))
+	}), 0))
 	assert.Contains(t, buf.String(), "    Status: Up to date, watching for changes\n")
 }
 
@@ -430,7 +436,7 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printAccountStatus(&buf, &statusAccount{
+	err := printAccountStatus(&buf, asBuiltStatusAccount(&statusAccount{
 		Email:          "alice@example.com",
 		DriveType:      "business",
 		UserID:         "user-123",
@@ -441,12 +447,12 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 		OrgName:        "Contoso",
 		DegradedReason: driveCatalogUnavailableReason,
 		DegradedAction: degradedAction(driveCatalogUnavailableReason),
-		Mounts: []statusDrive{
+		Drives: []statusDrive{
 			{
-				CanonicalID: "business:alice@example.com",
-				DisplayName: "Documents",
-				SyncDir:     "",
-				State:       driveStateReady,
+				InternalID: "business:alice@example.com",
+				Kind:       statusDriveKindBusinessOneDrive,
+				Name:       "Documents",
+				State:      driveStateReady,
 				SyncState: &syncStateInfo{
 					FileCount:      7,
 					ConditionCount: 1,
@@ -464,7 +470,7 @@ func TestPrintAccountStatus_RendersOptionalFieldsAndLiveDrive(t *testing.T) {
 				},
 			},
 		},
-	}, false)
+	}), false)
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -495,16 +501,18 @@ func TestPrintStatusText_RendersMultiAccountSummary(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, []statusAccount{
+	require.NoError(t, printStatusText(&buf, asBuiltStatusAccounts([]statusAccount{
 		{
 			Email:     "ready@example.com",
 			DriveType: "personal",
 			AuthState: authStateReady,
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{
-					CanonicalID: "personal:ready@example.com",
-					State:       driveStateReady,
-					SyncDir:     "/sync/ready",
+					InternalID: "personal:ready@example.com",
+					Kind:       statusDriveKindPersonalOneDrive,
+					Name:       "Personal OneDrive",
+					State:      driveStateReady,
+					Folder:     "/sync/ready",
 					SyncState: &syncStateInfo{
 						FileCount:      5,
 						ConditionCount: 2,
@@ -520,15 +528,17 @@ func TestPrintStatusText_RendersMultiAccountSummary(t *testing.T) {
 			AuthState:  authStateAuthenticationNeeded,
 			AuthReason: string(authReasonMissingLogin),
 			AuthAction: authAction(authReasonMissingLogin),
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{
-					CanonicalID: "business:needs-auth@example.com",
-					State:       driveStatePaused,
-					SyncDir:     "/sync/paused",
+					InternalID: "business:needs-auth@example.com",
+					Kind:       statusDriveKindBusinessOneDrive,
+					Name:       "Work OneDrive",
+					State:      driveStatePaused,
+					Folder:     "/sync/paused",
 				},
 			},
 		},
-	}))
+	})))
 
 	output := buf.String()
 	assert.Contains(t, output, "Status: 2 drives: 1 paused, 1 with issues, 1 account needs sign-in")

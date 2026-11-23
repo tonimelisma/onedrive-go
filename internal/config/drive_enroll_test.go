@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -65,8 +66,8 @@ func newEnrollFixture(t *testing.T, withFiles bool) enrollFixture {
 
 	if withFiles {
 		other := driveid.MustCanonicalID(enrollTestOtherDrive)
-		require.NoError(t, AppendDriveSection(f.configPath, other, filepath.Join(root, "Other")))
-		require.NoError(t, UpdateCatalogForDataDir(f.dataDir, func(catalog *Catalog) error {
+		require.NoError(t, AppendDriveSection(t.Context(), f.configPath, other, filepath.Join(root, "Other")))
+		require.NoError(t, UpdateCatalogForDataDir(t.Context(), f.dataDir, func(catalog *Catalog) error {
 			for _, raw := range []string{enrollTestOwnedDrive, enrollTestSharedOwner, enrollTestLoginAccount} {
 				cid := driveid.MustCanonicalID(raw)
 				catalog.UpsertAccount(&CatalogAccount{
@@ -156,7 +157,7 @@ func readFileState(t *testing.T, path string) fileState {
 // replaced, so a held lock runs out the bounded wait at once.
 func noWaitLocker() configLocker {
 	locker := defaultConfigLocker()
-	locker.sleep = func(time.Duration) {}
+	locker.sleep = func(context.Context, time.Duration) error { return nil }
 
 	return locker
 }
@@ -233,7 +234,7 @@ func TestAddDrive_FailureAtEachStepLeavesConfigAndCatalogUnchanged(t *testing.T)
 					io := defaultConfigIO()
 					step.inject(t, f, &req, &io)
 
-					_, err := addDrive(&req, io, noWaitLocker(), time.Now(), testLogger(t))
+					_, err := addDrive(t.Context(), &req, io, noWaitLocker(), time.Now(), testLogger(t))
 					require.ErrorIs(t, err, step.wantErr)
 
 					assert.Equal(t, configBefore, readFileState(t, f.configPath), "config changed")
@@ -267,7 +268,7 @@ func TestAddDrive_FailedCatalogRestoreLeavesWhatARerunCompletes(t *testing.T) {
 		return writeFile(path, data)
 	}
 
-	_, err := addDrive(&req, io, noWaitLocker(), time.Now(), testLogger(t))
+	_, err := addDrive(t.Context(), &req, io, noWaitLocker(), time.Now(), testLogger(t))
 	require.ErrorIs(t, err, errInjected)
 	require.ErrorIs(t, err, fs.ErrPermission, "the failed restore must be reported with the first error")
 	assert.Contains(t, err.Error(), "putting the catalog back")
@@ -279,7 +280,7 @@ func TestAddDrive_FailedCatalogRestoreLeavesWhatARerunCompletes(t *testing.T) {
 	_, found := catalog.DriveByCanonicalID(req.Drive)
 	require.True(t, found)
 
-	result, err := AddDrive(&req, testLogger(t))
+	result, err := AddDrive(t.Context(), &req, testLogger(t))
 	require.NoError(t, err)
 	assert.True(t, result.Added)
 	assertEnrollmentComplete(t, f, &req)
@@ -337,7 +338,7 @@ func TestAddDrive_RerunCompletesEachPartialState(t *testing.T) {
 			leave: func(t *testing.T, f enrollFixture, req *AddDriveRequest) {
 				t.Helper()
 				enrollThenForget(t, req, nil)
-				require.NoError(t, DeleteDriveKey(f.configPath, req.Drive, displayNameKey))
+				require.NoError(t, DeleteDriveKeys(t.Context(), f.configPath, req.Drive, displayNameKey))
 			},
 			wantCompleted: true,
 		},
@@ -347,7 +348,7 @@ func TestAddDrive_RerunCompletesEachPartialState(t *testing.T) {
 			leave: func(t *testing.T, f enrollFixture, req *AddDriveRequest) {
 				t.Helper()
 				enrollThenForget(t, req, nil)
-				require.NoError(t, DeleteDriveKey(f.configPath, req.Drive, syncDirKey))
+				require.NoError(t, DeleteDriveKeys(t.Context(), f.configPath, req.Drive, syncDirKey))
 			},
 			wantCompleted: true,
 		},
@@ -376,7 +377,7 @@ func TestAddDrive_RerunCompletesEachPartialState(t *testing.T) {
 			leave: func(t *testing.T, f enrollFixture, req *AddDriveRequest) {
 				t.Helper()
 				enrollThenForget(t, req, nil)
-				require.NoError(t, DeleteDriveSection(f.configPath, req.Drive))
+				require.NoError(t, DeleteDriveSection(t.Context(), f.configPath, req.Drive))
 			},
 			wantAdded: true,
 		},
@@ -388,7 +389,7 @@ func TestAddDrive_RerunCompletesEachPartialState(t *testing.T) {
 			req := tc.request(f)
 			tc.leave(t, f, &req)
 
-			result, err := AddDrive(&req, testLogger(t))
+			result, err := AddDrive(t.Context(), &req, testLogger(t))
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantAdded, result.Added, "added")
 			assert.Equal(t, tc.wantCompleted, result.Completed, "completed")
@@ -403,12 +404,12 @@ func TestAddDrive_RerunCompletesEachPartialState(t *testing.T) {
 func enrollThenForget(t *testing.T, req *AddDriveRequest, forget func(*Catalog)) AddDriveResult {
 	t.Helper()
 
-	result, err := AddDrive(req, testLogger(t))
+	result, err := AddDrive(t.Context(), req, testLogger(t))
 	require.NoError(t, err)
 	require.True(t, result.Added)
 
 	if forget != nil {
-		require.NoError(t, UpdateCatalogForDataDir(req.DataDir, func(catalog *Catalog) error {
+		require.NoError(t, UpdateCatalogForDataDir(t.Context(), req.DataDir, func(catalog *Catalog) error {
 			forget(catalog)
 			return nil
 		}))
@@ -423,7 +424,7 @@ func TestAddDrive_CompleteEnrollmentWritesNothing(t *testing.T) {
 		t.Run(kind.name, func(t *testing.T) {
 			f := newEnrollFixture(t, true)
 			req := kind.request(f)
-			first, err := AddDrive(&req, testLogger(t))
+			first, err := AddDrive(t.Context(), &req, testLogger(t))
 			require.NoError(t, err)
 			require.True(t, first.Added)
 
@@ -435,7 +436,7 @@ func TestAddDrive_CompleteEnrollmentWritesNothing(t *testing.T) {
 				return writeFile(path, data)
 			}
 			// A login refreshes what it learned, so only its config stays as it is.
-			again, err := addDrive(&req, io, noWaitLocker(), time.Now(), testLogger(t))
+			again, err := addDrive(t.Context(), &req, io, noWaitLocker(), time.Now(), testLogger(t))
 			require.NoError(t, err)
 
 			assert.False(t, again.Added)
@@ -461,8 +462,8 @@ func TestAddDrive_SharedSectionIsOneWrite(t *testing.T) {
 			leave: func(t *testing.T, f enrollFixture, req *AddDriveRequest) {
 				t.Helper()
 				enrollThenForget(t, req, nil)
-				require.NoError(t, DeleteDriveKey(f.configPath, req.Drive, syncDirKey))
-				require.NoError(t, DeleteDriveKey(f.configPath, req.Drive, displayNameKey))
+				require.NoError(t, DeleteDriveKeys(t.Context(), f.configPath, req.Drive, syncDirKey))
+				require.NoError(t, DeleteDriveKeys(t.Context(), f.configPath, req.Drive, displayNameKey))
 			},
 		},
 	}
@@ -483,7 +484,7 @@ func TestAddDrive_SharedSectionIsOneWrite(t *testing.T) {
 				return writeFile(path, data)
 			}
 
-			_, err := addDrive(&req, io, noWaitLocker(), time.Now(), testLogger(t))
+			_, err := addDrive(t.Context(), &req, io, noWaitLocker(), time.Now(), testLogger(t))
 			require.NoError(t, err)
 
 			require.Len(t, configWrites, 1, "the section must be written once")
@@ -526,9 +527,12 @@ func TestAddDrive_SameDirectoryForConfigAndDataDoesNotSelfDeadlock(t *testing.T)
 
 			waits := 0
 			locker := defaultConfigLocker()
-			locker.sleep = func(time.Duration) { waits++ }
+			locker.sleep = func(context.Context, time.Duration) error {
+				waits++
+				return nil
+			}
 
-			result, err := addDrive(&req, defaultConfigIO(), locker, time.Now(), testLogger(t))
+			result, err := addDrive(t.Context(), &req, defaultConfigIO(), locker, time.Now(), testLogger(t))
 			require.NoError(t, err)
 			assert.Zero(t, waits, "the enrollment waited on its own lock")
 			assert.True(t, result.Added)
@@ -600,7 +604,7 @@ func TestAddDrive_CrossProcessWorker(t *testing.T) {
 	_, err := io.Copy(io.Discard, os.Stdin)
 	require.NoError(t, err)
 
-	result, err := AddDrive(&AddDriveRequest{
+	result, err := AddDrive(t.Context(), &AddDriveRequest{
 		ConfigPath:  os.Getenv("ONEDRIVE_GO_ENROLL_CONFIG"),
 		DataDir:     os.Getenv("ONEDRIVE_GO_ENROLL_DATA"),
 		Drive:       driveid.MustCanonicalID(os.Getenv("ONEDRIVE_GO_ENROLL_DRIVE")),
@@ -621,7 +625,7 @@ func TestAddDrive_FirstEnrollmentCreatesTheConfigFromTheTemplate(t *testing.T) {
 	f := newEnrollFixture(t, false)
 
 	req := f.loginRequest()
-	result, err := AddDrive(&req, testLogger(t))
+	result, err := AddDrive(t.Context(), &req, testLogger(t))
 	require.NoError(t, err)
 	assert.True(t, result.Added)
 	assert.Equal(t, "~/OneDrive", result.SyncDir)
@@ -655,7 +659,7 @@ func TestAddDrive_ChoosesTheSyncDirFromTheLockedSnapshot(t *testing.T) {
 			drive: enrollTestLoginAccount,
 			seed: func(t *testing.T, f enrollFixture) {
 				t.Helper()
-				require.NoError(t, AppendDriveSection(f.configPath, driveid.MustCanonicalID(enrollTestSharedOwner), "~/OneDrive"))
+				require.NoError(t, AppendDriveSection(t.Context(), f.configPath, driveid.MustCanonicalID(enrollTestSharedOwner), "~/OneDrive"))
 			},
 			wantDir: "~/OneDrive - login@example.com",
 		},
@@ -669,7 +673,7 @@ func TestAddDrive_ChoosesTheSyncDirFromTheLockedSnapshot(t *testing.T) {
 			}
 
 			req := f.request(tc.drive)
-			result, err := AddDrive(&req, testLogger(t))
+			result, err := AddDrive(t.Context(), &req, testLogger(t))
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantDir, result.SyncDir)
 
@@ -684,12 +688,12 @@ func TestAddDrive_RefusesAConfigThatWouldNotLoad(t *testing.T) {
 	f := newEnrollFixture(t, true)
 	// A drive the user pointed inside the folder a personal drive defaults to.
 	other := driveid.MustCanonicalID("personal:inside@example.com")
-	require.NoError(t, AppendDriveSection(f.configPath, other, "~/OneDrive/Inside"))
+	require.NoError(t, AppendDriveSection(t.Context(), f.configPath, other, "~/OneDrive/Inside"))
 	configBefore := readFileState(t, f.configPath)
 	catalogBefore := readFileState(t, f.catalogPath)
 
 	req := f.loginRequest()
-	_, err := AddDrive(&req, testLogger(t))
+	_, err := AddDrive(t.Context(), &req, testLogger(t))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "checking the config with the drive added")
 
@@ -722,7 +726,7 @@ func TestAddDrive_RefusesAnIncoherentRequest(t *testing.T) {
 			req := f.request(enrollTestOwnedDrive)
 			spoil(&req)
 
-			_, err := AddDrive(&req, testLogger(t))
+			_, err := AddDrive(t.Context(), &req, testLogger(t))
 			require.Error(t, err)
 			assert.False(t, readFileState(t, f.configPath).exists)
 			assert.False(t, readFileState(t, f.catalogPath).exists)
@@ -735,7 +739,7 @@ func TestAddDrive_RefusesAnIncoherentRequest(t *testing.T) {
 func markSignInRequired(t *testing.T, f enrollFixture, account driveid.CanonicalID) {
 	t.Helper()
 
-	require.NoError(t, UpdateCatalogForDataDir(f.dataDir, func(catalog *Catalog) error {
+	require.NoError(t, UpdateCatalogForDataDir(t.Context(), f.dataDir, func(catalog *Catalog) error {
 		record, _ := catalog.AccountByCanonicalID(account)
 		record.AuthRequirementReason = authstate.ReasonSyncAuthRejected
 		catalog.UpsertAccount(&record)
@@ -769,7 +773,7 @@ func TestAddDrive_LoginEndsTheSignInRequirementInItsOneCatalogWrite(t *testing.T
 
 	failing := defaultConfigIO()
 	failing.writeManagedFile = failWritesTo(failing.writeManagedFile, f.configPath)
-	_, err := addDrive(&req, failing, noWaitLocker(), time.Now(), testLogger(t))
+	_, err := addDrive(t.Context(), &req, failing, noWaitLocker(), time.Now(), testLogger(t))
 	require.ErrorIs(t, err, errInjected)
 	assert.Equal(t, authstate.ReasonSyncAuthRejected, signInRequirement(t, f, req.Drive),
 		"a failed enrollment leaves the requirement standing")
@@ -783,7 +787,7 @@ func TestAddDrive_LoginEndsTheSignInRequirementInItsOneCatalogWrite(t *testing.T
 		}
 		return writeFile(path, data)
 	}
-	result, err := addDrive(&req, counting, noWaitLocker(), time.Now(), testLogger(t))
+	result, err := addDrive(t.Context(), &req, counting, noWaitLocker(), time.Now(), testLogger(t))
 	require.NoError(t, err)
 
 	assert.Empty(t, signInRequirement(t, f, req.Drive), "the login ended the requirement")
@@ -797,7 +801,7 @@ func TestAddDrive_LoginRecordsAccountAndPrimaryDrive(t *testing.T) {
 	req := f.loginRequest()
 	req.Login.OrgName = enrollTestOrgName
 
-	_, err := AddDrive(&req, testLogger(t))
+	_, err := AddDrive(t.Context(), &req, testLogger(t))
 	require.NoError(t, err)
 
 	catalog, err := LoadCatalogForDataDir(f.dataDir)
@@ -855,7 +859,7 @@ func TestAddDrive_RecordsTheDrivesOwner(t *testing.T) {
 			f := newEnrollFixture(t, true)
 			req := tc.request(f)
 
-			result, err := AddDrive(&req, testLogger(t))
+			result, err := AddDrive(t.Context(), &req, testLogger(t))
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantName(req.Drive), result.DisplayName)
 			assert.Equal(t, tc.wantSyncDir, result.SyncDir)
@@ -881,7 +885,7 @@ func TestLogin_RecordsTheIdentityCheck(t *testing.T) {
 	req := f.loginRequest()
 	now := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 
-	_, err := addDrive(&req, defaultConfigIO(), noWaitLocker(), now, testLogger(t))
+	_, err := addDrive(t.Context(), &req, defaultConfigIO(), noWaitLocker(), now, testLogger(t))
 	require.NoError(t, err)
 
 	catalog, err := LoadCatalogForDataDir(f.dataDir)

@@ -74,8 +74,10 @@ import (
 // item; a move that waits for the item at its folder's path on OneDrive is
 // deferred at once instead (deferRefusedMove). So the pending items are
 // decided in turn unless their waits loop: the final sweep defers every item
-// on a loop, so the pass still ends. Nothing breaks the loop of a folder whose
-// target hangs off an entry that waits for it, nor that of two files each
+// on a loop, so the pass still ends. The loop of a folder whose target hangs
+// off an entry that lands below the path the folder's move vacates is broken
+// by moving the folder aside first (parkOneVacatingLoop). Nothing breaks that
+// of two files each
 // moved here into a new folder at the other's path, nor a ring of such moves
 // through a file: every later pass defers their items again, and a one-shot
 // sync ends with them unfinished, after a pass that does nothing else or at
@@ -671,7 +673,7 @@ func (c *moveComposer) emitRun(order []string, takenBack map[string]bool) *moveE
 	}
 	for range len(order) + 1 {
 		e.resolvePending(order)
-		if !e.parkOneOccupancyCycle(order) {
+		if !e.parkOneOccupancyCycle(order) && !e.parkOneVacatingLoop(order) {
 			break
 		}
 	}
@@ -785,6 +787,75 @@ func (e *moveEmitter) parkOneOccupancyCycle(order []string) bool {
 	return false
 }
 
+// parkOneVacatingLoop breaks one loop of a folder moved into its own former
+// child: here docs moved to tmp, a new docs made, tmp/sub moved into it and
+// tmp moved to docs/sub/docs2 (or the same on OneDrive). sub's move on the
+// other side lands below the path docs's move vacates, so it is decided after
+// docs (waitsForVacatingFolder), while docs's target hangs off sub, so docs is
+// decided after sub: both stayed pending and were deferred on every pass, as
+// no order of plain moves exists (sub's new folder takes docs's path only once
+// docs has left it, and docs's destination lies below sub). The vacating
+// folder moves to a free name beside its source on that side, as a swap's
+// parked item does (park), carrying the child, and waits; the next pass makes
+// the folder at the path it left and moves the child into it and then the
+// folder below the child. A folder that holds the path of a folder a local
+// move of the plan lands in is not parked on this computer
+// (holdsALocalLanding), as in parkOneOccupancyCycle. It reports whether it
+// parked a folder.
+func (e *moveEmitter) parkOneVacatingLoop(order []string) bool {
+	for _, key := range order {
+		if e.state[key] != moveEmitPending || e.unresolvable[key] || e.parentState(key) != moveEmitSettled {
+			continue
+		}
+		n := e.nodes[key]
+		if !e.isMoveParticipant(n) {
+			continue
+		}
+		for _, side := range []moveCoord{moveCoordLocal, moveCoordRemote} {
+			if folder, ok := e.vacatingLoopFolder(key, n, side); ok && e.park(folder, side) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// vacatingLoopFolder is the folder parkOneVacatingLoop parks for key on side:
+// the pending folder whose move vacates the path key lands below, when that
+// folder's own target hangs off key.
+func (e *moveEmitter) vacatingLoopFolder(key string, n *moveNode, side moveCoord) (string, bool) {
+	if !n.present(side) || sameLocation(e.location(n, side), e.target[key]) {
+		return "", false
+	}
+	folder, lands := e.vacatingFolder(n, side, e.targetPath(key))
+	if !lands || e.state[folder] != moveEmitPending || e.unresolvable[folder] || !e.targetHangsOff(folder, key) {
+		return "", false
+	}
+	if side == moveCoordLocal && e.holdsALocalLanding(folder) {
+		return "", false
+	}
+
+	return folder, true
+}
+
+// targetHangsOff reports whether key's target position hangs, directly or
+// through the items above it, off ancestor (targetParentNode).
+func (e *moveEmitter) targetHangsOff(key, ancestor string) bool {
+	current := key
+	for range len(e.keys) {
+		current = e.targetParentNode(current)
+		if current == "" {
+			return false
+		}
+		if current == ancestor {
+			return true
+		}
+	}
+
+	return false
+}
+
 // parkAwayFromItsOwnLanding decides key, whose move on side lands in a folder
 // made on the other side at key's own path on side (folderHolder): the folder
 // takes that path only once key has left it, and key's move lands in the
@@ -817,14 +888,12 @@ func (e *moveEmitter) parkAwayFromItsOwnLanding(key string, side moveCoord) bool
 // target path names it. A later pass makes the folder, once the item has left
 // the path. Made this pass, the folder would collide with the item, and what
 // is made below it would go into the item: nothing orders such a create
-// after the item's move aside (park), which may fail, nor after an OneDrive
-// move of a folder above that carries the item to that path. On OneDrive the
-// folder's path is looked up back through the plan's earlier moves
-// (snapshotPath); on this computer it is not, so below a folder that moves
-// here in the same plan the item is not found and nothing is recorded: with
-// Y renamed Z on OneDrive and Z/f moved there into a new Z/f/a/f, the create
-// of Z/f/a here lands in the old f once Y has moved (a known limit,
-// sync-planning.md, Move Composition).
+// after the item's move aside (park), which may fail, nor after a move of a
+// folder above that carries the item to that path. On both sides the
+// folder's path is looked up back through the plan's earlier moves on that
+// side (snapshotPath): with Y renamed Z on OneDrive and Z/f moved there into
+// a new Z/f/a/f, the old f is found at Y/f here, where the create of Z/f/a,
+// rebased to where Y sits here, would land inside it before Y moves.
 func (e *moveEmitter) holdOwnLandings() {
 	for key := range e.result.deferred {
 		n := e.nodes[key]
@@ -1216,10 +1285,13 @@ func (e *moveEmitter) recordLanding(key string, side moveCoord, newPath string) 
 // first path the snapshot gives a synced item, which a move into the deepest
 // would otherwise land in or be carried by. Paths are compared as OneDrive
 // compares names (occupantAt): a case-insensitive volume resolves a new folder
-// X to the item at x. On OneDrive a path is looked up where the moves the
-// plan makes before this one leave it (snapshotPath); a local move is given
-// the path where it lands by planMove. An item present on one side only is a
-// create or a delete SQLite plans and holds nothing.
+// X to the item at x. On each side a path is looked up where the moves the
+// plan makes before this one on that side leave it (snapshotPath): a local
+// move that runs inside a folder before the folder moves is given the path
+// where it lands by planMove, which no earlier move maps, and one that runs
+// after a folder above it moved finds what that folder carried. An item
+// present on one side only is a create or a delete SQLite plans and holds
+// nothing.
 func (e *moveEmitter) folderHolder(side moveCoord, key, targetPath string) (string, bool) {
 	holder, _, held := e.landingFolderHolder(side, key, targetPath)
 
@@ -1227,7 +1299,11 @@ func (e *moveEmitter) folderHolder(side moveCoord, key, targetPath string) (stri
 }
 
 // landingFolderHolder is folderHolder, and it also returns the path of the new
-// folder whose path the holder has, as the move's target path names it.
+// folder whose path the holder has, as the plan's creates on side address it:
+// on OneDrive the move's target path, as creates there are rebased through
+// the local moves of the plan; on this computer the snapshot path, as writes
+// here are rebased to where their folders sit here now
+// (rebaseLocalWritesToLocalFolderPositions).
 func (e *moveEmitter) landingFolderHolder(side moveCoord, key, targetPath string) (holder, folder string, held bool) {
 	parent := e.target[key].parent
 	if !strings.HasPrefix(parent, unsyncedParentPrefix) {
@@ -1236,12 +1312,13 @@ func (e *moveEmitter) landingFolderHolder(side moveCoord, key, targetPath string
 	_, made := e.unsyncedAnchor(parent)
 	dir := path.Dir(targetPath)
 	for range strings.Count(made, "/") + 1 {
-		at := dir
-		if side == moveCoordRemote {
-			at = e.snapshotPath(side, dir)
-		}
+		at := e.snapshotPath(side, dir)
 		if occupant, isNode := e.occupantAt(side, at); isNode {
-			return occupant, dir, e.isMoveParticipant(e.nodes[occupant])
+			folder = dir
+			if side == moveCoordLocal {
+				folder = at
+			}
+			return occupant, folder, e.isMoveParticipant(e.nodes[occupant])
 		}
 		dir = path.Dir(dir)
 	}
@@ -1410,9 +1487,10 @@ func (e *moveEmitter) holdsALocalLanding(key string) bool {
 // nearer folder moves out of the moving one: its own move then waits for n
 // to leave it first, a cycle through the folder made there. When the plan
 // deletes the one-sided folder instead, that delete waits for the move and
-// the folder move for the delete, and when n lands on the vacated path itself
-// or in a folder moved onto it, n's move and the folder move wait for each
-// other: cycles the planner drops on every pass (sync-planning.md, Move
+// the folder move for the delete, a cycle the delete waits a pass to break
+// (withholdDeletesInsideFolderMoveCycles). When n lands on the vacated path
+// itself or in a folder moved onto it, n's move and the folder move wait for
+// each other: a cycle the planner drops on every pass (sync-planning.md, Move
 // Composition).
 func (e *moveEmitter) vacatingFolder(n *moveNode, side moveCoord, newPath string) (string, bool) {
 	for dir := path.Dir(n.paths[side]); dir != "." && dir != "/"; dir = path.Dir(dir) {
@@ -2222,6 +2300,102 @@ func withholdDeletesOfHeldWork(
 	}
 
 	return kept, withheld, withheldInMode
+}
+
+// withholdDeletesInsideFolderMoveCycles holds for the next pass each folder
+// delete of a plan with a dependency cycle that closes the cycle through the
+// move of a folder above it on its side (deletesInsideFolderMoveCycles), with
+// what waits for it apart from such a move (withoutWorkTheMoveCarries). The
+// shape: here docs moved to archive, a new docs made, archive/sub/inner.txt
+// moved into it and archive/sub removed (or the same on OneDrive). SQLite
+// deletes the one-sided sub at its baseline path docs/sub; the delete waits
+// for inner.txt to leave it, docs's move waits for the delete below its
+// source, and inner.txt's move waits for the new docs, which waits for docs's
+// move. Dropped as a cycle, nothing ran on any pass. Held, docs's move
+// carries sub with inner.txt in it, the new docs is made, inner.txt's move,
+// whose source docs's move took away, is superseded, and the next pass moves
+// inner.txt and then deletes the folder at its new path. Holding a delete
+// never removes anything. It logs each delete it holds at Debug and returns
+// the actions it keeps and those it holds.
+func withholdDeletesInsideFolderMoveCycles(
+	logger *slog.Logger, actions []syncdomain.Action, mode syncdomain.SyncMode,
+) (kept, withheld []syncdomain.Action) {
+	deps := buildDependencies(actions)
+	onCycle := dependencyCycleMembers(deps)
+	if len(onCycle) == 0 {
+		return actions, nil
+	}
+	roots := deletesInsideFolderMoveCycles(actions, deps, onCycle, mode)
+	if len(roots) == 0 {
+		return actions, nil
+	}
+	for i := range roots {
+		if logger != nil {
+			logger.Debug("folder delete waits for the move of the folder above it",
+				slog.String("action", actions[i].Type.String()),
+				slog.String("path", actions[i].Path))
+		}
+	}
+	dropped := withDependents(roots, withoutWorkTheMoveCarries(actions, deps))
+	kept = make([]syncdomain.Action, 0, len(actions)-len(dropped))
+	for i := range actions {
+		if dropped[i] {
+			withheld = append(withheld, actions[i])
+			continue
+		}
+		kept = append(kept, actions[i])
+	}
+
+	return kept, withheld
+}
+
+// deletesInsideFolderMoveCycles lists the folder deletes on a cycle (onCycle)
+// that a move of a folder above them on their side waits for, while they
+// wait for a same-side move out of the deleted folder that waits, directly or
+// through others, for that folder's move. deps are sorted per action, as
+// buildDependencies leaves them.
+func deletesInsideFolderMoveCycles(
+	actions []syncdomain.Action, deps [][]int, onCycle map[int]bool, mode syncdomain.SyncMode,
+) map[int]bool {
+	roots := map[int]bool{}
+	for d := range onCycle {
+		deleted := &actions[d]
+		if !isSubtreeDelete(deleted) || !actionAllowedInMode(deleted, mode) {
+			continue
+		}
+		side, _ := deleteSide(deleted)
+		if closesAFolderMoveCycle(actions, deps, onCycle, d, side) {
+			roots[d] = true
+		}
+	}
+
+	return roots
+}
+
+// closesAFolderMoveCycle reports whether the folder delete d on side is waited
+// for by the move of a folder above it on side that a move out of d's folder,
+// which d waits for, waits for in turn.
+func closesAFolderMoveCycle(actions []syncdomain.Action, deps [][]int, onCycle map[int]bool, d int, side moveCoord) bool {
+	deleted := &actions[d]
+	for a := range onCycle {
+		folderMove := &actions[a]
+		if !isMoveAction(folderMove) || moveSide(folderMove.Type) != side ||
+			!strings.HasPrefix(deleted.Path, folderMove.OldPath+"/") {
+			continue
+		}
+		if _, waits := slices.BinarySearch(deps[a], d); !waits {
+			continue
+		}
+		for _, m := range deps[d] {
+			out := &actions[m]
+			if isMoveAction(out) && moveSide(out.Type) == side && strings.HasPrefix(out.OldPath, deleted.Path+"/") &&
+				waitsFor(deps, m, a) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // deletesOfHeldWork lists the deletes of actions that wait for held work

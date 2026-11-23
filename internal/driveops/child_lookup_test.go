@@ -491,12 +491,12 @@ func TestMountSession_ParentListingStopsAtThePageThatHoldsTheName(t *testing.T) 
 
 // A fallback takes no item from a listing whose answers place its children in
 // another folder than the one at the path's parent. The fake's path route
-// skips the folder v1.0, as a path query that answers from another path
+// skips the folder v3.0, as a path query that answers from another path
 // would, and its answers carry their parent paths, as a Personal drive's
-// reads by path do: the read of Docs/v1.0/file.txt answers Docs/file.txt, and
-// the listing of Docs/v1.0 by path Docs's children. Neither is the item at the
-// path, so a delete or a visibility wait finds the folder v1.0 in Docs's
-// listing and the file in v1.0's listing by ID.
+// reads by path do: the read of Docs/v3.0/file.txt answers Docs/file.txt, and
+// the listing of Docs/v3.0 by path Docs's children. Neither is the item at the
+// path, so a delete or a visibility wait finds the folder v3.0 in Docs's
+// listing and the file in v3.0's listing by ID.
 //
 // Validates: R-6.7.22, R-6.7.14
 func TestMountSession_AFallbackTakesNoItemFromAListingThatNamesAnotherFolder(t *testing.T) {
@@ -505,7 +505,7 @@ func TestMountSession_AFallbackTakesNoItemFromAListingThatNamesAnotherFolder(t *
 	const (
 		drive       = "/drives/abcdef0123456789"
 		docsFile    = `{"id":"wrong-id","name":"file.txt","file":{},"parentReference":{"id":"docs-id","path":"/drive/root:/Docs"}}`
-		docsVersion = `{"id":"v1-id","name":"v1.0","folder":{},"parentReference":{"id":"docs-id","path":"/drive/root:/Docs"}}`
+		docsVersion = `{"id":"v1-id","name":"v3.0","folder":{},"parentReference":{"id":"docs-id","path":"/drive/root:/Docs"}}`
 	)
 
 	for lookup, resolve := range fallbackLookups() {
@@ -514,22 +514,22 @@ func TestMountSession_AFallbackTakesNoItemFromAListingThatNamesAnotherFolder(t *
 
 			session := NewMountSession(newTestSession(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case drive + "/root:/Docs/v1.0/file.txt:":
+				case drive + "/root:/Docs/v3.0/file.txt:":
 					writeTestResponsef(t, w, "%s", docsFile)
-				case drive + "/root:/Docs/v1.0:":
+				case drive + "/root:/Docs/v3.0:":
 					writeTestResponsef(t, w, `{"id":"docs-id","name":"Docs","folder":{},"parentReference":{"id":"root-id","path":"/drive/root:"}}`)
-				case drive + "/root:/Docs/v1.0:/children", drive + "/root:/Docs:/children":
+				case drive + "/root:/Docs/v3.0:/children", drive + "/root:/Docs:/children":
 					writeTestResponsef(t, w, `{"value":[%s,%s]}`, docsFile, docsVersion)
 				case drive + "/items/v1-id/children":
 					writeTestResponsef(t, w, `{"value":[{"id":"right-id","name":"file.txt","file":{},`+
-						`"parentReference":{"id":"v1-id","path":"/drive/root:/Docs/v1.0"}}]}`)
+						`"parentReference":{"id":"v1-id","path":"/drive/root:/Docs/v3.0"}}]}`)
 				default:
 					assert.Fail(t, "unexpected request", r.URL.String())
 					http.Error(w, "unexpected request", http.StatusInternalServerError)
 				}
 			})), "")
 
-			item, err := resolve(session, t.Context(), "Docs/v1.0/file.txt")
+			item, err := resolve(session, t.Context(), "Docs/v3.0/file.txt")
 			require.NoError(t, err)
 			assert.Equal(t, "right-id", item.ID)
 		})

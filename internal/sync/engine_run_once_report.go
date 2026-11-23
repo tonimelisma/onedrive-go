@@ -108,6 +108,8 @@ func (r *Report) withPass(pass *Report) *Report {
 	r.Uploads += pass.Uploads
 	r.LocalDeletes += pass.LocalDeletes
 	r.RemoteDeletes += pass.RemoteDeletes
+	r.LocalFolderDeletes += pass.LocalFolderDeletes
+	r.RemoteFolderDeletes += pass.RemoteFolderDeletes
 	r.ConflictCopies += pass.ConflictCopies
 	r.BaselineUpdates += pass.BaselineUpdates
 	r.Cleanups += pass.Cleanups

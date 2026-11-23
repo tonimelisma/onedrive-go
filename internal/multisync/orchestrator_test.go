@@ -51,7 +51,7 @@ func setupXDGIsolation(t *testing.T, cids ...driveid.CanonicalID) {
 	t.Setenv("XDG_DATA_HOME", xdgDir)
 
 	for _, cid := range cids {
-		require.NoError(t, config.UpdateCatalog(func(catalog *config.Catalog) error {
+		require.NoError(t, config.UpdateCatalog(t.Context(), func(catalog *config.Catalog) error {
 			catalog.UpsertDrive(&config.CatalogDrive{
 				CanonicalID:           cid.String(),
 				OwnerAccountCanonical: cid.String(),
@@ -2622,6 +2622,18 @@ type mockEngine struct {
 	closeFn      func(ctx context.Context) error
 	ackDrainFn   func(ctx context.Context, ack syncshortcut.ShortcutChildDrainAck) (syncshortcut.ShortcutChildWorkSnapshot, error)
 	ackCleanupFn func(ctx context.Context, ack syncshortcut.ShortcutChildArtifactCleanupAck) (syncshortcut.ShortcutChildWorkSnapshot, error)
+	confirmFn    func(ctx context.Context, confirmation syncdomain.HeldDeleteConfirmation) error
+}
+
+// ConfirmHeldDeletes answers as confirmFn does; without one, the mock is an
+// engine whose watch never takes a confirmation.
+func (m *mockEngine) ConfirmHeldDeletes(ctx context.Context, confirmation syncdomain.HeldDeleteConfirmation) error {
+	if m.confirmFn != nil {
+		return m.confirmFn(ctx, confirmation)
+	}
+	<-ctx.Done()
+
+	return fmt.Errorf("mock confirm: %w: %w", syncengine.ErrConfirmationNotTaken, ctx.Err())
 }
 
 func (m *mockEngine) RunOnce(ctx context.Context, mode syncdomain.SyncMode, opts syncengine.RunOptions) (*syncengine.Report, error) {
@@ -2836,7 +2848,7 @@ func TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed(t *test
 	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
 	lifecycle := make(chan WatchLifecycleEvent, 16)
 	cfg.WatchLifecycle = func(event WatchLifecycleEvent) { lifecycle <- event }
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused", "true"))
 
 	orch := NewOrchestrator(cfg)
 	var started atomic.Int32
@@ -2861,7 +2873,7 @@ func TestOrchestrator_RunWatch_IdlesWhenAllMountsPausedUntilOneIsResumed(t *test
 	assert.Zero(t, started.Load(), "a paused drive is not started")
 
 	// A resume reaches the running watch through the ordinary reload.
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "false"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused", "false"))
 	postControlReload(t, cfg.ControlSocketPath)
 	require.Eventually(t, func() bool {
 		return started.Load() >= 1
@@ -2931,6 +2943,100 @@ func TestOrchestrator_ControlSocket_StatusAndStop(t *testing.T) {
 	stop := postControlJSON(t, cfg.ControlSocketPath, synccontrol.PathStop, nil)
 	assert.Equal(t, synccontrol.StatusStopping, stop.Status)
 
+	require.NoError(t, receiveWithin(t, done, "RunWatch to return after the stop request"))
+}
+
+// postControlConfirmDeletes sends one confirmDeletes request with body and
+// returns the owner's status code and answer.
+func postControlConfirmDeletes(t *testing.T, socketPath string, body string) (int, synccontrol.MutationResponse) {
+	t.Helper()
+
+	client := controlTestClient(socketPath)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		synccontrol.HTTPBaseURL+synccontrol.PathConfirmDeletes, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	// #nosec G704 -- fixed Unix-domain test socket client.
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	var decoded synccontrol.MutationResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&decoded))
+
+	return resp.StatusCode, decoded
+}
+
+// A running watch takes a confirmation of one drive's held deletes through
+// the control socket and hands exactly the named set to that drive's engine.
+// The engine's refusal of a set that changed since it was shown reaches the
+// client as held_deletes_changed, and a confirmation for a drive the watch
+// does not sync, or one that names no held set, confirms nothing.
+//
+// Validates: R-6.2.17, R-2.9.2, R-2.9.3
+func TestOrchestrator_ControlSocket_ConfirmDeletesReachesTheDrivesEngine(t *testing.T) {
+	rd := testStandaloneMount(t, "personal:confirm@example.com", "Confirm")
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+	cfg.ControlSocketPath = shortControlSocketPath(t)
+	cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+
+	orch := NewOrchestrator(cfg)
+
+	held := syncdomain.HeldDeleteConfirmation{Count: 215, Token: "3fa9c1d2e4b5a6f7"} //nolint:gosec // a held-set token, not a credential
+	var confirmed []syncdomain.HeldDeleteConfirmation
+	var confirmedMu sync.Mutex
+	watchStarted := make(chan struct{})
+	orch.engineFactory = func(_ context.Context, _ engineFactoryRequest) (engineRunner, error) {
+		return &mockEngine{
+			runWatchFn: func(ctx context.Context, _ syncdomain.SyncMode, _ syncengine.WatchOptions) error {
+				close(watchStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			confirmFn: func(_ context.Context, confirmation syncdomain.HeldDeleteConfirmation) error {
+				confirmedMu.Lock()
+				defer confirmedMu.Unlock()
+				confirmed = append(confirmed, confirmation)
+				if confirmation != held {
+					return fmt.Errorf("%w: %d were shown, %d are held now", syncengine.ErrHeldDeletesChanged, confirmation.Count, held.Count)
+				}
+				return nil
+			},
+		}, nil
+	}
+
+	_, done := runWatchInBackground(t, orch)
+	receiveWithin(t, watchStarted, "RunWatch to start the drive")
+
+	drive := rd.CanonicalID.String()
+	status, answer := postControlConfirmDeletes(t, cfg.ControlSocketPath,
+		`{"drive":"`+drive+`","count":215,"token":"3fa9c1d2e4b5a6f7"}`)
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, synccontrol.StatusDeletesConfirmed, answer.Status)
+
+	status, answer = postControlConfirmDeletes(t, cfg.ControlSocketPath,
+		`{"drive":"`+drive+`","count":214,"token":"0000000000000000"}`)
+	assert.Equal(t, http.StatusConflict, status)
+	assert.Equal(t, synccontrol.ErrorHeldDeletesChanged, answer.Code)
+	assert.Contains(t, answer.Message, "214 were shown, 215 are held now")
+
+	status, answer = postControlConfirmDeletes(t, cfg.ControlSocketPath,
+		`{"drive":"personal:other@example.com","count":215,"token":"3fa9c1d2e4b5a6f7"}`)
+	assert.Equal(t, http.StatusNotFound, status)
+	assert.Equal(t, synccontrol.ErrorUnknownDrive, answer.Code)
+
+	status, answer = postControlConfirmDeletes(t, cfg.ControlSocketPath, `{"drive":"`+drive+`"}`)
+	assert.Equal(t, http.StatusNotFound, status, "a confirmation must name the held set it confirms")
+	assert.Equal(t, synccontrol.ErrorInvalidRequest, answer.Code)
+
+	confirmedMu.Lock()
+	assert.Equal(t, []syncdomain.HeldDeleteConfirmation{held, {Count: 214, Token: "0000000000000000"}}, confirmed,
+		"the engine saw each well-formed confirmation for its drive, exactly as sent")
+	confirmedMu.Unlock()
+
+	stop := postControlJSON(t, cfg.ControlSocketPath, synccontrol.PathStop, nil)
+	assert.Equal(t, synccontrol.StatusStopping, stop.Status)
 	require.NoError(t, receiveWithin(t, done, "RunWatch to return after the stop request"))
 }
 
@@ -3206,7 +3312,7 @@ func TestOrchestrator_Reload_PausedMount(t *testing.T) {
 	}, eventWait, 10*time.Millisecond, "the drive starts")
 
 	// Pause the mount and request a control-socket reload.
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused", "true"))
 	postControlReload(t, cfg.ControlSocketPath)
 
 	// The mount runner should stop.
@@ -3363,8 +3469,8 @@ func TestOrchestrator_Reload_TimedPauseExpiry(t *testing.T) {
 	}, eventWait, 10*time.Millisecond, "the drive starts")
 
 	// Set an already-expired timed pause and request a control-socket reload.
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused_until", "2000-01-01T00:00:00Z"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused_until", "2000-01-01T00:00:00Z"))
 	postControlReload(t, cfg.ControlSocketPath)
 
 	require.Eventually(t, func() bool {
@@ -3413,7 +3519,7 @@ func writeTestConfig(t *testing.T, cids ...driveid.CanonicalID) string {
 	require.NotEmpty(t, cids, "writeTestConfig requires at least one CID")
 
 	for _, cid := range cids {
-		require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+		require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 	}
 
 	return cfgPath
@@ -3441,7 +3547,7 @@ func writeTestConfigSingle(t *testing.T, cfgPath string, cid driveid.CanonicalID
 	t.Helper()
 
 	require.NoError(t, os.Remove(cfgPath))
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
 }
 
 // writeTestConfigMulti overwrites a config file with two drives.
@@ -3450,8 +3556,8 @@ func writeTestConfigMulti(t *testing.T, cfgPath string, cid1 driveid.CanonicalID
 	t.Helper()
 
 	require.NoError(t, os.Remove(cfgPath))
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid1, dir1))
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid2, dir2))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid1, dir1))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid2, dir2))
 }
 
 // Validates: R-6.6.28

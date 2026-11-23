@@ -22,11 +22,12 @@ Implements: R-3.2 [verified], R-3.5 [verified], R-3.7 [verified], R-3.3.12 [veri
 | Behavior | Evidence |
 | --- | --- |
 | Canonical drive IDs remain the single typed identity format for personal, business, SharePoint, and shared drives. | `internal/driveid/canonical_test.go`, `internal/driveid/id_test.go` |
+| Parse then render is the identity for every accepted drive ID; a SharePoint ID with an empty site or library is refused at parse (R-3.2.5). | `TestNewCanonicalID_RendersEveryAcceptedStringUnchanged`, `TestNewCanonicalID_RefusesAnEmptySharePointPart` |
 | CLI drive rendering and matching continue to derive display/match behavior from canonical identity rather than ad hoc strings. | `TestBuildConfiguredDriveEntries_OneDrive_WithSyncDir`, `TestPrintDriveListText_SharedDrive`, `TestDriveListEntry_SharedFieldsJSON` |
 
 ## Canonical Drive ID
 
-Format: `type:email[:site:library]` or `shared:email:sourceDriveID:sourceItemID`.
+Format: `type:email[:site[:library]]` or `shared:email:sourceDriveID:sourceItemID`. A SharePoint site or library, when present, is never empty: `NewCanonicalID` refuses an empty one, because `String` leaves an empty part out and would render a different ID (`sharepoint:a@example.com::Docs` would come back with site `Docs`). Every string the parse accepts therefore renders back unchanged, and the catalog's check of a record key is the parse alone (R-3.2.5).
 
 Four drive types:
 - `personal:email` — one per personal Microsoft account

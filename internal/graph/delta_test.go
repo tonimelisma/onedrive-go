@@ -224,6 +224,7 @@ func TestDelta_SinglePage(t *testing.T) {
 	assert.Contains(t, page.DeltaLink, "token=newtoken123")
 }
 
+// Validates: R-6.7.32
 func TestDelta_MultiPage(t *testing.T) {
 	t.Parallel()
 
@@ -340,6 +341,7 @@ func TestDelta_EmptyPage(t *testing.T) {
 	assert.NotEmpty(t, page.DeltaLink)
 }
 
+// Validates: R-6.7.9
 func TestDelta_KeepsPackages(t *testing.T) {
 	t.Parallel()
 
@@ -367,6 +369,7 @@ func TestDelta_KeepsPackages(t *testing.T) {
 	assert.True(t, page.Items[1].IsPackage)
 }
 
+// Validates: R-2.15.2
 func TestDelta_InvalidTokenURL(t *testing.T) {
 	t.Parallel()
 
@@ -405,6 +408,7 @@ func TestDeltaAll_SinglePage(t *testing.T) {
 	assert.Contains(t, token, "token=final")
 }
 
+// Validates: R-6.7.32
 func TestDeltaAll_MultiPage(t *testing.T) {
 	t.Parallel()
 
@@ -455,6 +459,7 @@ func TestDeltaAll_MultiPage(t *testing.T) {
 	assert.Equal(t, 3, callCount)
 }
 
+// Validates: R-2.15.3
 func TestDeltaAll_GoneError(t *testing.T) {
 	t.Parallel()
 
@@ -471,6 +476,7 @@ func TestDeltaAll_GoneError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrGone)
 }
 
+// Validates: R-6.7.32
 func TestDeltaAll_MissingContinuationLinkReturnsError(t *testing.T) {
 	t.Parallel()
 
@@ -512,29 +518,40 @@ func TestDeltaAll_MaxPages(t *testing.T) {
 	assert.Empty(t, token)
 }
 
-// An empty token, or one that is not a URL, starts from the initial path;
-// a token Graph returned as a full URL continues from that URL's path.
-// Delta and DeltaFolder build their initial paths, which
-// TestDelta_EmptyToken and TestDeltaFolder_SinglePage check on the wire.
+// Only an empty token starts from the initial path. A token Graph returned
+// as a link continues from that link's path, its scheme and host in any
+// letter case and a relative link resolved against the base URL; a token
+// that is not a link is refused (ErrDeltaTokenNotALink), never read as the
+// initial path, which would take a full enumeration for the changes since
+// the token; a link off the base URL is refused. Delta and DeltaFolder build
+// their initial paths, which TestDelta_EmptyToken and
+// TestDeltaFolder_SinglePage check on the wire.
+//
+// Validates: R-2.15.2, R-6.7.32
 func TestResolveDeltaToken(t *testing.T) {
 	t.Parallel()
 
-	const initialPath = "/drives/000000000000000d/items/folder-abc/delta"
-	initial := func() string { return initialPath }
+	const (
+		initialPath = "/drives/000000000000000d/items/folder-abc/delta"
+		tokenPath   = "/drives/000000000000000d/items/folder-abc/delta?token=xyz"
+	)
+	initial := func() (string, error) { return initialPath, nil }
 	client := newTestClient(t, "http://localhost")
 
 	cases := []struct {
-		name   string
-		cursor string
-		want   string
+		name    string
+		cursor  string
+		want    string
+		wantErr error
+		refused bool
 	}{
 		{name: "empty token", cursor: "", want: initialPath},
-		{name: "token that is not a URL", cursor: "not-a-url", want: initialPath},
-		{
-			name:   "full URL token",
-			cursor: "http://localhost/drives/000000000000000d/items/folder-abc/delta?token=xyz",
-			want:   "/drives/000000000000000d/items/folder-abc/delta?token=xyz",
-		},
+		{name: "full URL token", cursor: "http://localhost" + tokenPath, want: tokenPath},
+		{name: "upper-case scheme and host", cursor: "HTTP://LOCALHOST" + tokenPath, want: tokenPath},
+		{name: "relative link", cursor: strings.TrimPrefix(tokenPath, "/"), want: tokenPath},
+		{name: "token that is not a link", cursor: "not-a-url", wantErr: ErrDeltaTokenNotALink},
+		{name: "link to another host", cursor: "http://elsewhere" + tokenPath, refused: true},
+		{name: "link to a host that only starts like the base", cursor: "http://localhost.evil" + tokenPath, refused: true},
 	}
 
 	for _, tc := range cases {
@@ -542,10 +559,43 @@ func TestResolveDeltaToken(t *testing.T) {
 			t.Parallel()
 
 			path, err := client.resolveDeltaToken(tc.cursor, initial)
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, path)
+			switch {
+			case tc.wantErr != nil:
+				require.ErrorIs(t, err, tc.wantErr)
+				assert.Empty(t, path)
+			case tc.refused:
+				require.ErrorContains(t, err, "does not match base URL")
+				assert.Empty(t, path)
+			default:
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, path)
+			}
 		})
 	}
+}
+
+// A delta page says the path it was asked at and the path its next link
+// resolves to, one key however the link was spelled, so a caller that
+// follows the pages itself sees a link back to a page it asked for: here a
+// first page without a token whose next link, in upper case, is the page
+// itself.
+//
+// Validates: R-2.15.2
+func TestDelta_APageCarriesItsPathAndItsNextPath(t *testing.T) {
+	t.Parallel()
+
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		writeTestResponsef(t, w, `{"value":[],"@odata.nextLink":%q}`, strings.ToUpper(srv.URL[:len("http://")])+
+			srv.URL[len("http://"):]+r.URL.Path)
+	}))
+	t.Cleanup(srv.Close)
+
+	page, err := newNoRetryTestClient(t, srv.URL).Delta(t.Context(), driveid.New("d"), "")
+	require.NoError(t, err)
+	assert.Equal(t, "/drives/000000000000000d/root/delta", page.Path)
+	assert.Equal(t, page.Path, page.NextPath, "the next link leads back to the page itself")
 }
 
 // --- DeltaFolder tests ---
@@ -614,6 +664,7 @@ func TestDeltaFolder_WithToken(t *testing.T) {
 	assert.Equal(t, "changed-1", page.Items[0].ID)
 }
 
+// Validates: R-2.15.3
 func TestDeltaFolder_Gone(t *testing.T) {
 	t.Parallel()
 
@@ -630,6 +681,7 @@ func TestDeltaFolder_Gone(t *testing.T) {
 	assert.ErrorIs(t, err, ErrGone)
 }
 
+// Validates: R-6.7.9
 func TestDeltaFolder_KeepsPackages(t *testing.T) {
 	t.Parallel()
 
@@ -685,6 +737,7 @@ func TestDeltaFolderAll_SinglePage(t *testing.T) {
 	assert.Contains(t, token, "token=final")
 }
 
+// Validates: R-6.7.32
 func TestDeltaFolderAll_MultiPage(t *testing.T) {
 	t.Parallel()
 
@@ -727,6 +780,7 @@ func TestDeltaFolderAll_MultiPage(t *testing.T) {
 	assert.Equal(t, 2, callCount)
 }
 
+// Validates: R-6.7.32
 func TestDeltaFolderAll_MissingContinuationLinkReturnsError(t *testing.T) {
 	t.Parallel()
 

@@ -58,7 +58,7 @@ func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, te
 		return withPendingTokenRemoved(err, tempPath)
 	}
 
-	enrolled, err := config.AddDrive(&config.AddDriveRequest{
+	enrolled, err := config.AddDrive(ctx, &config.AddDriveRequest{
 		ConfigPath: cc.CfgPath,
 		DataDir:    config.DefaultDataDir(),
 		Drive:      canonicalID,

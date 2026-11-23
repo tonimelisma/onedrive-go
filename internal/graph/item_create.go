@@ -80,7 +80,10 @@ func (c *Client) CreateFile(ctx context.Context, driveID driveid.ID, parentID, n
 		return nil, fmt.Errorf("graph: marshaling create file request: %w", err)
 	}
 
-	path := itemRoute(driveID, parentID, "/children")
+	path, err := itemRoute(driveID, parentID, "/children")
+	if err != nil {
+		return nil, err
+	}
 
 	resp, err := doDocumentedGraphQuirkRetry(ctx, c, documentedGraphQuirkSpec{
 		name:   QuirkFileCreateTransient404,
@@ -142,7 +145,7 @@ func createOutcomeUnknown(err error) bool {
 
 // readCreatedFileByName finds a file the create answered without an item: one
 // read of its name (GetChildByName), and its folder's listing only when that
-// read cannot settle the name (readCannotSettleName), a page at a time up to
+// read cannot settle the name (ReadCannotSettleName), a page at a time up to
 // the page that holds it (listedChildNamed). A folder of the name is not the
 // created file.
 // The create itself succeeded, so every failure here wraps
@@ -154,7 +157,7 @@ func createOutcomeUnknown(err error) bool {
 func (c *Client) readCreatedFileByName(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
 	item, err := c.GetChildByName(ctx, driveID, parentID, name)
 	ambiguous := false
-	if err != nil && readCannotSettleName(err) {
+	if err != nil && ReadCannotSettleName(err) {
 		item, ambiguous, err = c.listedChildNamed(ctx, driveID, parentID, name)
 	}
 	if err != nil {
@@ -171,11 +174,12 @@ func (c *Client) readCreatedFileByName(ctx context.Context, driveID driveid.ID, 
 	return item, nil
 }
 
-// readCannotSettleName reports whether a failed GetChildByName leaves the
+// ReadCannotSettleName reports whether a failed GetChildByName leaves the
 // name to its folder's listing: the read found nothing (the path route can
 // lag behind the listing), the route cannot carry the name, or Graph answered
-// 400 (measured for a child named $value, which the listing holds).
-func readCannotSettleName(err error) bool {
+// 400 (measured for a child named $value, which the listing holds). Every
+// lookup of one name that falls back to a listing asks it here.
+func ReadCannotSettleName(err error) bool {
 	return errors.Is(err, ErrNotFound) || errors.Is(err, ErrNameNotPathAddressable) || errors.Is(err, ErrBadRequest)
 }
 

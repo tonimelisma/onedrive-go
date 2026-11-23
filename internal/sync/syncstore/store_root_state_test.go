@@ -8,6 +8,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -361,8 +362,44 @@ func TestSyncStore_RemoteUpsertRestoresCleanupPendingRoot(t *testing.T) {
 	require.Len(t, roots, 1)
 	assert.Equal(t, syncshortcut.ShortcutRootStateActive, roots[0].State)
 	assert.True(t, roots[0].RemoteDriveID.Equal(driveid.New("new-drive")))
-	snapshot, err := store.ShortcutChildWorkSnapshot(t.Context(), syncfixture.ShortcutNamespaceTestID, t.TempDir())
+	snapshot, err := store.ShortcutChildWorkSnapshot(t.Context(), syncfixture.ShortcutNamespaceTestID, t.TempDir(), syncdomain.ContentFilterConfig{})
 	require.NoError(t, err)
 	require.Len(t, snapshot.RunCommands, 1)
 	assert.Empty(t, snapshot.CleanupCommands)
+}
+
+// The child work a store's shortcut roots declare is projected through the
+// parent's content filter the caller hands it: a filter that hides part of a
+// child's tree reaches the child's run command below the shortcut, and one
+// that hides the shortcut leaves no run command at all.
+//
+// Validates: R-2.4.18, R-2.4.8
+func TestSyncStore_ShortcutChildWorkSnapshotProjectsTheParentsFilter(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
+		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: "Shared/Docs",
+		LocalAlias:        "Docs",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-1",
+		RemoteIsFolder:    true,
+		State:             syncshortcut.ShortcutRootStateActive,
+		ProtectedPaths:    []string{"Shared/Docs"},
+	}}))
+
+	partly, err := store.ShortcutChildWorkSnapshot(t.Context(), syncfixture.ShortcutNamespaceTestID, t.TempDir(),
+		syncdomain.ContentFilterConfig{IgnoredDirs: []string{"Shared/Docs/Private"}, IgnoredPaths: []string{"Shared/Docs/*.tmp"}})
+	require.NoError(t, err)
+	require.Len(t, partly.RunCommands, 1)
+	assert.Equal(t, []string{"Private"}, partly.RunCommands[0].Engine.ContentFilter.IgnoredDirs)
+	assert.Equal(t, []string{"*.tmp"}, partly.RunCommands[0].Engine.ContentFilter.IgnoredPaths)
+
+	excluded, err := store.ShortcutChildWorkSnapshot(t.Context(), syncfixture.ShortcutNamespaceTestID, t.TempDir(),
+		syncdomain.ContentFilterConfig{IgnoredDirs: []string{"Shared"}})
+	require.NoError(t, err)
+	assert.Empty(t, excluded.RunCommands, "an excluded shortcut has no child run")
+	assert.Empty(t, excluded.CleanupCommands)
 }

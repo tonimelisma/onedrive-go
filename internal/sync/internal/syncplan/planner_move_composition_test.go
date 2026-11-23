@@ -549,7 +549,9 @@ func composedMoveActions(c *moveComposition, nodes []moveNode) []syncdomain.Acti
 // delete waits for inner.txt to leave it; named from archive/sub, where docs's
 // move puts it, the move would not hold the delete back, and the delete would
 // remove docs/sub online with inner.txt still inside. Kept so, the plan is a
-// cycle the planner drops, so nothing is deleted. When OneDrive added a file
+// cycle, which the delete breaks by waiting a pass
+// (TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle).
+// When OneDrive added a file
 // to docs/sub, SQLite makes archive/sub here again instead, and the plan has
 // no delete: every action of it has an order
 // (TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges).
@@ -596,6 +598,110 @@ func TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource(t *testing.T)
 			assert.Len(t, kept, tc.wantKept)
 		})
 	}
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// A folder moved into its own former child: docs moved to tmp, a new docs
+// made, tmp/sub moved into it and tmp moved to docs/sub/docs2, here or on
+// OneDrive. sub's move lands below the path docs's move vacates, so it is
+// decided after docs, while docs's target hangs off sub: both stayed pending
+// and were deferred on every pass. docs moves aside to a free name beside its
+// path on the other side, carrying sub, and both wait for the next pass,
+// which makes the new docs at the path docs left and moves sub into it and
+// docs below sub. Every action of the plan has an order.
+func TestComposeMoves_FolderMovedIntoItsOwnFormerChildMovesAsideFirst(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name                  string
+		onOneDrive            bool
+		wantLocal, wantRemote []string
+	}{
+		{name: "here", wantRemote: []string{"docs->docs.swap-1"}},
+		{name: "on OneDrive", onOneDrive: true, wantLocal: []string{"docs->docs.swap-1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			moved := func(baseline, to string) [moveCoordCount]string {
+				if tc.onOneDrive {
+					return [moveCoordCount]string{baseline, baseline, to}
+				}
+				return [moveCoordCount]string{baseline, to, baseline}
+			}
+			node := func(key string, itemType syncdomain.ItemType, paths [moveCoordCount]string) moveNode {
+				return composeNode(key, itemType, paths[moveCoordBaseline], paths[moveCoordLocal], paths[moveCoordRemote])
+			}
+			nodes := []moveNode{
+				node("docs", syncdomain.ItemTypeFolder, moved("docs", "docs/sub/docs2")),
+				node("kept", syncdomain.ItemTypeFile, moved("docs/kept.txt", "docs/sub/docs2/kept.txt")),
+				node("sub", syncdomain.ItemTypeFolder, moved("docs/sub", "docs/sub")),
+				node("inner", syncdomain.ItemTypeFile, moved("docs/sub/inner.txt", "docs/sub/inner.txt")),
+			}
+			occupancy := composeOccupancy(nodes)
+			if tc.onOneDrive {
+				occupancy.remote["docs"] = true
+			} else {
+				occupancy.local["docs"] = true
+			}
+			c := composeMoves(nodes, occupancy, nil)
+
+			assert.Equal(t, tc.wantLocal, composedMovesBySide(&c, moveCoordLocal))
+			assert.Equal(t, tc.wantRemote, composedMovesBySide(&c, moveCoordRemote))
+			assert.Equal(t, map[string]bool{"docs": true, "sub": true}, c.deferred)
+
+			actions := composedMoveActions(&c, nodes)
+			kept, _, _ := isolateDependencyCycles(actions, nil)
+			assert.Len(t, kept, len(actions), "every action of the plan has an order")
+		})
+	}
+}
+
+// Validates: R-2.17.2, R-2.17.6
+//
+// The plan of the row "deleted online" above, a cycle of docs's move, the
+// delete of docs/sub, inner.txt's move and the new docs, holds the delete for
+// the next pass, and with it nothing else: docs's move carries sub with
+// inner.txt along, and every action left has an order. A plan whose delete
+// closes no such cycle (inner.txt moved out of a sub that no moving folder
+// holds) keeps it.
+func TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle(t *testing.T) {
+	t.Parallel()
+
+	folder := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFolder}}
+	nodes := []moveNode{
+		composeNode("docs", syncdomain.ItemTypeFolder, "docs", "archive", "docs"),
+		composeNode("kept", syncdomain.ItemTypeFile, "docs/kept.txt", "archive/kept.txt", "docs/kept.txt"),
+		composeNode("sub", syncdomain.ItemTypeFolder, "docs/sub", "", "docs/sub"),
+		composeNode("inner", syncdomain.ItemTypeFile, "docs/sub/inner.txt", "docs/inner.txt", "docs/sub/inner.txt"),
+	}
+	occupancy := composeOccupancy(nodes)
+	occupancy.local["docs"] = true
+	c := composeMoves(nodes, occupancy, nil)
+	actions := append(composedMoveActions(&c, nodes),
+		syncdomain.Action{Type: syncdomain.ActionFolderCreate, Path: "docs", CreateSide: syncdomain.CreateRemote},
+		syncdomain.Action{Type: syncdomain.ActionRemoteDelete, Path: "docs/sub", View: folder})
+
+	kept, withheld := withholdDeletesInsideFolderMoveCycles(nil, actions, syncdomain.SyncBidirectional)
+
+	require.Len(t, withheld, 1)
+	assert.Equal(t, syncdomain.ActionRemoteDelete, withheld[0].Type)
+	assert.Equal(t, "docs/sub", withheld[0].Path)
+	assert.Len(t, kept, len(actions)-1, "docs's move, inner.txt's move and the new docs stay")
+	_, _, cycled := isolateDependencyCycles(kept, nil)
+	assert.Empty(t, cycled, "every action left has an order")
+
+	unmoved := []syncdomain.Action{
+		{
+			Type: syncdomain.ActionRemoteMove, Path: "inner.txt", OldPath: "sub/inner.txt", ItemID: "inner",
+			View: &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFile}},
+		},
+		{Type: syncdomain.ActionRemoteDelete, Path: "sub", View: folder},
+	}
+	kept, withheld = withholdDeletesInsideFolderMoveCycles(nil, unmoved, syncdomain.SyncBidirectional)
+	assert.Empty(t, withheld)
+	assert.Len(t, kept, len(unmoved))
 }
 
 // Validates: R-2.17.6, R-2.17.1
@@ -1193,9 +1299,11 @@ func TestComposeMoves_MoveIntoAFolderMadeHereWaitsWhileOneDriveKeepsAnItemAtItsP
 // parent's move, or that of a folder above an unmoved parent. Either way the
 // item is deferred, and the folder's path, as the plan names it, is held
 // (ownLandings) with everything below it, compared as OneDrive compares
-// names: nothing is made there this pass. The rows with a folder moving above
-// the item move it on OneDrive; on this computer such a folder hides the item
-// from the lookup, and nothing is held (a known limit, holdOwnLandings).
+// names: nothing is made there this pass. A folder moving above the item on
+// its side is looked through: renamed Y to Z on OneDrive, with Y/f moved
+// there into a new Z/f/a/f, f waits for the pass after Y's move, and the
+// path Y/f, where the creates of Z/f and Z/f/a are addressed here until Y
+// has moved, is held.
 func TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *testing.T) {
 	t.Parallel()
 
@@ -1232,6 +1340,15 @@ func TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *te
 			landing: "f",
 		},
 		{
+			name: "a folder moved on OneDrive into a new folder at its own path",
+			nodes: []moveNode{
+				composeNode("k", syncdomain.ItemTypeFolder, "k", "k", "k/k"),
+				composeNode("c", syncdomain.ItemTypeFile, "k/c.txt", "k/c.txt", "k/k/c.txt"),
+			},
+			madeOnOneDrive: []string{"k"}, wantLocal: []string{"k->k.swap-1"}, wantDeferred: map[string]bool{"k": true},
+			landing: "k",
+		},
+		{
 			name: "the folder above it renamed on OneDrive too",
 			nodes: []moveNode{
 				composeNode("P", syncdomain.ItemTypeFolder, "P", "Q", "P"),
@@ -1249,6 +1366,16 @@ func TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *te
 			},
 			madeHere: []string{"Z/P/f"}, wantRemote: []string{"Y->Z"}, wantDeferred: map[string]bool{"f": true},
 			landing: "Z/P/f",
+		},
+		{
+			name: "the folder above it renamed on OneDrive, the item moved there into a new folder deeper",
+			nodes: []moveNode{
+				composeNode("Y", syncdomain.ItemTypeFolder, "Y", "Y", "Z"),
+				composeNode("f", syncdomain.ItemTypeFolder, "Y/f", "Y/f", "Z/f/a/f"),
+				composeNode("c", syncdomain.ItemTypeFile, "Y/f/c.txt", "Y/f/c.txt", "Z/f/a/f/c.txt"),
+			},
+			madeOnOneDrive: []string{"Z/f", "Z/f/a"}, wantLocal: []string{"Y->Z"}, wantDeferred: map[string]bool{"f": true},
+			landing: "Y/f",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

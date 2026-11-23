@@ -128,7 +128,7 @@ func writeIsolatedSharedRootWriterConfig(
 		root = createIsolatedSharedRoot(t, perTestDataDir)
 	}
 
-	require.NoError(t, config.UpdateCatalogForDataDir(perTestDataDir, func(catalog *config.Catalog) error {
+	require.NoError(t, config.UpdateCatalogForDataDir(t.Context(), perTestDataDir, func(catalog *config.Catalog) error {
 		catalog.UpsertDrive(&config.CatalogDrive{
 			CanonicalID:           root.canonicalID,
 			OwnerAccountCanonical: drive,

@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/loglevel/loglevel.go, internal/sdnotify/sdnotify.go
 
-Implements: R-1 [implemented], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.36 [verified], R-6.6.33 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.8.28 [verified], R-6.8.31 [verified]
+Implements: R-1 [implemented], R-6.2.17 [verified], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.36 [verified], R-6.6.33 [verified], R-6.6.37 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.8.28 [verified], R-6.8.31 [verified]
 
 ## Overview
 
@@ -37,13 +37,13 @@ are inserted, updated, pruned, and validated.
 | --- | --- |
 | A log file and any directory `logfile` creates for it are owner-only, because logs carry item names and account details (R-6.8.23). | `TestOpen_Permissions`, `TestOpen_CreatesParentDirs` |
 | Status JSON identifies each mount with a stable opaque `mount_ref` and still withholds canonical, mount, namespace, and remote drive IDs. | `TestStatusJSON_MountRefIsOpaqueAndDoesNotLeakIdentifiers`, `TestStatusJSON_MountRefDistinguishesSiblingChildren`, `TestMountRef_MatchesStateFileDigest`, `TestMountRef_IsStableUniqueAndOpaque`, `TestMountRef_EmptyForBlankMountID`, `TestStatusOutputGoldenJSON` |
-| `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreIsReportedAsUnavailable`, `TestStatusCommand_UncheckableStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_PermissionDeniedStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_UnreadableDataDirIsReported`, `TestManagedPathExists_DistinguishesAbsentFromUnreadable`, `TestInspectSavedLogin_UnreadableTokenIsNotMissingLogin`, `TestStatusCommand_NoAccountsDoesNotMutateManagedState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusDrive_FinalDrainGuidesAccessRestore`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestStatusRuntime_SummaryJSONWithActiveOwner`, `TestStatusRuntimeOverlayApplyAndSummary`, `TestPrintMountStatus_ShowsRuntimeState`, `TestE2E_FileOps_RoundTrip` |
+| `status` stays read-only and remains the only sync-health command surface. | `TestStatusOutputGoldenText`, `TestStatusOutputGoldenJSON`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_JSONSurfacesSyncAuthRejectedOffline`, `TestStatusCommand_UnreadableStateStoreIsReportedAsUnavailable`, `TestStatusCommand_UncheckableStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_PermissionDeniedStateDatabaseIsReportedAsUnavailable`, `TestStatusCommand_UnreadableDataDirIsReported`, `TestManagedPathExists_DistinguishesAbsentFromUnreadable`, `TestInspectSavedLogin_UnreadableTokenIsNotMissingLogin`, `TestStatusCommand_NoAccountsDoesNotMutateManagedState`, `TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors`, `TestBuildChildStatusDrive_FinalDrainGuidesAccessRestore`, `TestPrintMountStatus_RendersGuidedShortcutRecovery`, `TestStatusRuntime_SummaryJSONWithActiveOwner`, `TestStatusRuntimeOverlayApplyAndSummary`, `TestPrintDriveStatus_ShowsRuntimeState`, `TestE2E_FileOps_RoundTrip` |
 | `trash list/restore/empty` read and change one configured drive's local trash offline, together with the trash of each of its shortcut children (R-6.4.12; a child is a mount, not a selectable drive, and each entry names its sync folder); restore never overwrites, never re-creates a sync folder that is gone and then names where the file is in the trash, and creates the file's missing folders with the user-tree folder mode (R-5.10.2); empty needs `--confirm`. `trash list` words each reason by one exhaustive switch over the declared reasons (`trashReasonText`): `released` says the file's shared folder was removed from this account, and a reason outside the set is listed with its stored word (R-6.4.13). | `TestTrashCommands_ListRestoreAndEmpty`, `TestTrashRestore_NeverOverwrites`, `TestTrash_RestoreRefusesAMissingSyncFolder`, `TestTrash_RestoreCreatesMissingFoldersThatFollowTheUmask`, `TestTrashCommands_TheDrivesTrashCoversItsShortcutChildren`, `TestTrashList_ReleasedEntrySaysItsSharedFolderWasRemoved`, `TestTrashRestore_IntoASyncFolderThatIsGoneNamesWhereTheFileIs`, `TestTrashReasonText_NamesEveryDeclaredReason` |
 | `get` of a shared folder downloads through the tree download every folder `get` uses (`driveops.DownloadTree`, `drive-transfers.md`), listed by item ID; a shared file `get` into a folder lands under its remote name there, as a drive path's does, through the same downloader (R-1.2.5, R-1.2.6). Given no local path or a local folder, a file `get` takes the remote name as the file's name only when it is one plain local name, and otherwise refuses before anything is written and asks for a local file (R-1.2.7). The sync folder `login` and `drive add` create is the one folder the client makes in user space on its own initiative: it is private, 0700 (`syncRootDirPerms`). | `TestRunGet_SharedFolderDownloadsItsTree`, `TestRunGet_SharedFileDownloadsIntoTheGivenFolder`, `TestLocalFileTarget_DownloadsIntoDirectories`, `TestLocalFileTarget_RefusesAnUnsafeRemoteName`, `TestRunGet_SharedFileWithAnUnsafeNameIsRefused` |
 | `drive rebind-root` shows the remembered and present file counts, needs `--yes` or a typed REBIND, clears the recorded sync-folder fingerprint, keeps the rest of the state (recorded mount points included, so a disk that is not mounted stays unavailable truth), needs `--drive`, and refuses while a sync owner holds the drive. | `TestRunDriveRebindRoot_RequiresDrive`, `TestRunDriveRebindRoot_KeepsStateAndReportsRebind`, `TestRunDriveRebindRoot_RequiresConfirmationWithoutYes`, `TestRunDriveRebindRoot_RefusesLiveSyncOwner` |
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. It and `drive rebind-root` refuse while a sync owner holds the drive, and also while any engine holds the drive's sync folder or its state store (R-6.3.9). `drive remove --purge` and `logout --purge` remove the config sections, tell a running watch, and then delete each state store under the same locks, keeping one an engine still has open and naming the command that finishes (R-3.3.8, R-3.1.4). | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner`, `TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheDrive`, `TestDriveRemovePurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestLogoutPurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestDriveRemovePurge_NotifiesTheWatchBeforeDeleting`, `TestLogoutPurge_NotifiesTheWatchBeforeDeleting` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
-| After a config change the CLI says what the running watch did with it: picked up, being applied (`reload_in_progress`), busy (the owner's `busy` or the client's deadline, on the probe or the reload), or rejected (`reload_failed`); the reload's client timeout outlasts the owner's waits; `status` says when the running sync did not answer, and says nothing about it when the user stopped `status` (R-2.9.3). | `TestNotifyDaemon_BusySyncSaysItWillPickTheChangeUp`, `TestNotifyDaemon_ReloadInProgressSaysSo`, `TestNotifyDaemon_ReloadRejectedByRunningSyncIsAWarning`, `TestProbeControlOwner_ClassifiesOutcomes`, `TestControlSocketClientReloadAndPostJSON`, `TestControlSocketErrorClassification`, `TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer`, `TestRunStatusCommand_AStoppedStatusSaysNothingAboutTheRunningSync` |
+| After a config change the CLI says what the running watch did with it: picked up, being applied (`reload_in_progress`), busy (the owner's `busy` or the client's deadline, on the probe or the reload), or rejected (`reload_failed`); the reload's client timeout outlasts the owner's waits; `status` says when the running sync did not answer, and says nothing about it when the user stopped `status` (R-2.9.3). | `TestNotifyDaemon_BusySyncSaysItWillPickTheChangeUp`, `TestNotifyDaemon_ReloadInProgressSaysSo`, `TestDecodeControlJSONResponse_BodyTimeoutReadsAsDidNotAnswer`, `TestRunStatusCommand_PerfProbesTheSocketOnce`, `TestNotifyDaemon_ReloadRejectedByRunningSyncIsAWarning`, `TestProbeControlOwner_ClassifiesOutcomes`, `TestControlSocketClientReloadAndPostJSON`, `TestControlSocketErrorClassification`, `TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer`, `TestRunStatusCommand_AStoppedStatusSaysNothingAboutTheRunningSync` |
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestDryRunFlagSurfaceOnlySyncCommand`, `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestSyncConsole_MultiDriveNamesEachDrive`, `TestSyncConsole_WatchingEveryDrivePausedSaysWhatItWaitsFor` |
 | `sync` names every finished file, summarizes in human units, prints errors once, and renders console logs as human or journal text. | `TestSyncConsole_NamesEveryCompletedFile`, `TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose`, `TestSyncConsole_SummaryInHumanUnits`, `TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError`, `TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop`, `TestConsoleLogHandler_JournalLinesCarryPriorityAndNoTimestamp`, `TestConsoleLogHandler_DefaultConsoleShowsOutageAndItsRecoveryPlainly`, `TestConsoleLogHandler_JournalFilesNoticeAtNoticePriority`, `TestWithConsoleTimestamps_StampsHumanLinesOnly`, `TestNotice_SitsBetweenInfoAndWarn`, `TestReplaceLevelName_PrintsNoticeInStructuredOutput`, `TestCommandLogger_PerfSummaryInLogFileNotDefaultConsole`, `TestCommandLogger_SyncSchemaFieldsOnlyInLogFileAndVerboseConsole`, `TestMainWithWriters_SkipConfigCommandLogsPerfSummaryToLogFile`, `TestMainWithWriters_BootstrapRecordsFollowTheCommandLogger`, `TestCommandErrorText_NetworkFailureIsOnePlainLine`, `TestUnauthorizedAuthReason_DistinguishesExpiredLogin` |
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusDrive_RendersLifecycleState`, `TestBuildChildStatusDrive_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
@@ -51,7 +51,7 @@ are inserted, updated, pruned, and validated.
 | A recovered panic's `stack` attribute stays in the log file and the `--verbose` console; the default console prints the Error line without it. | `TestCommandLogger_PanicStackOnlyInLogFileAndVerboseConsole` |
 | A one-shot `sync` exits 1 when a drive it ran left a file unsynced, and 0 when none did: a failed action, work kept for retry, an issue that keeps a file from syncing, or a change kept from a removed shared folder because it could not be uploaded (counted with the files still not synced). What `status` lists without a file left unsynced (held deletes, a leftover of an interrupted removal, what a removed shared folder's local copy keeps for another reason) does not fail the run. The text summary, the JSON summary and the exit status take their numbers from one method (`Report.LeftWork`), which counts the run's last pass, each file once, and a drive error's 77 or 78 still wins (R-6.6.28). | `TestRunSyncCommand_FailedActionsExitNonZero`, `TestRunSyncCommand_StillOpenConditionsExitNonZero`, `TestRunSyncCommand_MultiDriveCountsTheDrivesThatLeftWork`, `TestRunSyncCommand_ADriveErrorWinsOverLeftWork`, `TestSyncConsole_StillOpenAddsTheIssuesToTheRunsOwnCounts`, `TestSyncConsole_LeftWorkComesFromTheReportAlone`, `TestSyncConsole_AChangeThatCouldNotBeUploadedFailsTheRun`, `TestReport_LeftWorkCountsAChangeTheReleaseCouldNotUpload`, `TestRunOnce_APauseThatRefusesItsTrialAgainLeavesEachFileOnce`, `TestSyncConsole_SummaryCountsWorkAThrottleLeftForTheNextSync`, `TestRunOnceResultError_ADriveWithAnErrorAndAReportIsADriveError`, `TestRunOnce_ReportCountsUnresolvedWork`, `TestRunOnce_RetryRowsThePlanDoesNotActOnAreGone`, `TestRunOnce_FollowUpWorkTheRunEndsOnIsLeftForTheNextSync` |
 | Command failures map into the shared error classes, and the exit status is chosen from typed errors: 77 sign-in required, 78 invalid config, 2 usage, 130 user stop, 1 everything else, a recovered panic and a one-shot sync that left work included. | `TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`, `TestMainWithWriters_ConfigErrorExits78`, `TestMainWithWriters_SignInRequiredExits77`, `TestFormatWatchStartupError_ExitStatusFollowsSharedCause`, `TestConfigFailuresAreTaggedInvalidConfig` |
-| A panic ends a command with exit 1 and never Go's 2 (R-6.3.10): on the command's goroutine through the last line of defense in `mainWithWriters` (the log file and stderr both get the stack), in the signal handler, the systemd keepalive or the performance logger through the command's context, and in a one-shot helper as its unit's failure; a watch a panic ended sets its failure `STATUS=`. In a folder `get` or `put`, a panic in one file's transfer is that file's failure, and a panic while the command renders an event fails the command (`drive-transfers.md`). | `TestMainWithWriters_PanicExitsOne`, `TestWithCommandPanic_AHelpersPanicIsTheCommandsError`, `TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError`, `TestShutdownContext_HandlerPanicStopsTheRequestInFlight`, `TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError`, `TestRunSyncDaemon_WatchdogPanicStopsTheWorkInFlight`, `TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne`, `TestSession_UpdatePanicEndsTheCommandWithThePanic`, `TestSession_UpdatePanicStopsTheRequestInFlight`, `TestSession_CompleteReleasesTheCommandContext`, `TestDiscoverAvailableDrives_APanicIsThatAccountsDegradedNotice`, `TestDownloadTree_APanickingTransferFailsOnlyThatFile`, `TestDownloadTree_APanickingReportFailsTheRun` |
+| A panic ends a command with exit 1 and never Go's 2 (R-6.3.10): on the command's goroutine through the last line of defense in `mainWithWriters` (the log file and stderr both get the stack), in the signal handler, the systemd keepalive or the performance logger through the command's context, and in a one-shot helper as its unit's failure; a watch a panic ended sets its failure `STATUS=`. In a folder `get` or `put`, a panic in one file's transfer is that file's failure, and a panic while the command renders an event fails the command (`drive-transfers.md`). | `TestMainWithWriters_PanicExitsOne`, `TestMainWithWriters_APanicOnTheCommandsGoroutineWritesOnePerformanceSummary`, `TestFormatWatchStartupError_KeepsAPanicTheErrorCarries`, `TestWithCommandPanic_AHelpersPanicIsTheCommandsError`, `TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError`, `TestShutdownContext_HandlerPanicStopsTheRequestInFlight`, `TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError`, `TestRunSyncDaemon_WatchdogPanicStopsTheWorkInFlight`, `TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne`, `TestSession_UpdatePanicEndsTheCommandWithThePanic`, `TestSession_UpdatePanicStopsTheRequestInFlight`, `TestSession_CompleteReleasesTheCommandContext`, `TestDiscoverAvailableDrives_APanicIsThatAccountsDegradedNotice`, `TestDownloadTree_APanickingTransferFailsOnlyThatFile`, `TestDownloadTree_APanickingReportFailsTheRun` |
 | `sync --watch` reports READY/STATUS/RELOADING/STOPPING/WATCHDOG to systemd through `internal/sdnotify`, and nothing outside systemd. | `TestRunSyncDaemon_NotifiesSystemdOfLifecycle`, `TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode`, `TestRunSyncDaemon_NoDrivesIsAConfigFailure`, `TestSyncNotifierWatchingStatus`, `TestOpenSyncNotifier_BadSocketWarnsAndContinues`, `TestNotifier_SendsProtocolMessages`, `TestOpen_AbstractSocket`, `TestOpen_WatchdogInterval`, `TestRunWatch_ReportsLifecycleTransitions` |
 | The watchdog keepalive goes out only while the watch loop's heartbeat shows progress; a silence is logged once at Error and the keepalive resumes when the loop beats again (R-6.6.36). | `TestSyncNotifier_KeepaliveOnlyWhileTheLoopMakesProgress` |
 | User-facing output agrees across commands: `drive list` and `status` derive a configured drive's state through one function (`configuredDriveState`); `stat` prints local times like `ls`; `ls` on a file lists that file; every transport failure, before or while reading the response, and every sign-in outcome is one plain line; health checks do not log a token load. | `TestBuildConfiguredDriveEntries_StateMatchesStatus`, `TestFormatExactTime_IsLocalWithZone`, `TestLs_OnAFileListsThatFile`, `TestCommandErrorText_EveryTransportFailureIsPlain`, `TestCommandErrorText_SignInOutcomesSayRunLoginAgain`, `TestInspectSavedLogin_DoesNotLogATokenLoad` |
@@ -154,7 +154,7 @@ scripts and service managers:
 | Status | Meaning | Chosen by |
 | --- | --- | --- |
 | 0 | success (also `sync --watch` stopped by a signal: the watch finishes cleanly, including one that idled because every drive was paused), unless stderr refused a write or a refreshed sign-in is still unsaved | `err == nil` and no refused stderr write recorded |
-| 1 | any other failure, transient or not, a one-shot `sync` that finished but left a file unsynced, a recovered panic, also one that ended a stop the user asked for or travels with a sign-in or configuration failure, a command that worked but could not write to stderr, and a command (a stopped watch included) that worked but holds a refreshed sign-in it could not save | default (`errSyncLeftWork` carries no sentinel); `panicguard.ErrPanic` is checked first, before usage, sign-in, configuration and cancellation; a refused stderr write turns 0 into 1 (`exitCodeAfterStatusStream`); an unsaved sign-in replaces a nil or canceled result (`withTokenSaveFailure`) |
+| 1 | any other failure, transient or not, a one-shot `sync` that finished but left a file unsynced, a `sync` (one-shot or a stopped watch) that did its work but whose stdout refused a line of its report (R-6.6.37), a recovered panic, also one that ended a stop the user asked for or travels with a sign-in or configuration failure, a command that worked but could not write to stderr, and a command (a stopped watch included) that worked but holds a refreshed sign-in it could not save | default (`errSyncLeftWork` carries no sentinel); `panicguard.ErrPanic` is checked first, before usage, sign-in, configuration and cancellation; a refused stderr write turns 0 into 1 (`exitCodeAfterStatusStream`); an unsaved sign-in replaces a nil or canceled result (`withTokenSaveFailure`) |
 | 2 | command-line mistake | `*usageError` |
 | 77 (EX_NOPERM) | sign-in required | `graph.ErrNotLoggedIn` or `graph.ErrUnauthorized` (`ErrLoginExpired` travels with it) |
 | 78 (EX_CONFIG) | invalid configuration | `config.ErrInvalidConfig` |
@@ -179,22 +179,27 @@ to stop, and the unit shows as failed until it next starts
 
 What the CLI could not tell the user changes the exit status, as it does for
 the GNU tools when standard error fails: `Statusf`, `warnf`, `Progressf`,
-`ProgressDone` and the watch's warning that a drive did not start record the
-first write stderr refused (`recordStatusError`), and once the command has
-returned `mainWithWriters` gives that record once to the command logger at
-warn level, the log file included, and ends a command that worked with exit 1;
-a command that failed for its own reason keeps its message and status
+`ProgressDone`, the watch's warning that a drive did not start, every
+stderr line `sync` writes through `syncConsole` (a failed or retried file
+action, a drive's error, held deletes, the warning that stdout refused a
+line; R-6.6.37) and main's final error record the first write stderr refused
+(`recordStatusError`), and `mainWithWriters` gives that record once to the
+command logger at warn level, the log file included, and ends a command that
+worked with exit 1; a command that failed for its own reason keeps its
+message and status
 (`TestMainWithWriters_AStatusStreamThatFailsAWriteFailsAWorkingCommand`,
 `TestMainWithWriters_AFailedCommandKeepsItsStatusWhenTheStatusStreamFails`,
-`TestRunSyncDaemonWithFactory_AStartWarningThatCannotBeWrittenIsRecorded`).
-Two kinds of stderr line are not recorded, and a write of theirs that fails is
-dropped: the lines `sync` writes through `syncConsole` (a failed or retried
-file action, a drive's error, held deletes), and main's own last lines (the
-final error, the warning that the log file did not close), which are written
-only for a command whose exit status is not 0 already, after the log file
-closed. A broken pipe on stderr never reaches the record: the CLI does not
-ask for SIGPIPE, so Go ends a program that writes to one on descriptor 2 with
-that signal.
+`TestRunSyncDaemonWithFactory_AStartWarningThatCannotBeWrittenIsRecorded`,
+`TestSyncConsole_AStderrLineThatCannotBeWrittenIsRecorded`,
+`TestMainWithWriters_ARefusedFinalErrorIsRecordedInTheLogFile`). main writes
+the final error before it closes the log file, so its refusal reaches the
+log. Two of main's last lines come after the close, because only the close
+tells whether they are needed, and a refused write of theirs is dropped: the
+warning that the log file did not close, and the final error of a command
+whose only failure was that close; both are written only for a command whose
+exit status is not 0 already. A broken pipe on stderr never reaches the
+record: the CLI does not ask for SIGPIPE, so Go ends a program that writes to
+one on descriptor 2 with that signal.
 
 Classification is by sentinel only. `internal/config` tags every failure at its
 exported read/parse/validate/resolve entrypoints (`Load*`, `Validate*`,
@@ -243,8 +248,12 @@ error):
   the last line of defense, a deferred recover in `mainWithWriters`
   (`reportMainPanic`): logged once through the command logger (the log file
   when there is one; the signal logger before the command logger exists),
-  the log file closed so the record is on disk, exit 1
-  (`TestMainWithWriters_PanicExitsOne`).
+  the command's performance session completed with the panic's error, so
+  the log file holds one summary that reads "error" as for a helper's panic
+  (a session already completed is not completed again), the log file closed
+  so the records are on disk, exit 1
+  (`TestMainWithWriters_PanicExitsOne`,
+  `TestMainWithWriters_APanicOnTheCommandsGoroutineWritesOnePerformanceSummary`).
 - A helper goroutine of the command has no error result, so it cancels the
   command's context with the panic as the cause: the signal handler
   (`shutdownContext`'s context), the systemd watchdog keepalive (the watch's
@@ -254,9 +263,16 @@ error):
   command that finished regardless, and `runSyncDaemonWithFactory` does the
   same for its own context, which main cannot see: a watch that drained on
   that cancellation returns the panic, and one that also failed on its way
-  out returns both, so the watch logs it and sets its failure `STATUS=`
+  out returns both, so the watch logs it and sets its failure `STATUS=`.
+  A watch whose start failed is presented from its drives' startup results
+  (`formatWatchStartupError`), which keeps a panic the error carries
+  (`panicCarriedBy`) joined to the presented message, so its message and
+  stack survive and the status is 1, never the sign-in or config status the
+  drives alone would give
   (`TestWithCommandPanic_AHelpersPanicIsTheCommandsError`,
   `TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError`,
+  `TestPanicCarriedBy_FindsThePanicInAJoin`,
+  `TestFormatWatchStartupError_KeepsAPanicTheErrorCarries`,
   `TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError`,
   `TestRunSyncDaemon_WatchdogPanicJoinsTheFailureTheWatchEndsWith`,
   `TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne`). Each hands
@@ -344,7 +360,27 @@ sends; the unit is `Type=notify` with that `ExecReload`, not
 
 Rules: [cli-output-guidelines.md](../reference/cli-output-guidelines.md).
 
-`sync` output is owned by `syncConsole` (`internal/cli/sync_console.go`):
+`sync` output is owned by `syncConsole` (`internal/cli/sync_console.go`).
+One policy covers a stdout that refuses a line, text and `--json`, one-shot
+and watch (R-6.6.37): the sync goes on, the first refusal is kept
+(`syncConsole.outputErr`) and said once on stderr, "Warning: sync output is
+incomplete: <cause>", the later lines are still attempted, and the command
+returns it (`OutputError`, a `*syncOutputError`) when the run ended with no
+other error, so it exits 1 and main's final error names it again; a run that
+failed or left work returns its own error. main names a `syncOutputError` as
+itself, never through the cause under it, which on a stdout redirected to a
+full disk is ENOSPC and would read as the sync's own disk being full. A
+closed pipe never reaches the console: the CLI does not ask for SIGPIPE, so Go
+ends the process on a write to a closed stdout
+(`TestSyncConsole_ATextLineStdoutRefusesIsSaidOnceAndIsTheOutputError`,
+`TestSyncConsole_NoOutputErrorWhenStdoutTookEveryLine`,
+`TestRunSyncCommand_AStdoutThatRefusesTheReportFailsAWorkingRun`,
+`TestRunSyncCommand_StdoutOnDevFullFailsTheRun`,
+`TestRunSyncDaemonWithFactory_AStdoutThatRefusesALineFailsAWatchThatStopsCleanly`).
+A stderr line the console cannot write is recorded through the command
+context (Exit Status).
+
+The console prints:
 
 - before a one-shot run, one line per drive: "Syncing ~/OneDrive with
   user@example.com..." (R-6.6.19)
@@ -403,7 +439,22 @@ Rules: [cli-output-guidelines.md](../reference/cli-output-guidelines.md).
   `WillRetry` or, through `LastPassAwaitingUser`, `StillOpen`. The line adds "; N still not synced (see 'onedrive-go
   status')" for `StillOpen`, and a drive that left anything is never "Up to
   date". A dry run leaves nothing. `syncConsole.Summary` returns each mount's counts, the
-  ones it printed, to `runOnceResultError`
+  ones it printed, to `runOnceResultError`. A delete is worded by what it
+  removed, files and folders apart ("deleted 3 files and 1 folder locally",
+  "Would delete 1 folder on OneDrive"): the engine marks an activity whose
+  planned view is a folder (`Activity.Folder`, from
+  `syncdomain.ResolveItemType`, which `ActionCompletion.ItemType` carries to
+  the completion), and a plan's folder deletes are counted apart for a dry
+  run (`Report.LocalFolderDeletes`, `Report.RemoteFolderDeletes`). A folder
+  with files is one activity per file and one for the folder, since the
+  planner deletes children before their parent. A deleted folder's own line
+  ends with `/`, and under `--json` its `activity` line carries
+  `"folder": true` and the `summary` a `folder_counts` map of how many of
+  `counts` were folders; `counts` keeps meaning every item
+  (`TestSyncConsole_SummaryCountsDeletedFoldersAsFolders`,
+  `TestSyncConsole_ADeletedFolderLineEndsWithASlash`,
+  `TestSyncConsole_JSONSummaryCountsDeletedFoldersApart`,
+  `TestActivity_AFolderDeleteIsMarkedAsAFolder`)
 - watch mode: a startup line per folder and account, the Ctrl-C hint on a
   terminal, time-of-day prefixes off the journal, and "Stopped." (R-6.6.20)
 - `--quiet` keeps only failures
@@ -566,6 +617,21 @@ pass already counted as failed or left. The exit status therefore says
 what `status` says on every run, including the later runs of a write into a
 read-only shared folder, which hold the upload under the write block and
 leave it for the next sync.
+While a watch runs, `sync --confirm-deletes` does not refuse as another sync
+would: it reads each selected drive's held set from its state store, shows it
+with the command that confirms exactly it
+(`onedrive-go sync --confirm-deletes --held-set <count>-<token>`), and
+confirms nothing (exit 1, `errHeldDeletesNotConfirmed`). With `--held-set` it
+finds the drive whose held set the value names, refuses at once when none
+does (the set changed since it was shown; the sets held now are listed), and
+otherwise sends the set to the watch (`POST /v1/confirm-deletes`), whose own
+refusal of a set that changed in between is reported with its reason; only a
+taken confirmation prints that the watch applies it in its next pass
+(R-6.2.17; `TestConfirmDeletesToRunningWatch_ShowsTheHeldSetAndConfirmsNothing`,
+`TestConfirmDeletesToRunningWatch_SendsTheNamedSetToTheWatch`,
+`TestConfirmDeletesToRunningWatch_RefusesASetThatChanged`). The held-deletes
+condition of `status` says so in its action.
+
 Work a one-way mode held back, deletes held for `--confirm-deletes`, conflict
 copies, a paused drive beside a drive that ran, and a dry run are not work
 left (`TestRunSyncCommand_FailedActionsExitNonZero`,
@@ -648,8 +714,15 @@ every line. Each output type that can hold a list has one normalizing step
 that turns each nil list into an empty one, and its printer hands the value
 over through it: the type's `withEmptyLists` method, called as
 `out.withEmptyLists()`, or for the status document `newStatusOutput`, which
-builds the whole document once and whose `normalizeStatusAccounts` leaves no
-list nil. A construction site does not fill a list the step fills again. The
+builds the whole document once and fills a nil account list and each nil
+drive list. The status model itself holds one field per fact: the builder
+(`buildStatusAccountsFromViews`) fills the public fields of each account and
+drive (name, folder, kind, state, shared folders) and derives each account's
+sign-in requirement and each drive's final state once; the live, runtime and
+perf overlays update those same fields, keyed by the private `InternalID`
+(the mount ID), and the printers only read them. The two private facts a
+printer or overlay reads, `InternalID` and a shortcut child's `NamespaceID`,
+are tagged `json:"-"`. A construction site does not fill a list the step fills again. The
 folder forms of `get` and `put` print one generic document type,
 `folderTransferJSONOutput`, with one `withEmptyLists`; its two golden files
 pin both documents byte for byte (`TestGetFolderJSONOutput_Golden`,
@@ -679,7 +752,8 @@ walking the type with no depth limit; a type holding a list no probe can
 reach (inside a recursive type, or under a map not keyed by strings) fails
 the test (`TestListDepth_FindsTheDeepestList`). A `sync --json` line that
 cannot be written is reported once on stderr, and the sync goes on
-(`TestSyncConsole_EmitJSONFailureIsReported`).
+(`TestSyncConsole_EmitJSONFailureIsReported`); the text console does the
+same, and the run's exit status follows (Console Output, R-6.6.37).
 
 The mutating commands' documents:
 
@@ -1042,7 +1116,14 @@ reload waits `controlReloadClientTimeout`, the sum of the owner's waits
 `reload_in_progress` instead of giving up first. The probe classifies an
 owner that holds the socket but answered `busy`, or did not answer before the
 client's deadline, as `controlOwnerStateUnresponsive`: a live owner, never
-"no sync" (`controlOwnerDidNotAnswer`). Only a watch owner can be busy, since
+"no sync" (`controlOwnerDidNotAnswer`). A deadline that cuts short the body
+of a 2xx answer reads the same: `controlResponseReadError` returns the
+decode's timeout (a `context.DeadlineExceeded`, an `os.ErrDeadlineExceeded`,
+or any `net.Error` whose `Timeout()` is true) wrapped with `%w` rather than
+an `internal_error`, and every other decode or close failure stays an
+`internal_error` whose causes are reachable through `controlDaemonError`'s
+`Unwrap` (`TestDecodeControlJSONResponse_BodyTimeoutReadsAsDidNotAnswer`,
+`TestDecodeControlJSONResponse_AnInternalErrorKeepsItsCause`). Only a watch owner can be busy, since
 a one-shot owner answers status in the handler. `drive reset-sync-state`
 refuses on it as on any probe that could not tell.
 
@@ -1092,7 +1173,14 @@ Processes, R-6.8.30).
 missing: "the running sync did not answer in time" for an unresponsive owner,
 "could not read the running sync's live state (...)" for another probe
 failure. It used to drop the overlay silently, so a drive the watch was
-syncing read as pending with no reason given.
+syncing read as pending with no reason given. `status` probes the control
+socket once (`runStatusCommand`) and gives the probe to both overlays, the
+runtime one and, with `--perf`, the performance one, so a watch too busy to
+answer costs one probe timeout, not two
+(`TestRunStatusCommand_PerfProbesTheSocketOnce`). `status --perf` shows the
+per-mount snapshots of `GET /v1/perf` only; the owner aggregate the same
+answer carries is `onedrive-go perf`'s to show, a decision recorded here so
+status keeps one row per drive.
 
 ## Pause / Resume
 

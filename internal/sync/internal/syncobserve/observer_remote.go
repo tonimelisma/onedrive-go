@@ -239,18 +239,24 @@ func (o *RemoteObserver) fullDelta(
 		}()
 	}
 
-	loop := newDeltaLoopGuard(savedToken)
+	loop := newDeltaLoopGuard()
 	// The whole window is collected before anything is classified: a child
 	// can arrive pages before its parent, and resolving it page by page spent
 	// the window's GetItem budget on ancestors the window itself carried
 	// (R-2.15.4).
 	var window []graph.Item
 	for page := range maxDeltaPaginationGuard {
-		pageRaw, pageItems, newToken, done, err := o.fetchPageRetryingRejection(ctx, token, page, inflight, enumerated)
+		fetched, err := o.fetchPageRetryingRejection(ctx, token, page, inflight, enumerated)
 		if err != nil {
 			o.stats.errors.Add(1)
 
 			return nil, "", syncshortcut.ShortcutTopologyBatch{}, 0, err
+		}
+		pageRaw, pageItems, newToken, done := fetched.raw, fetched.items, fetched.next, fetched.done
+		if page == 0 {
+			// The window's own first request, with or without a saved token:
+			// a next link back to it is a link back like any other.
+			loop.asked(fetched.askedKey(token))
 		}
 
 		window = append(window, pageRaw...)
@@ -293,7 +299,7 @@ func (o *RemoteObserver) fullDelta(
 			return events, newToken, topology, windowItems, nil
 		}
 
-		if loopErr := loop.next(newToken, pageRaw); loopErr != nil {
+		if loopErr := loop.next(fetched.nextKey(), pageRaw); loopErr != nil {
 			o.stats.errors.Add(1)
 			o.logger.Warn("OneDrive's change list loops; rescanning the whole drive",
 				slog.String("reason", loopErr.Reason()), slog.Int("pages_fetched", page+1))
@@ -739,23 +745,57 @@ func (o *RemoteObserver) setDeltaToken(token string) {
 func (o *RemoteObserver) fetchPageRetryingRejection(
 	ctx context.Context, token string, page int, inflight map[string]inflightParent,
 	enumerated map[string]struct{},
-) ([]graph.Item, int, string, bool, error) {
-	events, items, next, done, err := o.fetchPage(ctx, token, page, inflight, enumerated)
+) (windowPage, error) {
+	fetched, err := o.fetchPage(ctx, token, page, inflight, enumerated)
 	if err == nil || token == "" || !isCursorRejection(err) {
-		return events, items, next, done, err
+		return fetched, err
 	}
 
 	o.logger.Debug("OneDrive refused the change-list token; retrying it once",
 		slog.Int("page", page), slog.Any("error", err))
-	events, items, next, done, err = o.fetchPage(ctx, token, page, inflight, enumerated)
+	fetched, err = o.fetchPage(ctx, token, page, inflight, enumerated)
 	if err == nil || !isCursorRejection(err) {
-		return events, items, next, done, err
+		return fetched, err
 	}
 
 	o.logger.Warn("OneDrive keeps refusing the saved change-list position; rescanning the whole drive",
 		slog.Any("error", err))
 
-	return nil, 0, "", false, syncdomain.NewCursorUnusableError("OneDrive refused the saved position twice", err)
+	return windowPage{}, syncdomain.NewCursorUnusableError("OneDrive refused the saved position twice", err)
+}
+
+// windowPage is one page of a delta window as fetchPage hands it on: its
+// items, how many are not the root, the token that continues the window (the
+// next link, or the delta link when done), and the paths the graph client
+// resolved the page's own request and its next link to.
+type windowPage struct {
+	raw      []graph.Item
+	items    int
+	next     string
+	done     bool
+	path     string
+	nextPath string
+}
+
+// askedKey is the loop guard's key of the page's own request: the path the
+// graph client asked at, else, from a fetcher that does not say, the token
+// it was asked with ("" for none, which keys nothing).
+func (p *windowPage) askedKey(token string) string {
+	if p.path != "" {
+		return p.path
+	}
+
+	return token
+}
+
+// nextKey is the loop guard's key of the page the next link leads to: the
+// path it resolves to, else the link as it was spelled.
+func (p *windowPage) nextKey() string {
+	if p.nextPath != "" {
+		return p.nextPath
+	}
+
+	return p.next
 }
 
 // isCursorRejection reports whether a delta fetch failed with a 4xx that
@@ -779,29 +819,36 @@ func isCursorRejection(err error) bool {
 	}
 }
 
-// deltaLoopGuard notices a change list that leads back on itself: a nextLink
-// already fetched in this window, or a non-empty page whose item IDs repeat
-// an earlier page exactly. Followed, such a list ran to the 10,000-page guard
-// with every item buffered in memory (R-2.15.2).
+// deltaLoopGuard notices a change list that leads back on itself: a next link
+// to a page already asked for in this window, the window's first request
+// included whether or not it carried a saved token, or a non-empty page whose
+// item IDs repeat an earlier page exactly. Pages are keyed by the path the
+// graph client resolves each request and link to (graph.DeltaPage.Path and
+// NextPath), so two spellings of one link are one page. The check runs
+// before the page is asked for again. Followed, such a list ran to the
+// 10,000-page guard with every item buffered in memory (R-2.15.2).
 type deltaLoopGuard struct {
-	tokens map[string]struct{}
-	pages  map[string]struct{}
+	askedKeys map[string]struct{}
+	pages     map[string]struct{}
 }
 
-func newDeltaLoopGuard(savedToken string) *deltaLoopGuard {
-	guard := &deltaLoopGuard{tokens: map[string]struct{}{}, pages: map[string]struct{}{}}
-	if savedToken != "" {
-		guard.tokens[savedToken] = struct{}{}
+func newDeltaLoopGuard() *deltaLoopGuard {
+	return &deltaLoopGuard{askedKeys: map[string]struct{}{}, pages: map[string]struct{}{}}
+}
+
+// asked records the key of a page the window asked for; an empty key, a
+// first request a fetcher did not describe, records nothing.
+func (g *deltaLoopGuard) asked(key string) {
+	if key != "" {
+		g.askedKeys[key] = struct{}{}
 	}
-
-	return guard
 }
 
-func (g *deltaLoopGuard) next(nextToken string, pageItems []graph.Item) *syncdomain.DeltaExpiredError {
-	if _, seen := g.tokens[nextToken]; seen {
+func (g *deltaLoopGuard) next(nextKey string, pageItems []graph.Item) *syncdomain.DeltaExpiredError {
+	if _, seen := g.askedKeys[nextKey]; seen {
 		return syncdomain.NewCursorUnusableError("a page links back to an earlier page", nil)
 	}
-	g.tokens[nextToken] = struct{}{}
+	g.askedKeys[nextKey] = struct{}{}
 
 	ids := make([]string, 0, len(pageItems))
 	for i := range pageItems {
@@ -834,15 +881,22 @@ func (g *deltaLoopGuard) next(nextToken string, pageItems []graph.Item) *syncdom
 func (o *RemoteObserver) fetchPage(
 	ctx context.Context, token string, page int, inflight map[string]inflightParent,
 	enumerated map[string]struct{},
-) (raw []graph.Item, items int, next string, done bool, err error) {
+) (windowPage, error) {
 	dp, err := o.fetchDeltaPageWithRetry(ctx, token, page)
 	if err != nil {
-		if errors.Is(err, graph.ErrGone) {
-			return nil, 0, "", false, syncdomain.NewDeltaExpiredError(err)
+		switch {
+		case errors.Is(err, graph.ErrGone):
+			return windowPage{}, syncdomain.NewDeltaExpiredError(err)
+		case errors.Is(err, graph.ErrDeltaTokenNotALink):
+			// A saved token that is not a link cannot be continued; read as
+			// no token it took a full enumeration for the changes since it.
+			return windowPage{}, syncdomain.NewCursorUnusableError("the saved position is not a link", err)
 		}
 
-		return nil, 0, "", false, fmt.Errorf("sync: fetching delta page %d: %w", page, err)
+		return windowPage{}, fmt.Errorf("sync: fetching delta page %d: %w", page, err)
 	}
+
+	items := 0
 
 	o.Converter.enrichSparseParentRefs(ctx, dp.Items)
 
@@ -857,14 +911,14 @@ func (o *RemoteObserver) fetchPage(
 	}
 
 	if dp.DeltaLink != "" {
-		return dp.Items, items, dp.DeltaLink, true, nil
+		return windowPage{raw: dp.Items, items: items, next: dp.DeltaLink, done: true, path: dp.Path}, nil
 	}
 
 	if dp.NextLink == "" {
-		return nil, 0, "", false, fmt.Errorf("sync: delta page %d has neither NextLink nor DeltaLink", page)
+		return windowPage{}, fmt.Errorf("sync: delta page %d has neither NextLink nor DeltaLink", page)
 	}
 
-	return dp.Items, items, dp.NextLink, false, nil
+	return windowPage{raw: dp.Items, items: items, next: dp.NextLink, path: dp.Path, nextPath: dp.NextPath}, nil
 }
 
 // classifyWindow resolves the ancestors the whole window still lacks, then

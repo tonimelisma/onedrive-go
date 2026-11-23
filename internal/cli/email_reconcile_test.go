@@ -36,7 +36,7 @@ func TestReconcileGraphUser_RefusesWhileASyncUsesTheState(t *testing.T) {
 		account.UserID = userID
 	})
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(cfgPath, oldCID, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, oldCID, t.TempDir()))
 	statePath := config.DriveStatePath(oldCID)
 	require.NoError(t, os.WriteFile(statePath, []byte(purgeTestStateContent), 0o600))
 	holdDriveState(t, statePath)
@@ -73,11 +73,11 @@ func seedInterruptedEmailChange(t *testing.T, oldCID, newCID driveid.CanonicalID
 		account.UserID = emailChangeTestUserID
 	})
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(cfgPath, oldCID, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, oldCID, t.TempDir()))
 	require.NoError(t, os.WriteFile(config.DriveStatePath(oldCID), []byte(purgeTestStateContent), 0o600))
 
 	killed := errors.New("killed")
-	_, err := config.ReconcileAccountEmail(cfgPath, newCID, emailChangeTestUserID, newCID.Email(),
+	_, err := config.ReconcileAccountEmail(t.Context(), cfgPath, newCID, emailChangeTestUserID, newCID.Email(),
 		func(_ []config.StateDBMove, begin func() error) error {
 			require.NoError(t, begin())
 			return killed

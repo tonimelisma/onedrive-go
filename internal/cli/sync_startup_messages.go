@@ -95,6 +95,12 @@ func formatStateStoreIncompatibleError(identity *multisync.MountIdentity, err er
 	return newPresentedError(message, err)
 }
 
+// formatWatchStartupError presents a watch that could not start from its
+// drives' startup results. A recovered panic the error carries (a keepalive
+// that panicked while the start failed, joined by withCommandPanic) is kept
+// beside the presented message: its message and stack still reach the user
+// and the log, and the exit status is 1 (R-6.3.10), never the sign-in or
+// config one the drives alone would give.
 func formatWatchStartupError(err error) error {
 	var startupErr *multisync.WatchStartupError
 	if !errors.As(err, &startupErr) {
@@ -105,16 +111,22 @@ func formatWatchStartupError(err error) error {
 	}
 
 	failures := startupErr.Summary.SkippedResults()
+	var presented error
 	if len(failures) == 1 {
-		return startupFailureError(formatStartupResultMessage(&failures[0]), failures)
+		presented = startupFailureError(formatStartupResultMessage(&failures[0]), failures)
+	} else {
+		parts := make([]string, 0, len(failures))
+		for i := range failures {
+			parts = append(parts, formatStartupResultMessage(&failures[i]))
+		}
+		presented = startupFailureError("watch startup failed: "+strings.Join(parts, "; "), failures)
 	}
 
-	parts := make([]string, 0, len(failures))
-	for i := range failures {
-		parts = append(parts, formatStartupResultMessage(&failures[i]))
+	if recovered := panicCarriedBy(err); recovered != nil {
+		return errors.Join(recovered, presented)
 	}
 
-	return startupFailureError("watch startup failed: "+strings.Join(parts, "; "), failures)
+	return presented
 }
 
 // startupFailureError keeps the drives' causes reachable for the exit status

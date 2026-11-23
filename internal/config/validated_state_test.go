@@ -44,7 +44,7 @@ func TestLoadValidatedState_RejectsConfiguredDriveMissingCatalogEntry(t *testing
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	seedCatalogAccount(t, cid, func(account *CatalogAccount) {
 		account.UserID = emailReconcileTestUser123
 		account.DisplayName = "Test User"
@@ -67,7 +67,7 @@ func TestLoadValidatedState_NamesTheFirstConfiguredDriveMissingFromTheCatalog(t 
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	for _, name := range []string{"e", "c", "a", "d", "b"} {
-		require.NoError(t, AppendDriveSection(cfgPath, driveid.MustCanonicalID("personal:"+name+"@example.com"), "~/"+name))
+		require.NoError(t, AppendDriveSection(t.Context(), cfgPath, driveid.MustCanonicalID("personal:"+name+"@example.com"), "~/"+name))
 	}
 
 	_, _, err := LoadValidatedState(cfgPath, testConfigLogger())
@@ -80,7 +80,7 @@ func TestLoadValidatedState_RejectsDriveOwnerMissingCatalogAccount(t *testing.T)
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("shared:user@example.com:drv123:item456")
-	require.NoError(t, AppendDriveSection(cfgPath, cid, "~/Shared"))
+	require.NoError(t, AppendDriveSection(t.Context(), cfgPath, cid, "~/Shared"))
 	seedCatalogDrive(t, cid, func(drive *CatalogDrive) {
 		drive.OwnerAccountCanonical = "business:owner@example.com"
 	})
@@ -106,7 +106,7 @@ func TestLoadValidatedState_RejectsPrimaryDriveOwnedByDifferentAccount(t *testin
 		account.UserID = "user-other"
 		account.DisplayName = "Other"
 	})
-	require.NoError(t, UpdateCatalog(func(catalog *Catalog) error {
+	require.NoError(t, UpdateCatalog(t.Context(), func(catalog *Catalog) error {
 		account, found := catalog.AccountByCanonicalID(accountCID)
 		require.True(t, found)
 		account.PrimaryDriveCanonical = accountCID.String()
@@ -230,7 +230,7 @@ func TestMarkAndClearAccountAuthRequirement(t *testing.T) {
 		account.DisplayName = validatedStateTestUser
 	})
 
-	require.NoError(t, MarkAccountAuthRequired(DefaultDataDir(), cid, authstate.ReasonSyncAuthRejected))
+	require.NoError(t, MarkAccountAuthRequired(t.Context(), DefaultDataDir(), cid, authstate.ReasonSyncAuthRejected))
 
 	stored, err := LoadCatalog()
 	require.NoError(t, err)
@@ -238,7 +238,7 @@ func TestMarkAndClearAccountAuthRequirement(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, authstate.ReasonSyncAuthRejected, account.AuthRequirementReason)
 
-	require.NoError(t, ClearAccountAuthRequirement(DefaultDataDir(), cid))
+	require.NoError(t, ClearAccountAuthRequirement(t.Context(), DefaultDataDir(), cid))
 
 	stored, err = LoadCatalog()
 	require.NoError(t, err)
@@ -269,12 +269,12 @@ func TestAccountAuthRequirement_TwoAccountsAtOneAddressAreMarkedReadAndClearedAp
 				return has
 			}
 
-			require.NoError(t, MarkAccountAuthRequired(DefaultDataDir(), account, authstate.ReasonSyncAuthRejected))
+			require.NoError(t, MarkAccountAuthRequired(t.Context(), DefaultDataDir(), account, authstate.ReasonSyncAuthRejected))
 			assert.True(t, required(account), "the account whose sign-in was refused is marked")
 			assert.False(t, required(other), "the other account at the address is not")
 
-			require.NoError(t, MarkAccountAuthRequired(DefaultDataDir(), other, authstate.ReasonSyncAuthRejected))
-			require.NoError(t, ClearAccountAuthRequirement(DefaultDataDir(), account))
+			require.NoError(t, MarkAccountAuthRequired(t.Context(), DefaultDataDir(), other, authstate.ReasonSyncAuthRejected))
+			require.NoError(t, ClearAccountAuthRequirement(t.Context(), DefaultDataDir(), account))
 			assert.False(t, required(account), "the clear ends the account's own requirement")
 			assert.True(t, required(other), "and keeps the other account's")
 		})

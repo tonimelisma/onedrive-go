@@ -252,7 +252,10 @@ func (c *Client) ListItemPermissions(ctx context.Context, driveID driveid.ID, it
 		slog.String("item_id", itemID),
 	)
 
-	apiPath := itemRoute(driveID, itemID, "/permissions")
+	apiPath, err := itemRoute(driveID, itemID, "/permissions")
+	if err != nil {
+		return nil, err
+	}
 
 	var permissions []Permission
 
@@ -303,11 +306,15 @@ func (c *Client) fetchPermissionsPage(ctx context.Context, apiPath string) (*lis
 func (c *Client) ListRecycleBinItems(
 	ctx context.Context, driveID driveid.ID,
 ) ([]Item, error) {
+	route, err := driveRoute(driveID, fmt.Sprintf("/special/recyclebin/children?$top=%d", listChildrenPageSize))
+	if err != nil {
+		return nil, err
+	}
+
 	return collectChildPages(func(visit ChildrenPageFunc) error {
 		return c.visitChildPages(
 			ctx,
-			fmt.Sprintf("/drives/%s/special/recyclebin/children?$top=%d",
-				driveID, listChildrenPageSize),
+			route,
 			"listing recycle bin items",
 			"listed recycle bin items complete",
 			[]slog.Attr{
@@ -329,7 +336,10 @@ func (c *Client) RestoreItem(
 		slog.String("item_id", itemID),
 	)
 
-	apiPath := itemRoute(driveID, itemID, "/restore")
+	apiPath, err := itemRoute(driveID, itemID, "/restore")
+	if err != nil {
+		return nil, err
+	}
 
 	// Restore takes optional JSON options; it is sent with none, and declares
 	// JSON as it always has: the request has never been sent without the

@@ -89,6 +89,14 @@ func (s *SyncStore) ListHeldDeletes(ctx context.Context) ([]syncdomain.HeldDelet
 	if err != nil {
 		return nil, err
 	}
+	return HeldDeletesFromRows(rows), nil
+}
+
+// HeldDeletesFromRows is the held set the rows record, as the engine reads it:
+// a status snapshot's rows name the same set, so the CLI derives the same
+// confirmation from them (syncdomain.ConfirmationOf) as the watch it sends
+// that confirmation to.
+func HeldDeletesFromRows(rows []HeldDeleteRow) []syncdomain.HeldDelete {
 	held := make([]syncdomain.HeldDelete, 0, len(rows))
 	for i := range rows {
 		held = append(held, syncdomain.HeldDelete{
@@ -99,5 +107,5 @@ func (s *SyncStore) ListHeldDeletes(ctx context.Context) ([]syncdomain.HeldDelet
 			ItemID:   rows[i].ItemID,
 		})
 	}
-	return held, nil
+	return held
 }

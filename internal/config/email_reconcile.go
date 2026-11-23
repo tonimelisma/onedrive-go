@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -45,6 +46,11 @@ type StateDBMover func(moves []StateDBMove, begin func() error) error
 type EmailReconcileResult struct {
 	AccountRenames []CanonicalIDRename
 	DriveRenames   []CanonicalIDRename
+	// KeptStateDBs are shared folders' state DBs left under the old email:
+	// two accounts of different types had that email, and no catalog record
+	// says which of them the folder belongs to. The CLI names each to the
+	// user; nothing else reads it.
+	KeptStateDBs []string
 }
 
 // Changed reports whether any persisted artifact was rewritten.
@@ -86,6 +92,7 @@ func (r *EmailReconcileResult) RemapCanonicalID(cid driveid.CanonicalID) (drivei
 // refuses the whole change before anything is renamed or recorded. A change
 // an earlier command left unfinished is finished first.
 func ReconcileAccountEmail(
+	ctx context.Context,
 	configPath string,
 	currentAccount driveid.CanonicalID,
 	userID string,
@@ -93,10 +100,11 @@ func ReconcileAccountEmail(
 	moveStateDBs StateDBMover,
 	logger *slog.Logger,
 ) (EmailReconcileResult, error) {
-	return newEmailChanger(moveStateDBs, logger).reconcile(configPath, currentAccount, userID, currentEmail)
+	return newEmailChanger(moveStateDBs, logger).reconcile(ctx, configPath, currentAccount, userID, currentEmail)
 }
 
 func (c *emailChanger) reconcile(
+	ctx context.Context,
 	configPath string,
 	currentAccount driveid.CanonicalID,
 	userID string,
@@ -122,18 +130,19 @@ func (c *emailChanger) reconcile(
 	}
 
 	var result EmailReconcileResult
-	err = c.withLock(func() error {
-		finished, finishErr := c.finishLocked()
+	err = c.withLock(ctx, func() error {
+		finished, finishErr := c.finishLocked(ctx)
 		if finishErr != nil {
 			return finishErr
 		}
-		started, startErr := c.startLocked(configPath, currentAccount, userID, currentEmail)
+		started, startErr := c.startLocked(ctx, configPath, currentAccount, userID, currentEmail)
 		if startErr != nil {
 			return startErr
 		}
 		result = EmailReconcileResult{
 			AccountRenames: slices.Concat(finished.AccountRenames, started.AccountRenames),
 			DriveRenames:   slices.Concat(finished.DriveRenames, started.DriveRenames),
+			KeptStateDBs:   started.KeptStateDBs,
 		}
 
 		return nil
@@ -146,6 +155,7 @@ func (c *emailChanger) reconcile(
 // while any new name is taken, and runs it. The caller holds the email
 // change lock and has finished any change a journal records.
 func (c *emailChanger) startLocked(
+	ctx context.Context,
 	configPath string,
 	currentAccount driveid.CanonicalID,
 	userID string,
@@ -175,17 +185,23 @@ func (c *emailChanger) startLocked(
 
 		return c.reached(emailChangeStepRecorded)
 	}
-	if applyErr := c.apply(journal, begin); applyErr != nil {
+	if applyErr := c.apply(ctx, journal, begin); applyErr != nil {
 		return EmailReconcileResult{}, applyErr
 	}
 
-	return journal.result(), nil
+	result := journal.result()
+	result.KeptStateDBs = slices.Clone(plan.keptStateDBs)
+
+	return result, nil
 }
 
 type emailReconcilePlan struct {
 	accountRenameMap map[driveid.CanonicalID]driveid.CanonicalID
 	driveRenameMap   map[driveid.CanonicalID]driveid.CanonicalID
 	pathRenames      []managedPathRename
+	// keptStateDBs are the shared stores the change cannot assign to an
+	// account (EmailReconcileResult.KeptStateDBs).
+	keptStateDBs []string
 }
 
 type managedPathRename struct {
@@ -343,8 +359,12 @@ func buildEmailReconcilePlan(
 		addStateDBRename(plan, DriveStatePath(from), DriveStatePath(to))
 	}
 
+	catalog, err := LoadCatalog()
+	if err != nil {
+		return nil, fmt.Errorf("loading catalog for email reconciliation: %w", err)
+	}
 	for _, oldEmail := range oldEmails {
-		if err := collectStateRenames(plan, oldEmail, currentEmail, ownedOldAccounts, logger); err != nil {
+		if err := collectStateRenames(plan, catalog, oldEmail, currentEmail, ownedOldAccounts, logger); err != nil {
 			return nil, err
 		}
 	}
@@ -415,8 +435,16 @@ func collectConfiguredDriveRenames(
 	return nil
 }
 
+// collectStateRenames plans the move of every state DB under oldEmail that
+// belongs to a renamed account. A personal store follows a renamed personal
+// account and a work or SharePoint store a renamed work or school account.
+// A shared folder's store follows its catalog owner; with no catalog record
+// its name is the evidence when one account had the old email, and it moves.
+// When two accounts of different types had it and no record says which owns
+// the folder, the store stays under the old email and the plan reports it.
 func collectStateRenames(
 	plan *emailReconcilePlan,
+	catalog *Catalog,
 	oldEmail string,
 	currentEmail string,
 	ownedOldAccounts map[string]driveid.CanonicalID,
@@ -442,12 +470,9 @@ func collectStateRenames(
 				addStateDBRename(plan, path, rewriteManagedEmailPath(path, oldEmail, currentEmail))
 			}
 		case driveid.DriveTypeShared:
-			targeted, err := sharedStateOwnedByRenamedAccount(path, ownedOldAccounts)
-			if err != nil {
-				logger.Warn("skip shared state email reconciliation",
-					"path", path,
-					"error", err,
-				)
+			targeted, assigned := sharedStateOwnedByRenamedAccount(catalog, path, oldEmail, ownedOldAccounts)
+			if !assigned {
+				plan.keptStateDBs = append(plan.keptStateDBs, path)
 				continue
 			}
 			if targeted {
@@ -465,8 +490,8 @@ func collectStateRenames(
 // address with another account type. The step is idempotent: an account
 // already at its new key, whose drives already name it as their owner, is
 // left as it is.
-func renameCatalogAccounts(dataDir string, accountRenames []CanonicalIDRename) error {
-	return UpdateCatalogForDataDir(dataDir, func(catalog *Catalog) error {
+func renameCatalogAccounts(ctx context.Context, dataDir string, accountRenames []CanonicalIDRename) error {
+	return UpdateCatalogForDataDir(ctx, dataDir, func(catalog *Catalog) error {
 		for i := range accountRenames {
 			if err := renameCatalogAccount(catalog, &accountRenames[i]); err != nil {
 				return err
@@ -497,11 +522,15 @@ func renameCatalogAccount(catalog *Catalog, rename *CanonicalIDRename) error {
 		}
 		drive.OwnerAccountCanonical = to.String()
 
-		// A drive key that is not a canonical ID, or not under the account's
-		// old address, names no file this change renames: it keeps its key
-		// and only learns its owner's new ID.
+		// The catalog decoder and encoder refuse a record whose key does not
+		// parse, so a failure here is a catalog built past those checks.
 		driveCID, err := driveid.NewCanonicalID(drive.CanonicalID)
-		if err != nil || driveCID.Email() != from.Email() {
+		if err != nil {
+			return fmt.Errorf("rename catalog drive %q: %w", drive.CanonicalID, err)
+		}
+		// A drive not under the account's old address names no file this
+		// change renames: it keeps its key and only learns its owner's new ID.
+		if driveCID.Email() != from.Email() {
 			catalog.UpsertDrive(&drive)
 			continue
 		}
@@ -510,11 +539,7 @@ func renameCatalogAccount(catalog *Catalog, rename *CanonicalIDRename) error {
 			return fmt.Errorf("rewrite catalog drive ID %s: %w", driveCID, err)
 		}
 		catalog.DeleteDrive(driveCID)
-		// A name the catalog derived from the old ID follows the ID. A name
-		// Graph or the user supplied stays.
-		if drive.DisplayName == DefaultDisplayName(driveCID) {
-			drive.DisplayName = DefaultDisplayName(renamed)
-		}
+		drive.DisplayName = followedDisplayName(drive.DisplayName, driveCID, renamed)
 		drive.CanonicalID = renamed.String()
 		drive.DriveType = renamed.DriveType()
 		catalog.UpsertDrive(&drive)
@@ -608,27 +633,38 @@ func rewriteManagedEmailPath(path string, oldEmail string, newEmail string) stri
 	return filepath.Join(dir, rewritten)
 }
 
-func sharedStateOwnedByRenamedAccount(path string, ownedOldAccounts map[string]driveid.CanonicalID) (bool, error) {
-	catalog, err := LoadCatalog()
-	if err != nil {
-		return false, fmt.Errorf("loading catalog for shared state reconciliation: %w", err)
-	}
-
+// sharedStateOwnedByRenamedAccount reports whether the shared folder's store
+// at path belongs to a renamed account, and whether that could be decided.
+// The catalog record's owner decides; without a record the store is the one
+// account's that had oldEmail, when there was one account.
+func sharedStateOwnedByRenamedAccount(
+	catalog *Catalog,
+	path string,
+	oldEmail string,
+	ownedOldAccounts map[string]driveid.CanonicalID,
+) (owned, assigned bool) {
 	for _, key := range catalog.SortedDriveKeys() {
 		drive := catalog.Drives[key]
 		driveCID, cidErr := driveid.NewCanonicalID(drive.CanonicalID)
-		if cidErr != nil {
-			continue
-		}
-		if DriveStatePath(driveCID) != path {
+		if cidErr != nil || DriveStatePath(driveCID) != path {
 			continue
 		}
 
 		_, ok := ownedOldAccounts[drive.OwnerAccountCanonical]
-		return ok, nil
+		return ok, true
 	}
 
-	return false, fmt.Errorf("matching catalog drive missing")
+	accountsAtOldEmail := 0
+	for _, key := range catalog.SortedAccountKeys() {
+		if catalog.Accounts[key].Email == oldEmail {
+			accountsAtOldEmail++
+		}
+	}
+	if accountsAtOldEmail > 1 {
+		return false, false
+	}
+
+	return true, true
 }
 
 // validate refuses a new change while any new name is taken, before

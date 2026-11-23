@@ -173,7 +173,7 @@ func TestResolveDeltaToken_FullURLTokenStripped(t *testing.T) {
 
 	path, err := client.resolveDeltaToken(
 		"https://graph.microsoft.com/v1.0/drives/abc123def4567890/root/delta?token=opaque",
-		func() string { return "/drives/abc123def4567890/root/delta" },
+		func() (string, error) { return "/drives/abc123def4567890/root/delta", nil },
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "/drives/abc123def4567890/root/delta?token=opaque", path)
@@ -665,7 +665,7 @@ func TestDeltaAll_HTTP410_ReturnsGone(t *testing.T) {
 
 	client := newTestClient(t, srv.URL)
 
-	_, _, err := client.DeltaAll(t.Context(), driveid.New("drive1"), "old-token")
+	_, _, err := client.DeltaAll(t.Context(), driveid.New("drive1"), srv.URL+"/drives/drive1/root/delta?token=old")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGone)
 }

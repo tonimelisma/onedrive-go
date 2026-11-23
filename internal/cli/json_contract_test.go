@@ -240,7 +240,7 @@ func jsonContractConfig(t *testing.T) (string, driveid.CanonicalID) {
 
 	cid := driveid.MustCanonicalID(jsonContractDrive)
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, filepath.Join(t.TempDir(), "OneDrive")))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, filepath.Join(t.TempDir(), "OneDrive")))
 	seedCatalogAccount(t, cid, func(*config.CatalogAccount) {})
 	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) { drive.RemoteDriveID = rootTestDrive123 })
 
@@ -401,7 +401,7 @@ func driveJSONContractCases() map[string]jsonContractCase {
 		"onedrive-go resume": {contract: jsonDocument, schema: schemaOf[resumeJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, cid := jsonContractConfigContext(t)
-			require.NoError(t, config.SetDriveKey(cc.CfgPath, cid, "paused", "true"))
+			require.NoError(t, config.SetDriveKey(t.Context(), cc.CfgPath, cid, "paused", "true"))
 			return runDetachedLeaf(t, leaf, cc)
 		}},
 		"onedrive-go sync": {contract: jsonLines, schema: schemaOf[syncJSONEvent](), invoke: invokeSyncJSON},

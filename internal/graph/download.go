@@ -493,7 +493,10 @@ func (c *Client) requestContent(ctx context.Context, driveID driveid.ID, itemID 
 		return http.ErrUseLastResponse
 	}
 
-	path := itemRoute(driveID, itemID, "/content")
+	path, err := itemRoute(driveID, itemID, "/content")
+	if err != nil {
+		return nil, err
+	}
 	resp, err := c.doRequestVia(ctx, http.MethodGet, path, nil, extra, requestRoute{client: &noFollow, keepRedirect: true})
 	if err != nil {
 		return nil, err

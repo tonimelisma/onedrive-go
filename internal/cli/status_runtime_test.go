@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +24,7 @@ func TestStatusRuntime_SummaryJSONWithActiveOwner(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("personal:runtime@example.com")
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = "Runtime User"
 	})
@@ -64,7 +65,7 @@ func busyRuntimeStatusCommand(t *testing.T) (*CLIContext, *bytes.Buffer, *bytes.
 
 	cid := driveid.MustCanonicalID("personal:busy-runtime@example.com")
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.DisplayName = "Busy Runtime User"
 	})
@@ -120,11 +121,10 @@ func TestStatusRuntimeOverlayApplyAndSummary(t *testing.T) {
 	t.Parallel()
 
 	accounts := []statusAccount{{
-		Mounts: []statusDrive{{
-			MountID:     "parent",
-			CanonicalID: "parent",
-			State:       driveStateReady,
-			ChildMounts: []statusDrive{{MountID: "child"}, {MountID: "idle-child"}},
+		Drives: []statusDrive{{
+			InternalID:    "parent",
+			State:         driveStateReady,
+			SharedFolders: []statusDrive{{InternalID: "child"}, {InternalID: "idle-child"}},
 		}},
 	}}
 
@@ -136,32 +136,82 @@ func TestStatusRuntimeOverlayApplyAndSummary(t *testing.T) {
 		},
 	})
 
-	parent := accounts[0].Mounts[0]
+	parent := accounts[0].Drives[0]
 	assert.Equal(t, "watch", parent.RuntimeOwner)
 	assert.Equal(t, statusRuntimeStateActive, parent.RuntimeState)
-	assert.Equal(t, statusRuntimeStateActive, parent.ChildMounts[0].RuntimeState)
-	assert.Equal(t, statusRuntimeStateInactive, parent.ChildMounts[1].RuntimeState)
+	assert.Equal(t, statusRuntimeStateActive, parent.SharedFolders[0].RuntimeState)
+	assert.Equal(t, statusRuntimeStateInactive, parent.SharedFolders[1].RuntimeState)
 
 	summary := newStatusOutput(accounts).Summary
 	assert.Equal(t, "watch", summary.RuntimeOwner)
-	assert.Equal(t, 2, summary.RuntimeActiveMounts)
+	assert.Equal(t, 2, summary.RuntimeActiveDrives)
 }
 
 // Validates: R-2.3.3
-func TestPrintMountStatus_ShowsRuntimeState(t *testing.T) {
+func TestPrintDriveStatus_ShowsRuntimeState(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
-	err := printMountStatus(&out, &statusDrive{
-		MountID:      "personal:user@example.com",
-		CanonicalID:  "personal:user@example.com",
-		DisplayName:  "user@example.com",
-		SyncDir:      "~/OneDrive",
+	err := printDriveStatus(&out, asBuiltStatusDrive(&statusDrive{
+		InternalID:   "personal:user@example.com",
+		Kind:         statusDriveKindPersonalOneDrive,
+		Name:         "user@example.com",
+		Folder:       "~/OneDrive",
 		State:        driveStateReady,
 		RuntimeOwner: "watch",
 		RuntimeState: statusRuntimeStateActive,
-	})
+	}), 0)
 
 	require.NoError(t, err)
 	assert.NotContains(t, out.String(), "Runtime:")
+}
+
+// status --perf asks the running sync's control socket for its status once
+// and gives the answer to both overlays: a watch too busy to answer used to
+// cost two probe timeouts.
+//
+// Validates: R-2.3.3, R-2.9.3
+func TestRunStatusCommand_PerfProbesTheSocketOnce(t *testing.T) {
+	setTestDriveHome(t)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	cid := driveid.MustCanonicalID("personal:probe-once@example.com")
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
+	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
+		account.DisplayName = "Probe Once User"
+	})
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) {
+		drive.RemoteDriveID = "drive-probe-once"
+	})
+
+	var statusProbes atomic.Int32
+	startCLIControlSocketWithStatusHandler(t, func(w http.ResponseWriter, _ *http.Request) {
+		statusProbes.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		assert.NoError(t, json.NewEncoder(w).Encode(synccontrol.StatusResponse{
+			OwnerMode: synccontrol.OwnerModeWatch,
+			Mounts:    []string{cid.String()},
+		}))
+	}, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != synccontrol.PathPerfStatus {
+			http.Error(w, "unexpected request", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		assert.NoError(t, json.NewEncoder(w).Encode(synccontrol.PerfStatusResponse{OwnerMode: synccontrol.OwnerModeWatch}))
+	})
+
+	var out bytes.Buffer
+	cc := newCommandContext(&out, cfgPath)
+	cc.Flags.JSON = true
+
+	require.NoError(t, runStatusCommand(t.Context(), cc, true))
+
+	assert.Equal(t, int32(1), statusProbes.Load(), "one status probe feeds the runtime and the perf overlay")
+	var decoded statusOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &decoded))
+	assert.Equal(t, "watch", decoded.Summary.RuntimeOwner)
 }

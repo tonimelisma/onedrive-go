@@ -89,6 +89,12 @@ type DeltaPage struct {
 	Items     []Item
 	NextLink  string // non-empty if more pages available
 	DeltaLink string // non-empty on final page (use as token for next sync)
+	// Path is the path the page was asked at, below the base URL, and
+	// NextPath the path NextLink resolves to (empty when it does not): the
+	// one key of a page however its link was spelled, which a caller that
+	// follows the pages itself checks for a link back to a page it asked for.
+	Path     string
+	NextPath string
 }
 
 // User represents a Microsoft Graph user profile.

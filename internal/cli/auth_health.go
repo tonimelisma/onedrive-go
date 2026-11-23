@@ -56,11 +56,11 @@ func newAuthProofRecorder(logger *slog.Logger) *authProofRecorder {
 
 func (r *authProofRecorder) Hook(account driveid.CanonicalID, proofSource string) func(context.Context) {
 	return func(ctx context.Context) {
-		r.recordSuccess(account, proofSource)
+		r.recordSuccess(ctx, account, proofSource)
 	}
 }
 
-func (r *authProofRecorder) recordSuccess(account driveid.CanonicalID, proofSource string) {
+func (r *authProofRecorder) recordSuccess(ctx context.Context, account driveid.CanonicalID, proofSource string) {
 	if account.IsZero() {
 		return
 	}
@@ -73,7 +73,7 @@ func (r *authProofRecorder) recordSuccess(account driveid.CanonicalID, proofSour
 	r.cleared[account] = true
 	r.mu.Unlock()
 
-	clearedCount, err := clearAccountAuthRequirementWithCount(account, config.AuthClearSourceCLIProof, r.logger)
+	clearedCount, err := clearAccountAuthRequirementWithCount(ctx, account, config.AuthClearSourceCLIProof, r.logger)
 	if err != nil {
 		// Auth-scope normalization is best-effort maintenance. Successful direct
 		// API commands must not surface stale auth proof cleanup failures to end
@@ -174,11 +174,12 @@ func inspectSavedLogin(
 }
 
 func clearAccountAuthRequirementForSource(
+	ctx context.Context,
 	account driveid.CanonicalID,
 	source config.AuthClearSource,
 	logger *slog.Logger,
 ) error {
-	_, err := clearAccountAuthRequirementWithCount(account, source, logger)
+	_, err := clearAccountAuthRequirementWithCount(ctx, account, source, logger)
 	return err
 }
 
@@ -186,6 +187,7 @@ func clearAccountAuthRequirementForSource(
 // account, named by canonical ID, and reports whether one stood. It reads the
 // catalog first so a proof that finds nothing to end writes nothing.
 func clearAccountAuthRequirementWithCount(
+	ctx context.Context,
 	account driveid.CanonicalID,
 	source config.AuthClearSource,
 	logger *slog.Logger,
@@ -202,7 +204,7 @@ func clearAccountAuthRequirementWithCount(
 		return 0, nil
 	}
 
-	if err := config.ClearAccountAuthRequirement(config.DefaultDataDir(), account); err != nil {
+	if err := config.ClearAccountAuthRequirement(ctx, config.DefaultDataDir(), account); err != nil {
 		return 0, fmt.Errorf("clearing auth requirement: %w", err)
 	}
 
@@ -238,6 +240,9 @@ func authRequirement(
 	}
 }
 
+// mergeAuthRequirements merges the reports of one account from several
+// sources into one entry. An account is its address and its drive type: a
+// personal and a work or school account at one address are two entries.
 func mergeAuthRequirements(groups ...[]accountAuthRequirement) []accountAuthRequirement {
 	merged := make(map[string]accountAuthRequirement)
 
@@ -247,7 +252,8 @@ func mergeAuthRequirements(groups ...[]accountAuthRequirement) []accountAuthRequ
 				continue
 			}
 
-			if existing, ok := merged[group[i].Email]; ok {
+			key := authRequirementKey(&group[i])
+			if existing, ok := merged[key]; ok {
 				if existing.DisplayName == "" {
 					existing.DisplayName = group[i].DisplayName
 				}
@@ -263,11 +269,11 @@ func mergeAuthRequirements(groups ...[]accountAuthRequirement) []accountAuthRequ
 				if existing.Action == "" {
 					existing.Action = group[i].Action
 				}
-				merged[group[i].Email] = existing
+				merged[key] = existing
 				continue
 			}
 
-			merged[group[i].Email] = group[i]
+			merged[key] = group[i]
 		}
 	}
 
@@ -281,9 +287,24 @@ func mergeAuthRequirements(groups ...[]accountAuthRequirement) []accountAuthRequ
 	return result
 }
 
+// authRequirementKey names the account an auth requirement is for. A work
+// or school account's SharePoint report is the work or school account's.
+func authRequirementKey(item *accountAuthRequirement) string {
+	driveType := item.DriveType
+	if driveType == driveid.DriveTypeSharePoint {
+		driveType = driveid.DriveTypeBusiness
+	}
+
+	return item.Email + "|" + driveType
+}
+
 func sortAccountAuthRequirements(items []accountAuthRequirement) {
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].Email < items[j].Email
+		if items[i].Email != items[j].Email {
+			return items[i].Email < items[j].Email
+		}
+
+		return items[i].DriveType < items[j].DriveType
 	})
 }
 

@@ -362,6 +362,73 @@ func localRootContains(root, candidate string) bool {
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// RecordsForLocalPaths returns every readable record of an upload of one of
+// localPaths, under either key an upload can hold: the create key (the
+// absolute local path) and the overwrite key (existingItemSessionKey). The
+// records carry the drive and key they were saved under, so the caller can
+// drop each. A file that holds no readable record is left to Load and
+// CleanStale; a file gone since the listing is skipped.
+func (s *SessionStore) RecordsForLocalPaths(localPaths map[string]struct{}) ([]SessionRecord, error) {
+	if len(localPaths) == 0 {
+		return nil, nil
+	}
+	root, err := fsroot.Open(s.dir)
+	if err != nil {
+		return nil, fmt.Errorf("opening session root: %w", err)
+	}
+
+	entries, err := root.ReadDir("")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading session dir: %w", err)
+	}
+
+	var (
+		records []SessionRecord
+		errs    []error
+	)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), sessionRecordSuffix) {
+			continue
+		}
+		data, readErr := root.ReadFile(entry.Name())
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil {
+			errs = append(errs, fmt.Errorf("reading session file %s: %w", entry.Name(), readErr))
+			continue
+		}
+		rec, decodeErr := decodeSessionRecord(data)
+		if decodeErr != nil {
+			continue
+		}
+		if _, ok := localPaths[uploadLocalPathOfKey(rec.LocalPath)]; ok {
+			records = append(records, *rec)
+		}
+	}
+
+	return records, errors.Join(errs...)
+}
+
+// uploadLocalPathOfKey is the absolute local path an upload's session key
+// names: the key itself for a create, the part after the item ID for an
+// overwrite by ID.
+func uploadLocalPathOfKey(key string) string {
+	rest, isOverwrite := strings.CutPrefix(key, existingItemSessionKeyPrefix)
+	if !isOverwrite {
+		return key
+	}
+	_, localPath, found := strings.Cut(rest, existingItemSessionKeySeparator)
+	if !found {
+		return key
+	}
+
+	return localPath
+}
+
 // CleanStale removes session files older than maxAge. It returns the number
 // of files deleted and every file it could not check or delete, joined. Safe
 // to call concurrently.

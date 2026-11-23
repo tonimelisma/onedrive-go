@@ -133,7 +133,7 @@ func filterAccountViews(views []accountView, account string) []accountView {
 
 	filtered := make([]accountView, 0, len(views))
 	for i := range views {
-		if views[i].Email != account {
+		if !accountViewMatchesSelector(&views[i], account) {
 			continue
 		}
 		filtered = append(filtered, views[i])

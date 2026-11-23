@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/permissions_rdonly_bsd.go, internal/sync/permissions_rdonly_linux.go, internal/sync/report_left_work.go, internal/sync/engine_shortcut_alias_mutation.go, internal/sync/syncshortcut/shortcut_root_lifecycle.go, internal/sync/syncshortcut/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go, internal/sync/engine_shadow_plan.go
 
-Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.12.8 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified], R-6.3.8 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.10.29 [verified]
+Implements: R-6.2.17 [verified], R-2.1 [verified], R-2.1.7 [verified], R-2.12.8 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified], R-6.3.8 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.10.29 [verified], R-2.4.18 [verified]
 
 ## Overview
 
@@ -109,6 +109,7 @@ removed shared folder that cannot be read reconciles the same batch empty.
 | Executor live preconditions use the same superseded completion path as worker-start and admission stale-work checks. | `TestExecuteRemoteDelete_NotFoundPreflightReturnsStalePreconditionAndDoesNotDelete`, `TestExecutor_RemoteDelete_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_RemoteMove_ConditionalMismatchReturnsStalePrecondition`, `TestExecutor_LocalDelete_FolderIdentityChangedReturnsStalePrecondition`, `TestExecutor_Upload_SourceHashChangedBeforeTransferReturnsStalePrecondition`, `TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition` |
 | Shutdown is a fact about the run, never the shape of an error (R-6.8.29). The worker records on each completion whether the context it was started under had ended when the action returned (`ActionCompletion.RunEnded`, through `RunEnded`; the publication drain sets it from the run's context for the completions it builds), and the classifier reads that field and no context: a completion is a shutdown only when its run had ended and its error is the cancellation's own echo (`IsCancellationEcho`); a separate failure that landed during the stop keeps its class. With the run going on, a request that timed out (`IsRequestTimeout`: a transport timeout carries `context.DeadlineExceeded` or says it timed out; a transfer the stall watchdog abandoned carries `graph.ErrTransferStalled`) is retry work with `request_timeout` and outage evidence (the next row), so its dependents wait for its retry instead of being dropped and a one-shot run counts it as left work it will retry; a cancel with a live run is retried too and said at Warn with the action's path and kind (`isLiveRunCancel`), since no cancel the engine makes reaches an action while its run goes on (`ErrActionReturned`, `ErrWorkerPoolStopped`, `ErrOneShotPassFailed`, `ErrOneShotPassEnded`, each a `cancelCauseError`, which answers to `context.Canceled`: a request that carries one in place of `context.Canceled` still reads as canceled, so what a cancel interrupts once its run has ended is a shutdown). Only `IsCancellationEcho`, `IsRequestTimeout`, `isLiveRunCancel` and `cancelCauseError.Is` read the two context errors off an error, and only `isWatchShutdownError`, `classifyResult`, `logSuppressedShutdownCompletionError` and `withTimerPanic` call `IsCancellationEcho`, each where its run has ended; a source-reading test holds both lists by file and function for the engine and the watch control plane. | `TestClassifyResult_TransportTimeoutIsARequestTimeoutUntilTheRunEnds`, `TestClassifyResult_SuccessAndShutdown`, `TestRunEnded_AsksTheRunNotTheError`, `TestRunOnce_TimedOutRequestIsKeptForRetryAndLeftWork`, `TestRunWatch_TimedOutRequestIsRetriedAndItsDependentRuns`, `TestRunOnce_ACancelWhileTheRunGoesOnIsRetriedAndSaid`, `TestContextErrorChecks_OnlyNamedReadersReadTheShape`, `TestContextErrorChecks_FindsEachFormInItsFunction`, `TestClassifyResult_StalledTransferIsRetryableNotShutdown`, `TestRunOnce_AFatalFailureEndsTheTransferItInterruptsAsAShutdown`, `TestCancelCauses_AnswerToCanceledAndNameTheirCancel`, `TestIsWatchShutdownError_OnlyTheEndedRunsOwnCancellation`, `TestContextErrorChecks_RefusesAnUnnamedSite`, `TestWatch_MountRootPollThatTimedOutBacksOffAndPollsAgain` |
 | A request OneDrive never answered while its run goes on is outage evidence as a 5xx is (R-2.10.3): the server-answer table reads it as `ServerAnswerServiceOutage` (`classifyServerAnswer`: no status and `IsRequestTimeout`, which also takes a TLS handshake timeout and a read whose connection's keepalive found the server gone, network errors that say they timed out, an answer whose body brought nothing for the stall window (`graph.ErrResponseStalled`), a request or a body read on an HTTP/2 connection closed because its ping went unanswered (`graph.ErrConnectionLost`: graph types the library's untyped failure, and sync reads only the type), and a token Microsoft sign-in never answered for, without which no request reaches OneDrive), so the request-timeout branch of `classifyResult` takes its evidence from `deriveScopeKey`, the function a 504 uses: `SKService`, counted in the service window (five paths in 30 s), and a trial that times out keeps the scope as a trial a 504 answers does. Its own issue stays `request_timeout`. The outage is then said as a 5xx outage is: one activation line, one `service_outage` condition in status, one line in the watch condition log. Only the service's silence counts: a timeout the end of the run landed on is a shutdown, any other timeout that lands once the run has ended is retry work with no evidence, a cancel of the run or of something narrower is no evidence, a read of the local file an upload sends that timed out is the disk's failure (a chain that holds `*fs.PathError` is no network timeout), and an outcome commit or created-item record that outlasted its bound carries `ErrStoreAccessTimedOut`, which `IsRequestTimeout` refuses and the shutdown test does not take for the stop's echo, so it is classified as any failed store access is (actionable), and a stopping run that cannot write that failure down says it could not record the result. | `TestClassifyResult_EveryTimedOutRequestIsOutageEvidenceLikeA504`, `TestRunOnce_TimeoutsAgainstOneSilentServiceOpenOneOutageScope`, `TestRunOnce_OneTimedOutRequestOpensNoOutageScope`, `TestRunOnce_AnOutageOfTimeoutsIsOneConditionNotOnePerFile`, `TestEngineFlow_ProcessTrialDecision_ATimedOutTrialKeepsTheOutageScope`, `TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence`, `TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure`, `TestUploadNewFile_ARecordThatOutlastsItsBoundIsAStoreFailure`, `TestEngineFlow_ACommitThatOutlastsItsBoundWhileStoppingIsSaid` |
+| Every request that did not reach OneDrive is one family with the timeouts (R-2.10.3): `syncdomain.IsServiceUnreached` is `IsRequestTimeout` and `retry.IsUnreached` (a name the resolver does not find, a connection refused, a host or network that cannot be reached, a connection reset, each read off the `*net.OpError` or `*net.DNSError` net/http returns, never off a chain that holds a local `*fs.PathError`). The server-answer table reads every member as `ServerAnswerServiceOutage`, and `classifyResult` makes each retry work with `SKService` evidence in the service window while the run goes on, and retry work with no evidence once it has ended. A timeout's condition stays `request_timeout`; the others carry `service_outage`, so none is an issue that names the file. A cause that is plainly local (no route, network unreachable) gets the same scope and the same line, "OneDrive is temporarily unavailable": the remedy is the same and the scope's trial finds the network back either way. Until 2026-11-23 these were a per-file `unexpected_condition` a user was asked to act on, so a dead link or a laptop waking from sleep split one outage into a scope and a list of files with nothing wrong. | `TestIsUnreached_Table`, `TestClassifyResult_EveryUnreachedRequestIsOutageEvidenceLikeA504`, `TestRunOnce_RefusedConnectionsOpenOneOutageScopeAndNoFileIssue`, `TestRunOnce_OneRefusedConnectionOpensNoOutageScope` |
 | A stale precondition is classified before any server answer its error chain also carries (only shutdown, a request that timed out, a durable name collision and a cancel with a live run come first), so a create's 409 resolved as stale, a conditional overwrite's 412 or any other status is superseded and replanned in the same run, not held as retry work; and a superseded completion never reaches the permission probes. Classified by its 409 first, a stale create waited on the durable curve, and a stale 412 was recorded as `transient_conflict` (R-2.8.7, R-5.6.2). | `TestClassifyResult_StalePreconditionIsSupersededWhateverStatusItCarries`, `TestEngineFlow_ProcessNormalDecision_StaleCompletionIsNeverProbedForPermissions`, `TestRunOnce_OverwriteRefusedWithA412IsReplannedInTheSameRun`, `TestRunOnce_UploadOnlyCollisionHiddenByListingLagIsFoundOnTheNextAttempt` |
 | Watch runtime and admission record aggregate stale-work perf counters without exposing paths or IDs. | `TestEngineAdmissionFreshness_RemoteMismatchRetiresWithoutDispatchOrDependents`, `TestWatchRuntime_QueuePendingReplanRetiresOldOutbox`, `TestSnapshotAttrs_IncludesStaleWorkAndObservationCounters` |
 | Watch shutdown enters drain before accepting cancellation-closed intake channels as terminal, and non-canceled scheduler closure is fatal instead of a clean stop, so retry and trial timers stop at the observable shutdown boundary. | `TestWatchRuntime_RunNonDrainingWatchStep_CanceledClosedReplanStartsDrain`, `TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsBeforeReturn`, `TestWatchRuntime_RunWatchLoop_CanceledClosedReplanDrainsFromBootstrapPhase`, `TestWatchRuntime_RunNonDrainingWatchStep_ClosedReplanWithoutCancelErrors`, `TestRunWatch_ShutdownStopsRetryAndTrialTimers` |
@@ -1142,6 +1143,39 @@ boundary too, but the fingerprint itself must stay raw-only and must not
 depend on the current human-readable breakdown wording. The store does not own
 grouped watch-condition projections or watch-specific presentation.
 
+### Confirming Held Deletes in a Running Watch
+
+A user confirms held deletes (R-6.2.5) without stopping the watch (R-6.2.17).
+A confirmation names the held set the user was shown: its count and a token
+derived from exactly those deletes (`syncdomain.ConfirmationOf`, a digest of
+each delete's side, path, item ID, type and reason, independent of order),
+written `<count>-<token>`. `Engine.ConfirmHeldDeletes` carries it, from any
+goroutine, over the engine's unbuffered `heldDeleteConfirms` channel to the
+running watch loop, which reads that channel only while running
+(`watchInputHeldDeleteConfirm`): before the watch runs steadily, or once it
+drains, nobody takes it and the caller's deadline answers
+`ErrConfirmationNotTaken`, never a confirmation kept for later.
+
+The loop checks the confirmation against the held set the store records now
+(`acceptHeldDeleteConfirmation`). Only exactly that set is taken: a set that
+changed since it was shown (a delete held or released after the user looked)
+is `ErrHeldDeletesChanged`, and a drive holding none is `ErrNoHeldDeletes`;
+neither keeps anything. A taken set is kept on the flow
+(`confirmedHeldDeletes`, owned by the loop goroutine) and a replan is asked
+for; the next plan takes it once (`approvedHeldDeletes`) as the approved set
+of the delete-safety hold, exactly as a one-shot `--confirm-deletes` approves
+the recorded set, so deletes held after the confirmation are judged by the
+hold again. A replan that fails before planning leaves the confirmation for
+the next one; a plan that fails after taking it has released nothing, and
+the deletes stay held until the user confirms again.
+
+| Behavior | Evidence |
+| --- | --- |
+| The next plan releases exactly the confirmed set; deletes made after the user looked are held again; a confirmation of a set no longer held is refused and releases nothing. | `TestHeldDeleteConfirmation_ReleasesOnlyTheSetItNames` |
+| The watch loop takes only the held set recorded now, asks for a replan only then, and the plan after the one that released it releases nothing. | `TestWatchHeldDeleteConfirm_AcceptsOnlyTheHeldSet` |
+| A confirmation no running watch takes is refused. | `TestEngine_ConfirmHeldDeletes_WithoutARunningWatchIsNotTaken` |
+| A confirmation names exactly one held set, whatever the order of its deletes, and its written form reads back as itself. | `TestConfirmationOf_NamesExactlyTheHeldSet` |
+
 ## Drive-Root And Mount-Root Runtime Shapes
 
 The engine supports two runtime shapes:
@@ -1206,6 +1240,23 @@ observation values and local actions (`noop`, `keepRecord`, `dropRecord`,
 `materializeRoot`, `mutateAlias`, and `moveProjection`) so the shell performs
 Graph, filesystem, and SQLite effects only, then feeds those outcomes back
 through the same transition table.
+
+A shortcut whose local path the parent's content filter excludes
+(`ignored_dirs`, `ignored_paths`, or outside `included_dirs`) is not touched
+(R-2.4.18). One rule decides it, `syncshortcut.ShortcutRootExcludedByContentFilter`,
+and both sides ask it: the child work publication publishes no run command for
+the shortcut and projects the parent's filter below it for every other, and
+the local lifecycle skips the record, so no folder is made at its path, a
+folder already there is left as it is, and a materialized root whose folder
+is gone is not read as the user deleting the alias on OneDrive. Every
+publication path hands the engine's filter to the snapshot, the store's
+`ShortcutChildWorkSnapshot` included: until 2026-11-23 that one passed an
+empty filter, so the snapshot published after a child acknowledgement started
+a child for a shortcut the user excluded, with nothing below it hidden
+(`TestEngine_ShortcutTheFiltersExcludeLeavesNoFolderAndNoWork`, `TestEngine_ShortcutTheFiltersExcludeLeavesAFolderAlreadyThereAlone`, `TestEngine_ShortcutTheFiltersExcludeIsNotReadAsTheAliasDeleted`,
+`TestSyncStore_ShortcutChildWorkSnapshotProjectsTheParentsFilter`). The
+record itself stays as the remote observation keeps it, so removing the
+filter picks the shortcut up on the next pass.
 
 A child final drain ends by releasing its local tree (below), and when it
 completes, multisync acknowledges that completion to
@@ -1641,17 +1692,22 @@ process's change is unfinished gets this error, as any start failure (R-3.7.3,
 
 A few store accesses run on a context detached from the engine's
 cancellation, because a shutdown must not drop the record of work that
-already happened or skip a cleanup. Every one of them carries a deadline, in
-the same expression that detaches it:
+already happened or skip a cleanup. Every one of them goes through the one
+helper, `syncexec.RunDetachedStoreAccess` (a bound from now) or
+`RunDetachedStoreAccessUntil` (a deadline the caller holds), both on
+`DetachedStoreContext`; only that helper and `SyncStore.Close` detach by hand
+(`TestDetachedContexts_TheSyncTreeDetachesOnlyThroughTheOneHelper`,
+`TestHandMadeDetaches_NamesTheFunctionOfEachDetach`):
 
 | Access | Where | Bound |
 | --- | --- | --- |
 | commit of a completed action's outcome | `worker.go` `commitOutcome` | `OutcomeCommitTimeout` (30 s) |
 | record of an item a create made | `executor_transfer.go` `recordPendingCreate` | `OutcomeCommitTimeout` |
-| clearing the intent of a create that succeeded | `executor_transfer.go` `clearPendingCreateIntent` | `OutcomeCommitTimeout` |
-| dropping the record of a placeholder the cleanup removed | `executor_transfer.go` `forgetRemovedPlaceholder` | `OutcomeCommitTimeout` |
+| clearing the intent of a create that succeeded | `executor_transfer.go` `clearPendingCreateIntent` | `OutcomeCommitTimeout`, or the outer deadline inside a detached caller |
+| dropping the record of a placeholder the cleanup removed | `executor_transfer.go` `forgetRemovedPlaceholder` | `OutcomeCommitTimeout`, or the outer deadline inside a detached caller |
+| restoring the baseline rows a failed release forgot | `engine_shortcut_release.go` `restoreForgottenRows` | one `OutcomeCommitTimeout` for every row, or the outer deadline inside a detached caller |
 | clearing a succeeded action's retry work | `engine_retry_trial.go` `clearRetryWorkOnActionSuccess` | `OutcomeCommitTimeout` |
-| a local snapshot observed before a shutdown | `engine_watch_local_observation.go` `applyLocalSnapshot` | `OutcomeCommitTimeout` |
+| a local snapshot observed before a shutdown | `engine_watch_local_observation.go` `applyLocalSnapshot` | the stop's one deadline (`runStoppedStoreAccess`, `stopDeadline`) |
 | persisted-invariant checks (tests and debug only) | `engine_runtime_invariants.go` | `OutcomeCommitTimeout` |
 | the records of the completions a stopping run drains | `engine_runtime_shutdown.go` `processShutdownCompletion` | one `OutcomeCommitTimeout` for the whole drain, measured from the cancel (`stopDrain`) |
 | the WAL checkpoint in `SyncStore.Close` | `store.go` | `StoreCloseCheckpointTimeout` (10 s) |
@@ -1686,6 +1742,22 @@ also once the run has ended, and never a request that timed out
 run whose write of that failure fails on the ended run's context says it could
 not record the result, since the record of done work is lost
 (`TestEngineFlow_ACommitThatOutlastsItsBoundWhileStoppingIsSaid`).
+
+A local scan that reaches the watch after its context ended is committed
+under the stop's one deadline (`stopDeadline`: the running drain's, or
+`stopBound` after the cancel), never a bound of its own, so it cannot hold a
+stop past that deadline. When the deadline cuts the commit short the lost scan
+is said once at Warn and the watch ends as the stop asked, with no new error:
+a scan is observation, not the record of work done, and the next sync scans
+the tree again. Until 2026-11-23 the commit took its own 30 s bound and a
+timeout there was read as the stop's echo and dropped without a word
+(`TestWatchRuntime_AScanCommitTheStopsDeadlineCutsIsSaidNotAnError`,
+`TestWatchRuntime_AScanAfterTheStopIsStillCommitted`). The executor's
+best-effort pending-create writes and the release's row restores keep their
+own bound when they run on a live context, and the outer deadline when they
+run inside a stopping run's detached one; a completion in flight on the live
+context at the instant the cancel lands is still cut by the cancel, not
+finished under the stop's deadline.
 
 ### Permission recovery
 

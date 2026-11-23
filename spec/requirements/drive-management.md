@@ -21,6 +21,7 @@ The system shall support all four drive types:
 - R-3.2.2: OneDrive Business (Microsoft 365 / Azure AD work accounts). [verified]
 - R-3.2.3: SharePoint Document Libraries (via `drive add`). [verified]
 - R-3.2.4: Shared Folders (folders shared by other users, synced as separate drives). [verified]
+- R-3.2.5: A drive ID is accepted only as onedrive-go writes it: every accepted spelling renders back unchanged, and a SharePoint ID with an empty site or library (`sharepoint:a@example.com::Docs`, `sharepoint:a@example.com:site:`, a trailing colon) is refused with an error that names it, wherever it is read (command line, `config.toml` section, catalog). [verified]
 
 ## R-3.3 Drive Management Commands [verified]
 
@@ -106,7 +107,7 @@ The system shall support all four drive types:
 ## R-3.5 Drive Selection [verified]
 
 - R-3.5.1: When `--drive` is passed, the system shall match by canonical ID, display name, or substring. [verified]
-- R-3.5.2: When `--account` is passed on auth commands, the system shall select by email. [verified]
+- R-3.5.2: When `--account` is passed on auth commands, the system shall select by email, or by an account's ID (`personal:<email>`, `business:<email>`). A personal and a work or school account can share an email; each shall then have its own `status` row and its own `drive list` sign-in entry, and `logout` shall refuse the shared email with a message that names the two account IDs to use instead, deleting nothing. `logout --account <account ID>` shall delete only that account's saved login, drive sections and (with `--purge`) state databases and catalog records. [verified]
 - R-3.5.3: `--drive` shall be repeatable for sync/status to select multiple drives. [verified]
 
 ## R-3.6 Shared Drive Discovery [verified]
@@ -122,7 +123,7 @@ The system shall support all four drive types:
 ## R-3.7 Email Change Detection [verified]
 
 - R-3.7.1: The system shall store a stable user GUID from the Graph API alongside the email. [verified]
-- R-3.7.2: When a user's email changes, the system shall auto-rename token files, state DBs, and config sections. A state DB shall move with its whole file family and only while no sync has it open; one in use shall leave every name unchanged and say to stop that sync and run again. [verified]
+- R-3.7.2: When a user's email changes, the system shall auto-rename token files, state DBs, and config sections. A state DB shall move with its whole file family and only while no sync has it open; one in use shall leave every name unchanged and say to stop that sync and run again. A drive name the client stored as the default derived from the old email (in the catalog or in a config section's `display_name`) shall follow the new email; a name the user or OneDrive supplied shall stay. A shared folder's state DB that cannot be assigned to one account (two accounts had the old email and nothing records the folder's owner) shall stay under the old email, and the user shall be told which file. [verified]
 - R-3.7.3: An account email change interrupted at any point (a crash, a kill, a failed step) shall be finished by the next command that uses an account, with no sync state lost and nothing deleted at a new name; a name taken when the change starts, or created under an old name while it is unfinished, shall stop it and be named as the one to remove. Until the change is finished, no sync shall start on a drive whose state it moves. [verified]
 
 ## R-3.8 Migration [future]

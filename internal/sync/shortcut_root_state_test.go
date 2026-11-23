@@ -864,3 +864,155 @@ func TestEngine_ReconcileShortcutRootLocalStatePromotesWaitingReplacementAfterRe
 	assert.Equal(t, syncshortcut.ShortcutRootStateActive, byBinding["new-binding"].State)
 	assert.True(t, byBinding["new-binding"].RemoteDriveID.Equal(driveid.New("new-drive")))
 }
+
+// excludedShortcutAlias is the alias path of the shortcut the filter tests
+// exclude or keep.
+const excludedShortcutAlias = "Shared/Docs"
+
+// excludedShortcutRoot is the active shortcut root at excludedShortcutAlias.
+func excludedShortcutRoot(identity *synctree.FileIdentity) syncshortcut.ShortcutRootRecord {
+	return syncshortcut.ShortcutRootRecord{
+		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
+		BindingItemID:     "binding-1",
+		RelativeLocalPath: excludedShortcutAlias,
+		LocalAlias:        "Docs",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-1",
+		RemoteIsFolder:    true,
+		State:             syncshortcut.ShortcutRootStateActive,
+		ProtectedPaths:    []string{excludedShortcutAlias},
+		LocalRootIdentity: identity,
+	}
+}
+
+// shortcutFilterCase is a content filter and whether it excludes the shortcut.
+type shortcutFilterCase struct {
+	name     string
+	filter   syncdomain.ContentFilterConfig
+	excluded bool
+}
+
+func shortcutFilterCases() []shortcutFilterCase {
+	return []shortcutFilterCase{
+		{name: "ignored_dirs names the shortcut's parent", filter: syncdomain.ContentFilterConfig{IgnoredDirs: []string{"Shared"}}, excluded: true},
+		{name: "ignored_paths names the shortcut", filter: syncdomain.ContentFilterConfig{IgnoredPaths: []string{excludedShortcutAlias}}, excluded: true},
+		{name: "included_dirs leaves the shortcut out", filter: syncdomain.ContentFilterConfig{IncludedDirs: []string{"Work"}}, excluded: true},
+		{name: "a filter that hides nothing here", filter: syncdomain.ContentFilterConfig{IgnoredDirs: []string{"Other"}}},
+	}
+}
+
+// A shortcut whose path the user's filters exclude is not touched: a pass of
+// the parent's local lifecycle makes no folder for it and leaves a folder
+// already there as it is, the child work the parent publishes has no run
+// command for it, and a materialized root whose folder is gone is not read as
+// the user deleting the alias. A filter that hides nothing gets the folder
+// and the run command.
+//
+// Validates: R-2.4.18, R-2.4.8
+func TestEngine_ShortcutTheFiltersExcludeLeavesNoFolderAndNoWork(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range shortcutFilterCases() {
+		t.Run(tc.name+": a new shortcut", func(t *testing.T) {
+			t.Parallel()
+
+			eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
+			eng.contentFilter = tc.filter
+			var published []syncshortcut.ShortcutChildWorkSnapshot
+			eng.shortcutChildWorkSink = func(_ context.Context, snapshot syncshortcut.ShortcutChildWorkSnapshot) error {
+				published = append(published, snapshot)
+				return nil
+			}
+			require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{excludedShortcutRoot(nil)}))
+
+			_, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
+			require.NoError(t, err)
+			returned, err := eng.shortcutRoots().acknowledgeChildArtifactsPurged(t.Context(), syncshortcut.ShortcutChildArtifactCleanupAck{})
+			require.NoError(t, err)
+
+			require.Len(t, published, 1)
+			roots, err := eng.baseline.ListShortcutRoots(t.Context())
+			require.NoError(t, err)
+			require.Len(t, roots, 1)
+			if tc.excluded {
+				assert.NoDirExists(t, filepath.Join(syncRoot, "Shared"), "no folder is made under an excluded path")
+				assert.Empty(t, published[0].RunCommands, "an excluded shortcut has no child run")
+				assert.Empty(t, returned.RunCommands)
+				assert.Nil(t, roots[0].LocalRootIdentity, "the record is left as it was")
+				return
+			}
+			assert.DirExists(t, filepath.Join(syncRoot, "Shared", "Docs"))
+			require.Len(t, published[0].RunCommands, 1)
+			assert.NotNil(t, roots[0].LocalRootIdentity)
+		})
+	}
+}
+
+// Validates: R-2.4.18
+func TestEngine_ShortcutTheFiltersExcludeLeavesAFolderAlreadyThereAlone(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range shortcutFilterCases() {
+		if !tc.excluded {
+			continue
+		}
+		t.Run(tc.name+": a folder already there", func(t *testing.T) {
+			t.Parallel()
+
+			eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
+			eng.contentFilter = tc.filter
+			kept := filepath.Join(syncRoot, "Shared", "Docs", "notes.txt")
+			require.NoError(t, os.MkdirAll(filepath.Dir(kept), 0o700))
+			require.NoError(t, os.WriteFile(kept, []byte("the user's own"), 0o600))
+			require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{excludedShortcutRoot(nil)}))
+
+			changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
+			require.NoError(t, err)
+
+			assert.False(t, changed)
+			content, err := os.ReadFile(kept) //nolint:gosec // the test reads the folder it made
+			require.NoError(t, err)
+			assert.Equal(t, "the user's own", string(content))
+		})
+	}
+}
+
+// Validates: R-2.4.18, R-2.4.8
+func TestEngine_ShortcutTheFiltersExcludeIsNotReadAsTheAliasDeleted(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range shortcutFilterCases() {
+		if !tc.excluded {
+			continue
+		}
+		t.Run(tc.name+": a materialized folder that is gone", func(t *testing.T) {
+			t.Parallel()
+
+			var deletedItems []string
+			mock := &syncfixture.EngineMockClient{
+				DeleteItemFn: func(_ context.Context, _ driveid.ID, itemID string) error {
+					deletedItems = append(deletedItems, itemID)
+					return nil
+				},
+			}
+			eng, syncRoot := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), withTestShortcutNamespace)
+			eng.contentFilter = tc.filter
+			gone := filepath.Join(syncRoot, "Shared", "Docs")
+			require.NoError(t, os.MkdirAll(gone, 0o700))
+			identity, err := eng.syncTree.IdentityNoFollow(filepath.Join("Shared", "Docs"))
+			require.NoError(t, err)
+			require.NoError(t, os.Remove(gone))
+			require.NoError(t, eng.baseline.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{excludedShortcutRoot(&identity)}))
+
+			changed, err := eng.shortcutRoots().reconcileShortcutRootLocalState(t.Context())
+			require.NoError(t, err)
+
+			assert.False(t, changed)
+			assert.Empty(t, deletedItems, "the alias is not deleted on OneDrive")
+			roots, err := eng.baseline.ListShortcutRoots(t.Context())
+			require.NoError(t, err)
+			require.Len(t, roots, 1)
+			assert.Equal(t, syncshortcut.ShortcutRootStateActive, roots[0].State)
+		})
+	}
+}

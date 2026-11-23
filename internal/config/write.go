@@ -1,10 +1,12 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -31,10 +33,13 @@ const (
 	driveTypeShared     = driveid.DriveTypeShared
 )
 
-// Drive-section keys that drive enrollment writes.
+// Drive-section keys the writers of this package name: enrollment writes the
+// first two, and the clearing of an expired timed pause removes the last two.
 const (
 	syncDirKey     = "sync_dir"
 	displayNameKey = "display_name"
+	pausedKey      = "paused"
+	pausedUntilKey = "paused_until"
 )
 
 // defaultConfigTemplate returns the first-login config content. All global
@@ -111,8 +116,8 @@ func driveSection(canonicalID string, keys []driveKey) string {
 // template first. A section that is already there is refused. Login and
 // `drive add` enroll drives through AddDrive instead; this is the plain
 // append that tests use to set up a configured drive.
-func AppendDriveSection(path string, canonicalID driveid.CanonicalID, syncDir string) error {
-	return withConfigMutationLock(path, true, func() error {
+func AppendDriveSection(ctx context.Context, path string, canonicalID driveid.CanonicalID, syncDir string) error {
+	return withConfigMutationLock(ctx, path, true, func() error {
 		syncDirValue, err := newDriveKey(syncDirKey, syncDir)
 		if err != nil {
 			return err
@@ -228,8 +233,8 @@ func withDriveKeysSet(data []byte, canonicalID driveid.CanonicalID, keys []drive
 // The value is written as the kind the key holds (newDriveKey): a bool key
 // refuses anything but "true" and "false", and a string key is always quoted.
 // A refused value leaves the file as it was.
-func SetDriveKey(path string, canonicalID driveid.CanonicalID, key, value string) error {
-	return defaultConfigLocker().setDriveKey(path, canonicalID, key, value)
+func SetDriveKey(ctx context.Context, path string, canonicalID driveid.CanonicalID, key, value string) error {
+	return defaultConfigLocker().setDriveKey(ctx, path, canonicalID, key, value)
 }
 
 func setDriveKeySnapshot(path string, canonicalID driveid.CanonicalID, key, value string) error {
@@ -251,35 +256,49 @@ func setDriveKeySnapshot(path string, canonicalID driveid.CanonicalID, key, valu
 	return atomicWriteFile(path, content)
 }
 
-// DeleteDriveKey removes a single key from a drive section. Idempotent:
-// returns nil if the key does not exist in the section. Used by `resume`
-// to clear `paused` and `paused_until` keys.
-func DeleteDriveKey(path string, canonicalID driveid.CanonicalID, key string) error {
-	return withConfigMutationLock(path, false, func() error {
-		return deleteDriveKeySnapshot(path, canonicalID, key)
+// DeleteDriveKeys removes keys from a drive section in one locked write, so
+// keys that only make sense together (`paused` and `paused_until`) go
+// together and a stuck lock holder is waited for once, not once per key.
+// Idempotent: a key the section does not have is skipped. Used by `resume`
+// and by the clearing of an expired timed pause.
+func DeleteDriveKeys(ctx context.Context, path string, canonicalID driveid.CanonicalID, keys ...string) error {
+	return defaultConfigLocker().deleteDriveKeys(ctx, path, canonicalID, keys...)
+}
+
+func (l configLocker) deleteDriveKeys(
+	ctx context.Context,
+	path string,
+	canonicalID driveid.CanonicalID,
+	keys ...string,
+) error {
+	return l.withMutationLock(ctx, path, false, func() error {
+		return deleteDriveKeysSnapshot(path, canonicalID, keys)
 	})
 }
 
-func deleteDriveKeySnapshot(path string, canonicalID driveid.CanonicalID, key string) error {
+func deleteDriveKeysSnapshot(path string, canonicalID driveid.CanonicalID, keys []string) error {
 	data, err := readManagedFile(path)
 	if err != nil {
 		return fmt.Errorf("reading config file: %w", err)
 	}
 
-	lines, sectionFound := deleteDriveKeyFromSnapshot(data, canonicalID, key)
-	if !sectionFound {
-		return fmt.Errorf("drive section %q not found in config", canonicalID.String())
+	for _, key := range keys {
+		lines, sectionFound := deleteDriveKeyFromSnapshot(data, canonicalID, key)
+		if !sectionFound {
+			return fmt.Errorf("drive section %q not found in config", canonicalID.String())
+		}
+		data = []byte(renderLines(lines))
 	}
 
-	return atomicWriteFile(path, []byte(renderLines(lines)))
+	return atomicWriteFile(path, data)
 }
 
 // DeleteDriveSection removes a drive section (header + all keys) from the
 // config file. Also removes blank lines immediately preceding the section
 // header for clean formatting. Used by `drive remove --purge` and
 // `logout --purge`.
-func DeleteDriveSection(path string, canonicalID driveid.CanonicalID) error {
-	return withConfigMutationLock(path, false, func() error {
+func DeleteDriveSection(ctx context.Context, path string, canonicalID driveid.CanonicalID) error {
+	return withConfigMutationLock(ctx, path, false, func() error {
 		return deleteDriveSectionSnapshot(path, canonicalID)
 	})
 }
@@ -316,13 +335,16 @@ func (e *driveSectionCollisionError) Error() string {
 // exists (*driveSectionCollisionError), because the config would otherwise
 // end up with two owners for the same canonical ID; the file is then left as
 // it is. A source section that does not exist is skipped, so a rename that
-// already happened is done.
-func RenameDriveSections(path string, renames map[driveid.CanonicalID]driveid.CanonicalID) error {
+// already happened is done. A renamed section's display_name that is exactly
+// the default derived from the old ID becomes the new ID's default
+// (followedDisplayName); this also runs on a section a resumed change renamed
+// earlier, so it is idempotent too.
+func RenameDriveSections(ctx context.Context, path string, renames map[driveid.CanonicalID]driveid.CanonicalID) error {
 	if len(renames) == 0 {
 		return nil
 	}
 
-	return withConfigMutationLock(path, false, func() error {
+	return withConfigMutationLock(ctx, path, false, func() error {
 		return renameDriveSectionsSnapshot(path, renames)
 	})
 }
@@ -370,11 +392,39 @@ func renameDriveSectionsSnapshot(path string, renames map[driveid.CanonicalID]dr
 			renamed = true
 		}
 	}
+	for from, to := range renames {
+		if toIdx, found := headerIndex[to.String()]; found && followSectionDisplayName(lines, toIdx, from, to) {
+			renamed = true
+		}
+	}
 	if !renamed {
 		return nil
 	}
 
 	return atomicWriteFile(path, []byte(renderLines(lines)))
+}
+
+// followSectionDisplayName rewrites the display_name of the section at
+// headerIdx when it is exactly the default derived from from, to that of to,
+// keeping the line's inline comment. It reports whether it changed a line.
+func followSectionDisplayName(lines []parsedLine, headerIdx int, from, to driveid.CanonicalID) bool {
+	contentStart, contentEnd := sectionContentRange(lines, headerIdx)
+	idx, found := findKeyInRange(lines, contentStart, contentEnd, displayNameKey)
+	if !found {
+		return false
+	}
+	stored, err := strconv.Unquote(lines[idx].value)
+	if err != nil {
+		// Not a basic string onedrive-go wrote: the user's own spelling.
+		return false
+	}
+	followed := followedDisplayName(stored, from, to)
+	if followed == stored {
+		return false
+	}
+	lines[idx].raw = renderKeyValueLine(displayNameKey, tomlString(followed), lines[idx].inlineComment)
+
+	return true
 }
 
 // DefaultSyncDir computes a default sync directory for a drive. Uses a two-level

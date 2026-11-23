@@ -67,7 +67,7 @@ func ensureCatalogDriveRecordForDrive(
 		if recoveredDrive.OwnerAccountCanonical == "" {
 			recoveredDrive.OwnerAccountCanonical = cid.String()
 		}
-		if saveErr := config.UpdateCatalog(func(catalog *config.Catalog) error {
+		if saveErr := config.UpdateCatalog(ctx, func(catalog *config.Catalog) error {
 			catalog.UpsertDrive(recoveredDrive)
 			return nil
 		}); saveErr != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
@@ -79,7 +80,7 @@ func testShortcutChildAckRef(t *testing.T, bindingItemID string) syncshortcut.Sh
 	)
 	require.NoError(t, err)
 
-	snapshot, err := store.ShortcutChildWorkSnapshot(ctx, namespaceID, t.TempDir())
+	snapshot, err := store.ShortcutChildWorkSnapshot(ctx, namespaceID, t.TempDir(), syncdomain.ContentFilterConfig{})
 	require.NoError(t, err)
 	require.Len(t, snapshot.RunCommands, 1)
 	require.False(t, snapshot.RunCommands[0].AckRef.IsZero())

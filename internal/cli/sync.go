@@ -19,7 +19,10 @@ func newSyncCmd() *cobra.Command {
 By default sync is bidirectional; --download-only and --upload-only make it
 one-way. --dry-run previews without changing anything. --full lists everything
 on OneDrive instead of using the change feed. --confirm-deletes applies deletes
-an earlier run held for confirmation (one-shot only).`,
+an earlier run held for confirmation. While 'sync --watch' runs, the watch keeps
+running: --confirm-deletes shows each drive's held set and the command that
+confirms exactly it, and --confirm-deletes --held-set <set> confirms that set
+to the running watch, which refuses it if the set changed since it was shown.`,
 		// sync handles its own config resolution via ResolveDrives (multi-drive).
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 		RunE:        runSync,
@@ -32,6 +35,8 @@ an earlier run held for confirmation (one-shot only).`,
 	cmd.Flags().Bool("full", false, "run full remote refresh (enumerate all remote items, detect orphans)")
 	cmd.Flags().Bool("confirm-deletes", false,
 		"apply deletes that sync held for confirmation because more was deleted than looks intended")
+	cmd.Flags().String(heldSetFlag, "",
+		"with --confirm-deletes, the held set to confirm to a running 'sync --watch', as --confirm-deletes shows it")
 	cmd.Flags().Bool(allowRootFlag, false, "allow sync to run as root (files it creates will be owned by root)")
 
 	cmd.MarkFlagsMutuallyExclusive("download-only", "upload-only")
@@ -39,6 +44,7 @@ an earlier run held for confirmation (one-shot only).`,
 	// Confirmation answers one held set the user has looked at; a watch
 	// session would keep applying whatever later passes delete.
 	cmd.MarkFlagsMutuallyExclusive("confirm-deletes", "watch")
+	cmd.MarkFlagsMutuallyExclusive(heldSetFlag, "watch")
 
 	return cmd
 }
@@ -77,6 +83,13 @@ func runSync(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("read --confirm-deletes flag: %w", err)
 	}
+	heldSet, err := cmd.Flags().GetString(heldSetFlag)
+	if err != nil {
+		return fmt.Errorf("read --%s flag: %w", heldSetFlag, err)
+	}
+	if heldSet != "" && !confirmDeletes {
+		return &usageError{commandPath: cmd.CommandPath(), err: fmt.Errorf("--%s needs --confirm-deletes", heldSetFlag)}
+	}
 
 	return runSyncCommand(ctx, cc, syncCommandOptions{
 		Mode:           mode,
@@ -84,6 +97,7 @@ func runSync(cmd *cobra.Command, _ []string) error {
 		DryRun:         dryRun,
 		FullReconcile:  fullReconcile,
 		ConfirmDeletes: confirmDeletes,
+		HeldSet:        heldSet,
 	})
 }
 

@@ -106,7 +106,7 @@ func (flow *engineFlow) applyNormalCompletionDecision(
 		return nil, nil
 	case errclass.ClassFatal:
 		flow.applyCompletedSubtree(current, r.ActionID, "fatal action completion")
-		flow.applyFatalAuthEffects(r, decision.ConditionKey)
+		flow.applyFatalAuthEffects(ctx, r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		return nil, fatalResultError(r)
 	case errclass.ClassRetryableTransient, errclass.ClassScopeBlockingTransient, errclass.ClassActionable:
@@ -166,7 +166,7 @@ func (flow *engineFlow) applyTrialCompletionDecision(
 		return nil, nil
 	case syncstore.ScopeTrialOutcomeFatal:
 		flow.applyCompletedSubtree(current, r.ActionID, "trial fatal action completion")
-		flow.applyFatalAuthEffects(r, decision.ConditionKey)
+		flow.applyFatalAuthEffects(ctx, r, decision.ConditionKey)
 		flow.recordError(decision, r)
 		return nil, fatalResultError(r)
 	}
@@ -298,6 +298,11 @@ func (flow *engineFlow) applyOrdinaryFailureEffects(
 	flow.recordError(decision, r)
 	return nil
 }
+
+// authRequirementMarkTimeout bounds recording that the engine's account needs
+// sign-in: the catalog write waits for the catalog lock up to that lock's own
+// 10 s bound, and the rest is one small file.
+const authRequirementMarkTimeout = 15 * time.Second
 
 // persistAndHoldFailure persists a failure's retry_work and holds its action.
 // activation, when not nil, is the block scope the failure activates: its
@@ -467,8 +472,11 @@ func fatalResultError(r *syncdomain.ActionCompletion) error {
 
 // applyFatalAuthEffects marks the account as needing a sign-in for the first
 // fatal 401 of a run. The mark is a catalog update under the config lock,
-// whose wait the config package bounds, so it takes no context.
+// whose wait the config package bounds. It records what already happened, so
+// it runs on a context detached from the run's cancel: a shutdown that
+// arrives with the 401 must not lose the mark.
 func (flow *engineFlow) applyFatalAuthEffects(
+	ctx context.Context,
 	r *syncdomain.ActionCompletion,
 	conditionKey syncdomain.ConditionKey,
 ) {
@@ -489,11 +497,12 @@ func (flow *engineFlow) applyFatalAuthEffects(
 	// The mark goes on the engine's own account, by canonical ID: another
 	// account at the same address keeps its own sign-in state.
 	if account := flow.cfg.accountCanonicalID; !account.IsZero() {
-		if err := config.MarkAccountAuthRequired(
-			flow.cfg.dataDir,
-			account,
-			authstate.ReasonSyncAuthRejected,
-		); err != nil {
+		// Recorded even when the run is stopping, so a shutdown does not
+		// lose it, under the one detached-wait helper and a bound past the
+		// catalog lock's own wait.
+		if err := syncexec.RunDetachedStoreAccess(ctx, authRequirementMarkTimeout, func(markCtx context.Context) error {
+			return config.MarkAccountAuthRequired(markCtx, flow.cfg.dataDir, account, authstate.ReasonSyncAuthRejected)
+		}); err != nil {
 			fields := append([]any{}, logFields...)
 			fields = append(fields,
 				slog.String("account", account.String()),

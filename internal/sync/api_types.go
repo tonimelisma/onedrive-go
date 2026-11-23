@@ -47,16 +47,21 @@ type (
 		DryRun   bool
 		Duration time.Duration
 
-		FolderCreates   int
-		Moves           int
-		Downloads       int
-		Uploads         int
-		LocalDeletes    int
-		RemoteDeletes   int
-		ConflictCopies  int
-		BaselineUpdates int
-		Cleanups        int
-		DeferredByMode  syncdomain.DeferredCounts
+		FolderCreates int
+		Moves         int
+		Downloads     int
+		Uploads       int
+		LocalDeletes  int
+		RemoteDeletes int
+		// LocalFolderDeletes and RemoteFolderDeletes are how many of
+		// LocalDeletes and RemoteDeletes remove a folder, so a dry run's
+		// summary counts folders apart from files.
+		LocalFolderDeletes  int
+		RemoteFolderDeletes int
+		ConflictCopies      int
+		BaselineUpdates     int
+		Cleanups            int
+		DeferredByMode      syncdomain.DeferredCounts
 		// HeldLocalDeletes and HeldRemoteDeletes count the deletes the
 		// delete-safety hold kept for confirmation, by the side they would
 		// remove content from.

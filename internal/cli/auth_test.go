@@ -650,7 +650,7 @@ func TestPurgeOrphanedFiles(t *testing.T) {
 	))
 
 	logger := slog.Default()
-	err := purgeOrphanedFiles(t.Context(), io.Discard, "alice@outlook.com", nil, logger)
+	err := purgeOrphanedFiles(t.Context(), io.Discard, purgeScope{email: "alice@outlook.com"}, nil, logger)
 	require.NoError(t, err)
 
 	// Alice's retained state should be gone.
@@ -670,7 +670,7 @@ func TestRunStatusCommand_ClearsPersistedAuthScopeAfterSuccessfulAuthenticatedPr
 
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:user@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, "~/OneDrive"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
 	seedAuthScope(t, cid)
 

@@ -3083,26 +3083,48 @@ func TestPublicationMutation_Cleanup_FolderType(t *testing.T) {
 	assert.Equal(t, syncdomain.ItemTypeFolder, mutation.ItemType)
 }
 
-func TestPublicationMutation_SyncedUpdate_BaselineFallback(t *testing.T) {
+// A baseline update's type is read from the side observed: a synced folder
+// the planner sees locally (a folder carries no hash) and not remotely stays
+// a folder, and one both sides replaced with the same file is that file,
+// whatever the baseline recorded.
+//
+// Validates: R-2.17.4
+func TestPublicationMutation_SyncedUpdate_TypeFromObservedSide(t *testing.T) {
 	t.Parallel()
 
-	// No Remote, only Baseline with folder type.
-	action := &syncdomain.Action{
+	folderBaseline := &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFolder}
+	localOnly := &syncdomain.Action{
 		Type:    syncdomain.ActionBaselineUpdate,
 		Path:    "exec-synced-folder",
 		ItemID:  "folder1",
 		DriveID: driveid.New(synctest.TestDriveID),
 		View: &syncdomain.PathView{
-			Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFolder},
-			Local:    &syncdomain.LocalState{Hash: "lh", Mtime: 123},
+			Baseline: folderBaseline,
+			Local:    &syncdomain.LocalState{ItemType: syncdomain.ItemTypeFolder, Mtime: 123},
 		},
 	}
 
-	mutation, err := syncstore.PublicationMutationFromAction(action, driveid.New(synctest.TestDriveID))
+	mutation, err := syncstore.PublicationMutationFromAction(localOnly, driveid.New(synctest.TestDriveID))
 	require.NoError(t, err)
 	require.NotNil(t, mutation)
-
 	assert.Equal(t, syncdomain.ItemTypeFolder, mutation.ItemType)
+
+	replacedByFile := &syncdomain.Action{
+		Type:    syncdomain.ActionBaselineUpdate,
+		Path:    "exec-synced-folder",
+		ItemID:  "file1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &syncdomain.PathView{
+			Baseline: folderBaseline,
+			Remote:   &syncdomain.RemoteState{ItemID: "file1", ItemType: syncdomain.ItemTypeFile, Hash: "h"},
+			Local:    &syncdomain.LocalState{ItemType: syncdomain.ItemTypeFile, Hash: "h"},
+		},
+	}
+
+	mutation, err = syncstore.PublicationMutationFromAction(replacedByFile, driveid.New(synctest.TestDriveID))
+	require.NoError(t, err)
+	require.NotNil(t, mutation)
+	assert.Equal(t, syncdomain.ItemTypeFile, mutation.ItemType)
 }
 
 // ---------------------------------------------------------------------------

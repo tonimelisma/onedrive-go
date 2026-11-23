@@ -83,8 +83,8 @@ func newTimedPauseWatch(t *testing.T) *timedPauseWatch {
 	// the test clock.
 	clock := newTestClock()
 	until := time.Now().Add(time.Hour).Truncate(time.Second)
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused_until", until.Format(time.RFC3339)))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused_until", until.Format(time.RFC3339)))
 
 	capture, logger := synctest.NewLogCapture()
 	cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
@@ -171,13 +171,13 @@ func TestNextPauseExpiryDelay_OnlyATimedPauseArmsTheWake(t *testing.T) {
 	_, ok := orch.nextPauseExpiryDelay()
 	assert.False(t, ok, "a drive that is not paused arms nothing")
 
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused", "true"))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused", "true"))
 	reloadTestOrchestratorConfig(t, orch, cfgPath)
 	_, ok = orch.nextPauseExpiryDelay()
 	assert.False(t, ok, "an indefinite pause arms nothing")
 
 	until := clock.now().Add(2 * time.Minute)
-	require.NoError(t, config.SetDriveKey(cfgPath, rd.CanonicalID, "paused_until", until.Format(time.RFC3339)))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, rd.CanonicalID, "paused_until", until.Format(time.RFC3339)))
 	reloadTestOrchestratorConfig(t, orch, cfgPath)
 	delay, ok := orch.nextPauseExpiryDelay()
 	require.True(t, ok)

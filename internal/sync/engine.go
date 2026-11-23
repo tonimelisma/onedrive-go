@@ -115,6 +115,12 @@ type Engine struct {
 	// release through the ack handle.
 	releasedRootJunkFailing atomic.Bool
 	releaseRefusalFailing   atomic.Bool
+
+	// heldDeleteConfirms carries a user's confirmation of held deletes from
+	// any goroutine (ConfirmHeldDeletes) to the engine's running watch loop,
+	// which alone receives on it, and only while running steadily. Unbuffered:
+	// a confirmation is taken by a loop or by nobody.
+	heldDeleteConfirms chan heldDeleteConfirmRequest
 }
 
 // newEngine creates an Engine and opens the per-mount SyncStore. Existing
@@ -207,6 +213,7 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		wallClock:              syncdomain.NewRealClock(cfg.Logger, &syncdomain.TimerPanics{}),
 		hooks:                  cfg.hooks,
 		protectedRoots:         newProtectedRootSet(bm, cfg.ShortcutNamespaceID),
+		heldDeleteConfirms:     make(chan heldDeleteConfirmRequest),
 	}
 	e.upkeep = &housekeeper{
 		syncTree:      syncTree,
@@ -478,6 +485,7 @@ func (e *Engine) hasPersistedAccountAuthRequirement() (bool, error) {
 }
 
 func (e *Engine) normalizePersistedAccountAuthRequirement(
+	ctx context.Context,
 	required bool,
 	proof driveIdentityProof,
 	proofErr error,
@@ -498,7 +506,7 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 	if clearRequirement == nil {
 		clearRequirement = config.ClearAccountAuthRequirement
 	}
-	if err := clearRequirement(e.dataDir, e.accountCanonicalID); err != nil {
+	if err := clearRequirement(ctx, e.dataDir, e.accountCanonicalID); err != nil {
 		if !errors.Is(err, config.ErrConfigLocked) {
 			return fmt.Errorf("sync: clearing catalog auth requirement: %w", err)
 		}

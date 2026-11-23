@@ -104,11 +104,23 @@ func NewCanonicalID(raw string) (CanonicalID, error) {
 		}
 
 	case DriveTypeSharePoint:
+		// An empty site or library would not render back to raw: String
+		// leaves an empty part out, so "sharepoint:a@x::Docs" would come
+		// back as a different ID whose site is "Docs". Refusing them keeps
+		// parse-then-render the identity for every accepted string.
 		if len(parts) >= 3 {
+			if parts[2] == "" {
+				return CanonicalID{}, fmt.Errorf(
+					"driveid: SharePoint canonical ID %q has an empty site (type:email[:site[:library]])", raw)
+			}
 			cid.site = parts[2]
 		}
 
 		if len(parts) >= canonicalIDMaxParts {
+			if parts[3] == "" {
+				return CanonicalID{}, fmt.Errorf(
+					"driveid: SharePoint canonical ID %q has an empty library (type:email[:site[:library]])", raw)
+			}
 			cid.library = parts[3]
 		}
 
@@ -228,6 +240,8 @@ func (c CanonicalID) String() string {
 		return c.driveType + ":" + c.email + ":" + c.sourceDriveID + ":" + c.sourceItemID
 
 	default:
+		// Unreachable: NewCanonicalID and the Construct functions accept
+		// only the four types above.
 		return c.driveType + ":" + c.email
 	}
 }

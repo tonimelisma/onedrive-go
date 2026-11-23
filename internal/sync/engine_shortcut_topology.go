@@ -65,21 +65,12 @@ func (s *shortcutRoots) acknowledgeChildFinalDrain(
 	if _, err := s.reconcileShortcutRootLocalState(ctx); err != nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: reconcile shortcut roots after child final drain: %w", err)
 	}
-	snapshot, err := s.store.ShortcutChildWorkSnapshot(ctx, s.namespaceID, s.syncRoot)
+	snapshot, err := s.store.ShortcutChildWorkSnapshot(ctx, s.namespaceID, s.syncRoot, s.contentFilter)
 	if err != nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: read shortcut child work snapshot after final drain: %w", err)
 	}
 	if s.sink != nil {
-		roots, rootErr := s.store.ListShortcutRoots(ctx)
-		if rootErr != nil {
-			return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: read parent shortcut roots after final drain: %w", rootErr)
-		}
-		if err := s.sink(ctx, syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(
-			s.namespaceID,
-			s.syncRoot,
-			s.contentFilter,
-			roots,
-		)); err != nil {
+		if err := s.sink(ctx, snapshot); err != nil {
 			return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: publish shortcut child work snapshot after final drain: %w", err)
 		}
 	}
@@ -99,7 +90,7 @@ func (s *shortcutRoots) acknowledgeChildArtifactsPurged(
 	if _, err := s.store.AcknowledgeShortcutChildArtifactsPurged(ctx, ack); err != nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: acknowledge shortcut child artifact cleanup: %w", err)
 	}
-	snapshot, err := s.store.ShortcutChildWorkSnapshot(ctx, s.namespaceID, s.syncRoot)
+	snapshot, err := s.store.ShortcutChildWorkSnapshot(ctx, s.namespaceID, s.syncRoot, s.contentFilter)
 	if err != nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: read shortcut child work snapshot after artifact cleanup: %w", err)
 	}

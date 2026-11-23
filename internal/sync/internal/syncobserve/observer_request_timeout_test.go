@@ -37,7 +37,7 @@ func TestFullDelta_RetriesATimedOutPageUpToItsPolicy(t *testing.T) {
 		return nil
 	}}
 
-	_, _, err := obs.FullDelta(t.Context(), "saved-token")
+	_, _, err := obs.FullDelta(t.Context(), "drives/0000000000000001/root/delta?token=saved") // a saved position is a link
 
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	policy := retry.DeltaPagePolicy()

@@ -26,13 +26,17 @@ type statusPerfOverlay struct {
 	snapshots         map[string]perf.Snapshot
 }
 
-func loadStatusPerfOverlay(ctx context.Context, showPerf bool) statusPerfOverlay {
+// loadStatusPerfOverlay reads the live performance snapshots from the owner
+// probe found, the one control-socket probe status makes (probeErr is its
+// error), so a busy watch costs one probe timeout, not two. It shows the
+// per-mount snapshots only: the owner aggregate `GET /v1/perf` returns is
+// `onedrive-go perf`'s to show (cli.md).
+func loadStatusPerfOverlay(ctx context.Context, showPerf bool, probe controlOwnerProbe, probeErr error) statusPerfOverlay {
 	if !showPerf {
 		return statusPerfOverlay{}
 	}
 
-	probe, err := probeControlOwner(ctx)
-	if err != nil {
+	if probeErr != nil {
 		return statusPerfOverlay{
 			enabled:           true,
 			unavailableReason: statusPerfUnavailableGeneric,
@@ -82,9 +86,6 @@ func applyStatusPerfOverlay(accounts []statusAccount, overlay statusPerfOverlay)
 	}
 
 	for i := range accounts {
-		for j := range accounts[i].Mounts {
-			applyStatusPerfOverlayToDrive(&accounts[i].Mounts[j], overlay)
-		}
 		for j := range accounts[i].Drives {
 			applyStatusPerfOverlayToDrive(&accounts[i].Drives[j], overlay)
 		}
@@ -96,18 +97,8 @@ func applyStatusPerfOverlayToDrive(drive *statusDrive, overlay statusPerfOverlay
 		return
 	}
 
-	internalID := drive.InternalID
-	if internalID == "" {
-		internalID = drive.MountID
-	}
-	if internalID == "" {
-		internalID = drive.CanonicalID
-	}
-	drive.SyncState = overlaySyncState(internalID, drive.SyncState, overlay)
+	drive.SyncState = overlaySyncState(drive.InternalID, drive.SyncState, overlay)
 	finalizeStatusDriveState(drive)
-	for i := range drive.ChildMounts {
-		applyStatusPerfOverlayToDrive(&drive.ChildMounts[i], overlay)
-	}
 	for i := range drive.SharedFolders {
 		applyStatusPerfOverlayToDrive(&drive.SharedFolders[i], overlay)
 	}

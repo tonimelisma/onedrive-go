@@ -1334,9 +1334,9 @@ func TestEnsureFolder_ConflictFindsTheFolderInAnotherCase(t *testing.T) {
 }
 
 // The folder is listed, once, only when the read cannot settle the name: a
-// name the path route cannot carry, a read answered 400 (measured on a
-// Personal drive for a folder named $value that its parent's listing holds),
-// or a read that finds nothing equal although the create said the name
+// name the path route cannot carry or is known not to resolve (a colon, the
+// name $value, a name that starts with v1.0: no read is sent for them), a
+// read answered 400, or a read that finds nothing equal although the create said the name
 // exists.
 //
 // Validates: R-1.3.1
@@ -1354,9 +1354,11 @@ func TestEnsureFolder_ConflictListsOnceWhenTheReadCannotFindTheName(t *testing.T
 		{label: "a name holding a colon", name: "a:b"},
 		{label: "a read that finds nothing equal", name: "docs", readMisses: true, wantReads: 1},
 		{
-			label: "a read answered 400", name: "$value",
+			label: "a read answered 400", name: "docs",
 			readStatus: http.StatusBadRequest, readCode: "invalidRequest", wantReads: 1,
 		},
+		{label: "the name $value, which the path route answers 400", name: "$value"},
+		{label: "a name the path route answers 404", name: "v1.0.zip"},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			t.Parallel()
@@ -1487,4 +1489,256 @@ func TestEnsureFolder_AFileHoldingTheNameIsSaidSo(t *testing.T) {
 	_, err := fake.session(t).EnsureFolder(t.Context(), ensureFolderParent, "docs")
 	require.EqualError(t, err, `"docs" is a file on OneDrive`)
 	assert.Zero(t, fake.listings.Load())
+}
+
+// quirkNode is an item of quirkDrive: its ID, its name, its children when it
+// is a folder.
+type quirkNode struct {
+	id, name string
+	children []*quirkNode
+	isFolder bool
+}
+
+// quirkDrive is a Graph fake of a drive whose path route answers as the live
+// service was measured to (2026-11-15, Personal): a path or a name below a
+// parent that holds a name starting with v1.0 answers 404, one that holds the
+// name $value answers 400, and so does one that holds the name weird.txt
+// here, a 400 whose name no rule knows in advance. Reads by ID and listings
+// answer the tree. It counts every request.
+type quirkDrive struct {
+	root     *quirkNode
+	requests atomic.Int32
+}
+
+const quirkDrivePrefix = "/drives/abcdef0123456789"
+
+func newQuirkDrive() *quirkDrive {
+	return &quirkDrive{root: &quirkNode{id: "root-id", isFolder: true, children: []*quirkNode{
+		{id: "value-id", name: "$value", isFolder: true, children: []*quirkNode{{id: "a-id", name: "a.txt"}}},
+		{id: "docs-id", name: "Docs", isFolder: true, children: []*quirkNode{
+			{id: "zip-id", name: "v1.0.zip"},
+			{id: "weird-id", name: "weird.txt"},
+			{id: "v1-id", name: "v1.0", isFolder: true, children: []*quirkNode{{id: "readme-id", name: "readme.md"}}},
+		}},
+	}}}
+}
+
+// routeRefuses is the status the path route answers for names, or 0.
+func routeRefuses(names ...string) int {
+	for _, name := range names {
+		switch {
+		case strings.HasPrefix(name, "v1.0"):
+			return http.StatusNotFound
+		case name == "$value", name == "weird.txt":
+			return http.StatusBadRequest
+		}
+	}
+
+	return 0
+}
+
+// find is the node at the path of names below the root, its parent and the
+// parent's path, or nil.
+func (d *quirkDrive) find(names []string) (node, parent *quirkNode, parentPath string) {
+	node = d.root
+	for i, name := range names {
+		parent, parentPath = node, strings.Join(names[:i], "/")
+		node = parent.child(name)
+		if node == nil {
+			return nil, nil, ""
+		}
+	}
+
+	return node, parent, parentPath
+}
+
+func (n *quirkNode) child(name string) *quirkNode {
+	for _, c := range n.children {
+		if strings.EqualFold(c.name, name) {
+			return c
+		}
+	}
+
+	return nil
+}
+
+func (d *quirkDrive) byID(id string, node *quirkNode, path string) (found *quirkNode, nodePath string) {
+	if node.id == id || (id == "root" && node == d.root) {
+		return node, path
+	}
+	for _, c := range node.children {
+		childPath := c.name
+		if path != "" {
+			childPath = path + "/" + c.name
+		}
+		if found, nodePath = d.byID(id, c, childPath); found != nil {
+			return found, nodePath
+		}
+	}
+
+	return nil, ""
+}
+
+// answer is node as Graph answers it, in parent at parentPath.
+func answer(node, parent *quirkNode, parentPath string) map[string]any {
+	item := map[string]any{"id": node.id, "name": node.name}
+	if node.isFolder {
+		item["folder"] = map[string]any{}
+	} else {
+		item["file"] = map[string]any{}
+	}
+	if parent != nil {
+		item["parentReference"] = map[string]any{"id": parent.id, "path": strings.TrimSuffix("/drive/root:/"+parentPath, "/")}
+	}
+
+	return item
+}
+
+func (d *quirkDrive) listing(node *quirkNode, path string) map[string]any {
+	values := make([]map[string]any, 0, len(node.children))
+	for _, c := range node.children {
+		values = append(values, answer(c, node, path))
+	}
+
+	return map[string]any{"value": values}
+}
+
+func (d *quirkDrive) serve(t *testing.T) http.HandlerFunc {
+	t.Helper()
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		d.requests.Add(1)
+		route := strings.TrimPrefix(r.URL.Path, quirkDrivePrefix)
+		status, body := d.route(route)
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			code := "itemNotFound"
+			if status == http.StatusBadRequest {
+				code = "invalidRequest"
+			}
+			writeTestResponsef(t, w, `{"error":{"code":%q}}`, code)
+			return
+		}
+		writeFolderConflictJSON(t, w, body)
+	}
+}
+
+// route answers one request: the read or listing of a path, the read of a
+// name under an ID, the listing of an ID, or the read of an ID.
+func (d *quirkDrive) route(route string) (int, any) {
+	if rest, ok := strings.CutPrefix(route, "/root:/"); ok {
+		path, isListing := strings.CutSuffix(rest, ":/children")
+		path = strings.TrimSuffix(path, ":")
+		names := strings.Split(path, "/")
+		if status := routeRefuses(names...); status != 0 {
+			return status, nil
+		}
+		node, parent, parentPath := d.find(names)
+		switch {
+		case node == nil:
+			return http.StatusNotFound, nil
+		case isListing:
+			return http.StatusOK, d.listing(node, path)
+		default:
+			return http.StatusOK, answer(node, parent, parentPath)
+		}
+	}
+
+	rest := strings.TrimPrefix(route, "/items/")
+	if id, name, ok := strings.Cut(rest, ":/"); ok {
+		name = strings.TrimSuffix(name, ":")
+		if status := routeRefuses(name); status != 0 {
+			return status, nil
+		}
+		parent, parentPath := d.byID(id, d.root, "")
+		if parent == nil || parent.child(name) == nil {
+			return http.StatusNotFound, nil
+		}
+
+		return http.StatusOK, answer(parent.child(name), parent, parentPath)
+	}
+	if id, ok := strings.CutSuffix(rest, "/children"); ok {
+		node, path := d.byID(id, d.root, "")
+		if node == nil {
+			return http.StatusNotFound, nil
+		}
+
+		return http.StatusOK, d.listing(node, path)
+	}
+	node, _ := d.byID(rest, d.root, "")
+	if node == nil {
+		return http.StatusNotFound, nil
+	}
+
+	return http.StatusOK, answer(node, nil, "")
+}
+
+// A name the path route does not resolve (a name starting with v1.0 answers
+// 404, $value answers 400) is found through its parent's listing at the leaf
+// and in the middle of a path, as is a name whose path read answers 400 for
+// no known reason, by every resolution a command makes: stat, get and mv
+// (ResolveItem), rm (ResolveDeleteTarget), put and mkdir (WaitPathVisible),
+// ls (ListChildren).
+//
+// Validates: R-6.7.38
+func TestMountSession_ANameThePathRouteDoesNotResolveIsFoundThroughItsParent(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		path, wantID string
+		children     []string
+	}{
+		{path: "$value", wantID: "value-id", children: []string{"a.txt"}},
+		{path: "$value/a.txt", wantID: "a-id"},
+		{path: "Docs/v1.0.zip", wantID: "zip-id"},
+		{path: "Docs/v1.0", wantID: "v1-id", children: []string{"readme.md"}},
+		{path: "Docs/v1.0/readme.md", wantID: "readme-id"},
+		{path: "Docs/weird.txt", wantID: "weird-id"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+
+			drive := newQuirkDrive()
+			session := newTestDriveRootMountSession(t, drive.serve(t))
+			for label, resolve := range map[string]func(context.Context, string) (*graph.Item, error){
+				"resolve":              session.ResolveItem,
+				"delete target":        session.ResolveDeleteTarget,
+				"visibility wait":      session.WaitPathVisible,
+				"resolve with slashes": func(ctx context.Context, p string) (*graph.Item, error) { return session.ResolveItem(ctx, "/"+p+"/") },
+			} {
+				item, err := resolve(t.Context(), tc.path)
+				require.NoError(t, err, label)
+				assert.Equal(t, tc.wantID, item.ID, label)
+			}
+
+			if tc.children == nil {
+				return
+			}
+			children, err := session.ListChildren(t.Context(), tc.path)
+			require.NoError(t, err)
+			names := make([]string, 0, len(children))
+			for i := range children {
+				names = append(names, children[i].Name)
+			}
+			assert.Equal(t, tc.children, names)
+		})
+	}
+}
+
+// A genuine miss still costs one request and says not found, and a missing
+// name the route does not resolve is not found from its parent's listing.
+//
+// Validates: R-6.7.38
+func TestMountSession_AGenuineMissCostsOneRequest(t *testing.T) {
+	t.Parallel()
+
+	drive := newQuirkDrive()
+	session := newTestDriveRootMountSession(t, drive.serve(t))
+
+	_, err := session.ResolveItem(t.Context(), "Docs/missing.txt")
+	require.ErrorIs(t, err, graph.ErrNotFound)
+	assert.Equal(t, int32(1), drive.requests.Load())
+
+	_, err = session.ResolveItem(t.Context(), "Docs/v1.0x")
+	require.ErrorIs(t, err, graph.ErrNotFound)
 }

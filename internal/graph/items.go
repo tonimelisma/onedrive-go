@@ -3,6 +3,7 @@ package graph
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -53,13 +54,63 @@ func encodePathSegments(path string) string {
 	return strings.Join(segments, "/")
 }
 
+// routeIDRefusedChars are the characters a drive or site ID may not hold to
+// go into a route as it is: each would change the request it went into ("/"
+// a segment, "?" the query, "#" the fragment, "%" an escape). The set does
+// not start with "/", so the route-format source checks never read it as a
+// route.
+const routeIDRefusedChars = "?#%/"
+
+// errRouteID is a drive or site ID a route cannot carry: empty, or holding
+// one of routeIDRefusedChars. No ID OneDrive answers is known to be either,
+// so a refusal is a bug or a malformed answer upstream, and no request is
+// sent for it.
+var errRouteID = errors.New("graph: ID cannot go into a route")
+
+// checkRouteID refuses an ID that is empty or would change the request it
+// goes into.
+func checkRouteID(kind, id string) error {
+	if id == "" {
+		return fmt.Errorf("%w: empty %s ID", errRouteID, kind)
+	}
+	if strings.ContainsAny(id, routeIDRefusedChars) {
+		return fmt.Errorf("%w: %s ID %q holds one of %q", errRouteID, kind, id, routeIDRefusedChars)
+	}
+
+	return nil
+}
+
+// driveRoute is the route of the drive driveID followed by rest. Every route
+// of a drive starts here. The drive ID goes in as it is, never escaped: a
+// Business drive ID holds "!", Graph's documentation shows drive IDs in paths
+// only in that raw form, and what Graph does with "%21" in the drive segment
+// is not known. An ID the raw form cannot carry safely is refused instead.
+func driveRoute(driveID driveid.ID, rest string) (string, error) {
+	if err := checkRouteID("drive", driveID.String()); err != nil {
+		return "", err
+	}
+
+	return "/drives/" + driveID.String() + rest, nil
+}
+
+// siteRoute is the route of the SharePoint site siteID followed by rest. A
+// site ID holds commas ("host,siteCollectionID,webID") and goes in as it is,
+// by driveRoute's rule.
+func siteRoute(siteID, rest string) (string, error) {
+	if err := checkRouteID("site", siteID); err != nil {
+		return "", err
+	}
+
+	return "/sites/" + siteID + rest, nil
+}
+
 // itemRoute is the route of the item itemID of driveID, followed by rest: an
 // action ("/children", "/content"), a path below the item, or nothing. The
 // item ID goes in escaped as one path segment, as a name does: a Personal item
 // ID holds "!", and every route that names an item by its ID builds it here.
-// The drive ID goes in as it is.
-func itemRoute(driveID driveid.ID, itemID, rest string) string {
-	return "/drives/" + driveID.String() + "/items/" + url.PathEscape(itemID) + rest
+// The drive ID goes in by driveRoute's rule.
+func itemRoute(driveID driveid.ID, itemID, rest string) (string, error) {
+	return driveRoute(driveID, "/items/"+url.PathEscape(itemID)+rest)
 }
 
 // driveItemResponse mirrors the Graph API driveItem JSON exactly.

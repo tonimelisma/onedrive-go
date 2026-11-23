@@ -32,7 +32,10 @@ func (c *Client) CreateUploadSessionForItem(
 		slog.Int64("size", size),
 	)
 
-	path := itemRoute(driveID, itemID, "/createUploadSession")
+	path, err := itemRoute(driveID, itemID, "/createUploadSession")
+	if err != nil {
+		return nil, err
+	}
 
 	item := uploadSessionItem{ConflictBehavior: "replace", FileSystemInfo: c.newFileSystemInfo(mtime)}
 

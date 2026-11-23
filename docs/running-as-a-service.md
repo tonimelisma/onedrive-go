@@ -91,10 +91,14 @@ run 'onedrive-go resume' to continue", and syncing starts again at `resume`
 (or when a timed pause expires). The same goes for starting the service
 while every drive is paused.
 
-`onedrive-go sync --confirm-deletes --drive <drive>` applies deletes the
-running sync held for confirmation (the journal and `status` report them).
-Stop the service first, since only one sync may run, and `--confirm-deletes`
-is one-shot only; then start it again.
+Deletes the running sync held for confirmation (the journal and `status`
+report them) are confirmed without stopping the service:
+`onedrive-go sync --confirm-deletes --drive <drive>` shows the held set and
+the command that confirms exactly that set,
+`onedrive-go sync --confirm-deletes --held-set <set>`. The running sync
+applies the confirmed deletes in its next pass, and refuses the confirmation
+if the held set changed since it was shown, so a delete held after you looked
+is never confirmed unseen.
 
 ### Stopping
 

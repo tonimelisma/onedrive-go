@@ -245,7 +245,7 @@ func TestCLIContextSession_ProbeAndSessionShareOneTokenSource(t *testing.T) {
 
 	cid := driveid.MustCanonicalID("business:user@example.com")
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(configPath, cid, "~/Business"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), configPath, cid, "~/Business"))
 	seedCatalogAccount(t, cid, func(account *config.CatalogAccount) {
 		account.UserID = snapshotTestUserID123
 		account.PrimaryDriveID = rootTestDrive123
@@ -302,7 +302,7 @@ func TestCLIContextSession_ReconcilesEmailChangeAndReloadsDrive(t *testing.T) {
 	oldCID := driveid.MustCanonicalID("business:user@example.com")
 	newCID := driveid.MustCanonicalID("business:renamed@example.com")
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	require.NoError(t, config.AppendDriveSection(configPath, oldCID, "~/Business"))
+	require.NoError(t, config.AppendDriveSection(t.Context(), configPath, oldCID, "~/Business"))
 	seedCatalogAccount(t, oldCID, func(account *config.CatalogAccount) {
 		account.UserID = snapshotTestUserID123
 		account.DisplayName = "Business User"

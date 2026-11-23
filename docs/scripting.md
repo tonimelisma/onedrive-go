@@ -9,6 +9,12 @@
   progress is its result: its "Syncing ~/OneDrive with …" line, the line per
   file and the summary go to stdout, and only failures and warnings to stderr.
 
+When stdout refuses a line of `sync`'s report (stdout redirected to a full
+disk, an I/O error), the sync still finishes its work, stderr says once
+"Warning: sync output is incomplete: ...", and the run exits 1 when nothing
+else failed, in text and with `--json`, one-shot or `--watch`. A closed pipe
+ends the process with SIGPIPE instead, as for any Unix tool.
+
 `-q`/`--quiet` drops informational output; warnings and errors still print.
 Transfer progress bars appear only when stderr is a terminal and neither
 `--quiet` nor `--json` is set.
@@ -93,8 +99,8 @@ Each line is one JSON object with an `event` field:
 | --- | --- | --- |
 | `start` | One-shot sync begins, one line per drive | `drive`, `sync_dir`, `account`, `mode`, `dry_run`, `paused` |
 | `watching` | `sync --watch` is running, one line per drive | `drive`, `sync_dir`, `account`, `mode`, `paused` |
-| `activity` | A file action finished (or, in a dry run, is planned) | `drive`, `action`, `path`, `old_path` (moves), `size`, `status`, `condition`, `error` |
-| `summary` | A drive's one-shot sync finished; `failed`, `will_retry` and `still_open` are what its last pass left | `drive`, `status`, `duration_ms`, `counts`, `failed`, `will_retry`, `still_open`, `dry_run`, `error` |
+| `activity` | A file action finished (or, in a dry run, is planned) | `drive`, `action`, `path`, `old_path` (moves), `size`, `folder`, `status`, `condition`, `error` |
+| `summary` | A drive's one-shot sync finished; `failed`, `will_retry` and `still_open` are what its last pass left | `drive`, `status`, `duration_ms`, `counts`, `folder_counts`, `failed`, `will_retry`, `still_open`, `dry_run`, `error` |
 | `stopped` | `sync --watch` stopped | |
 
 - `mode` is `bidirectional`, `download_only` or `upload_only`.
@@ -115,7 +121,10 @@ Each line is one JSON object with an `event` field:
   held it until its retry is due. On a `summary` the status is `done`,
   `incomplete` (the drive left files unsynced, and the run exits 1) or
   `failed` (the drive could not sync; `error` says why).
-- `counts` maps the same `action` names to how many were done.
+- `counts` maps the same `action` names to how many were done, every item.
+  `folder_counts` says, for an action that touched folders, how many of
+  those were folders (`{"delete_local": 1}`), and an `activity` whose item
+  is a folder has `"folder": true`.
 - On a `summary`, `failed`, `will_retry` and `still_open` describe what the
   run's last pass left, each file once: `still_open` counts the files an
   issue listed by `status` keeps unsynced until you clear it (a name OneDrive
@@ -137,7 +146,7 @@ onedrive-go sync --json | jq -c 'select(.event == "activity" and (.status == "fa
 | Code | Meaning | Retry unchanged? |
 | --- | --- | --- |
 | 0 | Success, or `sync --watch` stopped normally, unless stderr refused a write | |
-| 1 | Any other failure, including network, throttling and server errors, a one-shot `sync` that left a file unsynced, a command that worked but could not write to stderr, or one that could not save a refreshed sign-in to its file | May work |
+| 1 | Any other failure, including network, throttling and server errors, a one-shot `sync` that left a file unsynced, a `sync` whose output could not be written in full (stdout on a full disk, an I/O error), a command that worked but could not write to stderr, or one that could not save a refreshed sign-in to its file | May work |
 | 2 | Command-line mistake: unknown command or flag, wrong arguments, conflicting flags | No |
 | 77 | Sign-in required: no saved login, or Microsoft rejected or revoked it (sysexits `EX_NOPERM`) | No: run `onedrive-go login` |
 | 78 | Invalid configuration: unreadable or invalid file, a `--drive` that matches nothing, no drives configured (sysexits `EX_CONFIG`) | No: fix the config |

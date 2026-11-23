@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -58,13 +59,14 @@ func TestWithConfigMutationLock_HeldLockTimesOutWithTheDirectoryNamed(t *testing
 		attempts++
 		return syscall.EWOULDBLOCK
 	}
-	locker.sleep = func(d time.Duration) {
+	locker.sleep = func(_ context.Context, d time.Duration) error {
 		waits++
 		waited += d
+		return nil
 	}
 
 	ran := false
-	err := locker.withMutationLock(path, false, func() error {
+	err := locker.withMutationLock(t.Context(), path, false, func() error {
 		ran = true
 		return nil
 	})
@@ -79,6 +81,62 @@ func TestWithConfigMutationLock_HeldLockTimesOutWithTheDirectoryNamed(t *testing
 }
 
 // Validates: R-4.4.4
+func TestWithConfigMutationLock_CanceledContextEndsTheWait(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	holdDirectoryLock(t, dir)
+
+	// The context ends during the first wait, as a Ctrl-C would; the real
+	// pause between attempts must then return at once.
+	ctx, cancel := context.WithCancel(t.Context())
+	attempts := 0
+	locker := defaultConfigLocker()
+	locker.flock = func(fd int, how int) error {
+		attempts++
+		cancel()
+		return syscall.Flock(fd, how)
+	}
+
+	ran := false
+	err := locker.withMutationLock(ctx, path, false, func() error {
+		ran = true
+		return nil
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotErrorIs(t, err, ErrConfigLocked, "the wait ended on the context, not on the timeout")
+	assert.Contains(t, err.Error(), dir)
+	assert.False(t, ran, "the change must not run without the lock")
+	assert.Equal(t, 1, attempts, "no attempt after the context ended")
+}
+
+// Validates: R-4.4.4
+func TestWithConfigMutationLock_EndedContextMakesNoAttempt(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	locker := defaultConfigLocker()
+	locker.flock = func(int, int) error {
+		return errBlockingFlock
+	}
+
+	ran := false
+	err := locker.withMutationLock(ctx, path, false, func() error {
+		ran = true
+		return nil
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, ran)
+}
+
+// Validates: R-4.4.4
 func TestWithConfigMutationLock_AcquiresWhenTheHolderReleases(t *testing.T) {
 	t.Parallel()
 
@@ -89,15 +147,16 @@ func TestWithConfigMutationLock_AcquiresWhenTheHolderReleases(t *testing.T) {
 	const waitsBeforeRelease = 2
 	waits := 0
 	locker := defaultConfigLocker()
-	locker.sleep = func(time.Duration) {
+	locker.sleep = func(context.Context, time.Duration) error {
 		waits++
 		if waits == waitsBeforeRelease {
 			releaseHolder()
 		}
+		return nil
 	}
 
 	runs := 0
-	require.NoError(t, locker.withMutationLock(path, false, func() error {
+	require.NoError(t, locker.withMutationLock(t.Context(), path, false, func() error {
 		runs++
 		return nil
 	}))
@@ -116,7 +175,7 @@ func TestSetDriveKey_CrossProcessHolderIsNotWaitedForForever(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	cid := driveid.MustCanonicalID("personal:lock-holder@example.com")
-	require.NoError(t, AppendDriveSection(path, cid, "~/OneDrive"))
+	require.NoError(t, AppendDriveSection(t.Context(), path, cid, "~/OneDrive"))
 	before, err := localpath.ReadFile(path)
 	require.NoError(t, err)
 
@@ -124,11 +183,12 @@ func TestSetDriveKey_CrossProcessHolderIsNotWaitedForForever(t *testing.T) {
 
 	var waited time.Duration
 	locker := defaultConfigLocker()
-	locker.sleep = func(d time.Duration) {
+	locker.sleep = func(_ context.Context, d time.Duration) error {
 		waited += d
+		return nil
 	}
 
-	err = locker.setDriveKey(path, cid, "paused", "true")
+	err = locker.setDriveKey(t.Context(), path, cid, "paused", "true")
 
 	require.ErrorIs(t, err, ErrConfigLocked)
 	assert.Contains(t, err.Error(), dir)
@@ -166,11 +226,12 @@ func TestUpdateCatalog_CrossProcessUpdatesAreNotLost(t *testing.T) {
 	resumeWaiter := sync.OnceFunc(func() { close(resume) })
 	var firstWait sync.Once
 	locker := defaultConfigLocker()
-	locker.sleep = func(time.Duration) {
+	locker.sleep = func(context.Context, time.Duration) error {
 		firstWait.Do(func() {
 			close(waiting)
 			<-resume
 		})
+		return nil
 	}
 
 	var updateErr error
@@ -178,7 +239,7 @@ func TestUpdateCatalog_CrossProcessUpdatesAreNotLost(t *testing.T) {
 	var updater sync.WaitGroup
 	updater.Go(func() {
 		defer close(updateReturned)
-		updateErr = locker.updateCatalog(dataDir, func(catalog *Catalog) error {
+		updateErr = locker.updateCatalog(t.Context(), dataDir, func(catalog *Catalog) error {
 			catalog.UpsertAccount(&waiterAccount)
 			return nil
 		})

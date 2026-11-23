@@ -13,36 +13,36 @@ In flight: W57 has branch `test/crash-model-replacing-move` at `c6e273a6` (built
 - [x] W67 — A replacing local move that finds a new file at the freed name still moves — planner composition; do it after F4, against the Go `decide`. — built in #974
 
 ## Correctness
-- W20 — The account identity check never fails or stalls a command — in flight (worktree); ship when a slot is free.
-- W34 — `status --perf` counts a committed transaction once — in flight (worktree).
-- W6 — Control client: one probe, honest errors, one runtime per sync — CLI and control-plane; not refactor.
-- W13 — Config writers: one write per expired pause, a context, portable locks — after W8 (in R1).
-- W15 — A live test loses a create's answer on the wire — product handling of a lost answer; not refactor.
-- W22 — An account email change reaches everything that names the old email — cross-package feature.
-- W25 — The status model has one field per fact — CLI status; not refactor.
-- W33 — An upload sync gives up drops its session record and cancels the server session — executor code that moves in the split.
-- W39 — A shortcut the user's filters exclude leaves no folder and no work behind — sync behaviour; after the split.
-- W40 — A sync whose output cannot be written says so and exits non-zero, in text and in JSON — CLI output.
-- W52 — A subfolder moved onto its moved parent's old path on this computer converges — move planner; after F4.
-- W53 — A folder moved into its own former child converges — move planner; after F4.
-- W60 — The engine treats every failure to reach OneDrive as one family — classifier change; after the split.
-- W63 — A watch user can confirm held deletes — needs a DoR choice; watch loop is rebuilt in E5.
-- W64 — A local read that times out is retried as busy — classifier; after the split.
-- W68 — A file moved out of a subfolder into the folder re-made at the old path converges — move planner; after F4.
-- W73 — A name the path route does not resolve is found through its parent's listing in every command — uses G2's `namekey.Find`; after R2.
-- W80 — A folder moved into a new folder at its own path converges — move planner; after F4.
-- W81 — A publication's item type has one rule — sync code that moves in the split.
-- W91 — The sync summary counts a deleted folder as a folder, not as a file — summary text and counts.
-- W92 — A folder made below a path whose old holder has not left waits for it — planner dependencies; after F4.
-- W95 — A change list that leads back is refused and recovered wherever it is read — observer code; after G7 and the split.
-- W96 — Every store wait after a run's context ended goes through one helper and the stop's deadline — conflicts with E5's watch-loop edits; after R8.
-- W100 — A refused stderr line of the sync console and of main's last lines is recorded — CLI.
-- W105 — Each account at a shared address has its own view, status row and selector — CLI and config feature.
-- W106 — A panic on main's goroutine completes the performance summary; a failed watch start keeps a keepalive panic — CLI and panic boundaries.
-- W109 — A folder create's empty answer and sync's 409s read the one name before listing the folder — executor; after R2.
-- W112 — Creates at a waiting item's own landing below a folder moved here wait until it has left — move planner; after F4.
-- W113 — A folder moved into different new folders at its own path on each side converges — move planner; after F4.
-- W114 — Three folders moved into each other's new folders converge — move planner; after F4.
+- [x] W20 — The account identity check never fails or stalls a command — in flight (worktree); ship when a slot is free. — built in #959
+- [x] W34 — `status --perf` counts a committed transaction once — in flight (worktree). — built in #959
+- [x] W6 — Control client: one probe, honest errors, one runtime per sync — CLI and control-plane; not refactor. — built in #975 (still open: refusing a one-shot sync before its banner when the owner does not answer; flushing the shared-target clients' token cache after a rename)
+- [x] W13 — Config writers: one write per expired pause, a context, portable locks — after W8 (in R1). — built in #975 (still open: portable locks; no FUSE filesystem here to probe flock on)
+- W15 — A live test loses a create's answer on the wire — product handling of a lost answer; not refactor. — still open: needs fault injection in the live harness and a live run, which only CI can make
+- W22 — An account email change reaches everything that names the old email — cross-package feature. — partly built in #975 (a default display name follows the address; an unrecorded shared store moves when one account had the address); still open: a shortcut child's store moving with its parent, the watch checking the catalog and hearing of the change, a second config file caught up through former emails
+- [x] W25 — The status model has one field per fact — CLI status; not refactor. — built in #975
+- [x] W33 — An upload sync gives up drops its session record and cancels the server session — executor code that moves in the split. — built in #975 (still open: the new-file, local-move and local-delete variants and the clock rider)
+- [x] W39 — A shortcut the user's filters exclude leaves no folder and no work behind — sync behaviour; after the split. — built in #975
+- [x] W40 — A sync whose output cannot be written says so and exits non-zero, in text and in JSON — CLI output. — built in #975
+- [x] W52 — A subfolder moved onto its moved parent's old path on this computer converges — move planner; after F4. — closed without code: owner's choice on the comparison model; kept today's behaviour, which drops the cycle and loses nothing
+- [x] W53 — A folder moved into its own former child converges — move planner; after F4. — built in #975
+- [x] W60 — The engine treats every failure to reach OneDrive as one family — classifier change; after the split. — built in #975
+- [x] W63 — A watch user can confirm held deletes — needs a DoR choice; watch loop is rebuilt in E5. — built in #975 (a confirmation names the held set; a stale one is refused)
+- [x] W64 — A local read that times out is retried as busy — classifier; after the split. — built in #975 (rider, a stall whose local side blocks, still open)
+- [x] W68 — A file moved out of a subfolder into the folder re-made at the old path converges — move planner; after F4. — built in #975 (the vacatingFolder rider shapes not checked)
+- [x] W73 — A name the path route does not resolve is found through its parent's listing in every command — uses G2's `namekey.Find`; after R2. — built in #975 (rider, the CLI fake graph's root ID, still open)
+- [x] W80 — A folder moved into a new folder at its own path converges — move planner; after F4. — built in #975
+- [x] W81 — A publication's item type has one rule — sync code that moves in the split. — built in #975
+- [x] W91 — The sync summary counts a deleted folder as a folder, not as a file — summary text and counts. — built in #975
+- W92 — A folder made below a path whose old holder has not left waits for it — planner dependencies; after F4. — still open: a create below a vacating path cannot yet be told from the moved item's content after the local rebase
+- [x] W95 — A change list that leads back is refused and recovered wherever it is read — observer code; after G7 and the split. — built in #975 (no new sentinel, per the earlier decision; a shared folder's looping change list still waits for the periodic full refresh)
+- W96 — Every store wait after a run's context ended goes through one helper and the stop's deadline — conflicts with E5's watch-loop edits; after R8. — partly built in #975 (one helper under the stop's deadline, held by a source check); still open: a completion on the live context at the cancel, and executor writes on a live worker context
+- [x] W100 — A refused stderr line of the sync console and of main's last lines is recorded — CLI. — built in #975
+- [x] W105 — Each account at a shared address has its own view, status row and selector — CLI and config feature. — built in #975 (status --account and drive search --account still filter by email)
+- [x] W106 — A panic on main's goroutine completes the performance summary; a failed watch start keeps a keepalive panic — CLI and panic boundaries. — built in #975
+- [x] W109 — A folder create's empty answer and sync's 409s read the one name before listing the folder — executor; after R2. — built in #975
+- [x] W112 — Creates at a waiting item's own landing below a folder moved here wait until it has left — move planner; after F4. — built in #975
+- W113 — A folder moved into different new folders at its own path on each side converges — move planner; after F4. — still open: the stall looks to be outside move composition and needs a run to find
+- W114 — Three folders moved into each other's new folders converge — move planner; after F4. — still open: depends on W113
 
 ## Tests and tooling
 - W57 — The crash model draws the crash point of the replacing move — built and unreviewed; review and ship when a slot is free.

@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/sync.go, internal/multisync/*.go, internal/synccontrol/*.go
 
-Implements: R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.8.11 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-2.9.7 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.6.32 [verified], R-6.10.6 [verified], R-6.10.13 [verified], R-6.3.8 [verified], R-6.3.9 [verified], R-6.3.10 [verified]
+Implements: R-6.2.17 [verified], R-2.4.8 [verified], R-2.4.9 [verified], R-2.4.10 [verified], R-2.8.1 [verified], R-2.8.2 [verified], R-2.8.3 [verified], R-2.8.11 [verified], R-2.9.1 [verified], R-2.9.2 [verified], R-2.9.3 [verified], R-2.9.7 [verified], R-3.4.2 [verified], R-6.3.3 [verified], R-6.3.4 [verified], R-6.6.15 [verified], R-6.6.16 [verified], R-6.6.17 [verified], R-6.6.32 [verified], R-6.10.6 [verified], R-6.10.13 [verified], R-6.3.8 [verified], R-6.3.9 [verified], R-6.3.10 [verified]
 
 ## Control Socket Exposure
 
@@ -659,6 +659,21 @@ The socket speaks JSON over HTTP:
 - `POST /v1/perf/capture` triggers an explicit local capture bundle from the active owner. The request carries a duration of at most 5 minutes (`maxPerfCaptureDuration`; longer is `invalid_request`, compared in milliseconds so a huge value cannot overflow into a short one) plus optional output-dir, trace, and full-detail toggles; the response returns the local artifact paths for the completed bundle.
 - `POST /v1/reload` reloads config in the watch owner.
 - `POST /v1/stop` asks the watch owner to stop cleanly.
+- `POST /v1/confirm-deletes` confirms one drive's held deletes to the watch
+  owner (R-6.2.17). The body names the drive and the held set the user was
+  shown, `{drive, count, token}` (`synccontrol.ConfirmDeletesRequest`); a body
+  without all three is `invalid_request`. The watch loop only names the
+  drive's engine (`confirmTargetResponse`: a drive it does not sync now, or
+  whose runner is stuck, is HTTP 404 `unknown_drive`), and the handler hands
+  the confirmation to that engine off the loop (`confirmHeldDeletes`), so a
+  drive's busy sync loop never holds up the loop that serves every drive. The
+  engine takes it only for the set it holds now: a set that changed since it
+  was shown is HTTP 409 `held_deletes_changed`, a drive holding none is 409
+  `no_held_deletes`, and a drive loop that does not take it within
+  `synccontrol.ConfirmTakeTimeout` (5 s) is `busy`; none of them confirms
+  anything. A taken confirmation is `{"status": "deletes_confirmed"}`: the
+  drive's next pass applies exactly that set
+  (`TestOrchestrator_ControlSocket_ConfirmDeletesReachesTheDrivesEngine`).
 
 One-shot sync exposes status plus the direct perf endpoints above. Durable
 control requests still return a busy response with
@@ -669,8 +684,9 @@ mutation path for sync decisions anymore.
 
 Error responses have the shape `{status, code, message}`. Stable codes are
 `invalid_request`, `foreground_sync_running`, `capture_unavailable`,
-`capture_in_progress`, `reload_failed`, `busy`, and `internal_error`. One
-answer is not an error: `{"status": "reload_in_progress"}` with HTTP 202.
+`capture_in_progress`, `reload_failed`, `busy`, `held_deletes_changed`,
+`no_held_deletes`, `unknown_drive` and `internal_error`. One answer is not an
+error: `{"status": "reload_in_progress"}` with HTTP 202.
 
 #### Deadlines
 
@@ -687,6 +703,7 @@ the watch loop with no deadline of its own.
 | Watch loop taking a command | 5 s | `synccontrol.LoopAcceptTimeout`; past it HTTP 503 `busy`, nothing changed |
 | Answer to a reload the loop took | 60 s | `synccontrol.ReloadAnswerTimeout`; past it HTTP 202 `reload_in_progress` |
 | Answer to status or stop the loop took | 5 s | the loop answers these the moment it takes them; past it `busy` |
+| A drive's sync loop taking a confirmation of held deletes | 5 s | `synccontrol.ConfirmTakeTimeout`, after the watch loop named the drive; past it `busy`, nothing confirmed |
 | Writing an answer | 5 s | `WriteTimeout` = `synccontrol.ReplyWriteTimeout` |
 | Perf capture | 5 min | `maxPerfCaptureDuration` |
 
@@ -861,10 +878,20 @@ an `Orchestrator`, and chooses between `RunOnce` and `RunWatch`.
 - `--watch` selects daemon mode
 - `--download-only` and `--upload-only` select sync mode
 - `--dry-run` and `--full` apply only to one-shot mode
-- `--confirm-deletes` applies only to one-shot mode: it releases the
-  delete-safety hold for that pass (`RunOptions.ConfirmDeletes`), so the user
-  confirms the held set they were shown rather than whatever a watch session
-  deletes later (`TestNewSyncCmd_ConfirmDeletesIsOneShotOnly`)
+- `--confirm-deletes` never goes with `--watch`: a watch session would keep
+  confirming whatever later passes delete
+  (`TestNewSyncCmd_ConfirmDeletesIsOneShotOnly`). With no watch running it
+  releases the delete-safety hold for that one-shot pass
+  (`RunOptions.ConfirmDeletes`). While a watch runs, the watch keeps running:
+  `sync --confirm-deletes` shows each selected drive's held set and the
+  command that confirms exactly it, confirming nothing, and
+  `sync --confirm-deletes --held-set <count>-<token>` sends that set to the
+  watch (`POST /v1/confirm-deletes`), which refuses it if the drive's held set
+  changed since it was shown (R-6.2.17, `confirmDeletesToRunningWatch`).
+  `--held-set` needs `--confirm-deletes`, never goes with `--watch`
+  (`TestNewSyncCmd_HeldSetIsNotForAWatchSession`), and with no watch running
+  is refused (`errHeldSetWithoutWatch`): a one-shot run confirms the
+  recorded set
 - `--dry-run` binds, probes, and unlinks the control socket like any one-shot
   sync owner; it only changes plan execution and commit semantics
 - first SIGINT/SIGTERM cancels the shared watch contexts and lets each mount's
@@ -905,10 +932,14 @@ to the control-plane boundary.
   holds for account-level clients: the CLI's identity probes and discovery
   calls take theirs from `SessionRuntime.BootstrapClient`, so within one
   runtime one sign-in file has one token source (R-6.8.27). The `sync`
-  command still has two runtimes: its sync-bootstrap identity probe runs on
-  the command's runtime before `runSyncOnce`/`runSyncDaemon` build the
-  engine's, which loads the sign-in file after the probe has saved any
-  refresh. Giving the command one runtime for both is [planned].
+  command has one runtime for its sync-bootstrap identity probe and its
+  engines (`CLIContext.syncSessionRuntime`): `runSyncCommand` builds it
+  before the probe, over the `config.Holder` the engines and the control
+  plane read and with the logger the engines log through (timestamped for a
+  watch on a terminal, `syncRuntimeLogger`), and `runSyncOnce` and
+  `runSyncDaemonWithFactory` reuse it, so one process keeps one token source
+  per sign-in file (`TestRunSync_ProbeAndEngineShareOneSessionRuntime`,
+  `TestSyncSessionRuntime_ReusesTheCommandsRuntime`).
 - Reload updates config through one shared `config.Holder` and uses the
   CLI-supplied standalone-mount selection compiler, so both the control plane
   and session runtime see the same config snapshot without giving multisync
