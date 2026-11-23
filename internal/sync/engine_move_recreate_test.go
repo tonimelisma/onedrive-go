@@ -2463,7 +2463,7 @@ func TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves(t *testing
 	assert.True(t, first.LeftWork().Any(), "the run says it left the move: %+v", first.LeftWork())
 	assert.Equal(t, map[string]string{"a.txt": "alpha\n", "b.txt": savedAtTheFreedName, "keep.txt": "keep\n"},
 		harnessLocalTree(t, h.syncRoot))
-	syncfixture.RequireTrashHoldsOnce(t, h.eng.trash, "b.txt", "bravo\n")
+	syncfixture.RequireTrashHoldsOnce(t, h.eng.upkeep.trash, "b.txt", "bravo\n")
 
 	h.eng.armExecCrash(func(string) error { return nil })
 	second := runScenarioPass(t, h.eng)
@@ -2478,7 +2478,7 @@ func TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves(t *testing
 	assert.Equal(t, "alpha\n", local["b.txt"])
 	assert.Equal(t, moved, syncfixture.EntryIdentity(t, filepath.Join(h.syncRoot, "b.txt")), "b.txt is the moved file itself")
 	assert.Contains(t, slices.Collect(maps.Values(local)), savedAtTheFreedName, "the saved file's content is kept: %v", local)
-	syncfixture.RequireTrashHoldsOnce(t, h.eng.trash, "b.txt", "bravo\n")
+	syncfixture.RequireTrashHoldsOnce(t, h.eng.upkeep.trash, "b.txt", "bravo\n")
 
 	h.eng.hooks.oneShotPassLimit = 0
 	third := runScenarioPass(t, h.eng)
