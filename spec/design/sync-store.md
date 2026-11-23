@@ -584,8 +584,14 @@ baseline already holds drops the intent. The last is a zero-byte file whose
 create completed (it never runs the hook) while its intent outlived it,
 canceled as it succeeded or with a failed clear; claimed, the record named a
 file that stays empty and was never dropped
-(`TestCommitObservation_IntentDoesNotClaimAFileTheBaselineHolds`). An
-attempt known to have created nothing clears the intent. An attempt that was
+(`TestCommitObservation_IntentDoesNotClaimAFileTheBaselineHolds`). A
+folder's deletion observed at the path neither claims nor drops the intent:
+sync deletes a folder on OneDrive before it creates the file that replaced
+it here, and the delta that follows reports both, in either order; dropped on
+the folder's tombstone, the intent left the file's empty item to read as
+someone else's, a conflict copy of the user's file and the empty one
+downloaded in its place (`TestCommitObservation_AFolderDeletedAtThePathKeepsTheIntent`,
+chaos seed 63). An attempt known to have created nothing clears the intent. An attempt that was
 canceled, or whose create ended without an answer
 (`graph.ErrCreateOutcomeUnknown`), is not known to: its create may have
 landed or may still land, so the intent is kept. An attempt that succeeded
