@@ -72,6 +72,7 @@ func (p *Planner) PlanCurrentState(
 
 		reconciled = append(reconciled, actions...)
 	}
+	reconciled = append(reconciled, createFoldersOneDriveMadeAtAMovedSource(comparisons, views)...)
 	inputs := moveCompositionInputs(comparisons, views, remoteRows, localRows)
 	reconciled = giveWayFoldersReplacedOnOneDrive(&inputs, reconciled, comparisons, views, localRows)
 	displaceFoldersDeletedHere(&inputs, localDeletePaths(reconciled))
@@ -80,6 +81,33 @@ func (p *Planner) PlanCurrentState(
 	composed, waiting := buildComposedMoveActions(&composition, &inputs, views, baseline)
 
 	return p.planBuiltActions(reconciled, composed, waiting, &composition, &inputs, mount, mode)
+}
+
+// createFoldersOneDriveMadeAtAMovedSource plans here the folder OneDrive put
+// at the path a synced item left by this computer's move, while the path is
+// empty here (from the held start, OneDrive moved f into its new X2 and X2
+// onto f's path, while f had moved here into the new x). SQLite reconciles
+// the path as the source of the local move alone, which plans nothing there,
+// so the folder was never made here, and the move of f into it, OneDrive's
+// place winning, failed for want of its parent on every pass. The create
+// records OneDrive's folder at the path; a move of the item that left it
+// commits by item ID wherever it lands.
+func createFoldersOneDriveMadeAtAMovedSource(
+	comparisons []syncdomain.SQLiteComparisonRow, views map[string]*syncdomain.PathView,
+) []syncdomain.Action {
+	var creates []syncdomain.Action
+	for i := range comparisons {
+		cmp := &comparisons[i]
+		view := views[cmp.Path]
+		if cmp.ComparisonKind != syncdomain.ComparisonLocalMoveSource || cmp.LocalType.Present() ||
+			cmp.RemoteType != syncdomain.SideFolder || !cmp.RemoteItemReplaced || view == nil || view.Remote == nil ||
+			plannerSuppressesUnavailableTruth(&view.TruthStatus) {
+			continue
+		}
+		creates = append(creates, makeFolderCreate(view, syncdomain.CreateLocal))
+	}
+
+	return creates
 }
 
 // localDeletePaths lists the paths the reconciliation actions delete here.

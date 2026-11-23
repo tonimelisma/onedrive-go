@@ -89,7 +89,7 @@ local moved doc2       | remote edited           -> remote_move doc2 <- doc
 local moved doc2       | remote moved+edit doc3  -> local_move doc3 <- doc2
 local moved doc2       | remote deleted          -> cleanup doc; upload doc2
 local moved+edit doc2  | remote unchanged        -> remote_delete doc; upload doc2
-local moved+edit doc2  | remote moved doc2       -> cleanup doc; conflict_copy doc2; download doc2
+local moved+edit doc2  | remote moved doc2       -> baseline_update doc2 <- doc
 local moved+edit doc2  | remote moved doc3       -> cleanup doc; download doc3; upload doc2
 local moved+edit doc2  | remote edited           -> download doc; upload doc2
 local moved+edit doc2  | remote moved+edit doc3  -> cleanup doc; download doc3; upload doc2

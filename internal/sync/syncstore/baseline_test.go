@@ -1157,6 +1157,35 @@ func TestCommitMutation_Delete(t *testing.T) {
 	assert.False(t, ok, "entry still exists after delete")
 }
 
+// Validates: R-2.17.13
+//
+// The delete of an empty folder made here, which a synced folder's move takes
+// the place of, names no synced item: its commit leaves the row at its path,
+// the item that lands there, as it is.
+func TestCommitMutation_DeleteOfAnUnsyncedEntryRecordsNothing(t *testing.T) {
+	t.Parallel()
+
+	mgr := newTestStore(t)
+	ctx := t.Context()
+	seed := syncdomain.BaselineMutation{
+		Action: syncdomain.ActionFolderCreate, Success: true,
+		Path: "p", DriveID: driveid.New("d"), ItemID: "item-p", ItemType: syncdomain.ItemTypeFolder,
+	}
+	require.NoError(t, mgr.CommitMutation(ctx, &seed))
+	_, seeded := mgr.cachedBaseline().GetByPath("p")
+	require.True(t, seeded)
+
+	del := syncdomain.BaselineMutation{
+		Action: syncdomain.ActionLocalDelete, Success: true, Path: "p", ItemType: syncdomain.ItemTypeFolder,
+		DeletesUnsyncedEntry: true,
+	}
+	require.NoError(t, mgr.CommitMutation(ctx, &del))
+
+	entry, ok := mgr.cachedBaseline().GetByPath("p")
+	require.True(t, ok, "the synced folder's row stays")
+	assert.Equal(t, "item-p", entry.ItemID)
+}
+
 // Validates: R-2.2
 func TestCommitMutation_Move(t *testing.T) {
 	t.Parallel()

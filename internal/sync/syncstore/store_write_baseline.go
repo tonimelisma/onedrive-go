@@ -563,10 +563,15 @@ func (s *SyncStore) ForgetBaselineLocalCtime(ctx context.Context, path string) e
 // classifyMutation is classifyBaselineMutation for one outcome: a
 // publication-only baseline update that carries an old path re-keys the row
 // where both sides already hold the item (D-050), which is a move of the
-// baseline row and its subtree.
+// baseline row and its subtree. A delete of an entry no synced item is
+// (Action.DeletesUnsyncedEntry) removed nothing on record: the row at its
+// path, if any, is the item that lands there, so it changes nothing.
 func classifyMutation(o *syncdomain.BaselineMutation) (baselineMutationKind, error) {
 	if o.Action == syncdomain.ActionBaselineUpdate && o.OldPath != "" && o.OldPath != o.Path {
 		return baselineMutationMove, nil
+	}
+	if o.DeletesUnsyncedEntry && o.Action == syncdomain.ActionLocalDelete {
+		return baselineMutationNoop, nil
 	}
 
 	return classifyBaselineMutation(o.Action)

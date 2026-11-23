@@ -145,7 +145,7 @@ func preserveParentFoldersForRunnableDescendants(actions []syncdomain.Action, mo
 	preserved := append([]syncdomain.Action(nil), actions...)
 	for i := range preserved {
 		action := &preserved[i]
-		if !isFolderDelete(action) || deletesAFolderOneDriveGaveAway(action) ||
+		if !isFolderDelete(action) || deletesAFolderOneDriveGaveAway(action) || deletesAnUnsyncedFolder(action) ||
 			!runnableSubtreeActionRequiresParent(preserved, action.Path, mode) {
 			continue
 		}
@@ -181,6 +181,14 @@ func deletesAFolderOneDriveGaveAway(action *syncdomain.Action) bool {
 	view := action.View
 	return action.Type == syncdomain.ActionLocalDelete && view != nil && view.Remote != nil && !view.Remote.IsDeleted &&
 		view.Baseline != nil && view.Remote.ItemID != view.Baseline.ItemID
+}
+
+// deletesAnUnsyncedFolder reports a local delete of a folder no synced item
+// is: an empty folder made here that a synced folder's move takes the place
+// of (moveDisplaceEmptyFolder). The work below its path belongs to the
+// folder that lands there.
+func deletesAnUnsyncedFolder(action *syncdomain.Action) bool {
+	return action.Type == syncdomain.ActionLocalDelete && action.DeletesUnsyncedEntry
 }
 
 func isFolderDelete(action *syncdomain.Action) bool {

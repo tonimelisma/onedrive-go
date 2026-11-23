@@ -33,6 +33,7 @@ func MutationFromActionOutcome(o *ActionOutcome) *BaselineMutation {
 		LocalIdentityObserved: o.LocalIdentityObserved,
 		ETag:                  o.ETag,
 		KeptLocally:           o.KeptLocally,
-		ExemptFromDeleteHold:  o.DeleteConfirmed,
+		DeletesUnsyncedEntry:  o.DeletesUnsyncedEntry,
+		ExemptFromDeleteHold:  o.DeleteConfirmed || o.DeletesUnsyncedEntry,
 	}
 }

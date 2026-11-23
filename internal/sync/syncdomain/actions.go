@@ -109,6 +109,11 @@ type Action struct {
 	// `sync --confirm-deletes`. The store leaves it out of the delete ledger
 	// the proportional hold counts, since the confirmation reviewed it.
 	DeleteConfirmed bool
+	// DeletesUnsyncedEntry marks a local delete of an entry no synced item
+	// is: an empty folder made here that a synced folder's move takes the
+	// place of. Its commit records nothing, as the baseline row at its path,
+	// if any, is the item that lands there.
+	DeletesUnsyncedEntry bool
 	// ReleasesSharedFolder marks a local delete that releases a synced
 	// entry of a shared folder removed from this account
 	// (engine_shortcut_release.go): nothing was deleted on OneDrive, so the
@@ -231,6 +236,8 @@ type ActionOutcome struct {
 	ETag                  string
 	// DeleteConfirmed: see Action.DeleteConfirmed.
 	DeleteConfirmed bool
+	// DeletesUnsyncedEntry: see Action.DeletesUnsyncedEntry.
+	DeletesUnsyncedEntry bool
 	// KeptLocally marks a local folder delete that removed the synced
 	// folder from the baseline but left the folder on disk because it holds
 	// only content sync ignores (D-012). The local identity fields describe

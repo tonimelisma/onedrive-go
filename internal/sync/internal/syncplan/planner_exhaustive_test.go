@@ -1276,6 +1276,15 @@ func (w *exWorld) remoteFolderAt(dir string) (string, bool) {
 // folder only when it is empty (DeleteLocalFolder).
 func (w *exWorld) exLocalDelete(a *syncdomain.Action) bool {
 	item, ok := w.local[a.Path]
+	if a.DeletesUnsyncedEntry {
+		// No synced item: the store records nothing (applySingleMutation),
+		// and only an empty folder is deleted so.
+		if ok && item.folder && !w.holdsBelow(a.Path) {
+			delete(w.local, a.Path)
+			return true
+		}
+		return false
+	}
 	if !ok {
 		delete(w.baseline, a.Path)
 
@@ -1294,6 +1303,17 @@ func (w *exWorld) exLocalDelete(a *syncdomain.Action) bool {
 	delete(w.baseline, a.Path)
 
 	return true
+}
+
+// holdsBelow reports whether this computer holds an entry below p.
+func (w *exWorld) holdsBelow(p string) bool {
+	for held := range w.local {
+		if strings.HasPrefix(held, p+"/") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // plannedSynced is the baseline row of the item a delete was planned
@@ -2165,7 +2185,11 @@ func requireExhaustiveGolden(t *testing.T, results []exResult, complete bool) {
 		}
 	}
 	if *updateGolden {
-		requireGolden(t, exhaustiveGolden, strings.Join(broken, "\n")+"\n")
+		listed := ""
+		if len(broken) > 0 {
+			listed = strings.Join(broken, "\n") + "\n"
+		}
+		requireGolden(t, exhaustiveGolden, listed)
 		return
 	}
 	golden, err := os.ReadFile(exhaustiveGolden)
@@ -2173,6 +2197,9 @@ func requireExhaustiveGolden(t *testing.T, results []exResult, complete bool) {
 	var want, gone []string
 	for line := range strings.Lines(string(golden)) {
 		line = strings.TrimSuffix(line, "\n")
+		if line == "" {
+			continue
+		}
 		id, _, _ := strings.Cut(line, " :: ")
 		switch {
 		case byID[id] != nil:
@@ -2314,4 +2341,191 @@ func exActionsPlannedTwice(log []string) []string {
 	slices.Sort(twice)
 
 	return twice
+}
+
+// Validates: R-2.17.13, R-2.17.6
+//
+// From the held start (x renamed x2 here while OneDrive keeps it as x, a new
+// x made here holding f, which left p), OneDrive moves p onto x after
+// deleting x, or into x after moving x onto p: either way p lands on the
+// path of the new x here and p is left empty here. The two are one folder
+// by path: the new x takes p's item and the empty p is deleted here, so
+// neither side moves anything, and every run, with each create refused
+// once, converges.
+func TestPlannerPairs_ANewFolderHereMergesWithTheFolderOneDriveMovedOntoItsPath(t *testing.T) {
+	t.Parallel()
+
+	held := exStartNamed(t, "held")
+	for _, pair := range []exPair{
+		{start: held, remote: []exEdit{
+			{kind: exDeleteFolder, from: "x"}, {kind: exMoveFolder, from: "p", to: "x"},
+		}},
+		{start: held, remote: []exEdit{
+			{kind: exMoveFolder, from: "x", to: "p/x"}, {kind: exMoveFolder, from: "p", to: "x"},
+		}},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}
+
+// Validates: R-2.17.13, R-2.17.6
+//
+// A cycle of moves across the two sides lands a folder on a new folder made
+// here: from the synced tree, x moved into p and a new x made here while
+// OneDrive moved p into x; from the held start, the held x moved into p here
+// while OneDrive moved p into x. OneDrive's nesting wins, so x's copy here,
+// empty, meets the new x: the two merge by path and p moves into it, and
+// every run, with each create refused once, converges.
+func TestPlannerPairs_AFolderWhoseMoveHereIsUndoneMergesWithANewFolderAtItsPlace(t *testing.T) {
+	t.Parallel()
+
+	for _, pair := range []exPair{
+		{
+			start:  exStartNamed(t, "synced"),
+			local:  []exEdit{{kind: exMoveFolder, from: "x", to: "p/x"}, {kind: exMakeFolder, to: "x"}},
+			remote: []exEdit{{kind: exMoveFolder, from: "p", to: "x/p"}},
+		},
+		{
+			start:  exStartNamed(t, "held"),
+			local:  []exEdit{{kind: exMoveFolder, from: "x2", to: "p/x2"}},
+			remote: []exEdit{{kind: exMoveFolder, from: "p", to: "x/p"}},
+		},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}
+
+// Validates: R-2.17.6
+//
+// From the held start, here p moved into the new x and the held folder,
+// which OneDrive keeps at the new x's path, into p (as x/p/x2 or as x/p/f,
+// where f, which OneDrive keeps in p, leaves p for the new x). The new x is
+// made on OneDrive only once the held folder has left its path, so the held
+// folder moves first: into p where p is on OneDrive now, which p's move then
+// carries, or, with that name still f's, aside to a free name, from where the
+// next pass moves it. Every run, with each create refused once, converges.
+func TestPlannerPairs_AHeldFolderMovedIntoAFolderThatMovesIntoTheNewFolderAtItsPathConverges(t *testing.T) {
+	t.Parallel()
+
+	held := exStartNamed(t, "held")
+	for _, pair := range []exPair{
+		{start: held, local: []exEdit{
+			{kind: exMoveFolder, from: "p", to: "x/p"}, {kind: exMoveFolder, from: "x2", to: "x/p/x2"},
+		}},
+		{start: held, local: []exEdit{
+			{kind: exMoveFolder, from: "x2", to: "p/f"}, {kind: exMoveFolder, from: "p", to: "x/p"},
+		}},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}
+
+// Validates: R-2.17.6
+//
+// From the held start, f moved here into the new x while OneDrive moved it
+// into the new X2 and X2 onto f's old path, p/f. OneDrive's place wins: the
+// folder OneDrive put at p/f is made here, as SQLite plans nothing at a
+// path this computer's move left, and f moves into it. Every run, with each
+// create refused once, converges.
+func TestPlannerPairs_AFolderOneDriveMovedOntoThePathAFileLeftHereIsMadeHere(t *testing.T) {
+	t.Parallel()
+
+	requirePairKeepsEveryInvariant(t, &exPair{
+		start: exStartNamed(t, "held"),
+		remote: []exEdit{
+			{kind: exMoveFile, from: "p/f", to: "X2/f"}, {kind: exMoveFolder, from: "X2", to: "p/f"},
+		},
+	})
+}
+
+// Validates: R-2.17.6, R-2.17.13
+//
+// A rotation through nesting split across the two sides (p moved into x
+// here while OneDrive moved x into p, or the other way round) with a third
+// move: OneDrive's nesting wins and this computer's move is undone. The
+// folder going back to its path finds there an entry that has left it,
+// moves into its folder where that folder is now first or waits a pass
+// where its folder's move carries it, a synced file moved onto it, which
+// pairs as a move whose claim is undone, or an empty folder made here,
+// which gives way. Every run, with each create refused once, converges.
+func TestPlannerPairs_ARotationThroughNestingSplitAcrossTheSidesConverges(t *testing.T) {
+	t.Parallel()
+
+	synced := exStartNamed(t, "synced")
+	pIntoX := exEdit{kind: exMoveFolder, from: "p", to: "x/p"}
+	xIntoP := exEdit{kind: exMoveFolder, from: "x", to: "p/x"}
+	for _, pair := range []exPair{
+		{start: synced, local: []exEdit{pIntoX}, remote: []exEdit{xIntoP, {kind: exMoveFile, from: "p/f", to: "x"}}},
+		{start: synced, local: []exEdit{pIntoX}, remote: []exEdit{
+			{kind: exMoveFile, from: "z", to: "p/z"}, {kind: exMoveFolder, from: "x", to: "z"},
+		}},
+		{start: synced, local: []exEdit{xIntoP}, remote: []exEdit{
+			{kind: exMoveFile, from: "z", to: "x/z"}, {kind: exMoveFolder, from: "p", to: "z"},
+		}},
+		{start: synced, local: []exEdit{pIntoX, {kind: exMoveFile, from: "x/p/f", to: "p"}}, remote: []exEdit{xIntoP}},
+		{start: synced, local: []exEdit{pIntoX, {kind: exMoveFile, from: "z", to: "p"}}, remote: []exEdit{xIntoP}},
+		{start: synced, local: []exEdit{pIntoX, {kind: exMakeFolder, to: "p"}}, remote: []exEdit{xIntoP}},
+		{start: synced, local: []exEdit{xIntoP, {kind: exMoveFile, from: "p/f", to: "x"}}, remote: []exEdit{pIntoX}},
+		{start: synced, local: []exEdit{xIntoP, {kind: exMoveFile, from: "z", to: "x"}}, remote: []exEdit{pIntoX}},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}
+
+// Validates: R-2.17.6, R-2.17.9
+//
+// OneDrive deleted p/f, or p with it, and moved x onto that path, while this
+// computer moved x elsewhere. The two moves of x compose: OneDrive's place
+// wins and the folder here moves there, the synced entry OneDrive deleted
+// giving way. OneDrive's folder is not also made here at the path, as the
+// type change SQLite reads there would make it, and every run, with each
+// create refused once, converges.
+func TestPlannerPairs_AFolderMovedOnBothSidesOntoAnEntryOneDriveDeletedIsMovedHereNotMade(t *testing.T) {
+	t.Parallel()
+
+	synced := exStartNamed(t, "synced")
+	for _, pair := range []exPair{
+		{start: synced, local: []exEdit{{kind: exMoveFolder, from: "x", to: "q"}}, remote: []exEdit{
+			{kind: exDeleteFile, from: "p/f"}, {kind: exMoveFolder, from: "x", to: "p/f"},
+		}},
+		{start: synced, local: []exEdit{{kind: exMoveFolder, from: "x", to: "q"}}, remote: []exEdit{
+			{kind: exDeleteFolder, from: "p"}, {kind: exMoveFolder, from: "x", to: "p"},
+		}},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+		registerExCachingDriver(t)
+		r := newExRun(t, exQuietStore(t), &pair)
+		r.run()
+		for _, entry := range r.log {
+			assert.NotContains(t, entry, "folder_create p/f (local)", "%s makes the moved folder here:\n%s",
+				pair.id(), strings.Join(r.log, "\n"))
+		}
+	}
+}
+
+// Validates: R-2.17.7, R-2.17.6
+//
+// From the held start, f, moved here into the new x, is edited, while
+// OneDrive moves it into the old x: both sides hold f at x/f, in different
+// folders. The file here has f's identity and OneDrive's move of f to the
+// same path corroborates it, so it is the same item: OneDrive's version is
+// never downloaded beside the edit, which is carried by f's move here into
+// the old x and uploaded there, and every run, with each create refused once,
+// converges.
+func TestPlannerPairs_AFileEditedHereThatBothSidesMovedStaysOneItem(t *testing.T) {
+	t.Parallel()
+
+	pair := exPair{
+		start:  exStartNamed(t, "held"),
+		local:  []exEdit{{kind: exEditFile, from: "x/f"}},
+		remote: []exEdit{{kind: exMoveFile, from: "p/f", to: "x/f"}},
+	}
+	requirePairKeepsEveryInvariant(t, &pair)
+	registerExCachingDriver(t)
+	r := newExRun(t, exQuietStore(t), &pair)
+	r.run()
+	log := strings.Join(r.log, "\n")
+	assert.NotContains(t, log, "download", "OneDrive's version is not downloaded beside the edit:\n%s", log)
+	assert.Contains(t, log, "local_move x2/f <- x/f", "the edit moves where OneDrive put f:\n%s", log)
+	assert.Contains(t, log, "upload x2/f", "the edit is uploaded there:\n%s", log)
 }

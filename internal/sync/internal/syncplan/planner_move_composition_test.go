@@ -2420,7 +2420,8 @@ func TestBuildDependencies_ALocalMoveOntoAFolderDeletedHereWaitsForItsDelete(t *
 // p and z onto x, and this computer follows OneDrive. p leaves x first, x
 // moves into p, and z lands where x was. On OneDrive a move's source is
 // rebased through the moves before it, so a remote move from below another
-// remote move's destination still waits for it.
+// remote folder move's destination still waits for it; below a file's,
+// which holds nothing, it does not.
 func TestBuildDependencies_ALocalMoveFromBelowAnotherLocalMovesDestinationRunsFirst(t *testing.T) {
 	t.Parallel()
 
@@ -2436,10 +2437,12 @@ func TestBuildDependencies_ALocalMoveFromBelowAnotherLocalMovesDestinationRunsFi
 	assert.Equal(t, [][]int{nil, {0}, {1}}, deps, "p leaves x, x moves into p, z lands where x was")
 
 	remote := []syncdomain.Action{
-		{Type: syncdomain.ActionRemoteMove, OldPath: "z", Path: "x", View: file},
+		{Type: syncdomain.ActionRemoteMove, OldPath: "z", Path: "x", View: folder},
 		{Type: syncdomain.ActionRemoteMove, OldPath: "x/a.txt", Path: "b.txt", View: file},
 	}
 	assert.Equal(t, [][]int{nil, {0}}, buildDependencies(remote), "a rebased OneDrive source below x waits for the move onto x")
+	remote[0].View = file
+	assert.Equal(t, [][]int{nil, nil}, buildDependencies(remote), "a file moved onto x holds nothing a source can lie below")
 }
 
 // Validates: R-2.17.6
@@ -2792,4 +2795,54 @@ func TestMovedOntoAnotherItemsPath_NeedsTheIdentityAndTheSyncedContent(t *testin
 	stillHere := &syncdomain.SQLiteComparisonRow{Path: "z", BaselineType: syncdomain.SideFile, RemoteType: syncdomain.SideFile}
 	_, ok = movedOntoAnotherItemsPath(stillHere, entry, local("p", "hash-z"), cmpByPath)
 	assert.False(t, ok, "OneDrive still holds the item at its path")
+}
+
+// Validates: R-2.17.13
+//
+// OneDrive moved the synced folder p onto x, where this computer holds a new
+// folder of its own, or this computer's move of p into x was undone, OneDrive
+// having moved x into p. With p's copy here empty, the new x takes p's item
+// and the copy is deleted here: nothing moves. With anything in p's copy
+// here, with the folder at x a synced item, or with the folder at x a file,
+// nothing is merged.
+func TestComposeMoves_AFolderLandingOnANewFolderHereMergesWithItOnlyWhenItsCopyIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	newX := func(nodes []moveNode) moveOccupancy {
+		occupancy := composeOccupancy(nodes)
+		occupancy.local["x"] = true
+		occupancy.localFolders = map[string]bool{"x": true, "p": true}
+		return occupancy
+	}
+	movedOnOneDrive := []moveNode{composeNode("p", syncdomain.ItemTypeFolder, "p", "p", "x")}
+	c := composeMoves(movedOnOneDrive, newX(movedOnOneDrive), nil)
+	assert.Equal(t, []composedMerge{{key: "p", localPath: "p", newPath: "x"}}, c.merges)
+	assert.Empty(t, c.moves)
+	assert.Empty(t, c.deferred)
+
+	undoneHere := []moveNode{
+		composeNode("x", syncdomain.ItemTypeFolder, "x", "p/x2", "x"),
+		composeNode("p", syncdomain.ItemTypeFolder, "p", "p", "x/p"),
+	}
+	occupancy := newX(undoneHere)
+	occupancy.localFolders["p/x2"] = true
+	c = composeMoves(undoneHere, occupancy, nil)
+	assert.Equal(t, []composedMerge{{key: "x", localPath: "p/x2", newPath: "x"}}, c.merges,
+		"the cycle keeps OneDrive's nesting, and x's copy here meets the new x")
+	assert.Equal(t, []string{"p->x/p"}, composedMovesBySide(&c, moveCoordLocal))
+
+	occupancy = newX(movedOnOneDrive)
+	occupancy.local["p/new"] = true
+	c = composeMoves(movedOnOneDrive, occupancy, nil)
+	assert.Empty(t, c.merges, "p's copy here holds a file")
+
+	occupancy = newX(movedOnOneDrive)
+	occupancy.localFolders = map[string]bool{"p": true}
+	occupancy.localFiles = map[string]bool{"x": true}
+	c = composeMoves(movedOnOneDrive, occupancy, nil)
+	assert.Empty(t, c.merges, "a file here at x is no folder to merge with")
+
+	synced := append(slices.Clone(movedOnOneDrive), composeNode("y", syncdomain.ItemTypeFolder, "y", "x", "y"))
+	c = composeMoves(synced, newX(synced), nil)
+	assert.Empty(t, c.merges, "the folder at x here is the synced y")
 }
