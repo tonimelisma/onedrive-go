@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
@@ -402,4 +403,28 @@ func TestSyncStore_ShortcutChildWorkSnapshotProjectsTheParentsFilter(t *testing.
 	require.NoError(t, err)
 	assert.Empty(t, excluded.RunCommands, "an excluded shortcut has no child run")
 	assert.Empty(t, excluded.CleanupCommands)
+}
+
+// Validates: R-6.6.15
+func TestSyncStore_ReplaceShortcutRootsCountsAsOneTransaction(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	collector := perf.NewCollector(nil)
+	ctx := perf.WithCollector(t.Context(), collector)
+
+	require.NoError(t, store.ReplaceShortcutRoots(ctx, []syncshortcut.ShortcutRootRecord{{
+		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
+		BindingItemID:     "binding-perf",
+		RelativeLocalPath: "Shared/Perf",
+		LocalAlias:        "Perf",
+		RemoteDriveID:     driveid.New("drive-1"),
+		RemoteItemID:      "target-perf",
+		RemoteIsFolder:    true,
+		State:             syncshortcut.ShortcutRootStateActive,
+		ProtectedPaths:    []string{"Shared/Perf"},
+	}}))
+
+	assert.Equal(t, 1, collector.Snapshot().DBTransactionCount,
+		"the replacement is one store transaction in status --perf")
 }

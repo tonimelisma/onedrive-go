@@ -294,7 +294,11 @@ performance data.
   that ended it, with the time from its begin to that call. The rollback a
   store function defers after its commit ends nothing and records nothing
   (`TestPerfTx_RecordsEachEndedTransactionOnce`,
-  `TestPerfTx_RecordsAFailedCommitOnce`). `perf.WithCollector` replaces the context's
+  `TestPerfTx_RecordsAFailedCommitOnce`). Every write transaction of the sync
+  store begins through `BeginPerfTx`, the shortcut-root replacement included
+  (`TestSyncStore_ReplaceShortcutRootsCountsAsOneTransaction`); the status
+  inspector's read-only snapshot transaction does not, because a `status` read
+  is not the sync's work. `perf.WithCollector` replaces the context's
   collector rather than adding one, and every collector forwards each record to
   its parent, so the rule for an owner is to carry the most specific collector
   in the context: `internal/multisync` puts each mount's collector in that
