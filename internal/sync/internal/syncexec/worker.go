@@ -314,6 +314,7 @@ func WithRunStop(ctx context.Context, deadline func() time.Time, logger *slog.Lo
 // starts: the panic is a bug, logged with its stack, and the callback ends.
 func recoverRunStopCallback(logger *slog.Logger) {
 	if r := recover(); r != nil {
+		//nolint:errcheck // Recovered logs the panic at Error; the callback has no caller to return it to
 		_ = panicguard.Recovered(logger, "in the run stop's deadline watch", r)
 	}
 }
