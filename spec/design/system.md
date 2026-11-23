@@ -490,6 +490,18 @@ Static verification is a first-class architectural constraint, not a best-effort
   (`TestLogSeedReplayOnFailure_LogsTheCommandThatRerunsTheSeed`); no seeded
   family's failure message carries a second rerun hint
   (`TestModelRun_FailureContextCarriesNoSecondRerunHint`).
+- One fault is also injected against the live service, without a hook in
+  product code: the nightly full tier routes the CLI subprocess through a
+  TLS-terminating forward proxy the test starts (`HTTPS_PROXY`, and
+  `SSL_CERT_FILE` naming the proxy's throwaway certificate authority, which
+  Go reads on Linux, so the test skips elsewhere). The proxy forwards every
+  request to OneDrive as it is and, for the first file create of one name,
+  lets the create reach OneDrive and then closes the CLI's connection instead
+  of answering; the sync must finish into the file that create made, with one
+  remote file, no conflict copy and nothing left for the next pass (R-5.6.15,
+  `TestE2E_Sync_CreateWhoseAnswerWasLostFinishesIntoItsOwnFile`, what the
+  chaos fault `create:response-lost` proves against fakes). It is proved only
+  by the nightly run: it needs a live account.
 - `nolintlint` requires both a specific linter name and a short justification. Unused exclusions are surfaced with `linters.exclusions.warn-unused`.
 - Inline suppressions are reserved for the small documented exception set where the code is correct and the linter cannot express that shape cleanly: interface-mandated receiver shapes, validated subprocess/request dispatch that the linter cannot follow across helper boundaries, non-cryptographic jitter, `driver.Valuer` SQL `NULL` semantics, fixed placeholder SQL, and intentional test fixtures/mocks.
 - Every repository-rule walk of devtool (output boundaries, test conventions, spec ownership and test citations, backlog IDs, mutex docs, requirement traceability) leaves out the same folders through one helper, `skipRepositoryRuleDir` (`internal/devtool/verify_repo_walk.go`): `.git`, the credential bundle `.testdata`, the increment worktrees `.worktrees`, the agent harness's `.claude`, `node_modules` and `vendor`, at any depth, so a tree nested in one of them is read by every rule or by none; each walk once kept its own list, and the output-boundary walk read `.worktrees` while the test-convention walk skipped it (`TestRepositoryRuleWalksSkipTheSameFolders`, `TestSkipRepositoryRuleDirNamesTheSkippedFolders`). The e2e tier's test-file list and the lint-pass check follow the go command's own pattern rules instead, on purpose, since they ask what `go test` and `./...` build.
