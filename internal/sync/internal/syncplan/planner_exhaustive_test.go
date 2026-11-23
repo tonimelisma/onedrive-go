@@ -1269,22 +1269,40 @@ func (w *exWorld) exRemoteFolderCreate(a *syncdomain.Action) bool {
 	if !localOK || !local.folder {
 		return false
 	}
-	_, remote, found := w.remoteItem(a)
+	// The executor creates the folder by its parent and name and adopts a
+	// folder OneDrive already has there (createRemoteFolder): the item ID the
+	// action carries from the baseline names nothing it creates.
+	parent, parentOK := w.remoteFolderAt(path.Dir(a.Path))
+	if !parentOK {
+		return false
+	}
+	at, found := w.remoteEntryAt(path.Join(parent, path.Base(a.Path)))
+	remote := w.remote[at]
 	if found && !remote.folder {
 		return false
 	}
 	if !found {
-		parent, parentOK := w.remoteFolderAt(path.Dir(a.Path))
-		at := path.Join(parent, path.Base(a.Path))
-		if !parentOK || !exFree(w.remote, false, at, "") {
-			return false
-		}
 		remote = pmItem{id: "item-" + strconv.Itoa(w.next()), folder: true, etag: w.next()}
 		w.remote[at] = remote
 	}
 	w.baseline[a.Path] = pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag}
 
 	return true
+}
+
+// remoteEntryAt finds the entry OneDrive holds at p, as it compares names.
+func (w *exWorld) remoteEntryAt(p string) (string, bool) {
+	if _, ok := w.remote[p]; ok {
+		return p, true
+	}
+	key := namekey.OfPath(p)
+	for held := range w.remote {
+		if namekey.OfPath(held) == key {
+			return held, true
+		}
+	}
+
+	return p, false
 }
 
 // exLocalFolderCreate makes the folder here, with any folder above it that is

@@ -861,12 +861,19 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 202 runs of `pairs.golden` (150 from the synced tree, 52 from the held
+The 144 runs of `pairs.golden` (98 from the synced tree, 46 from the held
 one; a run names its start, the two histories, the refused create if any,
 and the invariants it breaks) fall into eleven shapes. Each is an open
 behaviour of the planner unless it says it is right as it is; a fix removes
 its lines from the file. The refused-create variants of a run break what
-the run itself breaks, so they belong to its shape.
+the run itself breaks, so they belong to its shape. 58 runs of shapes 4, 7
+and 8 were the check's own: its model of OneDrive gave a remote folder
+create the item the action's baseline row names, wherever that item now
+was, so a folder made here again at a path OneDrive had moved the synced
+folder away from was bound to the moved folder and nothing could be
+uploaded into it. The executor creates the folder by its parent and name
+and adopts only a folder OneDrive already has there (`createRemoteFolder`),
+and so does the model now; those runs converge with the planner as it is.
 
 1. A rotation through nesting made on OneDrive (3 runs left, all held).
    One entry moves into a folder, which then takes the entry's old path
@@ -890,15 +897,15 @@ the run itself breaks, so they belong to its shape.
    made again at the old path). The two sides' moves form one cycle, held for
    good like the shape above; it should resolve as a move conflict, one
    nesting kept and the other's entry kept beside it.
-3. A folder moved onto the path of a folder deleted on the same side (27
-   runs: 26 synced, 1 held): `rm p, mv x p` or `rm x, mv p x` on OneDrive.
+3. A folder moved onto the path of a folder deleted on the same side (29
+   runs: 26 synced, 3 held): `rm p, mv x p` or `rm x, mv p x` on OneDrive.
    A replacing move onto a folder's path waits while the folder is there
    (see the replacing move above), and nothing removes the deleted folder's
    copy here, so the move waits for good; with the other side writing into
    the deleted folder the deleted entry also comes back. The deleted folder
    should go, keeping what the other side wrote, and the move then run.
 4. A replacing move that meets the other side's move or delete of one of
-   its entries (60 runs, all synced): an entry deleted and another moved
+   its entries (19 runs, all synced): an entry deleted and another moved
    onto its path on one side (`rm z, mv p z`, `rm x, mv p x`,
    `rm p/f, mv x p/f`, or on OneDrive `rm p, mv x p`), while the other side
    moved the deleted entry elsewhere (`mv z g`, `mv x q`, `mv p/f f`) or
@@ -920,16 +927,15 @@ the run itself breaks, so they belong to its shape.
    also `mv x p` or `mkdir p` at the old path. The sides end equal, but a
    plan with nothing to do never comes: the agreed move keeps being planned
    against the reuse of its source.
-7. Two different entries given the same new name, one on each side (18
-   runs: 16 synced, 2 held): `mv p q` here and `mv x q` on OneDrive, a file
+7. Two different entries given the same new name, one on each side (7
+   runs: 5 synced, 2 held): `mv p q` here and `mv x q` on OneDrive, a file
    made here as `g` while OneDrive renamed `z` to `g`, or, from the held
    start, the folder made in the held one's place moved where OneDrive moved
    the held one. The plan never empties and the sides differ; one of the
    two should be kept under a conflict name.
 8. One entry moved to two places, or moved on one side and deleted on the
-   other (12 runs: 4 synced, 8 held): here `mv p x/p, mv x p` while OneDrive
-   renamed `p` (with the remote folder create refused once), or the held
-   folder moved or deleted here while OneDrive moved it. The plan never
+   other (4 runs, all synced): here `mv p x/p, mv x p` while OneDrive
+   renamed `p`, with the remote folder create refused once. The plan never
    empties and the sides differ; a move should beat a delete, and two moves
    should resolve as a move conflict.
 9. A refused folder create of the held start (22 runs, all held, each
