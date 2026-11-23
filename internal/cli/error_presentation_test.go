@@ -281,6 +281,52 @@ func TestCommandErrorText_EveryTransportFailureIsPlain(t *testing.T) {
 	assert.NotContains(t, commandErrorText(disk, false), "OneDrive", "a local write failure is not a OneDrive problem")
 }
 
+// The graph client's own marks for a silent answer and a lost connection are
+// read by their type, in the shapes the client gives them (pinned against a
+// real server in graph's TestGetItem_AConnectionLost* tests and its response
+// body tests): a stalled answer has no Timeout and, over HTTP/2, the text of
+// a closed body, and a lost connection needs no "http2: " text to be known.
+// An HTTP/2 stream or connection error net/http does not export is still
+// known by its text.
+//
+// Validates: R-6.6.22
+func TestCommandErrorText_AStalledAnswerAndALostConnectionAreKnownByType(t *testing.T) {
+	t.Parallel()
+
+	const interrupted = "Error: the connection to OneDrive was interrupted. Check your network connection, then run the command again."
+	const slow = "Error: OneDrive did not answer in time. Check your network connection, then run the command again."
+
+	// stalled is how graph's response body explains a read its stall timer
+	// ended by closing the body: the closed body's error is kept as text only.
+	stalled := func(closedBodyText string) error {
+		return fmt.Errorf("listing %q: %w", "/", &graph.ResponseReadError{
+			Err: fmt.Errorf("%w: no data moved for 2m0s (%v)", graph.ErrResponseStalled, errors.New(closedBodyText)),
+		})
+	}
+	lostBefore := fmt.Errorf("listing %q: dispatching request: %w", "/", fmt.Errorf("%w: %w", graph.ErrConnectionLost,
+		&url.Error{Op: "Get", URL: "https://graph.microsoft.com/v1.0/me", Err: errors.New("client connection lost")}))
+	lostDuring := fmt.Errorf("downloading %q: %w", "/a.txt",
+		&graph.ResponseReadError{Err: fmt.Errorf("%w: %w", graph.ErrConnectionLost, errors.New("client connection lost"))})
+	goAway := fmt.Errorf("listing %q: %w", "/", &url.Error{
+		Op: "Get", URL: "https://graph.microsoft.com/v1.0/me",
+		Err: errors.New("http2: server sent GOAWAY and closed the connection; LastStreamID=1, ErrCode=NO_ERROR, debug=\"\""),
+	})
+
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"stalled answer over HTTP/1":  {stalled("http: read on closed response body"), slow},
+		"stalled answer over HTTP/2":  {stalled("http2: response body closed"), slow},
+		"lost connection before":      {lostBefore, interrupted},
+		"lost connection during body": {lostDuring, interrupted},
+		"HTTP/2 GOAWAY":               {goAway, interrupted},
+		"HTTP/2 stream reset":         {fmt.Errorf("listing %q: %w", "/", &graph.ResponseReadError{Err: http2StreamError{}}), interrupted},
+	} {
+		assert.Equal(t, tc.want, commandErrorText(tc.err, false), name)
+	}
+}
+
 // A canceled or declined sign-in, or an expired sign-in code, is one plain
 // line that says to run login again, never the wrapped sentinel chain.
 //

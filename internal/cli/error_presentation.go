@@ -112,8 +112,12 @@ func failedService(err error) string {
 
 // transportErrorReason covers network failures after the connection was
 // made: timeouts (including a response-header timeout), TLS problems, and
-// connections that dropped or were reset, HTTP/2 stream resets included. It
-// only applies to errors that came from the HTTP transport: a *url.Error
+// connections that dropped or were reset, HTTP/2 stream resets included. The
+// graph client's own marks are read by type first: a body that went silent
+// for the stall window (graph.ErrResponseStalled) has no Timeout and, over
+// HTTP/2, a closed body's text, so it would otherwise read as interrupted or
+// as nothing at all; a connection whose health-check ping went unanswered
+// (graph.ErrConnectionLost) is interrupted. It only applies to errors that came from the HTTP transport: a *url.Error
 // (before the response) or a *graph.ResponseReadError (while reading it). So
 // a local file timeout, or a disk error io.Copy returned during a download,
 // is never described as a network problem. service names the one whose
@@ -127,11 +131,12 @@ func transportErrorReason(err error, service string) string {
 	}
 
 	switch {
-	case fromURL && urlErrorTimedOut(urlErr), !fromURL && isTimeout(readErr.Err):
+	case errors.Is(err, graph.ErrResponseStalled),
+		fromURL && urlErrorTimedOut(urlErr), !fromURL && isTimeout(readErr.Err):
 		return service + " did not answer in time"
 	case isTLSFailure(err):
 		return "the secure connection to " + service + " failed (" + innermostErrorText(err) + ")"
-	case isDroppedConnection(err):
+	case errors.Is(err, graph.ErrConnectionLost), isDroppedConnection(err):
 		return "the connection to " + service + " was interrupted"
 	default:
 		return ""
@@ -164,8 +169,11 @@ func isTLSFailure(err error) bool {
 }
 
 // isDroppedConnection recognizes a connection that ended mid-exchange. net/http
-// does not export its HTTP/2 stream and connection errors, so those are
-// recognized by their fixed "stream error:" and "http2:" text.
+// does not export its HTTP/2 stream and connection errors (a stream reset, a
+// GOAWAY, a connection closed under the request), so those, and only those,
+// are recognized by their fixed "stream error:" and "http2: " text; the
+// graph client's lost connection and stalled answer are read by type before
+// this runs (transportErrorReason).
 func isDroppedConnection(err error) bool {
 	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) ||
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) {
