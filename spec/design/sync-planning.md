@@ -954,6 +954,13 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    entry (`rm p, mv x p`, `rm p/f, mv x p/f`) while here `x` moved
    elsewhere (`mv x q`, `mv x p/x`). The plan never empties and the sides
    differ: both moves of one entry should resolve as a move conflict. The
+   move conflict itself is resolved already: OneDrive's location wins and
+   the local copy is to move onto the deleted entry's path. With `rm p`
+   what holds it is shape 3's: the deleted folder still stands at the path
+   here, and a move onto a folder's path waits while the folder is there,
+   so those runs go with shape 3's fix. With `rm p/f` the entry in the way
+   is a synced file, which a replacing move may displace; why those two
+   runs still stall is not yet traced. The
    runs where the moving entry is a file moved here too (`mv z g`,
    `mv z p/z`, `mv z x/z` here against `rm p, mv z p`, `rm x, mv z x` or
    `rm p/f, mv z p/f` there) no longer stall, and the check lists them no
