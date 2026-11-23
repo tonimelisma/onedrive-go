@@ -324,7 +324,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	// Should hold file1's row (it exists in the baseline) and the orphan
 	// delete of file2.
 	var live, deletes int
-	for _, ev := range full.events {
+	for _, ev := range full.items {
 		if !ev.IsDeleted {
 			live++
 			assert.Equal(t, "file1.txt", ev.Path)

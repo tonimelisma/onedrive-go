@@ -365,7 +365,7 @@ func (o *RemoteObserver) Watch(
 		// this time can be in what the poll sees, and the watch loop judges
 		// create intents by it (RemoteObservationBatch.pollStartedAt).
 		pollStartedAt := o.clock.Now()
-		polledEvents, newToken, topology, windowItems, err := o.fullDelta(ctx, token, nil)
+		polledItems, newToken, topology, windowItems, err := o.fullDelta(ctx, token, nil)
 		if stuck.observe(o.clock.Now(), token, err) {
 			o.logger.Warn("OneDrive has failed every check of the saved change-list position for hours; rescanning the whole drive",
 				slog.Duration("failing_for", cursorServerErrorResetAfter),
@@ -397,7 +397,7 @@ func (o *RemoteObserver) Watch(
 		outage.Recovered(ctx, o.logger, "Checking OneDrive for changes works again")
 
 		result := o.handleWatchBatch(
-			ctx, batches, pollStartedAt, polledEvents, windowItems, newToken, topology, interval, bo, wakeCh, handleBatch,
+			ctx, batches, pollStartedAt, polledItems, windowItems, newToken, topology, interval, bo, wakeCh, handleBatch,
 		)
 		if result.err != nil {
 			return result.err
@@ -412,7 +412,7 @@ func (o *RemoteObserver) handleWatchBatch(
 	ctx context.Context,
 	batches chan<- RemoteObservationBatch,
 	pollStartedAt time.Time,
-	polledEvents []syncdomain.RemoteItem,
+	polledItems []syncdomain.RemoteItem,
 	windowItems int,
 	newToken string,
 	topology syncshortcut.ShortcutTopologyBatch,
@@ -424,16 +424,16 @@ func (o *RemoteObserver) handleWatchBatch(
 	// Only a window that carried no items is empty. A window of items that all
 	// converted to nothing (deletes of never-synced items) must still advance
 	// the token, or every poll replays it forever.
-	if windowItems == 0 && len(polledEvents) == 0 && !topology.ShouldApply() {
+	if windowItems == 0 && len(polledItems) == 0 && !topology.ShouldApply() {
 		return o.handleZeroEventPoll(ctx, batches, pollStartedAt, interval, bo, wakeCh)
 	}
 
 	batch := RemoteObservationBatch{
-		Changes: remoteChangesOf(polledEvents),
+		Changes: remoteChangesOf(polledItems),
 	}
 	if handleBatch != nil {
 		var handleErr error
-		batch, handleErr = handleBatch(ctx, polledEvents, newToken, topology)
+		batch, handleErr = handleBatch(ctx, polledItems, newToken, topology)
 		if handleErr != nil {
 			if syncdomain.RunEnded(ctx, handleErr) {
 				return watchStepResult{stop: true}

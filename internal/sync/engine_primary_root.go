@@ -177,7 +177,7 @@ func (flow *observation) executeDriveRootFullObservation(
 	batch := buildRemoteObservationBatch(
 		flow.deps.logger,
 		syncdomain.RemoteObservationModeDelta,
-		full.events,
+		full.items,
 		full.token,
 		true,
 		syncdomain.NewRemoteObservationFindingsBatch(),
@@ -205,7 +205,7 @@ func (flow *observation) executeMountRootObservation(
 	batch := buildRemoteObservationBatch(
 		flow.deps.logger,
 		observed.mode,
-		observed.events,
+		observed.items,
 		observed.token,
 		fullReconcile || completeDelta,
 		syncdomain.NewRemoteObservationFindingsBatch(),

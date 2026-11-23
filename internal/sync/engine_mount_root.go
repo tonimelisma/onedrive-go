@@ -23,7 +23,7 @@ func (flow *observation) hasRemoteMountRoot() bool {
 
 // mountRootObservation is what one mount-root observation saw.
 type mountRootObservation struct {
-	events []syncdomain.RemoteItem
+	items []syncdomain.RemoteItem
 	token  string
 	mode   syncdomain.RemoteObservationMode
 	// complete marks a whole-folder enumeration (a delta without a token,
@@ -71,10 +71,10 @@ func (flow *observation) observeMountRootRemote(
 		}
 		if err == nil {
 			flow.remote.deltaFallbackReported.Store(false)
-			events, undecided := flow.remote.mountRootEvents(ctx, items, bl, fullReconcile, orphanKind)
+			observed, undecided := flow.remote.mountRootItems(ctx, items, bl, fullReconcile, orphanKind)
 
 			return mountRootObservation{
-				events: events, token: newToken, mode: syncdomain.RemoteObservationModeDelta,
+				items: observed, token: newToken, mode: syncdomain.RemoteObservationModeDelta,
 				complete: fullReconcile, orphansUndecided: undecided,
 			}, nil
 		}
@@ -114,9 +114,9 @@ func (flow *observation) observeMountRootRemote(
 
 	// A listing keeps no position: an undecided orphan is judged again by
 	// the next listing, every pass, so it needs no refresh pulled forward.
-	events, _ := flow.remote.mountRootEvents(ctx, items, bl, true, syncdomain.ResyncKindApplyDifferences)
+	observed, _ := flow.remote.mountRootItems(ctx, items, bl, true, syncdomain.ResyncKindApplyDifferences)
 
-	return mountRootObservation{events: events, mode: syncdomain.RemoteObservationModeEnumerate, complete: true}, nil
+	return mountRootObservation{items: observed, mode: syncdomain.RemoteObservationModeEnumerate, complete: true}, nil
 }
 
 // unusableMountRootCursor reports whether err says the saved change-list

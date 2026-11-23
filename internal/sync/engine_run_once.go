@@ -640,7 +640,7 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 // fullRemoteObservation is what a full enumeration with orphan detection
 // observed.
 type fullRemoteObservation struct {
-	events   []syncdomain.RemoteItem
+	items    []syncdomain.RemoteItem
 	token    string
 	topology syncshortcut.ShortcutTopologyBatch
 	// orphansUndecided reports an item missing from the enumeration whose
@@ -712,7 +712,7 @@ func (flow *observation) observeRemoteFullWithShortcutTopology(
 		slog.Int("orphans", len(orphans)),
 	)
 
-	return fullRemoteObservation{events: events, token: token, topology: topology, orphansUndecided: undecided}, nil
+	return fullRemoteObservation{items: events, token: token, topology: topology, orphansUndecided: undecided}, nil
 }
 
 // markOrphansForReupload turns confirmed orphans into re-uploads: their

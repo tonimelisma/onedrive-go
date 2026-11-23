@@ -132,11 +132,11 @@ func (s *remoteSource) preferredMountRootObservationMode() syncdomain.RemoteObse
 	return syncdomain.RemoteObservationModeEnumerate
 }
 
-// mountRootEvents converts a mount-root enumeration, adding confirmed orphan
+// mountRootItems converts a mount-root enumeration, adding confirmed orphan
 // deletes when the enumeration was complete. kind is the resync that forced
 // the enumeration, if any: unless it applies differences, confirmed orphans
 // are re-uploads, not deletes (R-2.15.3).
-func (s *remoteSource) mountRootEvents(
+func (s *remoteSource) mountRootItems(
 	ctx context.Context, items []graph.Item, bl syncdomain.BaselineView, complete bool, kind syncdomain.ResyncKind,
 ) ([]syncdomain.RemoteItem, bool) {
 	events := convertMountRootItems(ctx, items, s.remoteRootItemID, s.driveID, bl, s.logger, s.items)
