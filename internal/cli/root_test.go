@@ -695,7 +695,7 @@ func TestPersistentPreRunE_ADataCommandBuildsOneSessionRuntime(t *testing.T) {
 	setTestDriveHome(t)
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:one-runtime@example.com")
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, t.TempDir()))
 
 	cmd := newRootCmdWithWriters(io.Discard, io.Discard)
 	require.NoError(t, cmd.PersistentFlags().Set("config", cfgPath))
