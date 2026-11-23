@@ -407,7 +407,7 @@ func (tm *TransferManager) resumePersistedSession(
 
 	tm.deleteSession(driveStr, up.key)
 
-	if !rec.ExpiresAt.IsZero() && time.Now().Before(rec.ExpiresAt) {
+	if !rec.ExpiresAt.IsZero() && tm.now().Before(rec.ExpiresAt) {
 		return nil, true, fmt.Errorf("resuming the upload: %w", ErrUploadSessionInvalidated)
 	}
 

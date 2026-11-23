@@ -165,19 +165,15 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 	trash := localtrash.Open(trashDir, nil)
 
-	// Construct sessionStore and TransferManager together so the TM is
-	// immutable after creation (no post-hoc field mutation). Disk space
-	// checking is configured via WithDiskCheck so every download (sync
-	// and CLI) gets automatic protection (R-6.2.6).
+	// The session store is built here and the TransferManager below, once
+	// the engine exists to lend it its run clock; the TM is immutable after
+	// creation (no post-hoc field mutation). Disk space checking is
+	// configured via WithDiskCheck so every download (sync and CLI) gets
+	// automatic protection (R-6.2.6).
 	var sessionStore *driveops.SessionStore
 	if cfg.DataDir != "" {
 		sessionStore = driveops.NewSessionStore(cfg.DataDir, cfg.Logger)
 	}
-	transfers := driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
-		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
-		driveops.WithSessionScope(cfg.MountID, cfg.SyncRoot),
-	)
-
 	e := &Engine{
 		baseline:               bm,
 		planner:                syncplan.NewPlanner(cfg.Logger),
@@ -230,6 +226,11 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	// timestamps read the engine clock, or a retry scheduled by one clock is
 	// judged due by another.
 	bm.SetNowFunc(e.nowFunc)
+	transfers := driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
+		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
+		driveops.WithSessionScope(cfg.MountID, cfg.SyncRoot),
+		driveops.WithClock(e.nowFunc),
+	)
 	execCfg, execErr := newEngineExecutorConfig(cfg, syncTree, transfers, trash, rootIdentity, bm, e.nowFunc)
 	if execErr != nil {
 		return nil, execErr

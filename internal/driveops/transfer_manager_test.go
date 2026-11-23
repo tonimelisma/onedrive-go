@@ -2619,15 +2619,7 @@ func TestSessionUpload_GoneSessionBeforeExpiryIsInvalidation(t *testing.T) {
 	}))
 
 	var creates int
-	ul := &tmItemSessionUploader{tmMockUploader: tmMockUploader{
-		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
-			return nil, graph.ErrUploadSessionExpired
-		},
-		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
-			// Another writer changed the item: its bytes are not ours.
-			return &graph.Item{ID: "item-1", Size: 7, QuickXorHash: tmHashBytes([]byte("theirs!"))}, nil
-		},
-	}, createForItem: func() { creates++ }}
+	ul := goneSessionChangedItemUploader(&creates)
 
 	_, err := newTestTM(&tmSimpleDownloader{}, ul, store).UploadFileToItem(
 		t.Context(), driveid.New("d1"), "item-1", localPath, UploadOpts{})
@@ -2636,6 +2628,67 @@ func TestSessionUpload_GoneSessionBeforeExpiryIsInvalidation(t *testing.T) {
 	// answers 404. Restarting the upload overwrote that change.
 	require.ErrorIs(t, err, ErrUploadSessionInvalidated)
 	assert.Zero(t, creates, "no blind restart")
+}
+
+// goneSessionChangedItemUploader is an uploader whose recorded session is
+// gone on resume while another writer changed the item, so its bytes are not
+// the upload's; it counts the fresh sessions it opens in creates.
+func goneSessionChangedItemUploader(creates *int) *tmItemSessionUploader {
+	return &tmItemSessionUploader{tmMockUploader: tmMockUploader{
+		resumeUploadFn: func(_ context.Context, _ *graph.UploadSession, _ io.ReaderAt, _ int64, _ graph.ProgressFunc) (*graph.Item, error) {
+			return nil, graph.ErrUploadSessionExpired
+		},
+		getItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+			return &graph.Item{ID: "item-1", Size: 7, QuickXorHash: tmHashBytes([]byte("theirs!"))}, nil
+		},
+	}, createForItem: func() { *creates++ }}
+}
+
+// Validates: R-5.6.12
+//
+// Whether a gone session had expired is read on the manager's clock, not the
+// wall clock: the sync engine lends it its run clock, so a test that moves
+// the engine's time moves the expiry with it. The record expires at a fixed
+// instant long past on the wall clock; only the manager's clock decides.
+func TestSessionUpload_SessionExpiryIsJudgedOnTheManagersClock(t *testing.T) {
+	t.Parallel()
+
+	expiresAt := time.Date(2024, 5, 6, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name            string
+		now             time.Time
+		wantInvalidated bool
+	}{
+		{name: "before the expiry the gone session was invalidated", now: expiresAt.Add(-time.Hour), wantInvalidated: true},
+		{name: "after the expiry a fresh session starts", now: expiresAt.Add(time.Hour)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			store := NewSessionStore(dir, slog.Default())
+			localPath, data, hash := sessionTestFile(t, dir)
+			require.NoError(t, store.Save(driveid.New("d1").String(), existingItemSessionKey(localPath, "item-1"), &SessionRecord{
+				SessionURL: "https://upload.example.com/old", FileHash: hash, FileSize: int64(len(data)),
+				ExpiresAt: expiresAt,
+			}))
+			var creates int
+			ul := goneSessionChangedItemUploader(&creates)
+			tm := NewTransferManager(&tmSimpleDownloader{}, ul, store, slog.Default(),
+				WithClock(func() time.Time { return tt.now }))
+
+			_, err := tm.UploadFileToItem(t.Context(), driveid.New("d1"), "item-1", localPath, UploadOpts{})
+
+			if tt.wantInvalidated {
+				require.ErrorIs(t, err, ErrUploadSessionInvalidated)
+				assert.Zero(t, creates, "no blind restart")
+				return
+			}
+			require.NotErrorIs(t, err, ErrUploadSessionInvalidated)
+			assert.Equal(t, 1, creates, "an expired session is replaced by a fresh one")
+		})
+	}
 }
 
 // Validates: R-5.6.13
