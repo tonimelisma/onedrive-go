@@ -946,7 +946,6 @@ func TestEngine_ShortcutTheFiltersExcludeLeavesNoFolderAndNoWork(t *testing.T) {
 			assert.NotNil(t, roots[0].LocalRootIdentity)
 		})
 	}
-
 }
 
 // Validates: R-2.4.18
