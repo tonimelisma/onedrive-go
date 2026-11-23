@@ -1,51 +1,400 @@
 synced L[] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held delete-undone
+synced L[] R[rm p, mv z p] :: duplicated
+synced L[] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[] R[rm x, mv p x] :: sides-differ left-held
+synced L[] R[rm x, mv p/f x] :: duplicated
+synced L[] R[rm x, mv p/f x] refuse upload p/f #1 :: duplicated
+synced L[] R[rm x, mv z x] :: duplicated
+synced L[] R[rm x, mv z x] refuse upload z #1 :: duplicated
+synced L[mv p q] R[mv x q, mv p/f x] :: duplicated
+synced L[mv p q] R[mv x q, mv p/f x] refuse download x #1 :: duplicated
+synced L[mv p q] R[mv x q, mv p/f x] refuse upload q/f #1 :: duplicated
+synced L[mv p q] R[mv x q, mv z x] :: duplicated
+synced L[mv p q] R[mv x q, mv z x] refuse upload z #1 :: duplicated
+synced L[mv p q] R[rm x, mv p/f x] :: duplicated
+synced L[mv p q] R[rm x, mv p/f x] refuse upload q/f #1 :: duplicated
+synced L[mv p q] R[rm z, mv p/f z] :: duplicated
 synced L[mv p x/p] R[mv x p/x, mv p/f x] :: sides-differ left-held
+synced L[mv p x/p] R[rm x, mv z x] :: duplicated
 synced L[mv p x/p] R[mv z p/z, mv x z] :: sides-differ left-held
+synced L[mv p x/p] R[rm z, mv p/f z] :: duplicated
 synced L[mv p/f p/g] R[rm p, mv x p] :: sides-differ left-held
+synced L[mv p/f p/g] R[rm p, mv z p] :: duplicated
+synced L[mv p/f p/g] R[rm p, mv z p] refuse folder_create p.conflict-14 (remote) #1 :: duplicated
+synced L[mv p/f p/g] R[rm p, mv z p] refuse upload p.conflict-14/g #1 :: duplicated
+synced L[mv p/f p/g] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[mv p/f p/g] R[rm x, mv p x] :: sides-differ left-held
+synced L[mv p/f p/g] R[rm x, mv p/f x] :: duplicated
+synced L[mv p/f p/g] R[rm x, mv p/f x] refuse upload p/g #1 :: duplicated
+synced L[mv p/f p/g] R[rm z, mv p/f z] :: duplicated
 synced L[mv p/f f] R[rm p, mv x p] :: sides-differ left-held
 synced L[mv p/f f] R[rm p, mv x p] refuse upload f #1 :: sides-differ left-held
+synced L[mv p/f f] R[rm p, mv z p] :: duplicated
+synced L[mv p/f f] R[rm p, mv z p] refuse upload f #1 :: duplicated
+synced L[mv p/f f] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[mv p/f f] R[rm x, mv p x] :: sides-differ left-held
+synced L[mv p/f f] R[rm x, mv p/f x] :: duplicated
+synced L[mv p/f f] R[rm x, mv p/f x] refuse upload f #1 :: duplicated
+synced L[mv p/f f] R[rm z, mv p/f z] :: duplicated
 synced L[mv p/f x/f] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held
 synced L[mv p/f x/f] R[rm p, mv x p] refuse upload x/f #1 :: no-quiet-plan sides-differ left-held
 synced L[mv p/f x/f] R[rm p, mv x p] refuse upload x/f #2 :: no-quiet-plan sides-differ left-held
+synced L[mv p/f x/f] R[rm p, mv z p] :: duplicated
+synced L[mv p/f x/f] R[rm p, mv z p] refuse upload x/f #1 :: duplicated
+synced L[mv p/f x/f] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[mv p/f x/f] R[rm x, mv p x] :: sides-differ left-held
+synced L[mv p/f x/f] R[rm x, mv z x] :: duplicated
+synced L[mv p/f x/f] R[rm z, mv p/f z] :: duplicated
 synced L[rm p/f] R[rm p, mv x p] :: sides-differ left-held
+synced L[rm p/f] R[rm p, mv z p] :: duplicated
+synced L[rm p/f] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[rm p/f] R[rm x, mv p x] :: sides-differ left-held
 synced L[edit p/f] R[rm p, mv x p] :: sides-differ left-held
+synced L[edit p/f] R[rm p, mv z p] :: duplicated
+synced L[edit p/f] R[rm p, mv z p] refuse folder_create p.conflict-15 (remote) #1 :: duplicated
+synced L[edit p/f] R[rm p, mv z p] refuse upload p.conflict-15/f #1 :: duplicated
+synced L[edit p/f] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[edit p/f] R[rm x, mv p x] :: sides-differ left-held
-synced L[mv x q] R[rm p, mv x p] :: no-quiet-plan sides-differ
-synced L[mv x q] R[rm p/f, mv x p/f] :: no-quiet-plan sides-differ
-synced L[mv x p/x] R[rm p, mv x p] :: no-quiet-plan sides-differ
-synced L[mv x p/x] R[rm p/f, mv x p/f] :: no-quiet-plan sides-differ
+synced L[mv x q] R[mv p q, mv z p] :: duplicated
+synced L[mv x q] R[mv p q, mv z p] refuse upload z #1 :: duplicated
+synced L[mv x p/x] R[rm p, mv z p] :: duplicated
+synced L[mv x p/x] R[rm p, mv z p] refuse folder_create p.conflict-14 (remote) #1 :: duplicated
+synced L[mv x p/x] R[rm p, mv z p] refuse upload p.conflict-14/f #1 :: duplicated
+synced L[mv x p/x] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[mv x p/x] R[mv z x/z, mv p z] :: sides-differ left-held
+synced L[mv z g] R[rm p, mv z p] :: duplicated
+synced L[mv z g] R[rm p, mv z p] refuse upload g #1 :: duplicated
+synced L[mv z g] R[rm p/f, mv z p/f] :: duplicated
+synced L[mv z g] R[rm x, mv z x] :: duplicated
+synced L[mv z g] R[rm x, mv z x] refuse upload g #1 :: duplicated
 synced L[mv z p/z] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held
+synced L[mv z p/z] R[rm p/f, mv z p/f] :: duplicated
 synced L[mv z p/z] R[rm x, mv p x] :: sides-differ left-held
+synced L[mv z p/z] R[rm x, mv z x] :: duplicated
+synced L[mv z p/z] R[rm x, mv z x] refuse upload p/z #1 :: duplicated
 synced L[mv z x/z] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held delete-undone
+synced L[mv z x/z] R[rm p, mv z p] :: duplicated
+synced L[mv z x/z] R[rm p, mv z p] refuse upload x/z #1 :: duplicated
+synced L[mv z x/z] R[rm p/f, mv z p/f] :: duplicated
 synced L[mv z x/z] R[rm x, mv p x] :: sides-differ left-held
+synced L[mv z x/z] R[rm x, mv p/f x] :: duplicated
 synced L[new p/g] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held
+synced L[new p/g] R[rm p, mv z p] :: duplicated
+synced L[new p/g] R[rm p, mv z p] refuse folder_create p.conflict-16 (remote) #1 :: duplicated
+synced L[new p/g] R[rm p, mv z p] refuse upload p.conflict-16/f #1 :: duplicated
+synced L[new p/g] R[rm p, mv z p] refuse upload p.conflict-16/g #1 :: duplicated
+synced L[new p/g] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[new p/g] R[rm x, mv p x] :: no-quiet-plan sides-differ left-held
 synced L[new x/g] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held delete-undone
 synced L[new x/g] R[rm p, mv x p] refuse upload x/g #1 :: no-quiet-plan sides-differ left-held delete-undone
 synced L[new x/g] R[rm x, mv p x] :: sides-differ left-held
+synced L[new x/g] R[rm x, mv p/f x] :: duplicated
+synced L[new x/g] R[rm x, mv z x] :: duplicated
+synced L[mv p q, mv q/f p] R[mv p Q] :: duplicated
+synced L[mv p q, mv q/f p] R[mv p Q] refuse download q/f #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p Q] refuse upload p #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p q] :: duplicated
+synced L[mv p q, mv q/f p] R[mv p q] refuse download q/f #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p q] refuse upload p #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p x/p] :: duplicated
+synced L[mv p q, mv q/f p] R[mv p x/p] refuse download q/f #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p x/p] refuse upload p #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f p/G] :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f p/G] refuse download q/G #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f p/G] refuse upload p #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f p/g] :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f p/g] refuse download q/g #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f p/g] refuse upload p #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f f] :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f f] refuse download f #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f f] refuse upload p #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f x/f] :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f x/f] refuse download x/f #1 :: duplicated
+synced L[mv p q, mv q/f p] R[mv p/f x/f] refuse upload p #1 :: duplicated
 synced L[mv p q, mv q/f p] R[mv x q] refuse upload p #1 :: removed-in-a-pass
-synced L[mv p q, mv x q/x] R[mv x q] :: no-quiet-plan sides-differ
+synced L[mv p q, mv z p] R[mv z G] :: duplicated
+synced L[mv p q, mv z p] R[mv z G] refuse download G #1 :: duplicated
+synced L[mv p q, mv z p] R[mv z G] refuse upload p #1 :: duplicated
+synced L[mv p q, mv z p] R[mv z g] :: duplicated
+synced L[mv p q, mv z p] R[mv z g] refuse download g #1 :: duplicated
+synced L[mv p q, mv z p] R[mv z g] refuse upload p #1 :: duplicated
+synced L[mv p q, mv z p] R[mv z p/z] :: duplicated
+synced L[mv p q, mv z p] R[mv z p/z] refuse download q/z #1 :: duplicated
+synced L[mv p q, mv z p] R[mv z p/z] refuse upload p #1 :: duplicated
+synced L[mv p q, mv z p] R[mv z x/z] :: duplicated
+synced L[mv p q, mv z p] R[mv z x/z] refuse download x/z #1 :: duplicated
+synced L[mv p q, mv z p] R[mv z x/z] refuse upload p #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p Q] :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p Q] refuse download x/p/f #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p Q] refuse upload p #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p q] :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p q] refuse download x/p/f #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p q] refuse upload p #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p x/p] :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p x/p] refuse download x/p/f #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p x/p] refuse upload p #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f p/G] :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f p/G] refuse download x/p/G #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f p/G] refuse upload p #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f p/g] :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f p/g] refuse download x/p/g #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f p/g] refuse upload p #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f f] :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f f] refuse download f #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f f] refuse upload p #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f x/f] :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f x/f] refuse download x/f #1 :: duplicated
+synced L[mv p x/p, mv x/p/f p] R[mv p/f x/f] refuse upload p #1 :: duplicated
 synced L[mv p x/p, mv x/p/f p] R[mv x p/x] :: sides-differ left-held
 synced L[mv p x/p, mv z p] R[mv x p/x] :: sides-differ left-held
+synced L[mv p x/p, mv z p] R[mv z G] :: duplicated
+synced L[mv p x/p, mv z p] R[mv z G] refuse download G #1 :: duplicated
+synced L[mv p x/p, mv z p] R[mv z G] refuse upload p #1 :: duplicated
+synced L[mv p x/p, mv z p] R[mv z g] :: duplicated
+synced L[mv p x/p, mv z p] R[mv z g] refuse download g #1 :: duplicated
+synced L[mv p x/p, mv z p] R[mv z g] refuse upload p #1 :: duplicated
+synced L[mv p x/p, mv z p] R[mv z p/z] :: duplicated
+synced L[mv p x/p, mv z p] R[mv z p/z] refuse download x/p/z #1 :: duplicated
+synced L[mv p x/p, mv z p] R[mv z p/z] refuse upload p #1 :: duplicated
+synced L[mv p x/p, mv z p] R[mv z x/z] :: duplicated
+synced L[mv p x/p, mv z p] R[mv z x/z] refuse download x/z #1 :: duplicated
+synced L[mv p x/p, mv z p] R[mv z x/z] refuse upload p #1 :: duplicated
 synced L[mv p x/p, mkdir p] R[mv x p/x] :: sides-differ left-held
+synced L[rm p, mv z p] R[mv z G] :: duplicated
+synced L[rm p, mv z p] R[mv z G] refuse download G #1 :: duplicated
+synced L[rm p, mv z p] R[mv z G] refuse upload p #1 :: duplicated
+synced L[rm p, mv z p] R[mv z g] :: duplicated
+synced L[rm p, mv z p] R[mv z g] refuse download g #1 :: duplicated
+synced L[rm p, mv z p] R[mv z g] refuse upload p #1 :: duplicated
+synced L[rm p, mv z p] R[mv z x/z] :: duplicated
+synced L[rm p, mv z p] R[mv z x/z] refuse download x/z #1 :: duplicated
+synced L[rm p, mv z p] R[mv z x/z] refuse upload p #1 :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z G] :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z G] refuse download G #1 :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z G] refuse upload p/f #1 :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z g] :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z g] refuse download g #1 :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z g] refuse upload p/f #1 :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z p/z] :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z p/z] refuse download p/z #1 :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z p/z] refuse upload p/f #1 :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z x/z] :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z x/z] refuse download x/z #1 :: duplicated
+synced L[mv p/f p/g, mv z p/f] R[mv z x/z] refuse upload p/f #1 :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z G] :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z G] refuse download G #1 :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z G] refuse upload p/f #1 :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z g] :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z g] refuse download g #1 :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z g] refuse upload p/f #1 :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z p/z] :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z p/z] refuse download p/z #1 :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z p/z] refuse upload p/f #1 :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z x/z] :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z x/z] refuse download x/z #1 :: duplicated
+synced L[mv p/f f, mv z p/f] R[mv z x/z] refuse upload p/f #1 :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z G] :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z G] refuse download G #1 :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z G] refuse upload p/f #1 :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z g] :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z g] refuse download g #1 :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z g] refuse upload p/f #1 :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z p/z] :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z p/z] refuse download p/z #1 :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z p/z] refuse upload p/f #1 :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z x/z] :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z x/z] refuse download x/z #1 :: duplicated
+synced L[mv p/f x/f, mv z p/f] R[mv z x/z] refuse upload p/f #1 :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z G] :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z G] refuse download G #1 :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z G] refuse upload p/f #1 :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z g] :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z g] refuse download g #1 :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z g] refuse upload p/f #1 :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z p/z] :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z p/z] refuse download p/z #1 :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z p/z] refuse upload p/f #1 :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z x/z] :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z x/z] refuse download x/z #1 :: duplicated
+synced L[rm p/f, mv z p/f] R[mv z x/z] refuse upload p/f #1 :: duplicated
+synced L[mv x q, mv p/f x] R[mv p q] :: duplicated
+synced L[mv x q, mv p/f x] R[mv p q] refuse upload x #1 :: duplicated
+synced L[mv x q, mv p/f x] R[mv p q] refuse download q/f #1 :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f p/G] :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f p/G] refuse download p/G #1 :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f p/G] refuse upload x #1 :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f p/g] :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f p/g] refuse download p/g #1 :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f p/g] refuse upload x #1 :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f f] :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f f] refuse download f #1 :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f f] refuse upload x #1 :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f x/f] :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f x/f] refuse download q/f #1 :: duplicated
+synced L[mv x q, mv p/f x] R[mv p/f x/f] refuse upload x #1 :: duplicated
+synced L[mv x q, mv z x] R[mv z G] :: duplicated
+synced L[mv x q, mv z x] R[mv z G] refuse download G #1 :: duplicated
+synced L[mv x q, mv z x] R[mv z G] refuse upload x #1 :: duplicated
+synced L[mv x q, mv z x] R[mv z g] :: duplicated
+synced L[mv x q, mv z x] R[mv z g] refuse download g #1 :: duplicated
+synced L[mv x q, mv z x] R[mv z g] refuse upload x #1 :: duplicated
+synced L[mv x q, mv z x] R[mv z p/z] :: duplicated
+synced L[mv x q, mv z x] R[mv z p/z] refuse download p/z #1 :: duplicated
+synced L[mv x q, mv z x] R[mv z p/z] refuse upload x #1 :: duplicated
+synced L[mv x q, mv z x] R[mv z x/z] :: duplicated
+synced L[mv x q, mv z x] R[mv z x/z] refuse download q/z #1 :: duplicated
+synced L[mv x q, mv z x] R[mv z x/z] refuse upload x #1 :: duplicated
+synced L[mv x p/x, mv p x] R[mv p/f x/f] :: duplicated
+synced L[mv x p/x, mv p x] R[mv p/f x/f] refuse download x/x/f #1 :: duplicated
+synced L[mv x p/x, mv p x] R[mv p/f x/f] refuse folder_create x (remote) #1 :: duplicated
+synced L[mv x p/x, mv p x] R[mv p/f x/f] refuse upload x/f #1 :: duplicated
 synced L[mv x p/x, mv p/f x] R[mv p x/p] :: sides-differ left-held
+synced L[mv x p/x, mv p/f x] R[mv p/f p/G] :: duplicated
+synced L[mv x p/x, mv p/f x] R[mv p/f p/G] refuse download p/G #1 :: duplicated
+synced L[mv x p/x, mv p/f x] R[mv p/f p/G] refuse upload x #1 :: duplicated
+synced L[mv x p/x, mv p/f x] R[mv p/f p/g] :: duplicated
+synced L[mv x p/x, mv p/f x] R[mv p/f p/g] refuse download p/g #1 :: duplicated
+synced L[mv x p/x, mv p/f x] R[mv p/f p/g] refuse upload x #1 :: duplicated
+synced L[mv x p/x, mv p/f x] R[mv p/f f] :: duplicated
+synced L[mv x p/x, mv p/f x] R[mv p/f f] refuse download f #1 :: duplicated
+synced L[mv x p/x, mv p/f x] R[mv p/f f] refuse upload x #1 :: duplicated
+synced L[mv x p/x, mv p/f x] R[mv p/f x/f] :: duplicated
+synced L[mv x p/x, mv p/f x] R[mv p/f x/f] refuse download p/x/f #1 :: duplicated
+synced L[mv x p/x, mv p/f x] R[mv p/f x/f] refuse upload x #1 :: duplicated
 synced L[mv x p/x, mv z x] R[mv p x/p] :: sides-differ left-held
+synced L[mv x p/x, mv z x] R[mv z G] :: duplicated
+synced L[mv x p/x, mv z x] R[mv z G] refuse download G #1 :: duplicated
+synced L[mv x p/x, mv z x] R[mv z G] refuse upload x #1 :: duplicated
+synced L[mv x p/x, mv z x] R[mv z g] :: duplicated
+synced L[mv x p/x, mv z x] R[mv z g] refuse download g #1 :: duplicated
+synced L[mv x p/x, mv z x] R[mv z g] refuse upload x #1 :: duplicated
+synced L[mv x p/x, mv z x] R[mv z p/z] :: duplicated
+synced L[mv x p/x, mv z x] R[mv z p/z] refuse download p/z #1 :: duplicated
+synced L[mv x p/x, mv z x] R[mv z p/z] refuse upload x #1 :: duplicated
+synced L[mv x p/x, mv z x] R[mv z x/z] :: duplicated
+synced L[mv x p/x, mv z x] R[mv z x/z] refuse download p/x/z #1 :: duplicated
+synced L[mv x p/x, mv z x] R[mv z x/z] refuse upload x #1 :: duplicated
 synced L[mv x p/x, mkdir x] R[mv p x/p] :: sides-differ left-held
+synced L[rm x, mv p/f x] R[mv p/f p/G] :: duplicated
+synced L[rm x, mv p/f x] R[mv p/f p/G] refuse download p/G #1 :: duplicated
+synced L[rm x, mv p/f x] R[mv p/f p/G] refuse upload x #1 :: duplicated
+synced L[rm x, mv p/f x] R[mv p/f p/g] :: duplicated
+synced L[rm x, mv p/f x] R[mv p/f p/g] refuse download p/g #1 :: duplicated
+synced L[rm x, mv p/f x] R[mv p/f p/g] refuse upload x #1 :: duplicated
+synced L[rm x, mv p/f x] R[mv p/f f] :: duplicated
+synced L[rm x, mv p/f x] R[mv p/f f] refuse download f #1 :: duplicated
+synced L[rm x, mv p/f x] R[mv p/f f] refuse upload x #1 :: duplicated
+synced L[rm x, mv z x] R[mv z G] :: duplicated
+synced L[rm x, mv z x] R[mv z G] refuse download G #1 :: duplicated
+synced L[rm x, mv z x] R[mv z G] refuse upload x #1 :: duplicated
+synced L[rm x, mv z x] R[mv z g] :: duplicated
+synced L[rm x, mv z x] R[mv z g] refuse download g #1 :: duplicated
+synced L[rm x, mv z x] R[mv z g] refuse upload x #1 :: duplicated
+synced L[rm x, mv z x] R[mv z p/z] :: duplicated
+synced L[rm x, mv z x] R[mv z p/z] refuse download p/z #1 :: duplicated
+synced L[rm x, mv z x] R[mv z p/z] refuse upload x #1 :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f p/G] :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f p/G] refuse download p/G #1 :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f p/G] refuse upload z #1 :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f p/g] :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f p/g] refuse download p/g #1 :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f p/g] refuse upload z #1 :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f f] :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f f] refuse download f #1 :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f f] refuse upload z #1 :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f x/f] :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f x/f] refuse download x/f #1 :: duplicated
+synced L[mv z g, mv p/f z] R[mv p/f x/f] refuse upload z #1 :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f p/G] :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f p/G] refuse download p/G #1 :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f p/G] refuse upload z #1 :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f p/g] :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f p/g] refuse download p/g #1 :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f p/g] refuse upload z #1 :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f f] :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f f] refuse download f #1 :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f f] refuse upload z #1 :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f x/f] :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f x/f] refuse download x/f #1 :: duplicated
+synced L[mv z p/z, mv p/f z] R[mv p/f x/f] refuse upload z #1 :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f p/G] :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f p/G] refuse download p/G #1 :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f p/G] refuse upload z #1 :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f p/g] :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f p/g] refuse download p/g #1 :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f p/g] refuse upload z #1 :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f f] :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f f] refuse download f #1 :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f f] refuse upload z #1 :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f x/f] :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f x/f] refuse download x/f #1 :: duplicated
+synced L[mv z x/z, mv p/f z] R[mv p/f x/f] refuse upload z #1 :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f p/G] :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f p/G] refuse download p/G #1 :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f p/G] refuse upload z #1 :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f p/g] :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f p/g] refuse download p/g #1 :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f p/g] refuse upload z #1 :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f f] :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f f] refuse download f #1 :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f f] refuse upload z #1 :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f x/f] :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f x/f] refuse download x/f #1 :: duplicated
+synced L[rm z, mv p/f z] R[mv p/f x/f] refuse upload z #1 :: duplicated
+held L[] R[rm p, mv z p] :: duplicated
+held L[] R[rm p, mv z p] refuse folder_create X2 (local) #1 :: duplicated
+held L[] R[rm p, mv z p] refuse upload z #1 :: duplicated
+held L[] R[rm p, mv z p] refuse folder_create x (remote) #1 :: duplicated
+held L[] R[rm p, mv z p] refuse upload x/f #1 :: duplicated
 held L[] R[mv p/f X2/f, mv X2 p/f] :: no-quiet-plan sides-differ
+held L[] R[mv p/f X2/f, rm p] :: duplicated
+held L[] R[mv p/f X2/f, rm p] refuse folder_create X2 (local) #1 :: duplicated
+held L[] R[mv p/f X2/f, rm p] refuse download X2/f #1 :: duplicated
+held L[] R[mv p/f X2/f, rm p] refuse folder_create x (remote) #1 :: duplicated
+held L[] R[mv p/f X2/f, rm p] refuse upload x/f #1 :: duplicated
+held L[] R[mv p/f X2/f, mv z p/f] :: duplicated
 held L[] R[mv p/f x/f, mv x p/f] :: no-quiet-plan sides-differ
 held L[] R[mv x p/x, mv p x] :: sides-differ left-held
 held L[] R[rm x, mv p x] :: sides-differ left-held
 held L[] R[rm x, mv p x] refuse folder_create X2 (local) #1 :: sides-differ left-held
 held L[] R[rm x, mv p x] refuse folder_create x2 (remote) #1 :: sides-differ left-held
-held L[mv x q] R[mv x q] :: no-quiet-plan sides-differ
-held L[mv x p/x] R[mv x p/x] :: no-quiet-plan sides-differ
+held L[] R[rm x, mv z x] :: duplicated
+held L[] R[rm x, mv z x] refuse folder_create X2 (local) #1 :: duplicated
+held L[] R[rm x, mv z x] refuse folder_create x2 (remote) #1 :: duplicated
+held L[] R[rm x, mv z x] refuse folder_create x.conflict-18 (remote) #1 :: duplicated
+held L[] R[rm x, mv z x] refuse upload z #1 :: duplicated
+held L[] R[rm z, mv p/f z] :: duplicated
+held L[rm p] R[mv p/f X2/f] :: duplicated
+held L[rm p] R[mv p/f X2/f] refuse folder_create X2 (local) #1 :: duplicated
+held L[rm p] R[mv p/f X2/f] refuse download X2/f #1 :: duplicated
+held L[rm p] R[mv p/f X2/f] refuse folder_create x (remote) #1 :: duplicated
+held L[rm p] R[mv p/f X2/f] refuse upload x/f #1 :: duplicated
 held L[mv x2 p/x2] R[mv p x/p] :: sides-differ left-held
+held L[mv z p/f] R[mv z G] :: duplicated
+held L[mv z p/f] R[mv z G] refuse download G #1 :: duplicated
+held L[mv z p/f] R[mv z G] refuse folder_create X2 (local) #1 :: duplicated
+held L[mv z p/f] R[mv z G] refuse folder_create x (remote) #1 :: duplicated
+held L[mv z p/f] R[mv z G] refuse upload p/f #1 :: duplicated
+held L[mv z p/f] R[mv z g] :: duplicated
+held L[mv z p/f] R[mv z g] refuse download g #1 :: duplicated
+held L[mv z p/f] R[mv z g] refuse folder_create X2 (local) #1 :: duplicated
+held L[mv z p/f] R[mv z g] refuse folder_create x (remote) #1 :: duplicated
+held L[mv z p/f] R[mv z g] refuse upload p/f #1 :: duplicated
+held L[mv z p/f] R[mv z X2/z] :: duplicated
+held L[mv z p/f] R[mv z X2/z] refuse download X2/z #1 :: duplicated
+held L[mv z p/f] R[mv z X2/z] refuse folder_create X2 (local) #1 :: duplicated
+held L[mv z p/f] R[mv z X2/z] refuse folder_create x (remote) #1 :: duplicated
+held L[mv z p/f] R[mv z X2/z] refuse upload p/f #1 :: duplicated
+held L[mv z p/f] R[mv z p/z] :: duplicated
+held L[mv z p/f] R[mv z p/z] refuse download p/z #1 :: duplicated
+held L[mv z p/f] R[mv z p/z] refuse folder_create X2 (local) #1 :: duplicated
+held L[mv z p/f] R[mv z p/z] refuse folder_create x (remote) #1 :: duplicated
+held L[mv z p/f] R[mv z p/z] refuse upload p/f #1 :: duplicated
+held L[mv z p/f] R[mv z x/z] :: duplicated
+held L[mv z p/f] R[mv z x/z] refuse download x2/z #1 :: duplicated
+held L[mv z p/f] R[mv z x/z] refuse folder_create X2 (local) #1 :: duplicated
+held L[mv z p/f] R[mv z x/z] refuse folder_create x (remote) #1 :: duplicated
+held L[mv z p/f] R[mv z x/z] refuse upload p/f #1 :: duplicated
 held L[mv p x/p, mv x2 x/p/x2] R[] :: sides-differ left-held
 held L[rm p, mv x/f p] R[] refuse upload p #1 :: removed-in-a-pass
 held L[mv x2 p/f, mv p x/p] R[] :: sides-differ left-held

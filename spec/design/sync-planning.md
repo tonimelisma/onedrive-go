@@ -938,10 +938,12 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 53 runs of `pairs.golden` (39 from the synced tree, 14 from the held
+The 402 runs of `pairs.golden` (343 from the synced tree, 59 from the held
 one; a run names its start, the two histories, the refused create if any,
-and the invariants it breaks) fall into the eleven shapes below, of which
-5, 6, 8 and 9 are no longer listed. Each is an open
+and the invariants it breaks) fall into the twelve shapes below, of which
+4, 5, 6, 7, 8 and 9 are no longer listed: 46 runs break a rule of content or
+convergence, and 356 (125 pairs and their refusal variants) only the
+`duplicated` rule of shape 12. Each is an open
 behaviour of the planner unless it says it is right as it is; a fix removes
 its lines from the file. The refused-create variants of a run break what
 the run itself breaks, so they belong to its shape. 58 runs of shapes 4, 7
@@ -960,7 +962,16 @@ commit re-paths it from the row the item ID names (`commitMove`), so after
 a move here to OneDrive's place of an item the two sides had put at
 different paths, the model kept the item's row at its old path and every
 later pass re-keyed it back and forth: that made all of shape 8, all of
-shape 9 and two refusal variants of shape 6, which converge now too.
+shape 9 and two refusal variants of shape 6, which converge now too. A
+baseline update in the model wrote its row at its path beside the row the
+item had elsewhere, where the store's upsert keys the row by item ID and
+moves it (`commitUpsert`), so the plan repeated the update on every pass:
+that made all of shapes 4 and 7. And a local delete in the model checked
+the file against the row at its path, which a download of OneDrive's move
+of the same item earlier in the pass had moved away, where the executor
+checks it against the baseline the plan carries (`verifyLocalDeleteContent`):
+the model refused deletes the executor runs. Both now follow the store
+and the executor. The check also counts a duplicate now (shape 12).
 
 1. A rotation through nesting made on OneDrive (3 runs left, all held).
    One entry moves into a folder, which then takes the entry's old path
@@ -1022,27 +1033,17 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    copy here, so the move waits for good; with the other side writing into
    the deleted folder the deleted entry also comes back. The deleted folder
    should go, keeping what the other side wrote, and the move then run.
-4. A replacing move that meets the other side's move of its entry (4
-   runs, all synced): on OneDrive `x` moved onto the path of a deleted
-   entry (`rm p, mv x p`, `rm p/f, mv x p/f`) while here `x` moved
-   elsewhere (`mv x q`, `mv x p/x`). The plan never empties and the sides
-   differ: both moves of one entry should resolve as a move conflict. The
-   move conflict itself is resolved already: OneDrive's location wins and
-   the local copy is to move onto the deleted entry's path. With `rm p`
-   what holds it is shape 3's: the deleted folder still stands at the path
-   here, and a move onto a folder's path waits while the folder is there,
-   so those runs go with shape 3's fix. With `rm p/f` the entry in the way
-   is a synced file, which a replacing move may displace; why those two
-   runs still stall is not yet traced. The
-   runs where the moving entry is a file moved here too (`mv z g`,
-   `mv z p/z`, `mv z x/z` here against `rm p, mv z p`, `rm x, mv z x` or
-   `rm p/f, mv z p/f` there) no longer stall, and the check lists them no
-   more, or only under shape 5's delete rule, but they are not right yet:
-   OneDrive's move onto the replaced path is still reconciled as a
-   download there, not composed with the move here, so the file's content
-   ends twice on each side, once at OneDrive's path and once as a new file
-   (or a conflict copy) at this computer's. Nothing is lost; the check does
-   not count a duplicate.
+4. No longer listed: a replacing move that meets the other side's move of
+   its entry, on OneDrive `x` moved onto the path of a deleted entry
+   (`rm p, mv x p`, `rm p/f, mv x p/f`) while here `x` moved elsewhere
+   (`mv x q`, `mv x p/x`). Its runs repeated the model's baseline update
+   (above) and converge, but not right: the move conflict is reconciled at
+   OneDrive's path as a type change, the file there deleted and a folder
+   made, and the copy here is uploaded as a new folder, so `x` ends twice,
+   which the check does not count for a folder (no content). It should be
+   composed: OneDrive's place wins and the copy here moves onto it, the
+   synced file displaced. Where the moving entry is a file, the content
+   ends twice, which shape 12 lists.
 5. No longer listed, and right as it is: a folder deleted on one side, and
    replaced there by a file moved onto its path, written into on the other
    side (`rm p, mv z p` on one side, a file made in `p` or a folder moved
@@ -1064,17 +1065,17 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    reduces its frontier as the engine does
    (`TestPlannerPairs_AFolderRenamedTheSameOnBothSidesWithANewFolderAtItsOldPathConverges`,
    `TestRunOnce_AFolderRenamedTheSameOnBothSidesWithANewFolderAtItsOldPathConverges`).
-7. Two different entries given the same new name, one on each side (3
-   runs: 1 synced, 2 held): `mv p q, mv x q/x` here and `mv x q` on
-   OneDrive, or, from the held start, the folder made in the held one's
-   place moved where OneDrive moved the held one. The plan never empties
-   and the sides differ; one of the two should be kept under a conflict
-   name. Fixed for a file: a file moved here and renamed on OneDrive onto
-   the name of a file made here (`mv z p/z, new g` here, `mv z g` there)
-   was downloaded at that name beside its moved copy, pass after pass. The
-   new file is now kept as a conflict copy and the moved file moved onto
-   its name (Move Composition, `localDisplacementAt`). Two folders given
-   one name merge, keeping both folders' entries, which converges.
+7. Two different entries given the same new name, one on each side (no
+   runs left): `mv p q, mv x q/x` here and `mv x q` on OneDrive, or, from
+   the held start, the folder made in the held one's place moved where
+   OneDrive moved the held one. Its runs repeated the model's baseline update
+   (above); with the row keyed by item ID the two folders merge, keeping
+   both folders' entries, which converges. Fixed for a file: a file moved
+   here and renamed on OneDrive onto the name of a file made here
+   (`mv z p/z, new g` here, `mv z g` there) was downloaded at that name
+   beside its moved copy, pass after pass. The new file is now kept as a
+   conflict copy and the moved file moved onto its name (Move Composition,
+   `localDisplacementAt`).
 8. One entry moved to two places, or moved on one side and deleted on the
    other (no runs left). Every run of it was the check's own (above): with
    OneDrive's folder creates modelled by name and the baseline re-pathed by
@@ -1122,6 +1123,21 @@ shape 9 and two refusal variants of shape 6, which converge now too.
    not have, so that is an executor change too. The removals a pass ran
    although the other side held the moved file elsewhere and nothing carried
    it (R-2.17.11) are fixed and no longer listed.
+12. One synced or written content at two plain paths of a side at the end
+   (`duplicated`, 125 pairs: 114 synced, 11 held; a conflict copy keeps
+   both on purpose, under a name that tells the user, and is not counted).
+   Nothing is lost, so the content rules hold, but the user finds a copy
+   nobody asked for, and edits to one never reach the other. Two families:
+   OneDrive moved a file onto the path of an entry it deleted (`rm x,
+   mv z x`, `rm p, mv z p`, `rm z, mv p/f z`, 33 pairs, from nothing done
+   here on), where the move waits while a folder holds its destination here
+   and the file is downloaded there while its copy here is uploaded again;
+   and a move here onto a path another entry vacated or a delete freed
+   (`mv p q, mv z p`, `rm p, mv z p`, `mv x q, mv p/f x`) against
+   OneDrive's move of the same file elsewhere (92 pairs), where SQLite does
+   not pair the move here onto a path the baseline gives another item, so
+   composition does not see the move conflict, and the file is downloaded
+   at OneDrive's path and uploaded at this computer's.
 
 A remote move of a locally edited file is still applied (R-2.17.7): the local
 move source must be the same item (type and identity) but its content may

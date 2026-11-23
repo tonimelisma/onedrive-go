@@ -66,7 +66,9 @@ import (
 //     again, while the other side left it with everything above and below it
 //     as synced, is gone from both, unless it lay in a folder the user
 //     deleted with it that the other side wrote into: that folder is kept
-//     whole, and the item with it.
+//     whole, and the item with it;
+//   - no side ends holding one file content at two paths, a conflict copy
+//     apart: nothing the user did copies a file.
 //
 // While a name OneDrive takes for another entry's stays on both sides, the
 // sides cannot converge; when a plan has nothing left to do or a pass changes
@@ -668,6 +670,7 @@ const (
 	exLeftHeld       = "left-held"
 	exWrittenLost    = "written-lost"
 	exDeleteUndone   = "delete-undone"
+	exDuplicated     = "duplicated"
 )
 
 func (r *exRun) failf(invariant, format string, args ...any) {
@@ -675,6 +678,25 @@ func (r *exRun) failf(invariant, format string, args ...any) {
 		r.broken = append(r.broken, invariant)
 	}
 	r.failures = append(r.failures, fmt.Sprintf(format, args...))
+}
+
+// exConflictInfix marks a conflict copy's name in the model
+// (conflictModelPath).
+const exConflictInfix = ".conflict-"
+
+// filesByContent lists, per file content a side holds outside conflict
+// copies, the paths it holds it at, sorted. A conflict copy keeps both on
+// purpose, under a name that tells the user; the same content at two plain
+// paths is a copy nobody asked for.
+func (w *exWorld) filesByContent(local bool) map[string][]string {
+	byContent := map[string][]string{}
+	for _, p := range sortedKeys(w.side(local)) {
+		if item := w.side(local)[p]; !item.folder && !strings.Contains(p, exConflictInfix) {
+			byContent[item.content] = append(byContent[item.content], p)
+		}
+	}
+
+	return byContent
 }
 
 // contents is the set of file contents a side holds.
@@ -786,6 +808,13 @@ func (r *exRun) run() {
 	for _, content := range r.written {
 		if !local[content] && !remote[content] {
 			r.failf(exWrittenLost, "written %q is lost", content)
+		}
+	}
+	for _, local := range []bool{true, false} {
+		for content, paths := range r.filesByContent(local) {
+			if len(paths) > 1 {
+				r.failf(exDuplicated, "%s holds %q at %v", exSideName(local), content, paths)
+			}
 		}
 	}
 	for _, base := range r.mustGo {
@@ -1251,13 +1280,34 @@ func (w *exWorld) exLocalDelete(a *syncdomain.Action) bool {
 				return false
 			}
 		}
-	} else if row, synced := w.baseline[a.Path]; !synced || row.localContent != item.content {
+	} else if row, synced := w.plannedSynced(a); !synced || row.localContent != item.content {
 		return false
 	}
 	delete(w.local, a.Path)
 	deleteSyncedTree(w.baseline, a.Path)
 
 	return true
+}
+
+// plannedSynced is the baseline row of the item a delete was planned
+// against: the row at its path, or, when an earlier action of the pass
+// committed the item at another path (a download of OneDrive's move of it,
+// which records the row by item ID), that row. The executor verifies the
+// file against the baseline the plan carries, not the row's current path.
+func (w *exWorld) plannedSynced(a *syncdomain.Action) (pmSynced, bool) {
+	if row, synced := w.baseline[a.Path]; synced {
+		return row, true
+	}
+	if a.View == nil || a.View.Baseline == nil || a.View.Baseline.ItemID == "" {
+		return pmSynced{}, false
+	}
+	for _, row := range w.baseline {
+		if row.id == a.View.Baseline.ItemID {
+			return row, true
+		}
+	}
+
+	return pmSynced{}, false
 }
 
 // exRemoteDelete deletes the item and everything below it on OneDrive, as
@@ -1424,10 +1474,12 @@ func (w *exWorld) exBaselineUpdate(a *syncdomain.Action) bool {
 	if !remoteOK || !localOK {
 		return false
 	}
-	w.baseline[a.Path] = pmSynced{
+	// The store keys the row by item ID: a row the item had at another
+	// path goes (recordSynced).
+	w.recordSynced(a.Path, pmSynced{
 		id: remote.id, folder: remote.folder, localContent: local.content, remoteContent: remote.content,
 		inode: local.inode, etag: remote.etag,
-	}
+	})
 
 	return true
 }
