@@ -26,7 +26,7 @@ In flight: W57 has branch `test/crash-model-replacing-move` at `c6e273a6` (built
 - [x] W52 — A subfolder moved onto its moved parent's old path on this computer converges — move planner; after F4. — closed without code: owner's choice on the comparison model; kept today's behaviour, which drops the cycle and loses nothing
 - [x] W53 — A folder moved into its own former child converges — move planner; after F4. — built in #975
 - [x] W60 — The engine treats every failure to reach OneDrive as one family — classifier change; after the split. — built in #975
-- W63 — A watch user can confirm held deletes — needs a DoR choice; watch loop is rebuilt in E5.
+- [x] W63 — A watch user can confirm held deletes — needs a DoR choice; watch loop is rebuilt in E5. — built in #975 (a confirmation names the held set; a stale one is refused)
 - [x] W64 — A local read that times out is retried as busy — classifier; after the split. — built in #975 (rider, a stall whose local side blocks, still open)
 - [x] W68 — A file moved out of a subfolder into the folder re-made at the old path converges — move planner; after F4. — built in #975 (the vacatingFolder rider shapes not checked)
 - [x] W73 — A name the path route does not resolve is found through its parent's listing in every command — uses G2's `namekey.Find`; after R2. — built in #975 (rider, the CLI fake graph's root ID, still open)
