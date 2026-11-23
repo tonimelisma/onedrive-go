@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
@@ -31,6 +34,79 @@ func (s *SyncStore) ApplyShortcutTopology(ctx context.Context, batch syncshortcu
 	}
 	return true, nil
 }
+
+// ShortcutRootBindingsAt returns the binding item IDs of the shortcut roots
+// the store at dbPath records under any of namespaces, the names a parent
+// mount had before and after an account email change. It reads through the
+// read-only inspector and writes nothing. The caller holds the store's lock
+// (an account email change, syncengine.MoveStateDBs).
+func ShortcutRootBindingsAt(ctx context.Context, dbPath string, namespaces []string, logger *slog.Logger) ([]string, error) {
+	records, err := shortcutRootsAt(ctx, dbPath, logger)
+	if err != nil {
+		return nil, err
+	}
+	var bindings []string
+	for i := range records {
+		if records[i].NamespaceID == "" || slices.Contains(namespaces, records[i].NamespaceID) {
+			bindings = append(bindings, records[i].BindingItemID)
+		}
+	}
+
+	return bindings, nil
+}
+
+// RenameShortcutRootNamespaceAt gives every shortcut root the store at dbPath
+// records under the namespace from the namespace to, in one write, and says
+// whether it changed one: a parent mount's ID holds its account's email, and
+// a record left under the old one would be another mount's to its parent,
+// which would then neither protect the shortcut's folder nor run its child.
+// It is idempotent, and opens the store for writing only when a record needs
+// the new name. The caller holds the store's lock.
+func RenameShortcutRootNamespaceAt(ctx context.Context, dbPath string, from string, to string, logger *slog.Logger) (bool, error) {
+	records, err := shortcutRootsAt(ctx, dbPath, logger)
+	if err != nil {
+		return false, err
+	}
+	changed := false
+	for i := range records {
+		if records[i].NamespaceID == from {
+			records[i].NamespaceID = to
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+
+	store, err := NewSyncStore(ctx, dbPath, logger)
+	if err != nil {
+		return false, fmt.Errorf("open sync state %s: %w", dbPath, err)
+	}
+	replaceErr := store.ReplaceShortcutRoots(ctx, records)
+	if closeErr := store.Close(ctx); closeErr != nil {
+		replaceErr = errors.Join(replaceErr, fmt.Errorf("close sync state %s: %w", dbPath, closeErr))
+	}
+
+	return replaceErr == nil, replaceErr
+}
+
+// shortcutRootsAt reads the shortcut roots of the store at dbPath through
+// the read-only inspector.
+func shortcutRootsAt(ctx context.Context, dbPath string, logger *slog.Logger) ([]syncshortcut.ShortcutRootRecord, error) {
+	records, err := readWithInspector(dbPath, logger, func(inspector *storeInspector) ([]syncshortcut.ShortcutRootRecord, error) {
+		return queryShortcutRootRecords(ctx, inspector.db, "sync: querying shortcut_roots", "sync: iterating shortcut_roots")
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %w", ErrShortcutRootsUnreadable, dbPath, err)
+	}
+
+	return records, nil
+}
+
+// ErrShortcutRootsUnreadable reports a store whose shortcut roots could not
+// be read at all (not a database, damaged, another schema), as opposed to a
+// write that failed.
+var ErrShortcutRootsUnreadable = errors.New("the shared folders of the sync state could not be read")
 
 func (s *SyncStore) MarkShortcutChildFinalDrainReleasePending(
 	ctx context.Context,

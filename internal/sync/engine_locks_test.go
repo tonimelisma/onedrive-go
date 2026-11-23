@@ -18,6 +18,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 func secondEngineInputs(t *testing.T, syncRoot string, logger *slog.Logger) *engineInputs {
@@ -392,6 +394,61 @@ func TestMoveStateDBs_MovesTheWholeFamily(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "log", string(movedLog))
 	assert.NoFileExists(t, to+"-journal", "a journal beside no database is not left for the moved store")
+}
+
+// A drive's shortcut children name their stores by the drive's mount ID,
+// which holds the email, so a drive's store moves with them: each child store
+// keeps its content at the name of the new mount ID, and the drive's shortcut
+// records take the new mount ID, which the drive's engine then reads them
+// under. A change resumed after the drive's own store moved still moves the
+// children, read from the store at its new name.
+//
+// Validates: R-3.7.2, R-3.7.3, R-3.7.5
+func TestMoveStateDBs_MovesTheShortcutChildrensStoresWithTheirDrive(t *testing.T) {
+	t.Parallel()
+
+	for _, resumed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("resumed=%v", resumed), func(t *testing.T) {
+			t.Parallel()
+
+			dataDir := t.TempDir()
+			oldID := driveid.MustCanonicalID("personal:old@example.com")
+			newID := driveid.MustCanonicalID("personal:new@example.com")
+			move := config.StateDBMove{
+				From: config.DriveStatePathForDataDir(dataDir, oldID), To: config.DriveStatePathForDataDir(dataDir, newID),
+				FromMountID: oldID.String(), ToMountID: newID.String(),
+			}
+			parentAt := move.From
+			if resumed {
+				parentAt = move.To
+			}
+			store, err := syncstore.NewSyncStore(t.Context(), parentAt, syncfixture.TestLogger(t))
+			require.NoError(t, err)
+			require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
+				NamespaceID: oldID.String(), BindingItemID: "binding-1", RelativeLocalPath: "Shared",
+				LocalAlias: "Shared", RemoteDriveID: driveid.New("remote-drive"), RemoteItemID: "remote-item",
+				RemoteIsFolder: true, State: syncshortcut.ShortcutRootStateActive, ProtectedPaths: []string{"Shared"},
+			}}))
+			require.NoError(t, store.Close(t.Context()))
+			childFrom := config.MountStatePathForDataDir(dataDir, config.ChildMountID(oldID.String(), "binding-1"))
+			childTo := config.MountStatePathForDataDir(dataDir, config.ChildMountID(newID.String(), "binding-1"))
+			require.NoError(t, os.WriteFile(childFrom, []byte("the child's sync state"), 0o600))
+
+			begin := recordNothing
+			if resumed {
+				begin = nil
+			}
+			require.NoError(t, MoveStateDBs(t.Context(), dataDir, []config.StateDBMove{move}, begin, syncfixture.TestLogger(t)))
+
+			assert.NoFileExists(t, childFrom)
+			content, err := os.ReadFile(childTo) //nolint:gosec // test-owned temp path
+			require.NoError(t, err)
+			assert.Equal(t, "the child's sync state", string(content), "the child keeps its store")
+			bindings, err := syncstore.ShortcutRootBindingsAt(t.Context(), move.To, []string{newID.String()}, syncfixture.TestLogger(t))
+			require.NoError(t, err)
+			assert.Equal(t, []string{"binding-1"}, bindings, "the drive's shortcut records take its new mount ID")
+		})
+	}
 }
 
 // A store an engine has open refuses the whole move: nothing is renamed, and

@@ -81,6 +81,9 @@ func (o *Orchestrator) startWatchRunner(
 ) (*watchRunner, error) {
 	endStep := o.heartbeat.beatFor("starting a drive", watchRunnerStartStepLimit)
 	defer endStep()
+	if err := o.requireAccountInCatalog(mount); err != nil {
+		return nil, err
+	}
 	session, err := o.cfg.Runtime.SyncSession(mount.syncSessionConfig())
 	if err != nil {
 		// The caller reports this against the drive, so the text names only
@@ -407,4 +410,34 @@ func watchParentAckers(runners map[mountID]*watchRunner) map[mountID]shortcutChi
 		ackers[id] = runner.parentAck
 	}
 	return ackers
+}
+
+// errAccountNotInCatalog is a runner start refused because the catalog no
+// longer holds the mount's account (OrchestratorConfig.AccountInCatalog).
+var errAccountNotInCatalog = errors.New("its account is no longer signed in under this name; " +
+	"waiting for the configuration to reload")
+
+// requireAccountInCatalog refuses to start an engine for a mount whose
+// account the catalog no longer holds, and refuses on a catalog it cannot
+// read: starting is what the check guards, so an unknown answer starts
+// nothing. The start failure goes the way of every other (retried with the
+// drive's backoff), and the reload that follows an email change or a logout
+// replaces the mount.
+func (o *Orchestrator) requireAccountInCatalog(mount *mountSpec) error {
+	if o.cfg.AccountInCatalog == nil {
+		return nil
+	}
+	account := mount.tokenOwnerCanonical()
+	if account.IsZero() {
+		return nil
+	}
+	found, err := o.cfg.AccountInCatalog(account)
+	switch {
+	case err != nil:
+		return fmt.Errorf("check that the account %s is signed in: %w", account, err)
+	case !found:
+		return fmt.Errorf("account %s: %w", account, errAccountNotInCatalog)
+	default:
+		return nil
+	}
 }

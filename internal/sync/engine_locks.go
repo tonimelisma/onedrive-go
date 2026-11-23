@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -350,22 +351,28 @@ func MoveStateDBs(
 		}
 	}()
 
-	pending, leftovers, err := splitStateDBMoves(moves)
+	// A drive's shortcut children name their stores by the drive's mount ID,
+	// which holds the email: they move with it, under their own locks too.
+	children, err := childStateDBMoves(ctx, dataDir, moves, logger)
 	if err != nil {
 		return err
 	}
-	if checkErr := checkStateDBMoveTargets(pending, begin == nil); checkErr != nil {
-		return checkErr
+	releaseChildren, err := lockStateDBMoves(ctx, dataDir, children, logger)
+	if err != nil {
+		return err
 	}
-	if begin != nil {
-		for _, move := range pending {
-			if removeErr := syncstore.RemoveStateDBSidecars(move.To); removeErr != nil {
-				return removeErr
-			}
+	defer func() {
+		if releaseErr := releaseChildren(); releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("release sync state lock: %w", releaseErr))
 		}
-		if beginErr := begin(); beginErr != nil {
-			return fmt.Errorf("record the account email change: %w", beginErr)
-		}
+	}()
+
+	pending, leftovers, err := splitStateDBMoves(append(slices.Clone(moves), children...))
+	if err != nil {
+		return err
+	}
+	if beginErr := beginStateDBMoves(pending, begin); beginErr != nil {
+		return beginErr
 	}
 
 	for _, move := range pending {
@@ -377,9 +384,128 @@ func MoveStateDBs(
 			slog.String("from", move.From), slog.String("to", move.To))
 	}
 
+	if renameErr := renameMovedShortcutNamespaces(ctx, moves, logger); renameErr != nil {
+		return renameErr
+	}
+
 	for _, dbPath := range leftovers {
 		if removeErr := removeStateDBLeftovers(dbPath, logger); removeErr != nil {
 			return removeErr
+		}
+	}
+
+	return nil
+}
+
+// beginStateDBMoves checks every target of pending and, for a new change
+// (begin not nil), deletes the stranger's sidecars at the new names and
+// records the change, before the first rename.
+func beginStateDBMoves(pending []config.StateDBMove, begin func() error) error {
+	if checkErr := checkStateDBMoveTargets(pending, begin == nil); checkErr != nil {
+		return checkErr
+	}
+	if begin == nil {
+		return nil
+	}
+	for _, move := range pending {
+		if removeErr := syncstore.RemoveStateDBSidecars(move.To); removeErr != nil {
+			return removeErr
+		}
+	}
+	if beginErr := begin(); beginErr != nil {
+		return fmt.Errorf("record the account email change: %w", beginErr)
+	}
+
+	return nil
+}
+
+// childStateDBMoves are the moves of the stores of the shortcut children of
+// every drive moves renames (a move with mount IDs): ChildMountID of the old
+// mount ID to that of the new one, for each shortcut the drive's store
+// records. The bindings are read from the drive's store where it is now, at
+// its old name before the move or at its new one when a resumed change
+// already moved it; the caller holds that store's lock. A move derived so is
+// idempotent like every other: a resumed change derives the same moves, and
+// the ones already done find their source gone.
+func childStateDBMoves(
+	ctx context.Context, dataDir string, moves []config.StateDBMove, logger *slog.Logger,
+) ([]config.StateDBMove, error) {
+	var children []config.StateDBMove
+	for _, move := range moves {
+		if move.FromMountID == "" || move.ToMountID == "" || move.FromMountID == move.ToMountID {
+			continue
+		}
+		storePath, found, err := currentStateDBOfMove(move)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		bindings, err := syncstore.ShortcutRootBindingsAt(ctx, storePath,
+			[]string{move.FromMountID, move.ToMountID}, logger)
+		if err != nil {
+			// A store that cannot be read names no shortcut this change can
+			// know of: it moves as it is, and so does nothing else of it.
+			// Refusing would leave the change unfinished for good, every
+			// command failing on it, over sync state the next sync rebuilds.
+			logger.Warn("Could not read the shared folders of a drive's sync state to move theirs with it; "+
+				"their sync state stays under the old email, and the next sync rebuilds it",
+				slog.String("db_path", storePath), slog.Any("error", err))
+			continue
+		}
+		for _, binding := range bindings {
+			from := config.MountStatePathForDataDir(dataDir, config.ChildMountID(move.FromMountID, binding))
+			to := config.MountStatePathForDataDir(dataDir, config.ChildMountID(move.ToMountID, binding))
+			if from != "" && to != "" && from != to {
+				children = append(children, config.StateDBMove{From: from, To: to})
+			}
+		}
+	}
+
+	return children, nil
+}
+
+// currentStateDBOfMove is where move's store is now: at its old name, or at
+// its new one once moved; found is false when neither holds a database.
+func currentStateDBOfMove(move config.StateDBMove) (path string, found bool, err error) {
+	for _, candidate := range []string{move.From, move.To} {
+		exists, statErr := syncstore.StateDBFileExists(candidate)
+		if statErr != nil {
+			return "", false, fmt.Errorf("check sync state %s: %w", candidate, statErr)
+		}
+		if exists {
+			return candidate, true, nil
+		}
+	}
+
+	return "", false, nil
+}
+
+// renameMovedShortcutNamespaces gives the shortcut roots of every moved
+// drive's store its new mount ID, once the store is at its new name.
+func renameMovedShortcutNamespaces(ctx context.Context, moves []config.StateDBMove, logger *slog.Logger) error {
+	for _, move := range moves {
+		if move.FromMountID == "" || move.ToMountID == "" || move.FromMountID == move.ToMountID {
+			continue
+		}
+		exists, err := syncstore.StateDBFileExists(move.To)
+		if err != nil {
+			return fmt.Errorf("check sync state %s: %w", move.To, err)
+		}
+		if !exists {
+			continue
+		}
+		_, renameErr := syncstore.RenameShortcutRootNamespaceAt(ctx, move.To, move.FromMountID, move.ToMountID, logger)
+		switch {
+		case renameErr == nil:
+		case errors.Is(renameErr, syncstore.ErrShortcutRootsUnreadable):
+			// childStateDBMoves already said, once, that this store could not
+			// be read; it names no shortcut to rename.
+			logger.Debug("no shared folders to rename in a moved sync state that cannot be read",
+				slog.String("db_path", move.To), slog.Any("error", renameErr))
+		default:
+			return fmt.Errorf("rename the shortcuts of %s for an account email change: %w", move.To, renameErr)
 		}
 	}
 

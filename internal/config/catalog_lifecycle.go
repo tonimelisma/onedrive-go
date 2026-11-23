@@ -99,6 +99,27 @@ func (c *Catalog) recordLogin(accountCID driveid.CanonicalID, login *AccountLogi
 	}
 	// The sign-in read the user, which is the identity check's answer.
 	account.recordIdentityCheck(now, true)
+	if existing, found := c.AccountByCanonicalID(accountCID); found {
+		account.FormerEmails = existing.FormerEmails
+	}
+	// The address this sign-in brings is an account's own now, no former
+	// one: a config section under it is that account's, never caught up to
+	// another (CatchUpConfigFromFormerEmails).
+	for key := range c.Accounts {
+		other := c.Accounts[key]
+		if slices.Contains(other.FormerEmails, accountCID.Email()) {
+			other.FormerEmails = slices.DeleteFunc(slices.Clone(other.FormerEmails), func(email string) bool {
+				return email == accountCID.Email()
+			})
+			c.Accounts[key] = other
+		}
+	}
+	account.FormerEmails = slices.DeleteFunc(slices.Clone(account.FormerEmails), func(email string) bool {
+		return email == accountCID.Email()
+	})
+	if len(account.FormerEmails) == 0 {
+		account.FormerEmails = nil
+	}
 
 	drive := CatalogDrive{
 		CanonicalID:           accountCID.String(),

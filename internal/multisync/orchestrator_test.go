@@ -1187,6 +1187,57 @@ func TestStartWatchRunner_ThreadsWebsocketConfig(t *testing.T) {
 	require.NoError(t, wr.engine.Close(t.Context()))
 }
 
+// A watch runner starts no engine for an account the catalog no longer
+// holds: after another command changed the account's email (or logged it
+// out), the mount still carries the old ID until the watch reloads, and an
+// engine started under it would open a fresh store under the old name. A
+// catalog that cannot be read starts nothing either.
+//
+// Validates: R-3.7.3, R-3.7.5
+func TestRunner_DoesNotStartAnEngineForAnAccountTheCatalogNoLongerHolds(t *testing.T) {
+	rd := testStandaloneMount(t, "personal:watch-renamed@example.com", "Renamed")
+	cfgPath := writeTestConfig(t, rd.CanonicalID)
+	mounts, err := buildStandaloneMountSpecs([]StandaloneMountConfig{rd})
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name    string
+		answer  func(driveid.CanonicalID) (bool, error)
+		wantErr string
+	}{
+		{
+			name: "not in the catalog", answer: func(driveid.CanonicalID) (bool, error) { return false, nil },
+			wantErr: "no longer signed in under this name",
+		},
+		{name: "catalog unreadable", answer: func(driveid.CanonicalID) (bool, error) {
+			return false, errors.New("catalog damaged")
+		}, wantErr: "catalog damaged"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testOrchestratorConfigWithPath(t, cfgPath, rd)
+			cfg.Runtime.TokenSourceFn = stubTokenSourceFn
+			var asked []driveid.CanonicalID
+			cfg.AccountInCatalog = func(account driveid.CanonicalID) (bool, error) {
+				asked = append(asked, account)
+				return tc.answer(account)
+			}
+			orch := NewOrchestrator(cfg)
+			engines := 0
+			orch.engineFactory = func(context.Context, engineFactoryRequest) (engineRunner, error) {
+				engines++
+				return &mockEngine{}, nil
+			}
+
+			wr, startErr := orch.startWatchRunner(t.Context(), mounts[0], 1, syncdomain.SyncDownloadOnly, syncengine.WatchOptions{}, nil)
+
+			require.ErrorContains(t, startErr, tc.wantErr)
+			assert.Nil(t, wr)
+			assert.Zero(t, engines, "no engine is built")
+			assert.Equal(t, []driveid.CanonicalID{rd.CanonicalID}, asked, "the mount's account is asked about")
+		})
+	}
+}
+
 // Validates: R-2.4.8
 func TestStartWatchRunner_FinalDrainRunsOnceBidirectionalFullReconcile(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -204,10 +205,39 @@ func TestReconcileAccountEmail_RenamesOwnedArtifacts(t *testing.T) {
 
 	assertEmailReconcileFixtureRenamed(t, logger, &fixture, &result)
 	assert.ElementsMatch(t, []StateDBMove{
-		{From: DriveStatePath(fixture.oldBusiness), To: DriveStatePath(fixture.newBusiness)},
-		{From: DriveStatePath(fixture.oldSharePoint), To: DriveStatePath(fixture.newSharePoint)},
-		{From: DriveStatePath(fixture.oldShared), To: DriveStatePath(fixture.newShared)},
-	}, moved, "every state DB is moved by the mover, which locks it, never renamed here")
+		driveStateMove(fixture.oldBusiness, fixture.newBusiness),
+		driveStateMove(fixture.oldSharePoint, fixture.newSharePoint),
+		driveStateMove(fixture.oldShared, fixture.newShared),
+	}, moved, "every state DB is moved by the mover, which locks it, never renamed here, "+
+		"and a drive's own store names the drive's mount IDs, so its shortcut children's stores move with it")
+}
+
+// driveStateMove is the move of a drive's own store from the drive's old ID to
+// its new one, with the mount IDs its shortcut children are named by.
+func driveStateMove(from, to driveid.CanonicalID) StateDBMove {
+	return StateDBMove{
+		From: DriveStatePath(from), To: DriveStatePath(to),
+		FromMountID: from.String(), ToMountID: to.String(),
+	}
+}
+
+// A drive's store found only by its catalog record (no config section names
+// it) is still known as that drive, so its shortcut children move with it.
+//
+// Validates: R-3.7.2, R-3.7.5
+func TestReconcileAccountEmail_ACatalogDrivesStoreNamesItsMountIDs(t *testing.T) {
+	setTestDataDir(t)
+	logger := testLogger(t)
+	fixture := seedEmailReconcileFixture(t)
+	writeManagedFixture(t, fixture.configPath, []byte("# no drive sections\n"))
+
+	var moved []StateDBMove
+	_, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+		"renamed@example.com", stateDBMoverForTest(t, &moved), logger)
+	require.NoError(t, err)
+
+	assert.Contains(t, moved, driveStateMove(fixture.oldShared, fixture.newShared),
+		"the shared drive's catalog record names it")
 }
 
 // The catalog stores a default drive name derived from the drive's ID, which
@@ -520,4 +550,106 @@ func TestReconcileAccountEmail_ReportsASharedStoreItCannotAssign(t *testing.T) {
 	assert.Equal(t, []string{DriveStatePath(unassigned)}, result.KeptStateDBs)
 	assert.FileExists(t, DriveStatePath(unassigned), "the store stays under the old email")
 	assert.FileExists(t, DriveStatePath(fixture.newShared), "a store with a catalog record still moves")
+}
+
+// An email change records the old address on the account, so a config file
+// the change did not run with can still be caught up from it.
+//
+// Validates: R-3.7.2, R-3.7.5
+func TestReconcileAccountEmail_RecordsTheFormerEmailOnTheAccount(t *testing.T) {
+	setTestDataDir(t)
+	fixture := seedEmailReconcileFixture(t)
+
+	var moved []StateDBMove
+	_, err := ReconcileAccountEmail(t.Context(), fixture.configPath, fixture.newBusiness, emailReconcileTestUser123,
+		"renamed@example.com", stateDBMoverForTest(t, &moved), testLogger(t))
+	require.NoError(t, err)
+
+	account, found := loadCatalogAccount(t, fixture.newBusiness)
+	require.True(t, found)
+	assert.Equal(t, []string{fixture.oldBusiness.Email()}, account.FormerEmails)
+}
+
+// A second config file sharing the data directory keeps its sections under
+// the former email after the change ran with another file; the catch-up
+// renames them to the account's email now, a stored default name following
+// the address, and a second run renames nothing.
+//
+// Validates: R-3.7.2, R-3.7.3, R-3.7.5
+func TestCatchUpConfigFromFormerEmails_RenamesASecondConfigFilesSections(t *testing.T) {
+	setTestDataDir(t)
+	oldID := driveid.MustCanonicalID("business:old@example.com")
+	newID := driveid.MustCanonicalID("business:new@example.com")
+	seedCatalogAccount(t, newID, func(account *CatalogAccount) {
+		account.FormerEmails = []string{oldID.Email()}
+	})
+	second := filepath.Join(t.TempDir(), "second.toml")
+	writeManagedFixture(t, second, []byte("[\""+oldID.String()+"\"]\nsync_dir = \"~/Work\"\n"))
+
+	result, err := CatchUpConfigFromFormerEmails(t.Context(), second)
+	require.NoError(t, err)
+
+	assert.Equal(t, []CanonicalIDRename{{From: oldID, To: newID}}, result.DriveRenames)
+	raw, err := os.ReadFile(second) //nolint:gosec // test-owned temp path
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `["`+newID.String()+`"]`)
+	assert.NotContains(t, string(raw), oldID.String())
+	again, err := CatchUpConfigFromFormerEmails(t.Context(), second)
+	require.NoError(t, err)
+	assert.False(t, again.Changed(), "a caught-up file is left as it is")
+}
+
+// A former email that an account has now names that account's drives, and a
+// shared folder's section under an email two accounts had says nothing about
+// whose it is: neither is renamed.
+//
+// Validates: R-3.7.3, R-3.7.5
+func TestCatchUpConfigFromFormerEmails_LeavesWhatItCannotAssign(t *testing.T) {
+	setTestDataDir(t)
+	reused := driveid.MustCanonicalID("personal:reused@example.com")
+	seedCatalogAccount(t, reused, nil)
+	seedCatalogAccount(t, driveid.MustCanonicalID("business:moved@example.com"), func(account *CatalogAccount) {
+		account.FormerEmails = []string{reused.Email(), "both@example.com"}
+	})
+	seedCatalogAccount(t, driveid.MustCanonicalID("personal:moved@example.com"), func(account *CatalogAccount) {
+		account.FormerEmails = []string{"both@example.com"}
+	})
+	shared := driveid.MustCanonicalID("shared:both@example.com:drive-x:item-x")
+	second := filepath.Join(t.TempDir(), "second.toml")
+	content := "[\"" + reused.String() + "\"]\n[\"" + shared.String() + "\"]\n"
+	writeManagedFixture(t, second, []byte(content))
+
+	result, err := CatchUpConfigFromFormerEmails(t.Context(), second)
+	require.NoError(t, err)
+
+	assert.False(t, result.Changed())
+	raw, err := os.ReadFile(second) //nolint:gosec // test-owned temp path
+	require.NoError(t, err)
+	assert.Equal(t, content, string(raw))
+}
+
+// A sign-in that brings an address takes it off every other account's former
+// list: the address is an account's own again, and a section under it is
+// that account's, never caught up to another.
+//
+// Validates: R-3.7.3, R-3.7.5
+func TestLogin_ANewAccountTakesItsEmailOffAnotherAccountsFormerList(t *testing.T) {
+	t.Parallel()
+
+	renamed := driveid.MustCanonicalID("business:new@example.com")
+	returning := driveid.MustCanonicalID("personal:old@example.com")
+	catalog := &Catalog{}
+	catalog.UpsertAccount(&CatalogAccount{
+		CanonicalID: renamed.String(), Email: renamed.Email(), DriveType: renamed.DriveType(),
+		FormerEmails: []string{returning.Email(), "other@example.com"},
+	})
+
+	catalog.recordLogin(returning, &AccountLogin{UserID: "user-2"}, time.Now())
+
+	account, found := catalog.AccountByCanonicalID(renamed)
+	require.True(t, found)
+	assert.Equal(t, []string{"other@example.com"}, account.FormerEmails)
+	signedIn, found := catalog.AccountByCanonicalID(returning)
+	require.True(t, found)
+	assert.Empty(t, signedIn.FormerEmails)
 }

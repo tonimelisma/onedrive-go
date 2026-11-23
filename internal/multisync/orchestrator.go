@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -112,6 +113,15 @@ type OrchestratorConfig struct {
 	// changed level reaches the log file without a restart (R-2.8.1). Nil
 	// when the caller's logger has no adjustable file level.
 	ApplyLogLevel func(level string)
+	// AccountInCatalog reports whether the catalog still holds the account
+	// whose sign-in a mount syncs with. A watch runner asks it each time it
+	// starts an engine and starts none for an account the catalog no longer
+	// has: after an account email change another command made, or a logout,
+	// the runner's mount still carries the old ID until the watch reloads,
+	// and an engine started under it would open a fresh store under the old
+	// name and plan against an empty baseline. Nil asks nothing (tests that
+	// build mounts by hand).
+	AccountInCatalog func(account driveid.CanonicalID) (bool, error)
 }
 
 // Orchestrator manages per-mount sync runners. It is always used, even for a

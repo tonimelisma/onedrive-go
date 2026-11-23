@@ -537,6 +537,15 @@ and prints the "Account email changed" line once, so a command run with a
 drive's old name resolves it under the new one
 (`TestInitializeCLIContext_FinishesAnInterruptedEmailChangeBeforeTheCommandResolvesItsDrive`,
 `TestApplyEmailReconcileResult_RemapsEveryExactSelectorOfTheInvocation`).
+Right after, the command's config file is caught up from the former emails
+the catalog accounts keep (`catchUpConfigFromFormerEmails`,
+`config.CatchUpConfigFromFormerEmails`): a section another config file's
+change left under an old address is renamed, said in one line, and the
+selectors remapped (R-3.7.5,
+`TestInitializeCLIContext_ASecondConfigFileIsCaughtUpFromAFormerEmail`). A
+change applied or finished, or a file caught up, asks a running `sync
+--watch` to reload (`tellRunningWatchOfEmailChange`), except from the watch
+itself (`isWatchCommand`).
 A change that cannot be finished fails the command with the reason, because
 every name it would resolve may be half renamed. The commands cobra adds
 itself need no account and skip the whole CLI context

@@ -404,7 +404,7 @@ or legacy metadata files.
 
 ## Email Reconciliation
 
-Implements: R-3.7.1 [verified], R-3.7.2 [verified], R-3.7.3 [verified], R-3.7.4 [verified]
+Implements: R-3.7.1 [verified], R-3.7.2 [verified], R-3.7.3 [verified], R-3.7.4 [verified], R-3.7.5 [verified]
 
 `config.ReconcileAccountEmail()` owns durable email-change mutation. Given the
 current authenticated account type, stable Graph user GUID, and current Graph
@@ -449,11 +449,63 @@ email, it:
      A drive record whose key does not parse stops the step with an error:
      the catalog decoder and encoder refuse one, so it cannot be on disk
 
-Not covered yet (planned): a shortcut child's store (`state_mount_<digest of
-the mount ID>.db`, whose mount ID holds the parent's ID and so the email)
-does not move with its parent; a running `sync --watch` is not told at once
-about a change another command made; and a second config file sharing the
-data directory keeps sections under the old email. [planned]
+Three more things name the old email, and the change reaches each (R-3.7.5):
+
+- **A shortcut child's store moves with its drive's.** A child's store is
+  `state_mount_<digest of the mount ID>.db`, and the mount ID is the drive's
+  own ID (which holds the email) joined to the shortcut's binding
+  (`ChildMountID`). Each state move of a drive's own store carries the
+  drive's mount IDs before and after (`StateDBMove.FromMountID`,
+  `ToMountID`, filled from the change's drive renames and the catalog's drive
+  records under the old email, `stateDBMovesWithMounts`). The mover
+  (`syncengine.MoveStateDBs`) reads the bindings the drive's store records,
+  read-only and under its lock, at whichever name the store is now, takes the
+  child stores' locks too, checks their new names with the others before
+  the change is recorded, moves each child store's family, and gives the
+  drive's shortcut records the new mount ID
+  (`syncstore.RenameShortcutRootNamespaceAt`): a record left under the old
+  one is another mount's, which the drive would neither protect nor run.
+  The child moves are derived, not journaled: a resumed change derives the
+  same ones from the drive's store at its new name, and those already done
+  find their source gone. A drive store that cannot be read is moved as it
+  is, its children's stores staying under the old email, said in one Warn:
+  refusing would leave the change unfinished for good over state the next
+  sync rebuilds (`TestMoveStateDBs_MovesTheShortcutChildrensStoresWithTheirDrive`,
+  `TestReconcileAccountEmail_RenamesOwnedArtifacts`,
+  `TestReconcileAccountEmail_ACatalogDrivesStoreNamesItsMountIDs`). The trash
+  folders and upload-session records keyed by a store's or mount's name do
+  not move: a trash entry expires, and an upload session is started again.
+- **A running watch hears of the change and starts no engine under the old
+  name.** A command that applies or finishes a change, or catches up a
+  config file, asks a running `sync --watch` to reload at once
+  (`tellRunningWatchOfEmailChange`, `notifyDaemonIfRunning`), unless it is
+  the watch itself (`TestReconcileGraphUser_TellsARunningWatch`,
+  `TestFinishInterruptedEmailChange_TellsARunningWatch`,
+  `TestWatch_AChangeItFinishedItselfSendsNoReloadToItself`). Until that
+  reload lands, a watch runner checks the catalog each time it starts an
+  engine and starts none for an account the catalog no longer holds, or on a
+  catalog it cannot read (`OrchestratorConfig.AccountInCatalog`,
+  sync-control-plane.md; `TestRunner_DoesNotStartAnEngineForAnAccountTheCatalogNoLongerHolds`).
+  The catalog step comes before the journal is deleted, and while the
+  journal exists the engine refuses the stores it moves, so no stale runner
+  opens the old name at any instant. The rule holds for a logout racing a
+  stale runner too.
+- **A second config file is caught up.** The catalog account keeps the
+  addresses a change renamed it from (`CatalogAccount.FormerEmails`). At the
+  CLI's entry, after an unfinished change is finished, the command's config
+  file has every section under a former email of an account renamed to the
+  account's email now, by the same locked, idempotent section rename the
+  change makes, with one line to the user and the invocation's selectors
+  remapped (`CatchUpConfigFromFormerEmails`, `catchUpConfigFromFormerEmails`).
+  A former email that an account has now is that account's and never caught
+  up; a shared folder's section under an email two accounts had is left, as
+  nothing says whose it is. A sign-in that brings an address takes it off
+  every account's former list (`recordLogin`)
+  (`TestReconcileAccountEmail_RecordsTheFormerEmailOnTheAccount`,
+  `TestCatchUpConfigFromFormerEmails_RenamesASecondConfigFilesSections`,
+  `TestCatchUpConfigFromFormerEmails_LeavesWhatItCannotAssign`,
+  `TestLogin_ANewAccountTakesItsEmailOffAnotherAccountsFormerList`,
+  `TestInitializeCLIContext_ASecondConfigFileIsCaughtUpFromAFormerEmail`).
 
 Commands learn of a change from the CLI's account identity check, which is
 a freshness step and never a precondition (R-6.8.31). The catalog account
