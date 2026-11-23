@@ -467,7 +467,7 @@ func (o *LocalObserver) makeWalkFunc(
 			if synctree.IsDetachArtifactName(name) && d.Type().IsRegular() {
 				// A file set aside by a removal a crash interrupted: user
 				// content left under a hidden name. Report it every scan
-				// until the user deals with it; never delete it (P-4).
+				// until the user deals with it; never delete it (R-6.4.9).
 				// Only a regular file is ever set aside, so a folder or a
 				// special file with such a name is the user's own: it stays
 				// excluded like every entry with that name, unreported.

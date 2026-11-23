@@ -31,7 +31,7 @@ import (
 //   - the same location on both sides: nothing moves, the baseline is re-keyed
 //     (D-050);
 //   - different locations: OneDrive's wins and the local copy is moved to it
-//     (P-6, D-051). Neither choice loses data; remote-wins needs no remote
+//     (R-2.17.6, D-051). Neither choice loses data; remote-wins needs no remote
 //     mutation, so the local rename is the cheapest correct repair, and it is
 //     the same rule that breaks cycles;
 //   - a cycle (local A→B/A while OneDrive moved B→A/B): the remote move is kept

@@ -15,7 +15,7 @@ import (
 )
 
 // The local trash keeps what sync removed or replaced on this computer for
-// localtrash.Retention (P-4). It is per drive and lives under the data
+// localtrash.Retention (R-6.4.9). It is per drive and lives under the data
 // directory, so these commands work without network access. A drive's trash
 // commands also cover the trash of each of its shortcut children
 // (localtrash.Trash.Children): a child is a mount, not a configured drive,

@@ -612,7 +612,7 @@ func plannedCtimeChanged(planned *syncdomain.LocalState, info os.FileInfo) bool 
 // validateDownloadTargetBeforeReplace runs just before a finished download is
 // renamed over its target. With a trash, an existing target is verified
 // through the descriptor of the inode that is then preserved in the trash, so
-// the version kept is exactly the version checked (D-010, P-4); the rename
+// the version kept is exactly the version checked (D-010, R-6.4.9); the rename
 // that follows can no longer lose the content it replaces.
 func (e *Executor) validateDownloadTargetBeforeReplace(ctx context.Context, action *syncdomain.Action, target string) error {
 	if e.trash == nil {
@@ -1027,7 +1027,7 @@ func (e *Executor) validateNoSymlinkBoundary(relPath string, verb string) error 
 // application has open: its write-ahead log or rollback journal is non-empty.
 // Renaming new bytes over the main file while the sidecar holds uncommitted
 // pages corrupts the database the next time the application checkpoints
-// (P-3, D-084). It is a per-file condition retried later, not a stale plan:
+// (R-2.4.15, D-084). It is a per-file condition retried later, not a stale plan:
 // superseding would replan the same download at once.
 var ErrDatabaseInUse = errors.New("the local database is open in an application (it has a live -wal or -journal file)")
 

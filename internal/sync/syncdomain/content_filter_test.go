@@ -87,11 +87,11 @@ func TestContentFilter_ExtendedJunkList(t *testing.T) {
 	filter := NewContentFilter(ContentFilterConfig{IgnoreJunkFiles: true})
 
 	for _, junk := range []string{
-		"~$office-lock.docx", // Office owner file (P-2)
+		"~$office-lock.docx", // Office owner file (R-2.4.14)
 		"notes.txt~", ".notes.txt.swx", ".notes.txt.swo", "4913", "#notes.txt#", ".#notes.txt",
 		"Main.java___jb_tmp___", "Main.java___jb_old___",
 		".Spotlight-V100", ".Trashes", ".fseventsd", ".TemporaryItems", ".Trash-1000", "$RECYCLE.BIN", "Icon\r",
-		"app.db-wal", "app.db-shm", "places.sqlite-journal", // SQLite sidecars (P-3)
+		"app.db-wal", "app.db-shm", "places.sqlite-journal", // SQLite sidecars (R-2.4.15)
 		"photos/.fseventsd/000001",
 	} {
 		assert.False(t, filter.Visible(junk, ItemTypeFile), "%q is junk", junk)

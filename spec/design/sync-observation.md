@@ -549,7 +549,7 @@ stamps ctime from a coarse clock, so two writes in one tick share it).
   (walk stat, watch stat, `computeStableHashWith` pre-stat, which also rejects a
   read during which ctime moved), so a write racing the read leaves a newer
   ctime and forces the next re-read rather than hiding behind the recorded one.
-- A rolling re-verify budget (P-12) is not implemented: content that changes
+- A rolling re-verify budget is not implemented: content that changes
   without any metadata change (bit rot) is still only caught when something
   else forces a read. A created
 directory's own row is emitted before its contents are scanned.
@@ -576,7 +576,7 @@ stops with `watchCauseDescriptorBudget` once those entries plus the root exceed
 `watchDescriptorBudget()`, half of `RLIMIT_NOFILE` (zero, meaning no budget,
 on Linux, where inotify watches are not open files). The runtime then falls
 back to periodic full scans. An FSEvents watcher behind `FsWatcher` is the
-durable fix and is planned separately (P-15).
+durable fix, not yet a requirement or a plan.
 
 At watch start the observer identifies the sync root's filesystem with statfs
 (`localFilesystemKind`, in the platform files). Changes that reach a network or
@@ -769,7 +769,7 @@ subtree:
 - a synced path now occupied by a symlink sync does not follow, or by a FIFO,
   socket or device: `local_unsyncable_replacement` at that path (D-004);
 - a synced item renamed to a name OneDrive refuses, a too-long path, or an
-  excluded name (a dotfile under `ignore_dotfiles`, P-5):
+  excluded name (a dotfile under `ignore_dotfiles`, R-6.2.14):
   `local_unsyncable_replacement` at the old synced path, found by matching the
   skipped entry's (device, inode) against baseline identities; a regular file
   with other hard links is not evidence and is skipped;
@@ -782,7 +782,7 @@ subtree:
   (`truthVerdictForIssueType`, sync-store.md);
 - a folder whose device differs from its parent's, both read in the same scan,
   is a mount point; unless `cross_filesystems = true` it is not descended and
-  is recorded as `local_mount_boundary` (D-003, P-11). Devices are only
+  is recorded as `local_mount_boundary` (D-003, R-6.2.15). Devices are only
   compared within one scan, because device numbers change between boots;
   the sync folder's own device is required, and a scan that cannot read it
   stops as an unavailable sync folder;

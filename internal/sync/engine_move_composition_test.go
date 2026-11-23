@@ -168,7 +168,7 @@ func TestRunOnce_RenameAndRecreateMovesThenCreates(t *testing.T) {
 
 // Validates: R-2.17.6
 //
-// Local a→b while OneDrive renamed a→c (D-051). OneDrive's name wins (P-6):
+// Local a→b while OneDrive renamed a→c (D-051). OneDrive's name wins (R-2.17.6):
 // the local copy is renamed to c, nothing is uploaded or deleted, and the next
 // plan is quiet. Before, the plan moved the remote item from a, where it no
 // longer was, and was superseded on every pass.

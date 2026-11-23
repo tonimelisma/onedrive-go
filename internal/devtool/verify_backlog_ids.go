@@ -47,7 +47,18 @@ func runRetiredBacklogIDs(
 ) error {
 	return runViolationCheck(stdout, "retired backlog ids",
 		"retired backlog id check failed (see "+retiredBacklogRegistryPath+")",
-		func() ([]checkViolation, error) { return findBacklogIDViolations(repoRoot) })
+		func() ([]checkViolation, error) {
+			violations, err := findBacklogIDViolations(repoRoot)
+			if err != nil {
+				return nil, err
+			}
+			labels, err := findPrincipleLabelViolations(repoRoot)
+			if err != nil {
+				return nil, err
+			}
+
+			return append(violations, labels...), nil
+		})
 }
 
 func findBacklogIDViolations(repoRoot string) ([]checkViolation, error) {

@@ -815,7 +815,7 @@ a writer that keeps both, such as `rsync --inplace -t` or a write through an
 mmap that does not update mtime, can still slip a change past it.
 
 The file does not vanish: it moves into the drive's local trash
-(`internal/localtrash`, P-4), a directory under the data directory named after
+(`internal/localtrash`, R-6.4.9), a directory under the data directory named after
 the drive's state DB (`DirForStatePath`). Each entry is recorded as pending before anything is
 moved and as committed after, so a crash in between leaves a pending entry
 that `trash list` shows and `trash restore` puts back; an entry holding a file

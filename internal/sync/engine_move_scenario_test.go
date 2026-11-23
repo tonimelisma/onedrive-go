@@ -473,7 +473,7 @@ func TestRunOnce_RemoteFolderReplacedByFileWithLocalChildEditsKeepsBoth(t *testi
 // Validates: R-2.17.4, R-2.17.10
 //
 // The user replaced a folder with a file while OneDrive edited a file inside
-// the folder (GEN-079(b), P-7): the remote edit is not deleted with the
+// the folder (GEN-079(b), R-2.17.10): the remote edit is not deleted with the
 // folder. Local loses the path: its file becomes a conflict copy and the
 // folder with the edit comes back.
 func TestRunOnce_LocalFolderReplacedByFileWithRemoteChildEditKeepsBoth(t *testing.T) {

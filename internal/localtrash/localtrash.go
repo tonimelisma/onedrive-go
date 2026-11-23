@@ -7,7 +7,7 @@
 // after Retention. The trash turns the data-loss outcomes that safety checks
 // exist to prevent (a mass delete that slipped through, a file replaced
 // between verification and removal, a remote deletion the user did not mean)
-// into something a user can undo with `onedrive-go trash restore` (P-4).
+// into something a user can undo with `onedrive-go trash restore` (R-6.4.9).
 //
 // Layout, one directory per entry:
 //

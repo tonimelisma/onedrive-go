@@ -49,7 +49,7 @@ func TestIsDisposable(t *testing.T) {
 		{"file.crdownload", true},
 		{"~backup", true},
 		{".~lock.file", true},
-		// Office owner files are junk under P-2 (they are lock files that
+		// Office owner files are junk under R-2.4.14 (they are lock files that
 		// churn and confuse other devices).
 		{"~$doc.docx", true},
 		{"app.db-wal", true},

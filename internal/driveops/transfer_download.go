@@ -200,7 +200,7 @@ type downloadAttempt struct {
 }
 
 // acceptsServerTransform reports whether a run of mismatching attempts is
-// the deterministic server transform P-10 accepts: every attempt returned
+// the deterministic server transform R-5.8.2 accepts: every attempt returned
 // the same bytes, none was an error document, the item has a hash to differ
 // from, and the size is the reported one. Anything else is an integrity
 // failure.

@@ -855,7 +855,7 @@ Sync intent is derived from observation snapshots and planner reconciliation,
 then applied by the sync executor through concrete file and remote side effects.
 
 `sync` refuses to run as root (effective UID 0) unless `--allow-root` is
-given (P-9): a root sync writes root-owned files into the user's folder that
+given (R-6.3.7): a root sync writes root-owned files into the user's folder that
 the user's later syncs and editors cannot change. The refusal is a usage
 error raised before config is read (`refuseSyncAsRoot`,
 `TestSync_RefusesRootWithoutAllowRoot`).

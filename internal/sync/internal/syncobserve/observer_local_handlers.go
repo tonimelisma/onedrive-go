@@ -1079,7 +1079,7 @@ func (o *LocalObserver) HandleDelete(
 // a name sync skips (recognized by filesystem identity). The rename's delete
 // half has already reached the runtime; the scan records the synced path as
 // unavailable (scanner_unavailable.go) within the same debounce window, so
-// the replan sees an unavailable path instead of a deleted one (D-004, P-5).
+// the replan sees an unavailable path instead of a deleted one (D-004, R-6.2.14).
 func (o *LocalObserver) rescanIfSkippedEntryHidesSyncedItem(
 	ctx context.Context,
 	tree *synctree.Root,

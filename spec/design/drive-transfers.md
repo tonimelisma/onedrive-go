@@ -51,7 +51,7 @@ sync's rooted target, which never creates a parent. The final mode
 is the replaced file's permission bits, or 0666 minus the umask for a new
 file; the umask is read once per `TransferManager` from `/proc/self/status`
 on Linux, or by creating a probe file elsewhere, since reading it with
-`umask(2)` would change it for every other goroutine (D-044, P-8). ACLs, extended attributes and Finder tags of a replaced file are not
+`umask(2)` would change it for every other goroutine (D-044, R-5.10.2). ACLs, extended attributes and Finder tags of a replaced file are not
 carried over. The fsync before the rename and the directory sync after it
 make the download durable before success is reported (D-042). Evidence:
 `TestDownloadToFile_FsyncsBeforeRenameAndSyncsDirAfter`,
@@ -694,7 +694,7 @@ It is reported once per file, at INFO on a Business or SharePoint drive
 (`isBusinessLikeDriveID`: those rewrite uploads routinely) and at WARN with
 the path on a personal drive, where nothing legitimately rewrites bytes.
 
-The HEIC quirk (R-5.8.1, P-10) is a smaller post-processed HEIF file, and
+The HEIC quirk (R-5.8.1, R-5.8.2) is a smaller post-processed HEIF file, and
 only that shape is accepted: a `.heic` whose served size is non-zero and
 below the reported size (`isHEICServedSmaller`) **and** whose partial starts
 with an ISO BMFF `ftyp` box (`hasISOBMFFSignature`, read through the target
