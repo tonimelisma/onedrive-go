@@ -98,3 +98,39 @@ func TestRunOnce_DryRunActivityListsPlannedActions(t *testing.T) {
 		assert.True(t, a.Planned, "dry-run activity must be marked planned: %+v", a)
 	}
 }
+
+// A delete of a folder says so on its activity, done and planned, from the
+// planned action's view, and a report counts the folder deletes of a plan
+// apart, so the console's summary never calls a folder a file.
+//
+// Validates: R-6.6.18, R-6.6.19
+func TestActivity_AFolderDeleteIsMarkedAsAFolder(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	var got []Activity
+	eng.SetActivityHook(func(a Activity) { got = append(got, a) })
+
+	folderView := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFolder}}
+	fileView := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: syncdomain.ItemTypeFile}}
+	actions := []syncdomain.Action{
+		{Type: syncdomain.ActionLocalDelete, Path: "old", View: folderView},
+		{Type: syncdomain.ActionLocalDelete, Path: "old/a.txt", View: fileView},
+		{Type: syncdomain.ActionRemoteDelete, Path: "gone", View: folderView},
+	}
+
+	completion := syncdomain.ActionCompletionFromTrackedAction(&syncdomain.TrackedAction{Action: actions[0]}, nil, nil)
+	assert.Equal(t, syncdomain.ItemTypeFolder, completion.ItemType)
+	eng.emitActivity(&completion, &syncdomain.ResultDecision{Class: errclass.ClassSuccess}, false)
+	eng.emitPlannedActivity(&syncdomain.ActionPlan{Actions: actions})
+
+	require.Len(t, got, 4)
+	assert.True(t, got[0].Folder, "the done delete of a folder")
+	assert.True(t, got[1].Folder, "the planned delete of a folder")
+	assert.False(t, got[2].Folder, "the planned delete of a file")
+	assert.True(t, got[3].Folder, "the planned delete of a folder on OneDrive")
+
+	local, remote := countFolderDeletes(actions)
+	assert.Equal(t, 1, local)
+	assert.Equal(t, 1, remote)
+}

@@ -76,6 +76,9 @@ type reportedPath struct {
 type activityTally struct {
 	counts map[syncengine.ActivityKind]int
 	bytes  map[syncengine.ActivityKind]int64
+	// folders is how many of counts were folders, by kind: a delete counts
+	// files and folders apart ("deleted 3 files and 1 folder locally").
+	folders map[syncengine.ActivityKind]int
 }
 
 func newSyncConsole(cc *CLIContext, watch bool) *syncConsole {
@@ -219,8 +222,9 @@ func (c *syncConsole) ActivityHook() func(multisync.MountActivity) {
 
 func newActivityTally() *activityTally {
 	return &activityTally{
-		counts: make(map[syncengine.ActivityKind]int),
-		bytes:  make(map[syncengine.ActivityKind]int64),
+		counts:  make(map[syncengine.ActivityKind]int),
+		bytes:   make(map[syncengine.ActivityKind]int64),
+		folders: make(map[syncengine.ActivityKind]int),
 	}
 }
 
@@ -367,6 +371,9 @@ func (c *syncConsole) record(mountID string, a *syncengine.Activity) {
 		return
 	}
 	tally.counts[a.Kind]++
+	if a.Folder {
+		tally.folders[a.Kind]++
+	}
 	if a.SizeKnown {
 		tally.bytes[a.Kind] += a.Size
 	}
@@ -395,6 +402,8 @@ func (c *syncConsole) tallyFor(mountID string, r *syncengine.Report) *activityTa
 	tally.counts[syncengine.ActivityUpload] = r.Uploads
 	tally.counts[syncengine.ActivityLocalDelete] = r.LocalDeletes
 	tally.counts[syncengine.ActivityRemoteDelete] = r.RemoteDeletes
+	tally.folders[syncengine.ActivityLocalDelete] = r.LocalFolderDeletes
+	tally.folders[syncengine.ActivityRemoteDelete] = r.RemoteFolderDeletes
 	tally.counts[syncengine.ActivityLocalMove] = r.Moves
 	tally.counts[syncengine.ActivityFolderCreate] = r.FolderCreates
 	tally.counts[syncengine.ActivityConflictCopy] = r.ConflictCopies
@@ -464,11 +473,27 @@ func (t *activityTally) parts() []string {
 		}
 		parts = append(parts, text+suffix)
 	}
+	// A delete says what it removed: files and folders apart, since a
+	// folder's files are deleted (and counted) one by one before it.
+	addDeletes := func(kind syncengine.ActivityKind, suffix string) {
+		folders := t.folders[kind]
+		files := t.counts[kind] - folders
+		var items []string
+		if files > 0 {
+			items = append(items, countOf(files, "file"))
+		}
+		if folders > 0 {
+			items = append(items, countOf(folders, "folder"))
+		}
+		if len(items) > 0 {
+			parts = append(parts, "deleted "+strings.Join(items, " and ")+suffix)
+		}
+	}
 
 	add(syncengine.ActivityDownload, "downloaded", "file", "")
 	add(syncengine.ActivityUpload, "uploaded", "file", "")
-	add(syncengine.ActivityLocalDelete, "deleted", "file", " locally")
-	add(syncengine.ActivityRemoteDelete, "deleted", "file", " on OneDrive")
+	addDeletes(syncengine.ActivityLocalDelete, " locally")
+	addDeletes(syncengine.ActivityRemoteDelete, " on OneDrive")
 	add(syncengine.ActivityLocalMove, "moved", "item", "")
 	add(syncengine.ActivityRemoteMove, "moved", "item", " on OneDrive")
 	add(syncengine.ActivityFolderCreate, "created", "folder", "")
@@ -550,8 +575,12 @@ func activitySuccessLine(a *syncengine.Activity) string {
 		if a.SizeKnown && !a.Planned {
 			return fmt.Sprintf("%s %s (%s)", verb, a.Path, formatSize(a.Size))
 		}
-	case syncengine.ActivityLocalDelete, syncengine.ActivityRemoteDelete,
-		syncengine.ActivityFolderCreate, syncengine.ActivityConflictCopy:
+	case syncengine.ActivityLocalDelete, syncengine.ActivityRemoteDelete:
+		if a.Folder {
+			// A trailing slash marks a folder, as ls -F and rsync do.
+			return verb + " " + a.Path + "/"
+		}
+	case syncengine.ActivityFolderCreate, syncengine.ActivityConflictCopy:
 	}
 
 	return verb + " " + a.Path

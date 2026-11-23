@@ -644,6 +644,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 
 	counts := syncplan.CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
+	report.LocalFolderDeletes, report.RemoteFolderDeletes = countFolderDeletes(plan.Actions)
 	report.HeldLocalDeletes, report.HeldRemoteDeletes = syncdomain.CountHeldDeletesBySide(plan.HeldDeletes)
 
 	return &builtCurrentPlan{

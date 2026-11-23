@@ -936,3 +936,138 @@ func TestRunSyncDaemonWithFactory_AStdoutThatRefusesALineFailsAWatchThatStopsCle
 	require.ErrorAs(t, err, &outputErr)
 	assert.Equal(t, 1, strings.Count(errOut.String(), "Warning: sync output is incomplete"), errOut.String())
 }
+
+// A summary counts what each delete removed: files and folders apart, on
+// each side, in a live run from the activity feed and in a dry run from the
+// planner's counts, so a deleted empty folder is never "1 file".
+//
+// Validates: R-6.6.19
+func TestSyncConsole_SummaryCountsDeletedFoldersAsFolders(t *testing.T) {
+	t.Parallel()
+
+	type deleted struct {
+		kind   syncengine.ActivityKind
+		folder bool
+	}
+	local, remote := syncengine.ActivityLocalDelete, syncengine.ActivityRemoteDelete
+	tests := []struct {
+		name    string
+		deletes []deleted
+		want    string
+		dryRun  string
+	}{
+		{
+			name:    "one file locally",
+			deletes: []deleted{{kind: local}},
+			want:    "deleted 1 file locally",
+			dryRun:  "Would delete 1 file locally.",
+		},
+		{
+			name:    "one folder locally",
+			deletes: []deleted{{kind: local, folder: true}},
+			want:    "deleted 1 folder locally",
+			dryRun:  "Would delete 1 folder locally.",
+		},
+		{
+			name:    "files and a folder locally",
+			deletes: []deleted{{kind: local}, {kind: local}, {kind: local}, {kind: local, folder: true}},
+			want:    "deleted 3 files and 1 folder locally",
+			dryRun:  "Would delete 3 files and 1 folder locally.",
+		},
+		{
+			name:    "one folder on OneDrive",
+			deletes: []deleted{{kind: remote, folder: true}},
+			want:    "deleted 1 folder on OneDrive",
+			dryRun:  "Would delete 1 folder on OneDrive.",
+		},
+		{
+			name:    "a file and two folders on OneDrive",
+			deletes: []deleted{{kind: remote}, {kind: remote, folder: true}, {kind: remote, folder: true}},
+			want:    "deleted 1 file and 2 folders on OneDrive",
+			dryRun:  "Would delete 1 file and 2 folders on OneDrive.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c, out, _ := testSyncConsole()
+			c.ActivityHook()
+			report := &syncengine.Report{Duration: time.Second}
+			for i, d := range tt.deletes {
+				c.Activity(mountActivity(&syncengine.Activity{
+					Kind: d.kind, Path: fmt.Sprintf("item%d", i), Folder: d.folder, Success: true,
+				}))
+				report.Succeeded++
+				switch {
+				case d.kind == local && d.folder:
+					report.LocalDeletes++
+					report.LocalFolderDeletes++
+				case d.kind == local:
+					report.LocalDeletes++
+				case d.folder:
+					report.RemoteDeletes++
+					report.RemoteFolderDeletes++
+				default:
+					report.RemoteDeletes++
+				}
+			}
+			out.Reset()
+
+			c.Summary(singleMountResult(report))
+			assert.Equal(t, "Done in 1.0 s: "+tt.want+".\n", out.String())
+
+			dry, dryOut, _ := testSyncConsole()
+			dryReport := *report
+			dryReport.DryRun = true
+			dry.Summary(singleMountResult(&dryReport))
+			assert.Equal(t, "Dry run, nothing was changed. "+tt.dryRun+"\n", dryOut.String())
+		})
+	}
+}
+
+// A deleted folder's own line marks it as a folder with a trailing slash,
+// done and planned; a file's line is unchanged.
+//
+// Validates: R-6.6.18
+func TestSyncConsole_ADeletedFolderLineEndsWithASlash(t *testing.T) {
+	t.Parallel()
+
+	c, out, _ := testSyncConsole()
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityLocalDelete, Path: "Docs/old", Folder: true, Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityRemoteDelete, Path: "Docs/a.txt", Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityRemoteDelete, Path: "Docs/new", Folder: true, Planned: true}))
+
+	assert.Equal(t, "Deleted locally Docs/old/\nDeleted on OneDrive Docs/a.txt\nWould delete on OneDrive Docs/new/\n", out.String())
+}
+
+// The --json twin: an activity of a folder says "folder": true, and the
+// summary's folder_counts says how many of counts were folders, with counts
+// keeping its meaning of every item.
+//
+// Validates: R-6.6.19, R-6.6.33
+func TestSyncConsole_JSONSummaryCountsDeletedFoldersApart(t *testing.T) {
+	t.Parallel()
+
+	c, out, _ := testSyncConsole()
+	c.json = true
+	c.ActivityHook()
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityLocalDelete, Path: "a.txt", Success: true}))
+	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityLocalDelete, Path: "old", Folder: true, Success: true}))
+	c.Summary(singleMountResult(&syncengine.Report{
+		Duration: time.Second, LocalDeletes: 2, LocalFolderDeletes: 1, Succeeded: 2,
+	}))
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	require.Len(t, lines, 3)
+	var file, folder, summary syncJSONEvent
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &file))
+	require.NoError(t, json.Unmarshal([]byte(lines[1]), &folder))
+	require.NoError(t, json.Unmarshal([]byte(lines[2]), &summary))
+	assert.False(t, file.Folder)
+	assert.NotContains(t, lines[0], `"folder"`, "a file's line carries no folder field")
+	assert.True(t, folder.Folder)
+	assert.Equal(t, map[string]int{"delete_local": 2}, summary.Counts)
+	assert.Equal(t, map[string]int{"delete_local": 1}, summary.FolderCounts)
+}

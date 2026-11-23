@@ -32,7 +32,11 @@ type Activity struct {
 	OldPath   string
 	Size      int64
 	SizeKnown bool
-	Success   bool
+	// Folder is whether the item the action touched is a folder, as the
+	// planned action's view says (syncdomain.ActionItemType), so a summary
+	// counts a deleted folder as a folder rather than as a file.
+	Folder  bool
+	Success bool
 	// Planned is true for a dry run: the action would happen but did not.
 	Planned bool
 	// WillRetry is true for failures the engine keeps as retry work; the user
@@ -107,6 +111,7 @@ func (e *Engine) emitActivity(r *syncdomain.ActionCompletion, decision *syncdoma
 		OldPath:   r.OldPath,
 		Size:      r.Size,
 		SizeKnown: r.SizeKnown,
+		Folder:    r.ItemType == syncdomain.ItemTypeFolder,
 	}
 
 	switch decision.Class {
@@ -202,6 +207,7 @@ func (e *Engine) emitPlannedActivity(plan *syncdomain.ActionPlan) {
 			Kind:    kind,
 			Path:    action.Path,
 			OldPath: action.OldPath,
+			Folder:  syncdomain.ActionItemType(action) == syncdomain.ItemTypeFolder,
 			Planned: true,
 		})
 	}

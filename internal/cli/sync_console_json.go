@@ -25,7 +25,9 @@ type syncJSONEvent struct {
 	Path    string `json:"path,omitempty"`
 	OldPath string `json:"old_path,omitempty"`
 	Size    *int64 `json:"size,omitempty"`
-	Status  string `json:"status,omitempty"`
+	// Folder marks an activity whose item is a folder.
+	Folder bool   `json:"folder,omitempty"`
+	Status string `json:"status,omitempty"`
 	// Condition is, for an activity a condition only the user can clear
 	// refused, that condition as `status --json` names it in its `type`.
 	Condition string `json:"condition,omitempty"`
@@ -34,9 +36,12 @@ type syncJSONEvent struct {
 	// Summary fields.
 	DurationMS *int64         `json:"duration_ms,omitempty"`
 	Counts     map[string]int `json:"counts,omitempty"`
-	Failed     *int           `json:"failed,omitempty"`
-	WillRetry  *int           `json:"will_retry,omitempty"`
-	StillOpen  *int           `json:"still_open,omitempty"`
+	// FolderCounts is, by action, how many of Counts were folders; an
+	// action with no folder is left out (counts keeps meaning every item).
+	FolderCounts map[string]int `json:"folder_counts,omitempty"`
+	Failed       *int           `json:"failed,omitempty"`
+	WillRetry    *int           `json:"will_retry,omitempty"`
+	StillOpen    *int           `json:"still_open,omitempty"`
 }
 
 const (
@@ -117,6 +122,7 @@ func (c *syncConsole) jsonActivity(ma multisync.MountActivity) {
 		Action:  activityJSONAction(a.Kind),
 		Path:    a.Path,
 		OldPath: a.OldPath,
+		Folder:  a.Folder,
 	}
 	if a.SizeKnown {
 		size := a.Size
@@ -182,6 +188,14 @@ func (c *syncConsole) jsonSummary(result multisync.RunOnceResult, left map[strin
 		for kind, n := range tally.counts {
 			if n > 0 {
 				event.Counts[activityJSONAction(kind)] = n
+			}
+		}
+		for kind, n := range tally.folders {
+			if n > 0 {
+				if event.FolderCounts == nil {
+					event.FolderCounts = make(map[string]int, len(tally.folders))
+				}
+				event.FolderCounts[activityJSONAction(kind)] = n
 			}
 		}
 		c.emitJSON(event)

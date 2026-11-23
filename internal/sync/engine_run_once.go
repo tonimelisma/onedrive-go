@@ -517,6 +517,28 @@ func (r *oneShotRunner) dispatchInitialReadyActions(
 	return initialOutbox, false, nil
 }
 
+// countFolderDeletes counts the local and the remote deletes among actions
+// that remove a folder (syncdomain.ActionItemType).
+func countFolderDeletes(actions []syncdomain.Action) (local, remote int) {
+	for i := range actions {
+		action := &actions[i]
+		if syncdomain.ActionItemType(action) != syncdomain.ItemTypeFolder {
+			continue
+		}
+		switch action.Type {
+		case syncdomain.ActionLocalDelete:
+			local++
+		case syncdomain.ActionRemoteDelete:
+			remote++
+		case syncdomain.ActionDownload, syncdomain.ActionUpload, syncdomain.ActionLocalMove,
+			syncdomain.ActionRemoteMove, syncdomain.ActionFolderCreate, syncdomain.ActionConflictCopy,
+			syncdomain.ActionBaselineUpdate, syncdomain.ActionCleanup:
+		}
+	}
+
+	return local, remote
+}
+
 // buildReportFromCounts populates a Report with plan counts and directionally
 // deferred work observed by the planner.
 func buildReportFromCounts(

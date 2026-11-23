@@ -428,7 +428,22 @@ The console prints:
   `WillRetry` or, through `LastPassAwaitingUser`, `StillOpen`. The line adds "; N still not synced (see 'onedrive-go
   status')" for `StillOpen`, and a drive that left anything is never "Up to
   date". A dry run leaves nothing. `syncConsole.Summary` returns each mount's counts, the
-  ones it printed, to `runOnceResultError`
+  ones it printed, to `runOnceResultError`. A delete is worded by what it
+  removed, files and folders apart ("deleted 3 files and 1 folder locally",
+  "Would delete 1 folder on OneDrive"): the engine marks an activity whose
+  planned view is a folder (`Activity.Folder`, from
+  `syncdomain.ActionItemType`, which `ActionCompletion.ItemType` carries to
+  the completion), and a plan's folder deletes are counted apart for a dry
+  run (`Report.LocalFolderDeletes`, `Report.RemoteFolderDeletes`). A folder
+  with files is one activity per file and one for the folder, since the
+  planner deletes children before their parent. A deleted folder's own line
+  ends with `/`, and under `--json` its `activity` line carries
+  `"folder": true` and the `summary` a `folder_counts` map of how many of
+  `counts` were folders; `counts` keeps meaning every item
+  (`TestSyncConsole_SummaryCountsDeletedFoldersAsFolders`,
+  `TestSyncConsole_ADeletedFolderLineEndsWithASlash`,
+  `TestSyncConsole_JSONSummaryCountsDeletedFoldersApart`,
+  `TestActivity_AFolderDeleteIsMarkedAsAFolder`)
 - watch mode: a startup line per folder and account, the Ctrl-C hint on a
   terminal, time-of-day prefixes off the journal, and "Stopped." (R-6.6.20)
 - `--quiet` keeps only failures

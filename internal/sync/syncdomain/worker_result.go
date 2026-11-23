@@ -11,11 +11,14 @@ import (
 // DepGraph.Complete. Failed items become retry_work, block_scopes, or other
 // engine-owned durable control state through the persistence flow.
 type ActionCompletion struct {
-	Path              string
-	OldPath           string
-	ItemID            string
-	DriveID           driveid.ID
-	ActionType        ActionType
+	Path       string
+	OldPath    string
+	ItemID     string
+	DriveID    driveid.ID
+	ActionType ActionType
+	// ItemType is the kind of item the action touched, as its planned view
+	// says (ActionItemType): what the activity feed tells a summary.
+	ItemType          ItemType
 	Success           bool
 	ErrMsg            string
 	HTTPStatus        int // from graph.GraphError, 0 if not a Graph API error
@@ -99,6 +102,7 @@ func ActionCompletionFromTrackedAction(
 		ItemID:               ta.Action.ItemID,
 		DriveID:              driveID,
 		ActionType:           ta.Action.Type,
+		ItemType:             ActionItemType(&ta.Action),
 		Err:                  actionErr,
 		ErrMsg:               "",
 		HTTPStatus:           ExtractHTTPStatus(actionErr),

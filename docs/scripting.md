@@ -99,8 +99,8 @@ Each line is one JSON object with an `event` field:
 | --- | --- | --- |
 | `start` | One-shot sync begins, one line per drive | `drive`, `sync_dir`, `account`, `mode`, `dry_run`, `paused` |
 | `watching` | `sync --watch` is running, one line per drive | `drive`, `sync_dir`, `account`, `mode`, `paused` |
-| `activity` | A file action finished (or, in a dry run, is planned) | `drive`, `action`, `path`, `old_path` (moves), `size`, `status`, `condition`, `error` |
-| `summary` | A drive's one-shot sync finished; `failed`, `will_retry` and `still_open` are what its last pass left | `drive`, `status`, `duration_ms`, `counts`, `failed`, `will_retry`, `still_open`, `dry_run`, `error` |
+| `activity` | A file action finished (or, in a dry run, is planned) | `drive`, `action`, `path`, `old_path` (moves), `size`, `folder`, `status`, `condition`, `error` |
+| `summary` | A drive's one-shot sync finished; `failed`, `will_retry` and `still_open` are what its last pass left | `drive`, `status`, `duration_ms`, `counts`, `folder_counts`, `failed`, `will_retry`, `still_open`, `dry_run`, `error` |
 | `stopped` | `sync --watch` stopped | |
 
 - `mode` is `bidirectional`, `download_only` or `upload_only`.
@@ -121,7 +121,10 @@ Each line is one JSON object with an `event` field:
   held it until its retry is due. On a `summary` the status is `done`,
   `incomplete` (the drive left files unsynced, and the run exits 1) or
   `failed` (the drive could not sync; `error` says why).
-- `counts` maps the same `action` names to how many were done.
+- `counts` maps the same `action` names to how many were done, every item.
+  `folder_counts` says, for an action that touched folders, how many of
+  those were folders (`{"delete_local": 1}`), and an `activity` whose item
+  is a folder has `"folder": true`.
 - On a `summary`, `failed`, `will_retry` and `still_open` describe what the
   run's last pass left, each file once: `still_open` counts the files an
   issue listed by `status` keeps unsynced until you clear it (a name OneDrive
