@@ -333,3 +333,28 @@ func TestConfiguredMinFreeSpace(t *testing.T) {
 	_, err = newDownloadManager(unreadable, nil)
 	require.ErrorContains(t, err, "min_free_space")
 }
+
+// A path read answered 400 is walked by name from the drive root: the first
+// name is read under the root's alias, which no answer carries as its parent
+// ID (the fake root has an ID of its own, as Graph's does), so the get finds
+// it only because the answer's parent path places it at the top of the drive.
+//
+// Validates: R-6.7.22, R-6.7.8
+func TestRunGet_APathReadAnswered400IsWalkedFromTheRootAlias(t *testing.T) {
+	setTestDriveHome(t)
+	cc, fake := jsonContractFileContext(t)
+	addFakeItem(fake, addFakeItem(fake, fakeGraphRootID, "Docs", true, ""), "a.txt", false, "hello")
+	fake.mu.Lock()
+	fake.pathReadsRefused = true
+	fake.mu.Unlock()
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+
+	run := runFileCommand(t, getCommand, cc, false, "/Docs/a.txt")
+
+	require.NoError(t, run.err, run.stderr)
+	assertFileHolds(t, filepath.Join(workDir, "a.txt"), "hello")
+	listings, nameReads := fakeRequestCounts(fake)
+	assert.Equal(t, 2, nameReads, "one read of each name, the first under the root's alias")
+	assert.Zero(t, listings, "an answer read under the alias is taken, not looked for in a listing")
+}

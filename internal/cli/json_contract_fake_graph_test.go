@@ -34,6 +34,11 @@ type fakeGraphDrive struct {
 	baseURL string
 	// deleteRefused makes every DELETE answer 403, for cleanup-failure tests.
 	deleteRefused bool
+	// pathReadsRefused makes every read by path from the drive root
+	// (root:/{path}) answer 400, as Graph answers a path holding a name its
+	// route cannot resolve; reads of one name under a parent, the root's
+	// alias included, still answer.
+	pathReadsRefused bool
 	// hangRenameTo makes a PATCH renaming an item to this name hang until
 	// the client gives up.
 	hangRenameTo string
@@ -89,7 +94,12 @@ type fakeGraphRequest struct {
 }
 
 const (
-	fakeGraphRootID            = "root"
+	// fakeGraphRootID is the drive root's own item ID. Like Graph's, it is
+	// not the alias "root" that routes accept for it (fakeGraphRootAlias),
+	// so an answer read through the alias names a parent no route was asked
+	// by, and the client must place it by its parent path.
+	fakeGraphRootID            = "0000000drive-root-item"
+	fakeGraphRootAlias         = "root"
 	fakeGraphCopyMonitorPrefix = "https://monitor.1drv.com/copy/"
 
 	fakeGraphActionChildren        = "children"
@@ -294,6 +304,11 @@ func (f *fakeGraphDrive) serveByPath(w http.ResponseWriter, r *http.Request, res
 	case r.Method == http.MethodGet && suffix == "":
 		if byRootAlias {
 			f.nameReads++
+		} else if f.pathReadsRefused {
+			f.writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{
+				"code": "invalidRequest", "message": "Invalid request",
+			}})
+			return
 		}
 		item := f.byPath(itemPath)
 		if item == nil {
@@ -315,13 +330,24 @@ func (f *fakeGraphDrive) serveByPath(w http.ResponseWriter, r *http.Request, res
 	}
 }
 
+// resolveRootAlias is the item ID a route's ID segment names: the root's
+// own ID for the alias, the segment itself otherwise.
+func (f *fakeGraphDrive) resolveRootAlias(id string) string {
+	if id == fakeGraphRootAlias {
+		return fakeGraphRootID
+	}
+
+	return id
+}
+
 func (f *fakeGraphDrive) serveByID(w http.ResponseWriter, r *http.Request, rest string) {
 	if id, childPath, isChildPath := strings.Cut(rest, ":/"); isChildPath {
-		f.serveChildByName(w, r, id, childPath)
+		f.serveChildByName(w, r, f.resolveRootAlias(id), childPath)
 		return
 	}
 
 	id, action, _ := strings.Cut(rest, "/")
+	id = f.resolveRootAlias(id)
 	req := fakeGraphRequest{w: w, r: r, id: id, item: f.items[id], action: action}
 
 	if action == fakeGraphActionRestore || action == fakeGraphActionPermanentDelete {
