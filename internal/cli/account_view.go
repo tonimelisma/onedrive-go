@@ -237,13 +237,6 @@ func accountViewByCanonicalID(views []accountView, account driveid.CanonicalID) 
 	return accountView{}, false
 }
 
-// accountViewMatchesSelector reports whether an --account selector names the
-// view's account: its address (which names both accounts at an address two
-// share) or its canonical ID.
-func accountViewMatchesSelector(view *accountView, selector string) bool {
-	return selector == view.Email || (!view.AccountCanonicalID.IsZero() && selector == view.AccountCanonicalID.String())
-}
-
 // accountViewAuthByDrive is each configured drive's account sign-in health,
 // from the view of the account that owns the drive.
 func accountViewAuthByDrive(views []accountView) map[driveid.CanonicalID]accountAuthHealth {

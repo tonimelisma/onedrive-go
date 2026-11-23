@@ -58,12 +58,14 @@ drive sections, purged stores and catalog records alone
 (`TestLogout_RefusesAnEmailTwoAccountsShare`,
 `TestLogout_ACanonicalIDSelectorRemovesOnlyThatAccount`,
 `TestApplyPurgeLogout_LeavesTheOtherAccountAtTheSameAddress`; R-3.5.2).
-`status --account` and `drive search --account` read the selector through
-the same rule (`resolveAccountSelector`, `accountTarget`): a shared email is
+`status --account`, `drive search --account`, `shared --account` and the
+shared-folder search of `drive add --account` read the selector through the
+same rule (`resolveAccountSelector`, `accountTarget`): a shared email is
 refused naming the canonical IDs, and a canonical ID shows that account's
 row and drives, or searches with that account, alone
 (`TestStatus_AccountSelectorPicksOneOfTwoAccountsAtOneAddress`,
-`TestDriveSearch_AccountSelectorPicksOneOfTwoAccountsAtOneAddress`).
+`TestDriveSearch_AccountSelectorPicksOneOfTwoAccountsAtOneAddress`,
+`TestSharedList_AccountSelectorPicksOneOfTwoAccountsAtOneAddress`).
 `ApplyPurgeLogout` takes the account's canonical ID, never an email.
 
 ## Overview

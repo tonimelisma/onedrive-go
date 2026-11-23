@@ -392,7 +392,11 @@ func addSharedDriveByName(
 		return driveAddResult{}, err
 	}
 
-	discovery := discoverSharedTargets(ctx, cc, cc.runtime(), filterAccountViews(snapshot.Accounts, cc.Flags.Account))
+	target, selected, err := cc.selectedAccount(snapshot.Stored, "search shared folders of")
+	if err != nil {
+		return driveAddResult{}, err
+	}
+	discovery := discoverSharedTargets(ctx, cc, cc.runtime(), filterAccountViews(snapshot.Accounts, target.orNone(selected)))
 	matches := searchSharedDrives(selector, projectSharedFolders(cfg, discovery.Targets))
 
 	switch len(matches) {

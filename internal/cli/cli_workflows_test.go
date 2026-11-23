@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -646,4 +647,56 @@ func TestDriveSearch_AccountSelectorPicksOneOfTwoAccountsAtOneAddress(t *testing
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no business account found for "+personal.String())
 	assert.Equal(t, int32(1), siteSearches.Load(), "a personal account does not search SharePoint")
+}
+
+// shared --account takes an account ID too, and refuses an address two
+// accounts share with the IDs to use instead, before it asks OneDrive for
+// anything shared.
+//
+// Validates: R-3.5.2, R-3.6.6
+func TestSharedList_AccountSelectorPicksOneOfTwoAccountsAtOneAddress(t *testing.T) {
+	setTestDriveHome(t)
+	cfgPath, personal, business := twinAddressAccounts(t)
+
+	var searches sync.Map
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		kind := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer token-")
+		switch r.URL.Path {
+		case testGraphMePath:
+			writeTestResponse(t, w, `{"id":"user-`+kind+`","displayName":"`+kind+` user","mail":"`+business.Email()+`"}`)
+		case testDriveSearchAllPath:
+			searches.Store(kind, true)
+			writeTestResponse(t, w, `{"value":[]}`)
+		default:
+			assert.Failf(t, "unexpected graph path", "path=%s", r.URL.Path)
+			http.Error(w, "unexpected graph path", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	run := func(selector string) error {
+		var out bytes.Buffer
+		cc := newCommandContext(&out, cfgPath)
+		cc.GraphBaseURL = srv.URL
+		cc.Flags.Account = selector
+
+		return runSharedList(t.Context(), cc)
+	}
+	searched := func(kind string) bool {
+		_, found := searches.Load(kind)
+		return found
+	}
+
+	err := run(business.Email())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "more than one account")
+	assert.Contains(t, err.Error(), "--account "+business.String())
+	assert.Contains(t, err.Error(), "--account "+personal.String())
+	assert.False(t, searched(driveid.DriveTypeBusiness), "a refused selector searches nothing")
+	assert.False(t, searched(driveid.DriveTypePersonal), "a refused selector searches nothing")
+
+	require.NoError(t, run(personal.String()))
+	assert.True(t, searched(driveid.DriveTypePersonal))
+	assert.False(t, searched(driveid.DriveTypeBusiness), "the account ID names the personal account alone")
 }
