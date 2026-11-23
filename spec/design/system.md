@@ -1,8 +1,8 @@
 # System Architecture
 
-GOVERNS: internal/synctree/*.go, internal/localtrash/*.go, internal/fsroot/*.go, internal/localpath/*.go, internal/perf/*.go, internal/devtool/*.go, internal/errclass/*.go, internal/sharedref/*.go, internal/authstate/*.go, internal/synctest/*.go, internal/namekey/*.go, internal/panicguard/*.go, internal/filelock/*.go, internal/sync/internal/syncfixture/*.go, internal/sync/internal/syncstoretest/*.go
+GOVERNS: internal/synctree/*.go, internal/localtrash/*.go, internal/fsroot/*.go, internal/localpath/*.go, internal/perf/*.go, internal/devtool/*.go, internal/errclass/*.go, internal/sharedref/*.go, internal/authstate/*.go, internal/synctest/*.go, internal/namekey/*.go, internal/panicguard/*.go, internal/filelock/*.go, internal/humanunit/*.go, internal/sync/internal/syncfixture/*.go, internal/sync/internal/syncstoretest/*.go
 
-Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.32 [verified], R-6.10.2 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified], R-6.10.22 [verified], R-6.10.23 [verified], R-6.10.24 [verified], R-6.10.25 [verified], R-6.10.26 [verified], R-6.10.27 [verified], R-6.10.28 [verified], R-6.10.29 [verified], R-6.3.10 [verified]
+Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.32 [verified], R-6.10.2 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified], R-6.10.22 [verified], R-6.10.23 [verified], R-6.10.24 [verified], R-6.10.25 [verified], R-6.10.26 [verified], R-6.10.27 [verified], R-6.10.28 [verified], R-6.10.29 [verified], R-6.3.10 [verified], R-6.6.38 [verified]
 
 ## Verified By
 
@@ -58,6 +58,7 @@ internal/
   localpath/                  Explicit arbitrary-local-path boundary helpers
   logfile/                    Log file creation and retention
   filelock/                   Advisory file locks: try, release, wait under a context, "cannot lock here" (leaf, stdlib-only)
+  humanunit/                  Durations and sizes in human units, the one formatter of both for people (leaf, stdlib-only)
   multisync/                  Multi-mount sync control plane and watch reload
   namekey/                    OneDrive's name-equivalence key (leaf, x/text only)
   panicguard/                 A recovered panic as one log record with its stack and one error (leaf, stdlib-only)
@@ -93,7 +94,21 @@ root pkg → internal/cli/ → internal/graphtransport/ → internal/retry/
 - No cycles. `driveops` does NOT import `sync`. `graph` does NOT import `config`.
 - `multisync` owns multi-mount lifecycle; `sync` owns the single mounted
   content-root runtime.
-- `authstate`, `driveid`, `errclass`, `filelock`, `localpath`, `loglevel`, `namekey`, `panicguard`, `sdnotify` and `sharedref` are leaf packages (no internal imports), every package that is one today, held to it by the `leaf-internal` depguard rule. Three packages have one or two internal dependencies and are held to them by a rule of their own: `tokenfile` imports only `fsroot` and `filelock`, `retry` only `perf`, and `fsroot` only `localpath` (for `IsDirSyncUnsupported`).
+- `authstate`, `driveid`, `errclass`, `filelock`, `humanunit`, `localpath`, `loglevel`, `namekey`, `panicguard`, `sdnotify` and `sharedref` are leaf packages (no internal imports), every package that is one today, held to it by the `leaf-internal` depguard rule. Three packages have one or two internal dependencies and are held to them by a rule of their own: `tokenfile` imports only `fsroot` and `filelock`, `retry` only `perf` and `humanunit`, and `fsroot` only `localpath` (for `IsDirSyncUnsupported`).
+- `humanunit` is the one place a duration or a size is worded for a person:
+  `Duration(d, Wait)` for a wait, a delay or a limit (whole seconds, never
+  below "1 s") and `Duration(d, Measured)` for a measured time (tenths below
+  a minute), each rounded before it is split, minutes and seconds from a
+  minute up with a zero part dropped, hours and whole minutes from an hour
+  up; `Size` for a byte count. The retry warnings, the sync summary, a
+  watch's restart and stop notices, the engine's poll and rescan intervals,
+  `status --perf`, login's code expiry and every size the CLI and the
+  transfers print call it; `--json` keeps its numbers
+  (`TestDuration_RendersBothPrecisionsAtEveryBoundary`,
+  `TestSize_RendersTheLargestUnitReached`, R-6.6.38). No lint refuses a
+  `time.Duration` formatted with `%v`, `%s` or `.String()`: log attributes
+  and Go-syntax flag values (`perf --duration`) print one rightly, and no
+  rule tells them from a sentence for a person without false positives.
 - `filelock` is the one place an advisory file lock is taken: the config and
   catalog lock, the control socket's owner lock and the engine's folder and
   state-store locks all go through `TryLock`, `Unlock` and `IsUnsupported`

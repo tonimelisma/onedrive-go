@@ -1,9 +1,7 @@
 package retry
 
 import (
-	"fmt"
 	"sync"
-	"time"
 )
 
 // Notices remembers which retry announcements have already been shown, so a
@@ -71,26 +69,4 @@ func (n *Notices) markSucceeded() {
 	n.unreachableAnnounced = false
 	n.longWaitAnnounced = false
 	n.mu.Unlock()
-}
-
-// HumanDuration renders a wait the way the output guidelines ask for at
-// default verbosity: "2 s", "1 min 30 s", "5 min", rounded to whole seconds
-// (and never below 1 s, so a short wait does not read as "0 s").
-func HumanDuration(d time.Duration) string {
-	seconds := int64(d.Round(time.Second) / time.Second)
-	if seconds < 1 {
-		seconds = 1
-	}
-
-	const secondsPerMinute = 60
-	minutes, rest := seconds/secondsPerMinute, seconds%secondsPerMinute
-
-	switch {
-	case minutes == 0:
-		return fmt.Sprintf("%d s", rest)
-	case rest == 0:
-		return fmt.Sprintf("%d min", minutes)
-	default:
-		return fmt.Sprintf("%d min %d s", minutes, rest)
-	}
 }

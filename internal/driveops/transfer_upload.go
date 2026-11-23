@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
@@ -456,5 +457,5 @@ func (tm *TransferManager) deleteSession(driveID, localPath string) {
 // sentinel supplies the limit, so the limit is stated once, and the caller
 // names the file.
 func fileTooLargeForOneDriveError(size int64) error {
-	return fmt.Errorf("the file is %s: %w", formatSize(size), ErrFileExceedsOneDriveLimit)
+	return fmt.Errorf("the file is %s: %w", humanunit.Size(size), ErrFileExceedsOneDriveLimit)
 }

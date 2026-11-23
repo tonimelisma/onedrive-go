@@ -177,11 +177,11 @@ func TestStatusPerf_PrintStatusPerfText_UsesActionableCountFallback(t *testing.T
 	assert.Contains(t, rendered, "HTTP:")
 	assert.Contains(t, rendered, "\n    HTTP:      4 req, 1 retry, 2 transport errors\n")
 	assert.Contains(t, rendered, "DB:")
-	assert.Contains(t, rendered, "3 tx in 240ms")
+	assert.Contains(t, rendered, "3 tx in 0.2 s")
 	assert.Contains(t, rendered, "Transfers:")
 	assert.Contains(t, rendered, "down 5 (64 B), up 6 (128 B)")
 	assert.Contains(t, rendered, "Phases:")
-	assert.Contains(t, rendered, "observe 100ms, plan 200ms, execute 300ms, refresh 400ms")
+	assert.Contains(t, rendered, "observe 0.1 s, plan 0.2 s, execute 0.3 s, refresh 0.4 s")
 	assert.Contains(t, rendered, "Activity:")
 	assert.Contains(t, rendered, "actions 7, watch batches 8, watch paths 9")
 }
@@ -212,7 +212,7 @@ func TestStatusPerf_PrintStatusPerfText_IncludesNonzeroStaleWorkCounters(t *test
 	assert.Contains(t, rendered, "Local obs:")
 	assert.Contains(t, rendered, "commits 4, upserts 5, deletes 7, suspect 8")
 	assert.Contains(t, rendered, "Replan idle:")
-	assert.Contains(t, rendered, "drain 9ms, plan 10ms")
+	assert.Contains(t, rendered, "drain 0.0 s, plan 0.0 s")
 }
 
 // Validates: R-6.6.15
@@ -259,7 +259,8 @@ func TestStatusPerfOverlayApplyAndUnavailableBranches(t *testing.T) {
 	}))
 	assert.Contains(t, out.String(), "Live performance unavailable: "+statusPerfUnavailableGeneric)
 
-	assert.Equal(t, "0s", formatPerfElapsed(0))
+	assert.Equal(t, "0.0 s", formatPerfElapsed(0))
+	assert.Equal(t, "1.5 s", formatPerfElapsed(1500))
 
 	disabledSnapshot, disabledReason := (statusPerfOverlay{}).lookup("drive:a")
 	assert.Nil(t, disabledSnapshot)

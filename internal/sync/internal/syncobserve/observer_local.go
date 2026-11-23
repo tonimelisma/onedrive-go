@@ -28,6 +28,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -978,7 +979,7 @@ func (o *LocalObserver) adaptToRootFilesystem(syncRoot string) {
 
 	o.logger.Warn("The sync folder is on a network or FUSE filesystem ("+info.kind+"). "+
 		"Changes that reach it without going through this computer may not be reported as they happen; "+
-		"they are noticed by the periodic rescan, every "+WaitText(o.EffectiveSafetyScanInterval())+".",
+		"they are noticed by the periodic rescan, every "+humanunit.Duration(o.EffectiveSafetyScanInterval(), humanunit.Wait)+".",
 		slog.String("filesystem", info.kind),
 	)
 }

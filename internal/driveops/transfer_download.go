@@ -17,6 +17,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
@@ -295,8 +296,8 @@ func (tm *TransferManager) downloadToFile(
 		// The verified hash proves the content; the size metadata is stale.
 		tm.logger.Debug("downloaded file size differs from OneDrive's",
 			slog.String("target", targetPath),
-			slog.String("local_size", formatSize(result.Size)),
-			slog.String("remote_size", formatSize(opts.RemoteSize)),
+			slog.String("local_size", humanunit.Size(result.Size)),
+			slog.String("remote_size", humanunit.Size(opts.RemoteSize)),
 		)
 	}
 
@@ -510,7 +511,7 @@ func describeMismatches(opts DownloadOpts, attempts []downloadAttempt) string {
 	case last.errorDocument:
 		return "OneDrive answered with an error page instead of the file"
 	case opts.remoteSizeKnown() && last.size != opts.RemoteSize:
-		return fmt.Sprintf("received %s, OneDrive reports %s", formatSize(last.size), formatSize(opts.RemoteSize))
+		return fmt.Sprintf("received %s, OneDrive reports %s", humanunit.Size(last.size), humanunit.Size(opts.RemoteSize))
 	default:
 		return "the checksum differs on every attempt"
 	}
@@ -809,15 +810,15 @@ func (tm *TransferManager) checkDiskSpace(ctx context.Context, target TargetFS, 
 	if available < minFree {
 		return fmt.Errorf(
 			"%w: %s free, min_free_space requires %s; free up space or lower min_free_space in the config",
-			ErrDiskFull, formatSize(clampToInt64(available)), formatSize(tm.minFreeSpace))
+			ErrDiskFull, humanunit.Size(clampToInt64(available)), humanunit.Size(tm.minFreeSpace))
 	}
 
 	// Per-file check: can this specific file fit within available - minFreeSpace?
 	if fileSize > 0 && available < uint64(fileSize)+minFree {
 		return fmt.Errorf(
 			"%w: the file needs %s but only %s is free after keeping min_free_space (%s) in reserve",
-			ErrFileTooLargeForSpace, formatSize(fileSize), formatSize(clampToInt64(available-minFree)),
-			formatSize(tm.minFreeSpace))
+			ErrFileTooLargeForSpace, humanunit.Size(fileSize), humanunit.Size(clampToInt64(available-minFree)),
+			humanunit.Size(tm.minFreeSpace))
 	}
 
 	return nil

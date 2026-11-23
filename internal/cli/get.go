@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -122,7 +123,7 @@ func downloadOneFile(
 		})
 	}
 
-	cc.Statusf("Downloaded %s (%s)\n", localPath, formatSize(result.Size))
+	cc.Statusf("Downloaded %s (%s)\n", localPath, humanunit.Size(result.Size))
 
 	return nil
 }

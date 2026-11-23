@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
@@ -232,13 +233,10 @@ func printStatusPerfText(w io.Writer, indent string, ss *syncStateInfo) error {
 	return nil
 }
 
+// formatPerfElapsed is a perf snapshot's millisecond count as a measured
+// time in human units (humanunit.Measured); --json keeps the number.
 func formatPerfElapsed(durationMS int64) string {
-	duration := time.Duration(durationMS) * time.Millisecond
-	if duration <= 0 {
-		return "0s"
-	}
-
-	return duration.Round(time.Millisecond).String()
+	return humanunit.Duration(time.Duration(durationMS)*time.Millisecond, humanunit.Measured)
 }
 
 func formatDetailedPerfHTTP(snapshot *perf.Snapshot) string {
@@ -254,9 +252,9 @@ func formatDetailedPerfTransfers(snapshot *perf.Snapshot) string {
 	return fmt.Sprintf(
 		"down %d (%s), up %d (%s)",
 		snapshot.DownloadCount,
-		formatSize(snapshot.DownloadBytes),
+		humanunit.Size(snapshot.DownloadBytes),
 		snapshot.UploadCount,
-		formatSize(snapshot.UploadBytes),
+		humanunit.Size(snapshot.UploadBytes),
 	)
 }
 

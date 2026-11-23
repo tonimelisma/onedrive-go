@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
@@ -411,7 +411,7 @@ func (flow *engineFlow) logBlockScopeActivated(
 		return
 	}
 
-	line, clearsAutomatically := blockScopeActivationLine(key, conditionType, syncobserve.WaitText(interval))
+	line, clearsAutomatically := blockScopeActivationLine(key, conditionType, humanunit.Duration(interval, humanunit.Wait))
 	if clearsAutomatically {
 		flow.deps.logger.Info(line, fields...)
 		return

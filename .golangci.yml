@@ -289,6 +289,7 @@ linters:
             - "**/internal/driveid/*.go"
             - "**/internal/errclass/*.go"
             - "**/internal/filelock/*.go"
+            - "**/internal/humanunit/*.go"
             - "**/internal/localpath/*.go"
             - "**/internal/loglevel/*.go"
             - "**/internal/namekey/*.go"
@@ -314,16 +315,17 @@ linters:
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/
               desc: tokenfile imports no internal package but fsroot, through which every token file is read and written, and filelock, through which it is locked
-        retry-only-perf:
+        retry-only-perf-and-humanunit:
           list-mode: lax
           files:
             - "**/internal/retry/*.go"
             - "!$test"
           allow:
             - github.com/tonimelisma/onedrive-go/internal/perf$
+            - github.com/tonimelisma/onedrive-go/internal/humanunit$
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/
-              desc: retry imports no internal package but perf, which counts its retries
+              desc: retry imports no internal package but perf, which counts its retries, and humanunit, which words its waits
         fsroot-only-localpath:
           list-mode: lax
           files:

@@ -14,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
@@ -323,8 +324,10 @@ func deviceLoginInstructions(da graph.DeviceAuth, account string, now time.Time)
 		fmt.Fprintf(&b, "Sign in as %s. ", account)
 	}
 	if !da.Expiry.IsZero() {
-		minutes := int(da.Expiry.Sub(now).Round(time.Minute).Minutes())
-		fmt.Fprintf(&b, "The code expires at %s (in %s).", da.Expiry.Local().Format("15:04"), countOf(minutes, "minute"))
+		// The clock time is to the minute, so the wait is said to the minute
+		// too: rounded before it is rendered.
+		left := humanunit.Duration(da.Expiry.Sub(now).Round(time.Minute), humanunit.Wait)
+		fmt.Fprintf(&b, "The code expires at %s (in %s).", da.Expiry.Local().Format("15:04"), left)
 	}
 	b.WriteString("\n")
 	b.WriteString("If a passkey or Windows Hello sign-in ends on an error page, choose \"Other ways to sign in\" and use your password.\n")

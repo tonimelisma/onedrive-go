@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
@@ -491,7 +492,7 @@ func (rt *observation) watchLocalWithFallback(ctx context.Context, localObs *syn
 		if cause != warnedCause {
 			warnedCause = cause
 			rt.deps.logger.Warn("Cannot watch the sync folder for changes ("+syncobserve.WatchUnavailableReason(cause)+"). "+
-				"Local changes will be noticed every "+syncobserve.WaitText(interval)+
+				"Local changes will be noticed every "+humanunit.Duration(interval, humanunit.Wait)+
 				" instead of at once; watching will be retried. To fix: "+syncobserve.WatchUnavailableFix(cause),
 				slog.Duration("scan_interval", interval),
 				slog.Duration("retry_after", retryDelay),

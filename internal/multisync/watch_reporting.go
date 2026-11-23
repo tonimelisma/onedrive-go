@@ -2,7 +2,6 @@ package multisync
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -303,19 +302,4 @@ func (o *Orchestrator) releaseRunnerRestartWaits() {
 // selected, so re-adding it later starts clean.
 func (o *Orchestrator) forgetRunnerRestart(id mountID) {
 	delete(o.watchReports().restarts, id)
-}
-
-// humanDelay renders a restart delay in the units the output guidelines ask
-// for: "5 s", "2 min", "2 min 30 s".
-func humanDelay(d time.Duration) string {
-	d = d.Round(time.Second)
-	if d < time.Minute {
-		return fmt.Sprintf("%d s", int(d/time.Second))
-	}
-	minutes := int(d / time.Minute)
-	seconds := int((d % time.Minute) / time.Second)
-	if seconds == 0 {
-		return fmt.Sprintf("%d min", minutes)
-	}
-	return fmt.Sprintf("%d min %d s", minutes, seconds)
 }

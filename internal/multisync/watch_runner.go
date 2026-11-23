@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -315,7 +316,7 @@ func (o *Orchestrator) reportWatchRunnerExit(wr *watchRunner, err error) {
 		// The error value, not its text: the CLI console shows a plain
 		// reason at default verbosity, and the log file and --verbose keep
 		// the full chain.
-		o.logger.Warn(fmt.Sprintf("Stopped syncing %s; retrying in %s", name, humanDelay(delay)),
+		o.logger.Warn(fmt.Sprintf("Stopped syncing %s; retrying in %s", name, humanunit.Duration(delay, humanunit.Wait)),
 			slog.Any("error", err),
 		)
 	default:

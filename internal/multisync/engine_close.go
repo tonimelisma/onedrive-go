@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
@@ -127,7 +128,7 @@ func (o *Orchestrator) waitWithin(done <-chan struct{}, bound time.Duration) boo
 
 // engineCloseStuckDetail says which bound an engine close missed.
 func engineCloseStuckDetail() string {
-	return "its sync state did not close within " + humanDelay(engineCloseTimeout)
+	return "its sync state did not close within " + humanunit.Duration(engineCloseTimeout, humanunit.Wait)
 }
 
 // reportStuckSync logs, once, that mount's sync missed a bound, and returns

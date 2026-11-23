@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 )
 
 func newLsCmd() *cobra.Command {
@@ -135,7 +136,7 @@ func printItemsTable(w io.Writer, items []graph.Item) error {
 			name += "/"
 		}
 
-		rows = append(rows, []string{name, formatSize(items[i].Size), formatTime(items[i].ModifiedAt)})
+		rows = append(rows, []string{name, humanunit.Size(items[i].Size), formatTime(items[i].ModifiedAt)})
 	}
 
 	return printTable(w, headers, rows)

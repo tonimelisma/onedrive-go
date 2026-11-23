@@ -16,6 +16,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/loglevel"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -940,19 +941,6 @@ func (o *RemoteObserver) classifyWindow(
 	return events
 }
 
-// WaitText renders a retry delay or interval in human units for console
-// messages ("8 s", "5 min", "1 h"), never a raw Go duration.
-func WaitText(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%d s", int(d.Round(time.Second)/time.Second))
-	case d < time.Hour:
-		return fmt.Sprintf("%d min", int(d.Round(time.Minute)/time.Minute))
-	default:
-		return fmt.Sprintf("%d h", int(d.Round(time.Hour)/time.Hour))
-	}
-}
-
 // PollOutageLog reports a polling loop's failures once per outage instead of
 // once per attempt. The first failure after a success is a Warn with the plain
 // reason and the retry delay; later attempts in the same outage are Debug; the
@@ -971,7 +959,7 @@ func (l *PollOutageLog) Failed(logger *slog.Logger, msg string, err error, delay
 
 	fields := append([]any{
 		slog.Any("error", err),
-		slog.String("retry_in", WaitText(delay)),
+		slog.String("retry_in", humanunit.Duration(delay, humanunit.Wait)),
 	}, attrs...)
 	if l.failing {
 		logger.Debug(msg, fields...)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 )
 
 // ErrUploadVerificationFailed reports an upload whose stored item does not
@@ -273,7 +274,7 @@ func (tm *TransferManager) settleUploadedItem(
 	)
 
 	return nil, fmt.Errorf("%w (sent %s, OneDrive has %s)",
-		ErrUploadVerificationFailed, formatSize(sent.size), formatSize(item.Size))
+		ErrUploadVerificationFailed, humanunit.Size(sent.size), humanunit.Size(item.Size))
 }
 
 // lookupUploadTarget reads the item an upload wrote: by ID, or, for a create,

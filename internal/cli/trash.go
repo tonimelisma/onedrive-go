@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 )
@@ -261,7 +262,7 @@ func writeTrashEntryLine(cc *CLIContext, entry *localtrash.Entry) error {
 		suffix = " [interrupted, recoverable]"
 	}
 	return writef(cc.Output(), "%s  %s  %s %s (%s)%s%s\n",
-		entry.ID, entry.TrashedAt.Local().Format(time.DateTime), what, entry.Path, formatSize(entry.Size), why, suffix)
+		entry.ID, entry.TrashedAt.Local().Format(time.DateTime), what, entry.Path, humanunit.Size(entry.Size), why, suffix)
 }
 
 // trashReasonText is how `trash list` words why a file is in the trash: the
