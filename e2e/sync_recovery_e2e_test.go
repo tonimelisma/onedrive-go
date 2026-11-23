@@ -62,11 +62,9 @@ func TestE2E_SyncIsolated_IncrementalDeltaToken(t *testing.T) {
 	putRemoteFile(t, opsCfgPath, nil, "/"+testFolder+"/delta-new.txt", "new from remote")
 
 	// Verify the new file was downloaded locally. Any pass may be the one that
-	// downloads it, not only the last, so each pass's output is read for it.
+	// downloads it, not only the last, so every pass's output is read for it.
 	newFilePath := filepath.Join(localDir, "delta-new.txt")
-	downloadLine := "Downloaded " + testFolder + "/delta-new.txt"
 	var data []byte
-	sawDownloadLine := false
 	attempt := requireSyncEventuallyConverges(
 		t,
 		cfgPath,
@@ -74,9 +72,6 @@ func TestE2E_SyncIsolated_IncrementalDeltaToken(t *testing.T) {
 		120*time.Second,
 		"incremental download should eventually materialize a newly visible remote file after delta catches up",
 		func(result syncAttemptResult) bool {
-			if strings.Contains(result.Stdout, downloadLine) {
-				sawDownloadLine = true
-			}
 			if result.Err != nil {
 				return false
 			}
@@ -91,9 +86,8 @@ func TestE2E_SyncIsolated_IncrementalDeltaToken(t *testing.T) {
 		},
 		"--download-only",
 	)
-	assert.Truef(t, sawDownloadLine,
-		"incremental download should name the new file in one of its passes; the last pass printed: %s",
-		printable(attempt.Stdout))
+	assertOutputContains(t, attempt.AllStdout(), "Downloaded "+testFolder+"/delta-new.txt",
+		"incremental download should name the new file in one of its passes")
 	assert.Equal(t, "new from remote", string(data))
 }
 
@@ -214,10 +208,11 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 		},
 		"--upload-only",
 	)
-	assertOutputContains(t, attempt.Stdout, "Held back by --upload-only:",
+	// The predicate held these of the converged pass: its end state.
+	assertOutputContains(t, attempt.Last().Stdout, "Held back by --upload-only:",
 		"upload-only should report remote drift even when it cannot apply it")
-	assertOutputContains(t, attempt.Stdout, "1 download")
-	assertOutputContains(t, attempt.Stdout, "1 local delete")
+	assertOutputContains(t, attempt.Last().Stdout, "1 download")
+	assertOutputContains(t, attempt.Last().Stdout, "1 local delete")
 
 	editData := mustReadFile(t, remoteEditPath)
 	assert.Equal(t, "original remote edit", string(editData))
@@ -248,10 +243,11 @@ func TestE2E_Sync_ReconcilesDurableRemoteMirrorTruthWithoutFreshDelta(t *testing
 		},
 		"--download-only",
 	)
-	assertOutputContains(t, attempt.Stdout, "Done in",
+	assertOutputContains(t, attempt.Last().Stdout, "Done in",
 		"download-only should settle durable remote mirror drift")
-	assertOutputContains(t, attempt.Stdout, "Downloaded "+testFolder+"/remote-edit.txt")
-	assertOutputContains(t, attempt.Stdout, "Deleted locally "+testFolder+"/remote-delete.txt")
+	// Any pass may be the one that applied the drift.
+	assertOutputContains(t, attempt.AllStdout(), "Downloaded "+testFolder+"/remote-edit.txt")
+	assertOutputContains(t, attempt.AllStdout(), "Deleted locally "+testFolder+"/remote-delete.txt")
 
 	editData = mustReadFile(t, remoteEditPath)
 	assert.Equal(t, "updated from remote", string(editData))

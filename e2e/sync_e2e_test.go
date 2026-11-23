@@ -584,7 +584,7 @@ func TestE2E_Sync_DownloadOnly(t *testing.T) {
 		},
 		"--download-only",
 	)
-	assertOutputContains(t, attempt.Stdout, "(download only)")
+	assertOutputContains(t, attempt.Last().Stdout, "(download only)")
 	assert.Equal(t, content, downloaded)
 }
 

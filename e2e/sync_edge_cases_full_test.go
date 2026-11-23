@@ -106,8 +106,8 @@ func TestE2E_Sync_NestedDeletion(t *testing.T) {
 		},
 		"--upload-only",
 	)
-	require.NoErrorf(t, setup.Err, "unexpected sync setup failure\nstdout: %s\nstderr: %s",
-		printable(setup.Stdout), printable(setup.Stderr))
+	require.NoErrorf(t, setup.Last().Err, "unexpected sync setup failure\nstdout: %s\nstderr: %s",
+		printable(setup.Last().Stdout), printable(setup.Last().Stderr))
 
 	// Verify deep file exists remotely.
 	waitForRemoteReadContains(t, cfgPath, env, "", "deep.txt", pollTimeout, "ls", "/"+testFolder+"/a/b/c")
@@ -278,5 +278,5 @@ func TestE2E_SyncIsolated_TransferWorkersConfig(t *testing.T) {
 		},
 		"--upload-only",
 	)
-	assertOutputContains(t, attempt.Stdout, "(upload only)")
+	assertOutputContains(t, attempt.Last().Stdout, "(upload only)")
 }

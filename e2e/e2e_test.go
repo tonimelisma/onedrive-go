@@ -198,6 +198,36 @@ type syncAttemptResult struct {
 	Err    error
 }
 
+// syncConvergence is every pass a converge loop ran, in order. What a sync
+// did, an action its summary names, may be in any pass: an earlier pass can
+// have done the work and ended with an error from unrelated churn, leaving a
+// later clean pass nothing to name. So an assertion on what the sync did
+// reads every pass (AllStdout), and one on the end state reads the pass that
+// converged (Last); a quick-tier source rule fails an action assertion on
+// the last pass alone (converge_action_rule_test.go).
+type syncConvergence struct {
+	attempts []syncAttemptResult
+}
+
+// Last is the pass the loop's predicate accepted.
+func (c syncConvergence) Last() syncAttemptResult {
+	if len(c.attempts) == 0 {
+		return syncAttemptResult{}
+	}
+
+	return c.attempts[len(c.attempts)-1]
+}
+
+// AllStdout is the stdout of every pass, in order, one after another.
+func (c syncConvergence) AllStdout() string {
+	outputs := make([]string, 0, len(c.attempts))
+	for _, attempt := range c.attempts {
+		outputs = append(outputs, attempt.Stdout)
+	}
+
+	return strings.Join(outputs, "\n")
+}
+
 func writeSuiteConfig(path string, drives ...string) error {
 	var builder strings.Builder
 	for _, driveID := range drives {
@@ -567,7 +597,7 @@ func requireSyncEventuallyConverges(
 	description string,
 	ready func(syncAttemptResult) bool,
 	args ...string,
-) syncAttemptResult {
+) syncConvergence {
 	t.Helper()
 
 	return requireSyncEventuallyConvergesWith(t, syncRunnerForDrive(cfgPath, env, ""), timeout, description, ready, args...)
@@ -584,7 +614,7 @@ func requireSyncEventuallyConvergesForDrive(
 	description string,
 	ready func(syncAttemptResult) bool,
 	args ...string,
-) syncAttemptResult {
+) syncConvergence {
 	t.Helper()
 
 	return requireSyncEventuallyConvergesWith(t, syncRunnerForDrive(cfgPath, env, driveID), timeout, description, ready, args...)
@@ -600,7 +630,7 @@ func requireSyncEventuallyConvergesAllDrives(
 	description string,
 	ready func(syncAttemptResult) bool,
 	args ...string,
-) syncAttemptResult {
+) syncConvergence {
 	t.Helper()
 
 	return requireSyncEventuallyConvergesWith(t, syncRunnerAllDrives(cfgPath, env), timeout, description, ready, args...)
@@ -613,21 +643,23 @@ func requireSyncEventuallyConvergesWith(
 	description string,
 	ready func(syncAttemptResult) bool,
 	args ...string,
-) syncAttemptResult {
+) syncConvergence {
 	t.Helper()
 
-	var last syncAttemptResult
+	var convergence syncConvergence
 	syncArgs := append([]string{"sync"}, args...)
 	startedAt := time.Now()
 	deadline := time.Now().Add(timeout)
 
 	for attempt := 0; ; attempt++ {
+		var last syncAttemptResult
 		last.Stdout, last.Stderr, last.Err = runner.run(t, syncArgs...)
+		convergence.attempts = append(convergence.attempts, last)
 		requireLeftWorkExitsNonZero(t, last)
 		if ready(last) {
 			recordTimingEvent(t, timingKindSyncConvergence, description, runner.driveID, syncArgs,
 				timeout, time.Since(startedAt), attempt+1, timingOutcomeSuccess)
-			return last
+			return convergence
 		}
 
 		if time.Now().After(deadline) {

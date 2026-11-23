@@ -399,7 +399,7 @@ func syncShortcutDownloadUntilProjected(
 	fixture *resolvedShortcutFixture,
 	syncDir string,
 	relativeLocalPath string,
-) (shortcutChildE2ERecord, syncAttemptResult) {
+) (shortcutChildE2ERecord, syncConvergence) {
 	t.Helper()
 
 	sentinelPath := filepath.Join(syncDir, filepath.FromSlash(relativeLocalPath), filepath.FromSlash(fixture.SentinelPath))
