@@ -43,7 +43,7 @@ are inserted, updated, pruned, and validated.
 | `drive rebind-root` shows the remembered and present file counts, needs `--yes` or a typed REBIND, clears the recorded sync-folder fingerprint, keeps the rest of the state (recorded mount points included, so a disk that is not mounted stays unavailable truth), needs `--drive`, and refuses while a sync owner holds the drive. | `TestRunDriveRebindRoot_RequiresDrive`, `TestRunDriveRebindRoot_KeepsStateAndReportsRebind`, `TestRunDriveRebindRoot_RequiresConfirmationWithoutYes`, `TestRunDriveRebindRoot_RefusesLiveSyncOwner` |
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. It and `drive rebind-root` refuse while a sync owner holds the drive, and also while any engine holds the drive's sync folder or its state store (R-6.3.9). `drive remove --purge` and `logout --purge` remove the config sections, tell a running watch, and then delete each state store under the same locks, keeping one an engine still has open and naming the command that finishes (R-3.3.8, R-3.1.4). | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner`, `TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheDrive`, `TestDriveRemovePurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestLogoutPurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestDriveRemovePurge_NotifiesTheWatchBeforeDeleting`, `TestLogoutPurge_NotifiesTheWatchBeforeDeleting` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
-| After a config change the CLI says what the running watch did with it: picked up, being applied (`reload_in_progress`), busy (the owner's `busy` or the client's deadline, on the probe or the reload), or rejected (`reload_failed`); the reload's client timeout outlasts the owner's waits; `status` says when the running sync did not answer, and says nothing about it when the user stopped `status` (R-2.9.3). | `TestNotifyDaemon_BusySyncSaysItWillPickTheChangeUp`, `TestNotifyDaemon_ReloadInProgressSaysSo`, `TestNotifyDaemon_ReloadRejectedByRunningSyncIsAWarning`, `TestProbeControlOwner_ClassifiesOutcomes`, `TestControlSocketClientReloadAndPostJSON`, `TestControlSocketErrorClassification`, `TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer`, `TestRunStatusCommand_AStoppedStatusSaysNothingAboutTheRunningSync` |
+| After a config change the CLI says what the running watch did with it: picked up, being applied (`reload_in_progress`), busy (the owner's `busy` or the client's deadline, on the probe or the reload), or rejected (`reload_failed`); the reload's client timeout outlasts the owner's waits; `status` says when the running sync did not answer, and says nothing about it when the user stopped `status` (R-2.9.3). | `TestNotifyDaemon_BusySyncSaysItWillPickTheChangeUp`, `TestNotifyDaemon_ReloadInProgressSaysSo`, `TestDecodeControlJSONResponse_BodyTimeoutReadsAsDidNotAnswer`, `TestRunStatusCommand_PerfProbesTheSocketOnce`, `TestNotifyDaemon_ReloadRejectedByRunningSyncIsAWarning`, `TestProbeControlOwner_ClassifiesOutcomes`, `TestControlSocketClientReloadAndPostJSON`, `TestControlSocketErrorClassification`, `TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer`, `TestRunStatusCommand_AStoppedStatusSaysNothingAboutTheRunningSync` |
 | Watch and one-shot sync command wiring stays inside the CLI composition boundary and delegates runtime ownership to the sync daemon/orchestrator seam. | `TestDryRunFlagSurfaceOnlySyncCommand`, `TestRunSyncCommand_UsesConfigDryRunWhenFlagUnset`, `TestRunSyncCommand_DryRunOpensLogFileAndWarnsOnFailure`, `TestRunSyncCommand_DryRunFailsWhenControlSocketPathCannotBeDerived`, `TestRunSyncCommand_WatchRejectsEffectiveDryRun`, `TestRunSyncCommand_PassesMissingSyncDirToRunOnce`, `TestRunSyncCommand_DryRunPassesMissingSyncDirWithoutCreatingIt`, `TestRunSyncCommand_PassesPausedInvalidDriveToRunnerAsPaused`, `TestRunSyncWatch_UsesInjectedRunner`, `TestRunSyncDaemonWithFactory_CallsOrchestrator`, `TestSyncConsole_MultiDriveNamesEachDrive`, `TestSyncConsole_WatchingEveryDrivePausedSaysWhatItWaitsFor` |
 | `sync` names every finished file, summarizes in human units, prints errors once, and renders console logs as human or journal text. | `TestSyncConsole_NamesEveryCompletedFile`, `TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose`, `TestSyncConsole_SummaryInHumanUnits`, `TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError`, `TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop`, `TestConsoleLogHandler_JournalLinesCarryPriorityAndNoTimestamp`, `TestConsoleLogHandler_DefaultConsoleShowsOutageAndItsRecoveryPlainly`, `TestConsoleLogHandler_JournalFilesNoticeAtNoticePriority`, `TestWithConsoleTimestamps_StampsHumanLinesOnly`, `TestNotice_SitsBetweenInfoAndWarn`, `TestReplaceLevelName_PrintsNoticeInStructuredOutput`, `TestCommandLogger_PerfSummaryInLogFileNotDefaultConsole`, `TestCommandLogger_SyncSchemaFieldsOnlyInLogFileAndVerboseConsole`, `TestMainWithWriters_SkipConfigCommandLogsPerfSummaryToLogFile`, `TestMainWithWriters_BootstrapRecordsFollowTheCommandLogger`, `TestCommandErrorText_NetworkFailureIsOnePlainLine`, `TestUnauthorizedAuthReason_DistinguishesExpiredLogin` |
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusDrive_RendersLifecycleState`, `TestBuildChildStatusDrive_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
@@ -1094,7 +1094,14 @@ reload waits `controlReloadClientTimeout`, the sum of the owner's waits
 `reload_in_progress` instead of giving up first. The probe classifies an
 owner that holds the socket but answered `busy`, or did not answer before the
 client's deadline, as `controlOwnerStateUnresponsive`: a live owner, never
-"no sync" (`controlOwnerDidNotAnswer`). Only a watch owner can be busy, since
+"no sync" (`controlOwnerDidNotAnswer`). A deadline that cuts short the body
+of a 2xx answer reads the same: `controlResponseReadError` returns the
+decode's timeout (a `context.DeadlineExceeded`, an `os.ErrDeadlineExceeded`,
+or any `net.Error` whose `Timeout()` is true) wrapped with `%w` rather than
+an `internal_error`, and every other decode or close failure stays an
+`internal_error` whose causes are reachable through `controlDaemonError`'s
+`Unwrap` (`TestDecodeControlJSONResponse_BodyTimeoutReadsAsDidNotAnswer`,
+`TestDecodeControlJSONResponse_AnInternalErrorKeepsItsCause`). Only a watch owner can be busy, since
 a one-shot owner answers status in the handler. `drive reset-sync-state`
 refuses on it as on any probe that could not tell.
 
@@ -1144,7 +1151,14 @@ Processes, R-6.8.30).
 missing: "the running sync did not answer in time" for an unresponsive owner,
 "could not read the running sync's live state (...)" for another probe
 failure. It used to drop the overlay silently, so a drive the watch was
-syncing read as pending with no reason given.
+syncing read as pending with no reason given. `status` probes the control
+socket once (`runStatusCommand`) and gives the probe to both overlays, the
+runtime one and, with `--perf`, the performance one, so a watch too busy to
+answer costs one probe timeout, not two
+(`TestRunStatusCommand_PerfProbesTheSocketOnce`). `status --perf` shows the
+per-mount snapshots of `GET /v1/perf` only; the owner aggregate the same
+answer carries is `onedrive-go perf`'s to show, a decision recorded here so
+status keeps one row per drive.
 
 ## Pause / Resume
 

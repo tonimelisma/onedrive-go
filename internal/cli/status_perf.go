@@ -26,13 +26,17 @@ type statusPerfOverlay struct {
 	snapshots         map[string]perf.Snapshot
 }
 
-func loadStatusPerfOverlay(ctx context.Context, showPerf bool) statusPerfOverlay {
+// loadStatusPerfOverlay reads the live performance snapshots from the owner
+// probe found, the one control-socket probe status makes (probeErr is its
+// error), so a busy watch costs one probe timeout, not two. It shows the
+// per-mount snapshots only: the owner aggregate `GET /v1/perf` returns is
+// `onedrive-go perf`'s to show (cli.md).
+func loadStatusPerfOverlay(ctx context.Context, showPerf bool, probe controlOwnerProbe, probeErr error) statusPerfOverlay {
 	if !showPerf {
 		return statusPerfOverlay{}
 	}
 
-	probe, err := probeControlOwner(ctx)
-	if err != nil {
+	if probeErr != nil {
 		return statusPerfOverlay{
 			enabled:           true,
 			unavailableReason: statusPerfUnavailableGeneric,

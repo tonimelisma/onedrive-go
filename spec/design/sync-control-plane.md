@@ -905,10 +905,14 @@ to the control-plane boundary.
   holds for account-level clients: the CLI's identity probes and discovery
   calls take theirs from `SessionRuntime.BootstrapClient`, so within one
   runtime one sign-in file has one token source (R-6.8.27). The `sync`
-  command still has two runtimes: its sync-bootstrap identity probe runs on
-  the command's runtime before `runSyncOnce`/`runSyncDaemon` build the
-  engine's, which loads the sign-in file after the probe has saved any
-  refresh. Giving the command one runtime for both is [planned].
+  command has one runtime for its sync-bootstrap identity probe and its
+  engines (`CLIContext.syncSessionRuntime`): `runSyncCommand` builds it
+  before the probe, over the `config.Holder` the engines and the control
+  plane read and with the logger the engines log through (timestamped for a
+  watch on a terminal, `syncRuntimeLogger`), and `runSyncOnce` and
+  `runSyncDaemonWithFactory` reuse it, so one process keeps one token source
+  per sign-in file (`TestRunSync_ProbeAndEngineShareOneSessionRuntime`,
+  `TestSyncSessionRuntime_ReusesTheCommandsRuntime`).
 - Reload updates config through one shared `config.Holder` and uses the
   CLI-supplied standalone-mount selection compiler, so both the control plane
   and session runtime see the same config snapshot without giving multisync

@@ -212,13 +212,16 @@ func runStatusCommand(ctx context.Context, cc *CLIContext, showPerf bool) error 
 	liveOverlays := liveOverlayLoader(ctx, cc, filteredSnapshot)
 	applyStatusLiveOverlay(accounts, liveOverlays)
 	printStatusLiveNotes(cc, accounts, liveOverlays)
-	runtimeOverlay := loadStatusRuntimeOverlay(ctx)
+	// One probe of the control socket feeds both overlays: a watch too busy
+	// to answer costs one probe timeout, not one per overlay.
+	probe, probeErr := probeControlOwner(ctx)
+	runtimeOverlay := loadStatusRuntimeOverlay(ctx, probe, probeErr)
 	applyStatusRuntimeOverlay(accounts, runtimeOverlay)
 	if runtimeOverlay.unavailableNote != "" {
 		// stderr, so --json output stays one document.
 		cc.Statusf("%s", runtimeOverlay.unavailableNote)
 	}
-	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(ctx, showPerf))
+	applyStatusPerfOverlay(accounts, loadStatusPerfOverlay(ctx, showPerf, probe, probeErr))
 	if !cc.Flags.Verbose && !cc.Flags.Debug {
 		dropStatusDebugDetail(accounts)
 	}

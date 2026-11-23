@@ -24,8 +24,9 @@ type statusRuntimeOverlay struct {
 	unavailableNote string
 }
 
-func loadStatusRuntimeOverlay(ctx context.Context) statusRuntimeOverlay {
-	probe, err := probeControlOwner(ctx)
+// loadStatusRuntimeOverlay reads the running sync's live state from probe,
+// the one control-socket probe status makes (probeErr is its error).
+func loadStatusRuntimeOverlay(ctx context.Context, probe controlOwnerProbe, probeErr error) statusRuntimeOverlay {
 	switch probe.state {
 	case controlOwnerStateWatchOwner, controlOwnerStateOneShotOwner:
 		overlay := statusRuntimeOverlay{
@@ -48,7 +49,7 @@ func loadStatusRuntimeOverlay(ctx context.Context) statusRuntimeOverlay {
 		}
 
 		return statusRuntimeOverlay{
-			unavailableNote: fmt.Sprintf("Note: could not read the running sync's live state (%v), so it is not shown.\n", err),
+			unavailableNote: fmt.Sprintf("Note: could not read the running sync's live state (%v), so it is not shown.\n", probeErr),
 		}
 	case controlOwnerStateNoSocket, controlOwnerStatePathUnavailable:
 		return statusRuntimeOverlay{}

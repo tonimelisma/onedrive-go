@@ -190,7 +190,7 @@ func runSyncDaemonWithFactory(
 	standaloneSelection := standaloneMountSelectionFromResolvedDrives(drives)
 
 	cc := cliContextFrom(ctx)
-	runtime := cc.newSessionRuntime(holder, logger)
+	runtime := cc.syncSessionRuntime(holder, logger)
 
 	debugEventHook, closeDebugEvents, err := openSyncDebugEventHookFromEnv(logger)
 	if err != nil {

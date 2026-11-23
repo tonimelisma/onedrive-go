@@ -6,9 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
@@ -57,23 +59,31 @@ func runSyncCommand(ctx context.Context, cc *CLIContext, opts syncCommandOptions
 		return err
 	}
 
-	rawCfg, err = reconcileLoadedSyncConfig(ctx, cc, rawCfg, logger)
-	if err != nil {
-		return err
-	}
-
 	// Usually a no-op: the root already attached these logging settings.
 	if logErr := cc.useLoggingConfig(rawCfg.LoggingConfig); logErr != nil {
 		return logErr
 	}
 	logger = cc.Logger
 
+	// One session runtime serves the sync's identity probe and its engines
+	// (R-6.8.27), so the process keeps one token source per sign-in file.
+	// It is built before the probe, with the logger the engines log
+	// through, and its holder is the one the engines and the control plane
+	// read.
+	holder := config.NewHolder(rawCfg, cc.CfgPath)
+	cc.syncSessionRuntime(holder, syncRuntimeLogger(cc, logger, opts.Watch))
+
+	rawCfg, err = reconcileLoadedSyncConfig(ctx, cc, rawCfg, logger)
+	if err != nil {
+		return err
+	}
+	holder.Update(rawCfg)
+
 	controlSocketPath, err := config.ControlSocketPath()
 	if err != nil {
 		return fmt.Errorf("resolve control socket path: %w", err)
 	}
 
-	holder := config.NewHolder(rawCfg, cc.CfgPath)
 	if opts.Watch {
 		return runSyncWatch(ctx, cc, holder, selectors, opts.Mode, syncengine.WatchOptions{
 			PollInterval: parsePollInterval(rawCfg.PollInterval),
@@ -185,7 +195,7 @@ func runSyncOnce(
 		return cc.seams.syncRunOnce(ctx, holder, drives, mode, opts, logger, controlSocketPath)
 	}
 
-	runtime := cc.newSessionRuntime(holder, logger)
+	runtime := cc.syncSessionRuntime(holder, logger)
 	standaloneSelection := standaloneMountSelectionFromResolvedDrives(drives)
 
 	orch := multisync.NewOrchestrator(&multisync.OrchestratorConfig{
@@ -202,6 +212,34 @@ func runSyncOnce(
 	})
 
 	return orch.RunOnce(ctx, mode, opts)
+}
+
+// syncSessionRuntime is the one session runtime of a sync command: the
+// command's own (CLIContext.Runtime) once there is one, else a new one over
+// holder logging through logger, which becomes the command's. A nil cc (a
+// test of the daemon without a command context) gets a runtime nobody keeps.
+// Call it from the command goroutine.
+func (cc *CLIContext) syncSessionRuntime(holder *config.Holder, logger *slog.Logger) *driveops.SessionRuntime {
+	if cc == nil {
+		return cc.newSessionRuntime(holder, logger)
+	}
+	if cc.Runtime == nil {
+		cc.Runtime = cc.newSessionRuntime(holder, logger)
+	}
+
+	return cc.runtime()
+}
+
+// syncRuntimeLogger is the logger a sync's session runtime logs through:
+// for a watch on a terminal, the one that stamps its console lines with the
+// time of day (newSyncConsole), so a retry warning in a long watch says
+// when it happened like the watch's own lines.
+func syncRuntimeLogger(cc *CLIContext, logger *slog.Logger, watch bool) *slog.Logger {
+	if watch && !isWriterJournal(cc.Status()) {
+		return withConsoleTimestamps(logger, time.Now)
+	}
+
+	return logger
 }
 
 func loadSyncConfig(

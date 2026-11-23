@@ -14,6 +14,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -582,4 +583,58 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 	assert.Contains(t, status.String(), "pause --drive '"+cid.String()+"'")
 	assert.Contains(t, status.String(), "drive reset-sync-state --drive '"+cid.String()+"'")
 	assert.Contains(t, status.String(), "--drive selecting only other configured parent drives")
+}
+
+// A sync's identity probe and its engines use one session runtime, the
+// command's, so one process keeps one token source per sign-in file
+// (R-6.8.27): the watch's orchestrator gets the runtime the probe used, and
+// the command built no other.
+//
+// Validates: R-6.8.27
+func TestRunSync_ProbeAndEngineShareOneSessionRuntime(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:one-runtime@example.com")
+	require.NoError(t, config.AppendDriveSection(cfgPath, cid, t.TempDir()))
+
+	cc := &CLIContext{
+		Logger:       slog.New(slog.DiscardHandler),
+		OutputWriter: io.Discard,
+		StatusWriter: io.Discard,
+		CfgPath:      cfgPath,
+	}
+	orch := &testSyncDaemonOrchestrator{}
+	var engineRuntime *driveops.SessionRuntime
+	cc.seams.syncDaemonOrchestrator = func(cfg *multisync.OrchestratorConfig) syncDaemonOrchestrator {
+		engineRuntime = cfg.Runtime
+		return orch
+	}
+	ctx := context.WithValue(t.Context(), cliContextKey{}, cc)
+
+	require.NoError(t, runSyncCommand(ctx, cc, syncCommandOptions{Mode: syncdomain.SyncBidirectional, Watch: true}))
+
+	require.True(t, orch.called)
+	require.NotNil(t, engineRuntime)
+	assert.Same(t, cc.Runtime, engineRuntime, "the engines run on the command's runtime")
+	assert.Len(t, cc.runtimes, 1, "the command built one runtime for its probe and its engines")
+}
+
+// The daemon reuses a runtime the command already has instead of building a
+// second one beside it.
+//
+// Validates: R-6.8.27
+func TestSyncSessionRuntime_ReusesTheCommandsRuntime(t *testing.T) {
+	t.Parallel()
+
+	cc := &CLIContext{Logger: slog.New(slog.DiscardHandler)}
+	holder := config.NewHolder(config.DefaultConfig(), "")
+	first := cc.syncSessionRuntime(holder, cc.Logger)
+
+	assert.Same(t, first, cc.syncSessionRuntime(holder, cc.Logger))
+	assert.Same(t, first, cc.runtime(), "the probe's runtime is the same one")
+	assert.Len(t, cc.runtimes, 1)
+
+	var noContext *CLIContext
+	assert.NotNil(t, noContext.syncSessionRuntime(holder, cc.Logger), "without a command context, a runtime nobody keeps")
 }
