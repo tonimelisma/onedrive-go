@@ -25,10 +25,6 @@ const (
 )
 
 const (
-	defaultWritableShortcutName       = "Kikkeli Shared Test Folder"
-	defaultReadOnlyShortcutName       = "Read-only Shared Folder"
-	defaultStandaloneSharedFolderName = "Testi2 Shared Folder"
-	defaultShortcutSentinelPath       = "shortcut-sentinel.txt"
 
 	// WritableShortcutParentDriveEnvVar and ReadOnlyShortcutParentDriveEnvVar
 	// name the configured drives that hold the two shortcut fixtures. Nothing
@@ -39,8 +35,11 @@ const (
 	ReadOnlyShortcutParentDriveEnvVar = "ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE"
 )
 
-// The fixture variables applyShortcutFixtureDefaults fills when a run leaves
-// them unset.
+// The shortcut and shared-folder fixture variables. The names and sentinel
+// paths have no default: the repository names no fixture, so they come only
+// from the environment (CI's fixtures secret, a root .env or
+// .testdata/fixtures.env), and a test that needs one fails naming it. Each
+// sharer falls back to the other fixture's parent account.
 const (
 	writableShortcutNameEnvVar         = "ONEDRIVE_TEST_SHORTCUT_WRITABLE_NAME"
 	writableShortcutSharerEmailEnvVar  = "ONEDRIVE_TEST_SHORTCUT_WRITABLE_SHARER_EMAIL"
@@ -77,7 +76,8 @@ type LiveTestConfig struct {
 	SecondaryDrive string
 	Fixtures       LiveFixtures
 	// DefaultedFixtureVariables names, in a fixed order, each fixture
-	// variable the run left unset and whose default applied.
+	// variable the run left unset and whose fallback applied: only a
+	// shortcut's sharer has one.
 	DefaultedFixtureVariables []string
 }
 
@@ -197,11 +197,11 @@ func LoadLiveTestConfig(moduleRoot string) (LiveTestConfig, error) {
 	return cfg, nil
 }
 
-// applyShortcutFixtureDefaults fills the shortcut fixture names a run leaves
-// unset, and names each variable whose default applied in
-// DefaultedFixtureVariables. The parent drives have no default: they come
-// only from their variables. Each sharer is the other fixture's parent
-// account, when that is set.
+// applyShortcutFixtureDefaults fills each shortcut's sharer, when a run leaves
+// it unset, from the other fixture's parent account, and names each variable
+// it filled in DefaultedFixtureVariables. The parent drives, the shortcut
+// names, the sentinel paths and the standalone shared folder's name have no
+// default: they come only from their variables.
 func applyShortcutFixtureDefaults(cfg *LiveTestConfig) {
 	fixtures := &cfg.Fixtures
 	for _, fixture := range []struct {
@@ -209,20 +209,6 @@ func applyShortcutFixtureDefaults(cfg *LiveTestConfig) {
 		value    *string
 		fallback string
 	}{
-		{variable: writableShortcutNameEnvVar, value: &fixtures.WritableShortcutName, fallback: defaultWritableShortcutName},
-		{variable: readOnlyShortcutNameEnvVar, value: &fixtures.ReadOnlyShortcutName, fallback: defaultReadOnlyShortcutName},
-		{
-			variable: writableShortcutSentinelPathEnvVar, value: &fixtures.WritableShortcutSentinelPath,
-			fallback: defaultShortcutSentinelPath,
-		},
-		{
-			variable: readOnlyShortcutSentinelPathEnvVar, value: &fixtures.ReadOnlyShortcutSentinelPath,
-			fallback: defaultShortcutSentinelPath,
-		},
-		{
-			variable: standaloneSharedFolderNameEnvVar, value: &fixtures.StandaloneSharedFolderName,
-			fallback: defaultStandaloneSharedFolderName,
-		},
 		{
 			variable: writableShortcutSharerEmailEnvVar, value: &fixtures.WritableShortcutSharerEmail,
 			fallback: driveEmailFromCanonicalID(fixtures.ReadOnlyShortcutParentDrive),
