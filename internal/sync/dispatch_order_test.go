@@ -397,6 +397,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_ARotationThroughNestingMadeOnOneDriveConverges,
 		TestRunOnce_ARotationThroughNestingSplitAcrossTheSidesKeepsOneDrivesNesting,
 		TestRunOnce_AFolderMovedIntoDifferentNewFoldersAtItsOwnPathOnEachSideConverges,
+		TestRunOnce_ThreeFoldersMovedIntoEachOthersNewFoldersConverge,
 		TestRunOnce_AFileMadeHereUnderTheNameOneDriveGaveAMovedFileIsKeptAsAConflictCopy,
 		TestRunOnce_FileMovedOnOneDriveOutOfAFolderMadeHereConverges,
 		TestRunOnce_FileMovedOutOfARenamedSubfolderIntoTheRecreatedFolderConverges,

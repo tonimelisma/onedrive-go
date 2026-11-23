@@ -626,11 +626,14 @@ type moveEmitter struct {
 	// it waits for, which may turn out to be the first. remoteHeld holds the
 	// keys whose OneDrive move remoteLandingWaits holds, and takenBack the
 	// keys whose move an earlier run took back (takeBackHeldLandings); each
-	// waits for the next pass.
-	landings   map[string]string
-	loopHeld   map[string]string
-	remoteHeld map[string]bool
-	takenBack  map[string]bool
+	// waits for the next pass. parkedFirst holds the holders an earlier run
+	// found nested below the move that lands in the folder at their path, which
+	// move aside on OneDrive first (takeBackHeldLandings).
+	landings    map[string]string
+	loopHeld    map[string]string
+	remoteHeld  map[string]bool
+	takenBack   map[string]bool
+	parkedFirst map[string]bool
 }
 
 // emit decides every item. A run that plans an OneDrive move into a folder
@@ -652,13 +655,13 @@ func (c *moveComposer) emit() moveComposition {
 		return pi < pj
 	})
 
-	takenBack := map[string]bool{}
-	e := c.emitRun(order, takenBack)
-	for range order {
+	takenBack, parkedFirst := map[string]bool{}, map[string]bool{}
+	e := c.emitRun(order, takenBack, parkedFirst)
+	for range 2 * len(order) {
 		if !e.takeBackHeldLandings() {
 			break
 		}
-		e = c.emitRun(order, takenBack)
+		e = c.emitRun(order, takenBack, parkedFirst)
 	}
 	e.holdOwnLandings()
 	e.result.notices = append(c.notices, e.result.notices...)
@@ -667,8 +670,8 @@ func (c *moveComposer) emit() moveComposition {
 }
 
 // emitRun decides every item in order, the items of takenBack waiting for the
-// next pass.
-func (c *moveComposer) emitRun(order []string, takenBack map[string]bool) *moveEmitter {
+// next pass and those of parkedFirst moving aside on OneDrive.
+func (c *moveComposer) emitRun(order []string, takenBack, parkedFirst map[string]bool) *moveEmitter {
 	e := &moveEmitter{
 		moveComposer: c,
 		state:        make(map[string]moveEmitState, len(c.keys)),
@@ -677,6 +680,7 @@ func (c *moveComposer) emitRun(order []string, takenBack map[string]bool) *moveE
 		loopHeld:     map[string]string{},
 		remoteHeld:   map[string]bool{},
 		takenBack:    takenBack,
+		parkedFirst:  parkedFirst,
 	}
 	for range len(order) + 1 {
 		e.resolvePending(order)
@@ -699,18 +703,46 @@ func (c *moveComposer) emitRun(order []string, takenBack map[string]bool) *moveE
 // pass, so the move would land in it and stay there for as long as the item
 // does. The partner moves of a folder that waits as the second of them keep
 // theirs (isLoopPartner): that folder moves the next pass and carries them
-// along. It reports whether it took a move back.
+// along.
+//
+// A holder whose own target lies below key's (targetHangsOff) can never be
+// at its target before key has landed, so taking key's move back holds both
+// for good: here H moved aside, Y moved into a new folder H as H/Y, and the
+// old H into H/Y/f/a/H, while OneDrive kept H and Y. Such a holder moves
+// aside on OneDrive first (parkedFirst, park), which frees its path for the
+// folder made here; key's move then lands in that folder, which the plan
+// makes on OneDrive once the holder has left (recreatedSourceCreates), and a
+// later pass moves the holder below key. A holder that cannot be parked has
+// key's move taken back. It reports whether it changed the decisions of the
+// run.
 func (e *moveEmitter) takeBackHeldLandings() bool {
-	tookBack := false
+	changed := false
 	for key, holder := range e.landings {
 		if e.movedOnOneDrive(holder) || e.isLoopPartner(key, holder) {
 			continue
 		}
+		if !e.parkedFirst[holder] && e.mustLeaveBeforeItsLanding(holder, key) {
+			e.parkedFirst[holder] = true
+			changed = true
+			continue
+		}
 		e.takenBack[key] = true
-		tookBack = true
+		changed = true
 	}
 
-	return tookBack
+	return changed
+}
+
+// mustLeaveBeforeItsLanding reports whether holder, which OneDrive keeps at
+// the path of the folder key's OneDrive move lands in, has its own target
+// below key's and can move aside on OneDrive: a participant there that is
+// not frozen (unresolvable).
+func (e *moveEmitter) mustLeaveBeforeItsLanding(holder, key string) bool {
+	h := e.nodes[holder]
+
+	return h != nil && !e.unresolvable[holder] && h.present(moveCoordRemote) &&
+		e.isMoveParticipant(h) && !sameLocation(e.location(h, moveCoordRemote), e.target[holder]) &&
+		e.targetHangsOff(holder, key)
 }
 
 // isLoopPartner reports whether key's move is one of the partner moves holder
@@ -1203,6 +1235,14 @@ func (e *moveEmitter) relocationMoves(n *moveNode) []syncdomain.ActionType {
 // resolve decides one item. It reports whether the item left the pending
 // state.
 func (e *moveEmitter) resolve(key string) bool {
+	if e.parkedFirst[key] {
+		// It moves aside whatever its target parent's decision: its target
+		// lies below the move its leaving lets run.
+		if !e.park(key, moveCoordRemote) {
+			e.deferNode(key)
+		}
+		return true
+	}
 	switch e.parentState(key) {
 	case moveEmitPending:
 		return false
@@ -1217,6 +1257,7 @@ func (e *moveEmitter) resolve(key string) bool {
 		e.deferNode(key)
 		return true
 	}
+
 	if !e.isMoveParticipant(n) {
 		// Present on one side only: a create or delete that SQLite plans.
 		e.state[key] = moveEmitSettled
@@ -1491,9 +1532,11 @@ func (e *moveEmitter) waitsForAFolderHolder(key string, side moveCoord, targetPa
 // still to be decided, a file even when it then moves. Run anyway, the move
 // would land in the item and stay in it for as long as the item does. A
 // folder still to be decided, and an item decided without an OneDrive move
-// (held for the next pass, or parked), hold the move through the take-back:
-// the move is planned, and when the run ends without an OneDrive move of the
-// item, it is taken back (takeBackHeldLandings). An item the plan moves away
+// (held for the next pass, or parked on this computer), hold the move
+// through the take-back: the move is planned, and when the run ends without
+// an OneDrive move of the item, it is taken back, unless the item's own
+// target lies below the move and it moves aside on OneDrive first instead
+// (takeBackHeldLandings). An item the plan moves away
 // on OneDrive holds it only when that move, directly or through the moves it
 // waits for, lands in a folder made at key's own OneDrive path
 // (remoteLandingLoops): two folders each moved here into a new folder at the
@@ -1548,9 +1591,11 @@ func (e *moveEmitter) remoteLandingLoops(holder, key string) bool {
 	return false
 }
 
-// movedOnOneDrive reports whether the plan settles key with an OneDrive move.
+// movedOnOneDrive reports whether the plan moves key on OneDrive: settled
+// with an OneDrive move, or parked there (parkedFirst), which frees its path
+// as well.
 func (e *moveEmitter) movedOnOneDrive(key string) bool {
-	if e.state[key] != moveEmitSettled {
+	if e.state[key] != moveEmitSettled && !e.parkedFirst[key] {
 		return false
 	}
 	for i := range e.result.moves {
@@ -2233,7 +2278,8 @@ func recreatedSourceCreates(
 			createView.Remote = remoteFolderOfAnotherItem(sourceView.Remote, key)
 			create = makeFolderCreate(createView, syncdomain.CreateRemote)
 		}
-		if inputs.frozen[key] || composition.deferred[key] || !recreatedSourceVacated(composition, key, node, source) {
+		vacated := recreatedSourceVacated(composition, key, node, source)
+		if inputs.frozen[key] || (composition.deferred[key] && !movedAwayOnOneDrive(composition, key, source)) || !vacated {
 			waiting = append(waiting, create)
 			continue
 		}
@@ -2263,12 +2309,11 @@ func remoteFolderOfAnotherItem(remote *syncdomain.RemoteState, key string) *sync
 	return remote
 }
 
-// recreatedSourceVacated reports whether OneDrive no longer holds key at
-// source once the plan's moves have run.
-func recreatedSourceVacated(composition *moveComposition, key string, node *moveNode, source string) bool {
-	if node.paths[moveCoordRemote] != source {
-		return true
-	}
+// movedAwayOnOneDrive reports whether the plan moves key away from source on
+// OneDrive: a deferred item parked there frees the path in this pass
+// (parkedFirst), so the folder made here at it is made on OneDrive after the
+// move, and the move that lands in it after that.
+func movedAwayOnOneDrive(composition *moveComposition, key, source string) bool {
 	for i := range composition.moves {
 		move := &composition.moves[i]
 		if move.key == key && move.side == moveCoordRemote && move.oldPath == source {
@@ -2277,6 +2322,12 @@ func recreatedSourceVacated(composition *moveComposition, key string, node *move
 	}
 
 	return false
+}
+
+// recreatedSourceVacated reports whether OneDrive no longer holds key at
+// source once the plan's moves have run.
+func recreatedSourceVacated(composition *moveComposition, key string, node *moveNode, source string) bool {
+	return node.paths[moveCoordRemote] != source || movedAwayOnOneDrive(composition, key, source)
 }
 
 // dropCreatesOntoComposedItems removes creates of another item at a path a

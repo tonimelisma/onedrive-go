@@ -1412,6 +1412,44 @@ func TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *te
 
 // Validates: R-2.17.6, R-2.17.1
 //
+// Here H moved aside, Y/f moved into a new Y/f/a/f, Y moved into a new folder
+// H as H/Y, and the old H into H/Y/f/a/H, while OneDrive kept H, Y and Y/f.
+// Y's OneDrive move lands in the folder made at H's path, which OneDrive
+// gives the old H, and H's own target lies below Y's: taken back, Y's move
+// held H, and H's waited for Y, so all three waited for good. H moves aside
+// on OneDrive first, which frees its path for the new H, and Y moves into
+// it in the same plan; f, whose new folder is at its own path, and H wait
+// for a later pass, and nothing is made at f's path (ownLandings). Every
+// move of the plan has an order.
+func TestComposeMoves_AFolderWhoseTargetLiesBelowAMoveIntoAFolderAtItsPathMovesAsideFirst(t *testing.T) {
+	t.Parallel()
+
+	nodes := []moveNode{
+		composeNode("H", syncdomain.ItemTypeFolder, "H", "H/Y/f/a/H", "H"),
+		composeNode("h", syncdomain.ItemTypeFile, "H/h.txt", "H/Y/f/a/H/h.txt", "H/h.txt"),
+		composeNode("Y", syncdomain.ItemTypeFolder, "Y", "H/Y", "Y"),
+		composeNode("f", syncdomain.ItemTypeFolder, "Y/f", "H/Y/f/a/f", "Y/f"),
+		composeNode("c", syncdomain.ItemTypeFile, "Y/f/c.txt", "H/Y/f/a/f/c.txt", "Y/f/c.txt"),
+	}
+	occupancy := composeOccupancy(nodes)
+	for _, made := range []string{"H", "H/Y/f", "H/Y/f/a"} {
+		occupancy.local[made] = true
+	}
+	c := composeMoves(nodes, occupancy, nil)
+
+	assert.Equal(t, []string{"Y->H/Y", "H->H.swap-1"}, composedMovesBySide(&c, moveCoordRemote))
+	assert.Empty(t, composedMovesBySide(&c, moveCoordLocal))
+	assert.Equal(t, map[string]bool{"H": true, "f": true}, c.deferred)
+	assert.True(t, atOrBelowOwnLanding("H/Y/f/a", c.ownLandings[moveCoordRemote]), "nothing is made at f's path")
+	assert.False(t, atOrBelowOwnLanding("H", c.ownLandings[moveCoordRemote]), "the new H is made on OneDrive")
+
+	actions := composedMoveActions(&c, nodes)
+	kept, _, _ := isolateDependencyCycles(actions, nil)
+	assert.Len(t, kept, len(actions), "every action of the plan has an order")
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
 // On OneDrive an entry is moved into a folder and the folder then takes the
 // entry's old path: p into x and x to p, x into p and p to x, p/f into x and
 // x onto p/f, or the file z into p and p onto z. Here the entry still holds

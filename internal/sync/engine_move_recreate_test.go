@@ -441,6 +441,59 @@ func TestRunOnce_ARotationThroughNestingSplitAcrossTheSidesKeepsOneDrivesNesting
 
 // Validates: R-2.17.6, R-2.1.7
 //
+// Three folders moved into each other's new folders here: H moved aside,
+// Y/f moved into a new Y/f/a/f, Y moved into a new folder H as H/Y, and the
+// old H into H/Y/f/a/H, while OneDrive kept all three. Y's move on OneDrive
+// lands in the new H, at the path OneDrive still gives the old H, whose own
+// target lies below Y: the old H moves aside on OneDrive first, the new H is
+// made there and Y moved into it, and later passes do the same for f below
+// Y and then move f and the old H into the new f/a. Before, Y's move waited
+// while the old H held the path and the old H waited for Y, so every sync
+// left the moves for the next one (or, before that, moved Y into the old H
+// on OneDrive). One sync converges: both sides hold the tree made here, each
+// folder is the item that was moved there, so nothing was moved into or made
+// inside an old folder on OneDrive, and nothing is uploaded or downloaded
+// again.
+func TestRunOnce_ThreeFoldersMovedIntoEachOthersNewFoldersConverge(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-H", "root", "H")
+	remote.addFile(t, "item-h", "item-H", "h.txt", "h\n")
+	remote.addFolder("item-Y", "root", "Y")
+	remote.addFolder("item-f", "item-Y", "f")
+	remote.addFile(t, "item-c", "item-f", "c.txt", "c\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Rename(local("H"), local("H2")))
+	require.NoError(t, os.Rename(local("Y/f"), local("tmp")))
+	require.NoError(t, os.MkdirAll(local("Y/f/a"), 0o750))
+	require.NoError(t, os.Rename(local("tmp"), local("Y/f/a/f")))
+	require.NoError(t, os.Rename(local("Y"), local("tmp2")))
+	require.NoError(t, os.Mkdir(local("H"), 0o750))
+	require.NoError(t, os.Rename(local("tmp2"), local("H/Y")))
+	require.NoError(t, os.Rename(local("H2"), local("H/Y/f/a/H")))
+	want := harnessLocalTree(t, syncRoot)
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes the moves")
+	assert.Zero(t, superseded)
+
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	for id, at := range map[string]string{"item-H": "H/Y/f/a/H", "item-Y": "H/Y", "item-f": "H/Y/f/a/f"} {
+		assert.Equal(t, at, remote.pathOf(id), "%s is the folder moved there", id)
+	}
+	assert.Zero(t, remote.uploads)
+	assert.Equal(t, downloadsBefore, remote.downloads, "the folders are moved on OneDrive, not downloaded again")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.6, R-2.1.7
+//
 // f is moved into a new folder at its own path on each side: here into
 // f/a/f, on OneDrive into f/b/f. OneDrive's place wins (R-2.17.6), so f moves
 // to f/b/f here, and the new f made here and the one made on OneDrive are

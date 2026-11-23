@@ -1724,6 +1724,31 @@ func TestPlannerPairs_AHeldFolderMovedIntoARenamedFolderRunsOnceItsNameIsFree(t 
 
 // Validates: R-2.17.6, R-2.1.7
 //
+// Here p moved aside, a new p made, x moved into it as p/x, a new p/x/a made
+// and the old p moved into it as p/x/a/p, while OneDrive kept both: x's
+// OneDrive move lands in the new p, at the old p's path there, and the old
+// p's target lies below x's. The old p moves aside on OneDrive first, the new
+// p is made there and x moves into it, and a later pass makes p/x/a and moves
+// the old p into it, on every run with each create refused once. Before,
+// x's move was taken back while the old p held the path, and the old p
+// waited for x: nothing moved, ever.
+func TestPlannerPairs_AFolderMovedIntoANewFolderAtThePathOfAFolderMovedBelowItConverges(t *testing.T) {
+	t.Parallel()
+
+	requirePairKeepsEveryInvariant(t, &exPair{
+		start: exStartNamed(t, "synced"),
+		local: []exEdit{
+			{kind: exMoveFolder, from: "p", to: "q"},
+			{kind: exMakeFolder, to: "p"},
+			{kind: exMoveFolder, from: "x", to: "p/x"},
+			{kind: exMakeFolder, to: "p/x/a"},
+			{kind: exMoveFolder, from: "q", to: "p/x/a/p"},
+		},
+	})
+}
+
+// Validates: R-2.17.6, R-2.1.7
+//
 // p moved into a new folder at its own path on each side, into p/a/p here
 // and into p/b/p on OneDrive: OneDrive's place wins, so p moves to p/b/p here
 // and the two new folders p are one folder by path. The folder made here is
