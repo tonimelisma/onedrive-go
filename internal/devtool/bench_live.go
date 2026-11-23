@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/testutil"
+	"github.com/tonimelisma/onedrive-go/testutil/liveenv"
 )
 
 const (
@@ -286,7 +286,7 @@ const benchExcerptCutMark = "..."
 // allowlist does not name, through the one allowlist reader the live suites
 // use.
 func validateBenchAllowlist(driveID string) error {
-	if err := testutil.CheckDriveAllowed(benchPrimaryDriveEnvVar, driveID); err != nil {
+	if err := liveenv.CheckDriveAllowed(benchPrimaryDriveEnvVar, driveID); err != nil {
 		return fmt.Errorf("live benchmark: %w", err)
 	}
 

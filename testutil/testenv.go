@@ -3,7 +3,6 @@
 package testutil
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -14,11 +13,11 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/sharedref"
+	"github.com/tonimelisma/onedrive-go/testutil/liveenv"
 )
 
 const metadataDirPerms = 0o755
 
-const sharedFixtureEnvPath = ".testdata/fixtures.env"
 const (
 	testBundleConfigFile  = "config.toml"
 	testBundleCatalogFile = "catalog.json"
@@ -83,28 +82,21 @@ type LiveTestConfig struct {
 }
 
 // LoadDotEnvFile reads KEY=VALUE pairs from a .env file at the given path
-// into the process environment. It is the one .env reader of the live suites
-// and the live benchmark. A missing file is not an error (CI sets the
-// variables directly), and a variable already set wins over the file.
-func LoadDotEnvFile(envPath string) (err error) {
-	f, err := localpath.Open(envPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
+// into the process environment, through localpath, by liveenv's rule: the
+// one .env reader of the live suites and the live benchmark. A missing file
+// is not an error, and a variable already set wins over the file.
+func LoadDotEnvFile(envPath string) error {
+	return liveenv.LoadDotEnvFile(openLocalFile, envPath)
+}
+
+// openLocalFile is liveenv's file capability over localpath.
+func openLocalFile(path string) (io.ReadCloser, error) {
+	f, err := localpath.Open(path)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", envPath, err)
-	}
-	defer func() {
-		if closeErr := f.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("close %s: %w", envPath, closeErr)
-		}
-	}()
-
-	if applyErr := applyDotEnv(f); applyErr != nil {
-		return fmt.Errorf("read %s: %w", envPath, applyErr)
+		return nil, fmt.Errorf("open local file: %w", err)
 	}
 
-	return nil
+	return f, nil
 }
 
 // LoadDotEnv is LoadDotEnvFile for a test harness: it exits the process when
@@ -117,10 +109,8 @@ func LoadDotEnv(envPath string) {
 // order. Exported process env wins over both files. Root .env overrides
 // durable fixture defaults from .testdata/fixtures.env.
 func LoadTestEnvFiles(moduleRoot string) error {
-	for _, path := range []string{filepath.Join(moduleRoot, ".env"), filepath.Join(moduleRoot, sharedFixtureEnvPath)} {
-		if err := LoadDotEnvFile(path); err != nil {
-			return err
-		}
+	if err := liveenv.LoadEnvFiles(openLocalFile, moduleRoot); err != nil {
+		return fmt.Errorf("load test env files: %w", err)
 	}
 
 	return nil
@@ -286,82 +276,10 @@ func driveEmailFromCanonicalID(driveID string) string {
 	return parts[1]
 }
 
-// applyDotEnv sets the KEY=VALUE pairs of a .env stream that the
-// environment does not set yet. Its errors name a key, never a value.
-func applyDotEnv(r io.Reader) error {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		value = strings.Trim(value, "\"'")
-
-		// Env vars take precedence over .env file.
-		if key == "" || os.Getenv(key) != "" {
-			continue
-		}
-		if err := os.Setenv(key, value); err != nil {
-			return fmt.Errorf("set %s: %w", key, err)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scan: %w", err)
-	}
-
-	return nil
-}
-
-// AllowedTestAccountsEnvVar names the comma-separated allowlist of the
-// drives live tests may touch.
-const AllowedTestAccountsEnvVar = "ONEDRIVE_ALLOWED_TEST_ACCOUNTS"
-
-// AllowlistIncludes reports whether driveID is an entry of a comma-separated
-// allowlist. Entries are trimmed and must match the whole drive.
-func AllowlistIncludes(allowlist string, driveID string) bool {
-	if driveID == "" {
-		return false
-	}
-	for _, entry := range strings.Split(allowlist, ",") {
-		if strings.TrimSpace(entry) == driveID {
-			return true
-		}
-	}
-
-	return false
-}
-
-// CheckDriveAllowed returns an error unless driveID, the value of the
-// variable driveVar, is set and in the allowlist. The error names the
-// variables and never a value: live suites run in public CI logs.
-func CheckDriveAllowed(driveVar string, driveID string) error {
-	allowlist := os.Getenv(AllowedTestAccountsEnvVar)
-	switch {
-	case strings.TrimSpace(allowlist) == "":
-		return fmt.Errorf("%s is not set; set it in .env or the environment, e.g. %s=personal:user@outlook.com",
-			AllowedTestAccountsEnvVar, AllowedTestAccountsEnvVar)
-	case driveID == "":
-		return fmt.Errorf("%s is not set", driveVar)
-	case !AllowlistIncludes(allowlist, driveID):
-		return fmt.Errorf("the drive in %s is not an entry of %s", driveVar, AllowedTestAccountsEnvVar)
-	default:
-		return nil
-	}
-}
-
 // ValidateAllowlist crashes the process if ONEDRIVE_ALLOWED_TEST_ACCOUNTS
 // is not set or if the drive driveEnvVar names is not in the allowlist.
 func ValidateAllowlist(driveEnvVar string) {
-	if err := CheckDriveAllowed(driveEnvVar, os.Getenv(driveEnvVar)); err != nil {
+	if err := liveenv.CheckDriveAllowed(driveEnvVar, os.Getenv(driveEnvVar)); err != nil {
 		// CheckDriveAllowed's errors name variables, never a value.
 		fmt.Fprintf(os.Stderr, "FATAL: %s\n", pathlessError(err))
 		os.Exit(1)
