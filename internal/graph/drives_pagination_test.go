@@ -332,7 +332,13 @@ func TestPagedListings_ALinkBackToAPageAlreadyAskedForFailsTheListing(t *testing
 func TestPagedListings_ARepeatAtThePageCapReportsTheCap(t *testing.T) {
 	t.Parallel()
 
-	for listingName, call := range everyPagedListingCall() {
+	calls := everyPagedListingCall()
+	// The site search stops once it holds its limit, one site a page here,
+	// so its limit is above the cap for the cap to be what stops it.
+	calls["site search"] = func(ctx context.Context, c *Client) (any, error) {
+		return c.SearchSites(ctx, "*", c.maxListPages+1)
+	}
+	for listingName, call := range calls {
 		t.Run(listingName, func(t *testing.T) {
 			t.Parallel()
 

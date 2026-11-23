@@ -679,8 +679,10 @@ func TestBuildStatusAccountsFromViews_SingleAccount(t *testing.T) {
 	assert.Equal(t, driveStateNotSynced, acct.Drives[0].State)
 }
 
-// Drives are grouped under their account's email, and accounts are listed
-// by email, through the account views.
+// Drives are grouped under their account, and accounts are listed by email,
+// through the account views.
+//
+// Validates: R-3.5.2
 func TestBuildStatusAccountsFromViews_MultiAccountGrouping(t *testing.T) {
 	setTestDriveHome(t)
 
@@ -697,17 +699,21 @@ func TestBuildStatusAccountsFromViews_MultiAccountGrouping(t *testing.T) {
 
 	accounts := statusAccountsThroughViews(t, cfg)
 
-	require.Len(t, accounts, 3)
+	require.Len(t, accounts, 4, "the two accounts at alice's address are two rows")
 
-	// Sorted alphabetically by email.
+	// Sorted by email; the two accounts at one address each have a row of
+	// their own, with their own drive.
 	assert.Equal(t, "alice@example.com", accounts[0].Email)
-	assert.Len(t, accounts[0].Drives, 2)
-
-	assert.Equal(t, "bob@example.com", accounts[1].Email)
+	assert.Equal(t, "alice@example.com", accounts[1].Email)
+	assert.ElementsMatch(t, []string{"business", "personal"}, []string{accounts[0].DriveType, accounts[1].DriveType})
+	assert.Len(t, accounts[0].Drives, 1)
 	assert.Len(t, accounts[1].Drives, 1)
-	assert.Equal(t, driveStatePaused, accounts[1].Drives[0].State)
 
-	assert.Equal(t, "charlie@example.com", accounts[2].Email)
+	assert.Equal(t, "bob@example.com", accounts[2].Email)
+	assert.Len(t, accounts[2].Drives, 1)
+	assert.Equal(t, driveStatePaused, accounts[2].Drives[0].State)
+
+	assert.Equal(t, "charlie@example.com", accounts[3].Email)
 }
 
 // An account whose saved login is missing or unreadable needs sign-in, read

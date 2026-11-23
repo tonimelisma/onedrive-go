@@ -251,7 +251,7 @@ func TestMergeAuthRequirements_PrefersExistingFieldsAndSorts(t *testing.T) {
 
 	merged := mergeAuthRequirements(
 		[]accountAuthRequirement{
-			authRequirement("b@example.com", "", "", 0, accountAuthHealth{
+			authRequirement("b@example.com", "", "business", 0, accountAuthHealth{
 				Reason: authReasonMissingLogin,
 				Action: authAction(authReasonMissingLogin),
 			}),
@@ -277,6 +277,32 @@ func TestMergeAuthRequirements_PrefersExistingFieldsAndSorts(t *testing.T) {
 	assert.Equal(t, 2, merged[1].StateDBs)
 	assert.Equal(t, authReasonMissingLogin, merged[1].Reason)
 	assert.Equal(t, authAction(authReasonMissingLogin), merged[1].Action)
+}
+
+// Two accounts at one address are two requirements: they merge by address
+// and account type, never by address alone (R-3.5.2).
+//
+// Validates: R-3.5.2
+func TestMergeAuthRequirements_KeepsTwoAccountsAtOneAddressApart(t *testing.T) {
+	t.Parallel()
+
+	merged := mergeAuthRequirements(
+		[]accountAuthRequirement{
+			authRequirement("b@example.com", "", "personal", 0, accountAuthHealth{
+				Reason: authReasonMissingLogin,
+				Action: authAction(authReasonMissingLogin),
+			}),
+		},
+		[]accountAuthRequirement{
+			authRequirement("b@example.com", "Bravo", "business", 1, accountAuthHealth{
+				Reason: authReasonInvalidSavedLogin,
+				Action: authAction(authReasonInvalidSavedLogin),
+			}),
+		},
+	)
+
+	require.Len(t, merged, 2)
+	assert.ElementsMatch(t, []string{"personal", "business"}, []string{merged[0].DriveType, merged[1].DriveType})
 }
 
 func TestAuthReasonTextAndAction_ReturnExpectedStrings(t *testing.T) {
