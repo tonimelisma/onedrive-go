@@ -530,7 +530,7 @@ func composedMoveActions(c *moveComposition, nodes []moveNode) []syncdomain.Acti
 			moveType = syncdomain.ActionLocalMove
 		}
 		actions = append(actions, syncdomain.Action{
-			Type: moveType, OldPath: c.moves[i].oldPath, Path: c.moves[i].newPath,
+			Type: moveType, OldPath: c.moves[i].oldPath, Path: c.moves[i].newPath, MovedRemotePath: c.moves[i].remotePath,
 			View: &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{ItemType: itemTypes[c.moves[i].key]}},
 		})
 	}
@@ -1406,6 +1406,70 @@ func TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *te
 			actions := composedMoveActions(&c, tc.nodes)
 			kept, _, _ := isolateDependencyCycles(actions, nil)
 			assert.Len(t, kept, len(actions), "every action of the plan has an order")
+		})
+	}
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// On OneDrive an entry is moved into a folder and the folder then takes the
+// entry's old path: p into x and x to p, x into p and p to x, p/f into x and
+// x onto p/f, or the file z into p and p onto z. Here the entry still holds
+// the path the folder's move lands on, and its own target hangs off the
+// folder, so both waited for each other and were deferred on every pass. The
+// entry moves first into the folder at the folder's path here, and the
+// folder's move, which waits for it to leave that path, then carries it to
+// its target: both run in one plan, with no cycle between them.
+func TestComposeMoves_AnEntryMovedOnOneDriveIntoAFolderThatTakesItsPathMovesIntoItHereFirst(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		nodes []moveNode
+		want  []string
+	}{
+		{
+			name: "p into x, x to p",
+			nodes: []moveNode{
+				composeNode("p", syncdomain.ItemTypeFolder, "p", "p", "p/p"),
+				composeNode("f", syncdomain.ItemTypeFile, "p/f", "p/f", "p/p/f"),
+				composeNode("x", syncdomain.ItemTypeFolder, "x", "x", "p"),
+			},
+			want: []string{"p->x/p", "x->p"},
+		},
+		{
+			name: "p/f into x, x onto p/f",
+			nodes: []moveNode{
+				composeNode("p", syncdomain.ItemTypeFolder, "p", "p", "p"),
+				composeNode("f", syncdomain.ItemTypeFile, "p/f", "p/f", "p/f/f"),
+				composeNode("x", syncdomain.ItemTypeFolder, "x", "x", "p/f"),
+			},
+			want: []string{"p/f->x/f", "x->p/f"},
+		},
+		{
+			name: "the file z into p, p onto z",
+			nodes: []moveNode{
+				composeNode("p", syncdomain.ItemTypeFolder, "p", "p", "z"),
+				composeNode("f", syncdomain.ItemTypeFile, "p/f", "p/f", "z/f"),
+				composeNode("z", syncdomain.ItemTypeFile, "z", "z", "z/z"),
+			},
+			want: []string{"z->p/z", "p->z"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := composeMoves(tc.nodes, composeOccupancy(tc.nodes), nil)
+
+			require.Equal(t, tc.want, composedMovesBySide(&c, moveCoordLocal))
+			assert.Empty(t, composedMovesBySide(&c, moveCoordRemote))
+			assert.Empty(t, c.deferred)
+
+			actions := composedMoveActions(&c, tc.nodes)
+			kept, deps, _ := isolateDependencyCycles(actions, nil)
+			require.Len(t, kept, len(actions), "no move is dropped as a dependency cycle")
+			assert.Equal(t, []int{0}, deps[1], "the folder's move waits for the entry to leave its destination")
+			assert.Empty(t, deps[0], "the entry's move into the folder waits for nothing")
 		})
 	}
 }

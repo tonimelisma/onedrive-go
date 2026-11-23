@@ -76,7 +76,10 @@ import (
 // decided in turn unless their waits loop: the final sweep defers every item
 // on a loop, so the pass still ends. The loop of a folder whose target hangs
 // off an entry that lands below the path the folder's move vacates is broken
-// by moving the folder aside first (parkOneVacatingLoop). Nothing breaks that
+// by moving the folder aside first (parkOneVacatingLoop), and the loop of an
+// entry OneDrive moved into a folder that then took the entry's path, by
+// moving the entry here into the folder where the folder is now
+// (moveOneIntoItsWaitingFolder). Nothing breaks that
 // of two files each
 // moved here into a new folder at the other's path, nor a ring of such moves
 // through a file: every later pass defers their items again, and a one-shot
@@ -673,7 +676,7 @@ func (c *moveComposer) emitRun(order []string, takenBack map[string]bool) *moveE
 	}
 	for range len(order) + 1 {
 		e.resolvePending(order)
-		if !e.parkOneOccupancyCycle(order) && !e.parkOneVacatingLoop(order) {
+		if !e.parkOneOccupancyCycle(order) && !e.parkOneVacatingLoop(order) && !e.moveOneIntoItsWaitingFolder(order) {
 			break
 		}
 	}
@@ -854,6 +857,90 @@ func (e *moveEmitter) targetHangsOff(key, ancestor string) bool {
 	}
 
 	return false
+}
+
+// moveOneIntoItsWaitingFolder breaks one rotation through nesting made on
+// OneDrive: p moved into x, then x moved to p (or x moved into p and p to
+// x, or p/f moved into x and x onto p/f). Here the entry still holds the
+// path the folder's move lands on, so the folder waits for it to leave
+// (blockingPendingMove), and the entry, whose target hangs off the folder,
+// waits for the folder to be decided: both stayed pending and were deferred
+// on every pass. OneDrive moves by item ID, so the same rotation made here
+// converges; on this computer the entry moves first into the folder at the
+// path the folder has now, which vacates the folder's destination, and the
+// folder's move then carries the entry to its target in the same plan. The
+// entry's move is progress whether or not the folder's move runs: it puts
+// the entry under its target parent with its target name. It reports
+// whether it planned such a move.
+func (e *moveEmitter) moveOneIntoItsWaitingFolder(order []string) bool {
+	for _, key := range order {
+		if move, ok := e.moveIntoWaitingFolder(key); ok {
+			e.result.moves = append(e.result.moves, move)
+			e.state[key] = moveEmitSettled
+
+			return true
+		}
+	}
+
+	return false
+}
+
+// moveIntoWaitingFolder builds key's local move into its target folder at
+// that folder's current path here, when the folder waits for key alone
+// (waitsOnlyForItsFolder). No move of the plan may carry key's source, the
+// folder or the destination, so the move runs in snapshot coordinates.
+func (e *moveEmitter) moveIntoWaitingFolder(key string) (composedMove, bool) {
+	folderKey, ok := e.waitsOnlyForItsFolder(key)
+	if !ok {
+		return composedMove{}, false
+	}
+	n := e.nodes[key]
+	source, folderPath := n.paths[moveCoordLocal], e.nodes[folderKey].paths[moveCoordLocal]
+	if pathAtOrBelow(folderPath, source) {
+		return composedMove{}, false
+	}
+	newPath := joinMovePath(folderPath, e.target[key].name)
+	for i := range e.result.moves {
+		earlier := &e.result.moves[i]
+		if earlier.side == moveCoordLocal && (pathAtOrBelow(source, earlier.oldPath) ||
+			pathAtOrBelow(folderPath, earlier.oldPath) || pathAtOrBelow(newPath, earlier.newPath)) {
+			return composedMove{}, false
+		}
+	}
+	if free, displaced := e.destinationFree(n, moveCoordLocal, newPath); !free || displaced != moveDisplaceNever {
+		return composedMove{}, false
+	}
+
+	return composedMove{
+		key:        key,
+		side:       moveCoordLocal,
+		oldPath:    source,
+		newPath:    newPath,
+		localPath:  source,
+		remotePath: n.paths[moveCoordRemote],
+	}, true
+}
+
+// waitsOnlyForItsFolder reports key's target folder when key is pending and
+// relocated here only (OneDrive keeps it at its target), and that folder, a
+// pending folder present here, waits for key alone: key holds the folder's
+// local destination (blockingPendingMove).
+func (e *moveEmitter) waitsOnlyForItsFolder(key string) (string, bool) {
+	n := e.nodes[key]
+	if e.state[key] != moveEmitPending || e.unresolvable[key] || e.takenBack[key] || !e.isMoveParticipant(n) ||
+		sameLocation(e.location(n, moveCoordLocal), e.target[key]) ||
+		!sameLocation(e.location(n, moveCoordRemote), e.target[key]) {
+		return "", false
+	}
+	folderKey := e.target[key].parent
+	folder, known := e.nodes[folderKey]
+	if !known || e.state[folderKey] != moveEmitPending || e.unresolvable[folderKey] ||
+		folder.itemType != syncdomain.ItemTypeFolder || !folder.present(moveCoordLocal) {
+		return "", false
+	}
+	blocker, blocked := e.blockingPendingMove(folderKey, moveCoordLocal)
+
+	return folderKey, blocked && blocker == key
 }
 
 // parkAwayFromItsOwnLanding decides key, whose move on side lands in a folder

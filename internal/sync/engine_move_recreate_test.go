@@ -324,6 +324,79 @@ func TestRunOnce_SubfolderMovedOnOneDriveToThePathItsMovedParentLeftConverges(t 
 	requireScenarioQuietPlan(t, eng)
 }
 
+// nestingRotationCase is one rotation through nesting made on OneDrive: an
+// entry moved into a folder, and the folder then moved to the entry's old
+// path.
+type nestingRotationCase struct {
+	name        string
+	entry, into string
+	// folderTo is where the folder then moves.
+	folderTo string
+	want     map[string]string
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// On OneDrive docs is moved into archive and archive then to docs, or
+// docs/a.txt into archive and archive onto docs/a.txt, or notes.txt into docs
+// and docs onto notes.txt, before one sync. Here the entry still holds the
+// path the folder's move lands on and was held for good with the folder's
+// move. One sync moves the entry into the folder at the folder's path here
+// and then the folder: both sides end with the same tree, nothing is moved
+// back on OneDrive, uploaded or downloaded again, and no plan drops an
+// action as a dependency cycle.
+func TestRunOnce_ARotationThroughNestingMadeOnOneDriveConverges(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []nestingRotationCase{
+		{
+			name: "a folder into a folder that takes its path", entry: "docs", into: "archive", folderTo: "docs",
+			want: map[string]string{"docs": "/", "docs/docs": "/", "docs/docs/a.txt": "a\n", "notes.txt": "notes\n"},
+		},
+		{
+			name: "a file into a folder moved onto its path", entry: "docs/a.txt", into: "archive", folderTo: "docs/a.txt",
+			want: map[string]string{"docs": "/", "docs/a.txt": "/", "docs/a.txt/a.txt": "a\n", "notes.txt": "notes\n"},
+		},
+		{
+			name: "a file into a folder moved onto its path at the top", entry: "notes.txt", into: "docs", folderTo: "notes.txt",
+			want: map[string]string{
+				"archive": "/", "notes.txt": "/", "notes.txt/a.txt": "a\n", "notes.txt/notes.txt": "notes\n",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runNestingRotationMadeOnOneDrive(t, &tc)
+		})
+	}
+}
+
+func runNestingRotationMadeOnOneDrive(t *testing.T, tc *nestingRotationCase) {
+	t.Helper()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-docs", "root", "docs")
+	remote.addFile(t, "item-a", "item-docs", "a.txt", "a\n")
+	remote.addFolder("item-archive", "root", "archive")
+	remote.addFile(t, "item-notes", "root", "notes.txt", "notes\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	remote.moveAt(t, tc.entry, path.Join(tc.into, path.Base(tc.entry)))
+	remote.moveAt(t, tc.into, tc.folderTo)
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes the rotation")
+	assert.Zero(t, superseded, "no move names a source a folder's move took away")
+
+	assert.Equal(t, tc.want, remote.tree(), "OneDrive")
+	assert.Equal(t, tc.want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Empty(t, remote.moves, "nothing is moved back on OneDrive")
+	assert.Zero(t, remote.uploads)
+	assert.Equal(t, downloadsBefore, remote.downloads, "the entries are moved on this computer, not downloaded again")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // folderMadeHereCase is one way OneDrive takes a.txt out of docs while this
 // computer moved it into a new folder docs/new.
 type folderMadeHereCase struct {

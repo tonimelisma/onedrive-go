@@ -77,7 +77,7 @@ intent; multisync receives only that child work intent.
 | A file move needs content corroboration beyond inode identity; identity without it is delete + create, and unhashed moves carry the destination's observed truth. | `TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration`, `TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove`, `TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate`, `TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads`, `TestActionFreshness_LocalOriginMoveRejectsChangedDestination` |
 | Locally deleted or unpaired moved folders are deleted on OneDrive after their descendants, never re-created locally; identity-paired folder moves are one remote move. | `TestQueryReconciliationState_FolderDecisionMatrix`, `TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes`, `TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildMoves`, `TestRunOnce_LocalFolderDeleteDeletesRemoteFolder`, `TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource` |
 | A plan counts the work it leaves for the next pass (R-2.1.7): a converged plan leaves none, a folder renamed online over a local edit counts its move, a swap counts the parked item as deferred; conflict copies count as renames (the keep-both scenarios finish in one sync). | `TestPlanFollowUp_CountsWorkLeftForTheNextPass`, `TestRunOnce_OneShotUploadsLocalEditInsideFolderRenamedOnline`, `TestRunOnce_SwapOfTwoNamesConverges`, `TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth` |
-| Moves are composed per item (R-2.17.6): the same rename on both sides only re-keys the baseline and keeps either side's edit pending; divergent renames keep OneDrive's name; cross moves that would nest folders keep the OneDrive move; collisions undo the local claim; moves order against each other and their surroundings, a local move never fabricates its parent, and a pass that cannot order a move defers it, except that a cycle of moves each waiting for the next one's source (a swap or rotation of names) parks one item at a free `<name>.swap-N` sibling so the rest can run, and the parked item follows next pass. Work under a moved file's old path belongs to the folder that takes the path and waits for the move. A delete or cleanup never waits for its parent's folder create. A destination is free only when no other entry holds it under OneDrive's name folding, and an item's remote position may be a path another synced item is moving away from (the item ID proves it). | `TestComposeMoves_DestinationFreeUnderNameFolding`, `TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges`, `TestComposeMoves_RotationParksOneItemAndMovesTheRest`, `TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove`, `TestBuildDependencies_DeleteUnderARecreatedFolderDoesNotWaitForTheCreate`, `TestRunOnce_SwapOfTwoNamesConverges`, `TestComposeMoves_OneSidedRenamesMoveTheOtherSide`, `TestComposeMoves_SameRenameOnBothSidesOnlyRekeysTheBaseline`, `TestComposeMoves_DivergentRenameKeepsTheOneDriveName`, `TestComposeMoves_CrossMoveCycleKeepsTheRemoteMove`, `TestComposeMoves_DescendantRenameInsideRenamedFolder`, `TestComposeMoves_RemoteHierarchyInversionOrdersLocalMoves`, `TestComposeMoves_LocalMoveIntoRemotelyRenamedFolder`, `TestComposeMoves_OccupiedDestinationDefers`, `TestComposeMoves_FrozenItemsAndTheirSubtreesDoNotMove`, `TestBuildDependencies_NestedMoveEdges`, `TestBuildDependencies_MatchesScanningOracle`, `TestRunOnce_BothSidesRenamedIdenticallyConverges`, `TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending`, `TestRunOnce_DivergentRenameConvergesInOneSync`, `TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting`, `TestRunOnce_RemoteHierarchyInversionConverges`, `TestRunOnce_RemoteFolderRenameWithChildRenameAndMoveInConverges`, `TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass`, `TestRunOnce_RemoteFolderRenameWithNewSubfolderConverges`, `TestExecutor_LocalMove_MissingDestinationParentIsStale`, `TestRunOnce_RandomizedBidirectionalEditsConverge` |
+| Moves are composed per item (R-2.17.6): the same rename on both sides only re-keys the baseline and keeps either side's edit pending; divergent renames keep OneDrive's name; cross moves that would nest folders keep the OneDrive move; collisions undo the local claim; moves order against each other and their surroundings, a local move never fabricates its parent, and a pass that cannot order a move defers it, except that a cycle of moves each waiting for the next one's source (a swap or rotation of names) parks one item at a free `<name>.swap-N` sibling so the rest can run, and the parked item follows next pass. Work under a moved file's old path belongs to the folder that takes the path and waits for the move. A delete or cleanup never waits for its parent's folder create. A destination is free only when no other entry holds it under OneDrive's name folding, and an item's remote position may be a path another synced item is moving away from (the item ID proves it). | `TestComposeMoves_DestinationFreeUnderNameFolding`, `TestRunOnce_LocalRenameWhileOneDriveSwapsItConverges`, `TestComposeMoves_RotationParksOneItemAndMovesTheRest`, `TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove`, `TestBuildDependencies_DeleteUnderARecreatedFolderDoesNotWaitForTheCreate`, `TestRunOnce_SwapOfTwoNamesConverges`, `TestComposeMoves_OneSidedRenamesMoveTheOtherSide`, `TestComposeMoves_SameRenameOnBothSidesOnlyRekeysTheBaseline`, `TestComposeMoves_DivergentRenameKeepsTheOneDriveName`, `TestComposeMoves_CrossMoveCycleKeepsTheRemoteMove`, `TestComposeMoves_DescendantRenameInsideRenamedFolder`, `TestComposeMoves_RemoteHierarchyInversionOrdersLocalMoves`, `TestComposeMoves_LocalMoveIntoRemotelyRenamedFolder`, `TestComposeMoves_OccupiedDestinationDefers`, `TestComposeMoves_FrozenItemsAndTheirSubtreesDoNotMove`, `TestBuildDependencies_NestedMoveEdges`, `TestBuildDependencies_MatchesScanningOracle`, `TestRunOnce_BothSidesRenamedIdenticallyConverges`, `TestRunOnce_BothSidesRenamedIdenticallyKeepsTheRemoteEditPending`, `TestRunOnce_DivergentRenameConvergesInOneSync`, `TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting`, `TestRunOnce_RemoteHierarchyInversionConverges`, `TestRunOnce_RemoteFolderRenameWithChildRenameAndMoveInConverges`, `TestRunOnce_LocalFolderRenameWithChildRenameConvergesInOnePass`, `TestRunOnce_RemoteFolderRenameWithNewSubfolderConverges`, `TestExecutor_LocalMove_MissingDestinationParentIsStale`, `TestRunOnce_RandomizedBidirectionalEditsConverge`, `TestComposeMoves_AnEntryMovedOnOneDriveIntoAFolderThatTakesItsPathMovesIntoItHereFirst`, `TestRunOnce_ARotationThroughNestingMadeOnOneDriveConverges` |
 | A remote move of a locally edited file moves the local copy with its edit and uploads the edit afterwards (R-2.17.7); a local rename racing a remote edit downloads the edit (R-2.17.3). | `TestRunOnce_RemoteMoveWithLocalEditMovesThenUploads`, `TestExecutor_LocalMove_LocallyEditedSourceStillMovesAndKeepsTheEditPending`, `TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit` |
 | A remote move over a file OneDrive deleted moves the local copy onto it, replacing a verified unchanged file or conflict-copying an edited one or a new file that took the name (one saved at the name a replacing move freed, between its two steps), and never re-uploads the moved item or downloads it beside its old copy (R-2.17.9). | `TestComposedDisplacement_EntryAtTheDestination`, `TestComposeMoves_MoveOntoANewFileAtTheFreedNameKeepsItAsAConflictCopy`, `TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves`, `TestRunOnce_RemoteMoveOverExistingFileReplacesWithoutResurrecting`, `TestRunOnce_RemoteMoveOverLocallyEditedFileKeepsTheEdit`, `TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination`, `TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace`, `TestRunOnce_RemoteMoveOverIdenticalFileConvergesInOnePass` |
 | Move pairing requires the item to have left its baseline path: hard links and copies are new files, rename-and-recreate is a move plus a create (R-2.17.8). | `TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated`, `TestRunOnce_HardLinkUploadsAsANewFile`, `TestRunOnce_RenameAndRecreateMovesThenCreates` |
@@ -751,7 +751,22 @@ pass makes the new folder, moves the entry into it and the folder below the
 entry (`parkOneVacatingLoop`,
 `TestComposeMoves_FolderMovedIntoItsOwnFormerChildMovesAsideFirst`,
 `TestRunOnce_FolderMovedIntoItsOwnFormerChildConverges`). Before, both were
-deferred on every pass and a one-shot sync ended with them unfinished. The loop of a
+deferred on every pass and a one-shot sync ended with them unfinished. The
+loop of an entry that OneDrive moved into a folder which then took the
+entry's old path (`mv p x/p, mv x p`, `mv p/f x/f, mv x p/f`, `mv z p/z,
+mv p z`) holds on this computer only: the folder's move waits for the entry
+to leave its destination, and the entry's target hangs off the folder. The
+entry moves first into the folder at the path the folder has here (`p` to
+`x/p`), which is already its place under its target parent, and the
+folder's move, waiting for the path the entry left, carries it to its
+target in the same plan (`moveOneIntoItsWaitingFolder`). The entry's move
+carries `MovedRemotePath`, OneDrive's path for it, and lands in the folder
+the folder's move carries, not in a new folder at the path that move
+vacates, so it does not wait for that move (`landsInTheFolderMoveCarries`).
+On OneDrive the same rotation needs nothing of this, since a move goes by
+item ID
+(`TestComposeMoves_AnEntryMovedOnOneDriveIntoAFolderThatTakesItsPathMovesIntoItHereFirst`,
+`TestRunOnce_ARotationThroughNestingMadeOnOneDriveConverges`). The loop of a
 folder whose destination is held by a file that waits for it, as one of the
 folders OneDrive relocates, lasts until the move that vacates the file's
 target commits: the pass defers both, and a pass in which the file lands
@@ -846,24 +861,30 @@ remote move whose local copy sits elsewhere in the snapshot carries
 
 #### What the exhaustive check's broken runs show
 
-The 255 runs of `pairs.golden` (200 from the synced tree, 55 from the held
+The 202 runs of `pairs.golden` (150 from the synced tree, 52 from the held
 one; a run names its start, the two histories, the refused create if any,
 and the invariants it breaks) fall into eleven shapes. Each is an open
 behaviour of the planner unless it says it is right as it is; a fix removes
 its lines from the file. The refused-create variants of a run break what
 the run itself breaks, so they belong to its shape.
 
-1. A rotation through nesting made on OneDrive (56 runs: 50 synced, 6
-   held). One entry moves into a folder, which then takes the entry's old
-   path (`mv p x/p, mv x p`, `mv z p/z, mv p z`, `mv p/f x/f, mv x p/f`),
-   whatever this side did elsewhere. Here the two moves wait on each other:
-   the entry's move lands inside the folder's new path, and the folder's move
-   waits for the entry to leave that path, so both stay held for good (sides
-   differ, work left held). The same rotation made here converges, because
-   OneDrive moves an item into its parent by ID, which the order the
-   dependencies give allows; the local side needs the entry moved into the
-   folder at the folder's current path first, or a temporary name.
-2. A rotation through nesting split across the two sides (12 runs: 11
+1. A rotation through nesting made on OneDrive (3 runs left, all held).
+   One entry moves into a folder, which then takes the entry's old path
+   (`mv p x/p, mv x p`, `mv z p/z, mv p z`, `mv p/f x/f, mv x p/f`),
+   whatever this side did elsewhere. Here the entry still holds the path
+   the folder's move lands on, and the entry's target hangs off the folder,
+   so the two moves waited on each other and stayed held for good. Fixed:
+   the entry moves first into the folder at the path the folder has here,
+   and the folder's move then carries it (Move Composition,
+   `moveOneIntoItsWaitingFolder`), and 51 of its runs converge (48 from
+   the synced tree, 3 from the held one). What is left is from the held start,
+   where the folder made in the held one's place takes part: OneDrive
+   moves `p/f` into the held folder and that folder onto `p/f`
+   (`mv p/f x/f, mv x p/f`, also through `X2`) while here `f` already sits
+   in the new `x`, not in the held folder, so there is no move into the
+   folder to make first; and `mv x p/x, mv p x`, where `p` lands on the
+   new `x` made here, shape 7's collision of two entries at one name.
+2. A rotation through nesting split across the two sides (10 runs: 9
    synced, 1 held): `p` moved into `x` here while OneDrive moved `x` into
    `p` (with or without a third move onto a path they vacate, or a folder
    made again at the old path). The two sides' moves form one cycle, held for
@@ -988,7 +1009,9 @@ does a move into a folder below that path from a source outside it, whether
 or not the plan creates that folder: what it lands in takes the path only
 after the move. Both paths are compared as OneDrive compares names, so a move
 into a new `X` waits for `x`'s move away, a second guard beside composition's
-(`TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt`); a move
+(`TestBuildDependencies_MoveIntoThePathAnotherMoveVacatesWaitsForIt`), except a local
+move composition planned into the moving folder itself, which runs first
+(`landsInTheFolderMoveCarries`); a move
 waits for same-side moves out of its source, for local writes under a local
 move's source and for remote deletes under a remote move's source; a create at
 the path a move vacates waits for the move; the delete of a destination's old

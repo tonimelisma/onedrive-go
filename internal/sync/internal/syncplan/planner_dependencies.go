@@ -730,12 +730,30 @@ func movePrecedes(move, a *syncdomain.Action) bool {
 // (namekey.OfPath): a new folder X takes the path x leaves there and on a volume
 // that folds case.
 func movesIntoVacatedPath(a, move *syncdomain.Action) bool {
-	if move.OldPath == "" {
+	if move.OldPath == "" || landsInTheFolderMoveCarries(a, move) {
 		return false
 	}
 	vacated := namekey.OfPath(move.OldPath)
 
 	return belowPathKey(namekey.OfPath(a.Path), vacated) && !belowPathKey(namekey.OfPath(a.OldPath), vacated)
+}
+
+// landsInTheFolderMoveCarries reports whether a, a local move below the path
+// local folder move vacates, lands in that folder itself rather than in a
+// new folder that takes its path: composition planned it to run inside the
+// folder before the folder moves, and OneDrive already holds the item where
+// the folder's move carries a's destination (MovedRemotePath). Such a move
+// runs first, as a write below the folder's source does; ordered after the
+// folder's move it would wait for it while the folder's move waits for it to
+// vacate the folder's destination (a rotation through nesting made on
+// OneDrive: p moved into x, x moved to p).
+func landsInTheFolderMoveCarries(a, move *syncdomain.Action) bool {
+	if a.Type != syncdomain.ActionLocalMove || move.Type != syncdomain.ActionLocalMove ||
+		a.MovedRemotePath == "" || !strings.HasPrefix(a.Path, move.OldPath+"/") {
+		return false
+	}
+
+	return a.MovedRemotePath == move.Path+strings.TrimPrefix(a.Path, move.OldPath)
 }
 
 // belowPathKey reports whether the path of k lies below the path of root,
