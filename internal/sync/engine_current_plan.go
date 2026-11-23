@@ -574,13 +574,34 @@ func (flow *engineFlow) queryPlannerRowsTx(
 		decide = flow.hooks.decideOverride
 	}
 
-	return syncstore.QueryPlannerRows(
+	comparisons, reconciliations, err := syncstore.QueryPlannerRows(
 		ctx,
 		tx,
 		syncstore.PlannerVisibleLocalStateTable,
 		syncstore.PlannerVisibleRemoteStateTable,
 		decide,
 	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sync: querying planner rows: %w", err)
+	}
+	flow.mustAssertDecisionStatesValid(comparisons)
+
+	return comparisons, reconciliations, nil
+}
+
+// mustAssertDecisionStatesValid holds, under the engine's invariant checks,
+// every row the comparison query produced to the states it can produce
+// (syncdomain.DecisionState.Valid): the decision table's properties are
+// proven over valid states only, so a row outside them is a query bug.
+func (flow *engineFlow) mustAssertDecisionStatesValid(comparisons []syncdomain.SQLiteComparisonRow) {
+	if !flow.invariantChecksEnabled() {
+		return
+	}
+	for i := range comparisons {
+		if err := comparisons[i].DecisionState().Valid(); err != nil {
+			panic(fmt.Sprintf("planning %s: %v", comparisons[i].Path, err))
+		}
+	}
 }
 
 // buildCurrentPlanStage is the shared planning stage after an entrypoint has
