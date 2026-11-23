@@ -62,6 +62,7 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261123-01 | A watch test still counted the pools' workers without their floor | fixed | test bug | 2026-11-23 | no |
 | LI-20261121-02 | The nightly report could not read a red job's log and did not say why | mitigated | test harness | 2026-11-21 | no |
 | LI-20261121-01 | The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline | fixed | test harness | 2026-11-21 | yes |
 | LI-20261115-01 | Graph answered an ordinary folder move with 400 `Invalid request` | mitigated | graph quirk | 2026-11-15 | yes |
@@ -114,6 +115,26 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261123-01: A watch test still counted the pools' workers without their floor
+
+First seen: 2026-11-23
+Last seen: 2026-11-23
+Area: `internal/sync` watch runtime tests
+Suite / test: the push-to-`main` `verify-race` job on `af131d7`
+(`internal/sync.TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction`)
+Classification: test bug
+Status: fixed
+Recurring: no
+Summary: #977 made the watch count its workers as the pools run them, with
+their floor of four, so a replan's idle-worker time counts four workers where
+it counted the two the test configured. The change updated the idle-worker
+counts of the test's debug events but not its idle-time total: three idle
+workers over the 10ms drain record 30ms, and the test still expected 10. The
+per-PR lane runs a sample of the engine tests under `-short` and missed it;
+the push run of the whole sync tree under `-race` found it.
+
+Fix: the test expects the three idle workers' 30ms.
 
 ## LI-20261121-02: The nightly report could not read a red job's log and did not say why
 
