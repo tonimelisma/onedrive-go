@@ -87,12 +87,19 @@ func convergeLastActionAssertions(dir string, verbs []string) ([]string, error) 
 	return findings, nil
 }
 
+// convergeStdoutField and convergeStderrField name a converge pass's output
+// fields, which the rule reads off a call's arguments.
+const (
+	convergeStdoutField = "Stdout"
+	convergeStderrField = "Stderr"
+)
+
 // takesLastConvergeOutput reports a call given <result>.Last().Stdout or
 // <result>.Last().Stderr.
 func takesLastConvergeOutput(call *ast.CallExpr) bool {
 	for _, arg := range call.Args {
 		output, ok := arg.(*ast.SelectorExpr)
-		if !ok || (output.Sel.Name != "Stdout" && output.Sel.Name != "Stderr") {
+		if !ok || (output.Sel.Name != convergeStdoutField && output.Sel.Name != convergeStderrField) {
 			continue
 		}
 		last, isCall := output.X.(*ast.CallExpr)

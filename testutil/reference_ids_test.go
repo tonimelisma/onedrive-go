@@ -38,7 +38,7 @@ var (
 	referenceBusinessIDPattern = regexp.MustCompile(
 		`(?:^|[^A-Za-z0-9])(b(?:!|%21)[A-Za-z0-9_-]{8,}|01[A-Z0-9]{32})(?:$|[^A-Za-z0-9])`)
 	// inventedItemPartPattern is the item part of an invented item ID.
-	inventedItemPartPattern = regexp.MustCompile(`^invented[0-9]{3}x*$`)
+	inventedItemPartPattern = regexp.MustCompile(`^invented\d{3}x*$`)
 )
 
 func isInventedReferenceDrive(driveID string) bool {

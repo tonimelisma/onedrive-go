@@ -39,7 +39,7 @@ type engineHooks struct {
 	// a model's kept log shows every pass. It receives a copy of each
 	// action, so it records but cannot reorder or change what runs; nil
 	// records nothing.
-	recordFrontier func(step frontierStep, action syncdomain.Action)
+	recordFrontier func(step frontierStep, action *syncdomain.Action)
 	// serializeWorkers runs one worker instead of the pool, so with a
 	// dispatch order execution is deterministic.
 	serializeWorkers bool
@@ -110,7 +110,9 @@ func (h *engineHooks) recordFrontierStep(step frontierStep, ta *syncdomain.Track
 		return
 	}
 
-	h.recordFrontier(step, ta.Action)
+	// A copy, so the record cannot change or reorder what runs.
+	action := ta.Action
+	h.recordFrontier(step, &action)
 }
 
 // runClock is the clock a run reads: the engine's real clock unless a test

@@ -441,7 +441,7 @@ func (r *modelRun) recordf(format string, args ...any) {
 // recordFrontierStep keeps every action a pass publishes or dispatches in
 // the transcript, so a failing seed's kept log shows each pass, one with a
 // single action or only publications included.
-func (r *modelRun) recordFrontierStep(step frontierStep, action syncdomain.Action) {
+func (r *modelRun) recordFrontierStep(step frontierStep, action *syncdomain.Action) {
 	r.recordf("%s %s %s <- %s", step, action.Type, action.Path, action.OldPath)
 	if step != frontierDispatched {
 		return

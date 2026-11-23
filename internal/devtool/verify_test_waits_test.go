@@ -122,7 +122,7 @@ func TestTestWaitExceptionsNameLiteralWaitsOfTheTree(t *testing.T) {
 		assert.NotEmpty(t, exception.reason, exception.path)
 		require.True(t, isTestWaitRulePath(exception.path), "%s is a test file the rule reads", exception.path)
 
-		source, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(exception.path)))
+		source, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(exception.path))) //nolint:gosec // a repository file the test names
 		require.NoError(t, err)
 		file, err := parser.ParseFile(token.NewFileSet(), exception.path, source, parser.SkipObjectResolution)
 		require.NoError(t, err)

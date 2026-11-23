@@ -67,7 +67,8 @@ func (r nightlyRunReport) statusState() string {
 func (r nightlyRunReport) statusDescription() string {
 	failed, counted := 0, 0
 	notRun := []string{}
-	for _, job := range r.jobs {
+	for i := range r.jobs {
+		job := &r.jobs[i]
 		if job.result != nightlyJobSkipped {
 			counted++
 		}
@@ -121,7 +122,9 @@ func describeNotRun(names []string, limit int) string {
 func renderNightlyFailure(r nightlyRunReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "The scheduled CI run failed: %s\n\n", r.runURL)
-	for _, job := range r.failed() {
+	failed := r.failed()
+	for i := range failed {
+		job := &failed[i]
 		fmt.Fprintf(&b, "- `%s`: %s", job.name, job.result)
 		writeNightlyKeyList(&b, "failed tests", job.tests)
 		writeNightlyKeyList(&b, "hung at the go test deadline", job.hung)
@@ -141,7 +144,7 @@ func renderNightlyFailure(r nightlyRunReport) string {
 	return b.String()
 }
 
-// writeNightlyKeyList writes one labelled list of keys of a job's line, at
+// writeNightlyKeyList writes one labeled list of keys of a job's line, at
 // most nightlyIssueMaxTests of them, or nothing for none.
 func writeNightlyKeyList(b *strings.Builder, label string, keys []string) {
 	if len(keys) == 0 {

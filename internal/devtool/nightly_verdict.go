@@ -163,7 +163,7 @@ type nightlyJobReport struct {
 }
 
 // workflowJob is the ci.yml job the report's job is a run of.
-func (r nightlyJobReport) workflowJob() string {
+func (r *nightlyJobReport) workflowJob() string {
 	return ciCheckJob(r.name)
 }
 
@@ -171,13 +171,13 @@ func (r nightlyJobReport) workflowJob() string {
 // names: its log names no failed test, or names a package that failed without
 // naming one. Such a failure is keyed by the job's failed steps, or by the
 // job when its log names no failed step.
-func (r nightlyJobReport) failsWithoutTest() bool {
+func (r *nightlyJobReport) failsWithoutTest() bool {
 	return (len(r.tests) == 0 && len(r.overBudget) == 0) || r.packageFailed
 }
 
 // hasLog reports whether the job ran far enough to leave a log that can name
 // failed tests.
-func (r nightlyJobReport) hasLog() bool {
+func (r *nightlyJobReport) hasLog() bool {
 	return r.id != 0 && slices.Contains(
 		[]nightlyJobResult{nightlyJobFailed, nightlyJobTimedOut, nightlyJobCanceled}, r.result)
 }

@@ -86,7 +86,11 @@ type LiveTestConfig struct {
 // one .env reader of the live suites and the live benchmark. A missing file
 // is not an error, and a variable already set wins over the file.
 func LoadDotEnvFile(envPath string) error {
-	return liveenv.LoadDotEnvFile(openLocalFile, envPath)
+	if err := liveenv.LoadDotEnvFile(openLocalFile, envPath); err != nil {
+		return fmt.Errorf("loading %s: %w", filepath.Base(envPath), err)
+	}
+
+	return nil
 }
 
 // openLocalFile is liveenv's file capability over localpath.

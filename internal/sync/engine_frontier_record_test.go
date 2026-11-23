@@ -19,7 +19,7 @@ type frontierRecorder struct {
 	lines []string
 }
 
-func (r *frontierRecorder) record(step frontierStep, action syncdomain.Action) {
+func (r *frontierRecorder) record(step frontierStep, action *syncdomain.Action) {
 	r.lines = append(r.lines, fmt.Sprintf("%s %s", step, action.Path))
 }
 
