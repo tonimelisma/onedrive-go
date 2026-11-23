@@ -1193,7 +1193,7 @@ func TestRunOnce_AFileRenamedHereOntoADeletedFileInAFolderMovedOnOneDriveStaysTh
 //
 // An item is moved into a new folder made at its own path, before one sync:
 // the file g.txt into a new folder g.txt, or the folder f, with c.txt in it,
-// into a new folder f, here or on OneDrive. The side that has the item at
+// into a new folder f, each here or on OneDrive. The side that has the item at
 // that path keeps it there until it moves, and the item moves into the
 // folder, so it first moves aside there to a free name beside its path, and
 // a later pass makes the folder at the path it left and moves the item into
@@ -1221,6 +1221,10 @@ func TestRunOnce_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *testing
 		{
 			name: "a file, on OneDrive", item: "item-g", at: "g.txt", into: "g.txt/g.txt", onOneDrive: true,
 			want: map[string]string{"x": "/", "x/keep.txt": "keep\n", "f": "/", "f/c.txt": "c\n", "g.txt": "/", "g.txt/g.txt": "g\n"},
+		},
+		{
+			name: "a folder, on OneDrive", item: "item-f", at: "f", into: "f/f", onOneDrive: true,
+			want: map[string]string{"x": "/", "x/keep.txt": "keep\n", "f": "/", "f/f": "/", "f/f/c.txt": "c\n", "g.txt": "g\n"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

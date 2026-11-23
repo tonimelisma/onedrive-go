@@ -1232,6 +1232,15 @@ func TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *te
 			landing: "f",
 		},
 		{
+			name: "a folder moved on OneDrive into a new folder at its own path",
+			nodes: []moveNode{
+				composeNode("k", syncdomain.ItemTypeFolder, "k", "k", "k/k"),
+				composeNode("c", syncdomain.ItemTypeFile, "k/c.txt", "k/c.txt", "k/k/c.txt"),
+			},
+			madeOnOneDrive: []string{"k"}, wantLocal: []string{"k->k.swap-1"}, wantDeferred: map[string]bool{"k": true},
+			landing: "k",
+		},
+		{
 			name: "the folder above it renamed on OneDrive too",
 			nodes: []moveNode{
 				composeNode("P", syncdomain.ItemTypeFolder, "P", "Q", "P"),
