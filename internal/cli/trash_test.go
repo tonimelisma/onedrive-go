@@ -156,11 +156,14 @@ func TestReportTrashRestore_NothingPlacedPrintsNothing(t *testing.T) {
 	assert.NotErrorIs(t, err, localtrash.ErrRestoreNotDurable)
 }
 
-// childTrashDir is the trash of the shortcut child binding of the configured
+// testChildBinding is the binding of the shortcut child the trash tests seed.
+const testChildBinding = "binding-docs"
+
+// childTrashDir is the trash of the test shortcut child of the configured
 // drive cid: the child trash its engine writes and its purge hands over.
-func childTrashDir(cid driveid.CanonicalID, binding string) string {
+func childTrashDir(cid driveid.CanonicalID) string {
 	return localtrash.ChildDir(localtrash.DirForStatePath(config.DriveStatePath(cid)),
-		config.MountStatePath(config.ChildMountID(cid.String(), binding)))
+		config.MountStatePath(config.ChildMountID(cid.String(), testChildBinding)))
 }
 
 // A shortcut child is a mount, not a configured drive: its trash is reached
@@ -173,8 +176,8 @@ func TestTrashCommands_TheDrivesTrashCoversItsShortcutChildren(t *testing.T) {
 	syncRoot := t.TempDir()
 	childRoot := t.TempDir()
 	ownID := seedTrashEntry(t, config.DriveStatePath(cid), syncRoot, "own.txt")
-	childID := seedTrashEntryIn(t, childTrashDir(cid, "binding-docs"), childRoot, "Shared/report.txt", localtrash.ReasonDeleted)
-	seedTrashEntryIn(t, childTrashDir(cid, "binding-docs"), childRoot, "Shared/other.txt", localtrash.ReasonDeleted)
+	childID := seedTrashEntryIn(t, childTrashDir(cid), childRoot, "Shared/report.txt", localtrash.ReasonDeleted)
+	seedTrashEntryIn(t, childTrashDir(cid), childRoot, "Shared/other.txt", localtrash.ReasonDeleted)
 
 	require.NoError(t, runTrashList(t.Context(), cc))
 	assert.Contains(t, out.String(), ownID)
@@ -217,7 +220,7 @@ func TestTrashCommands_TheDrivesTrashCoversItsShortcutChildren(t *testing.T) {
 func TestTrashList_ReleasedEntrySaysItsSharedFolderWasRemoved(t *testing.T) {
 	cc, out, cid := newTrashTestContext(t)
 	childRoot := t.TempDir()
-	id := seedTrashEntryIn(t, childTrashDir(cid, "binding-docs"), childRoot, "report.txt", localtrash.ReasonReleased)
+	id := seedTrashEntryIn(t, childTrashDir(cid), childRoot, "report.txt", localtrash.ReasonReleased)
 
 	require.NoError(t, runTrashList(t.Context(), cc))
 	assert.Contains(t, out.String(), id+"  ")
@@ -242,7 +245,7 @@ func TestTrashList_ReleasedEntrySaysItsSharedFolderWasRemoved(t *testing.T) {
 func TestTrashRestore_IntoASyncFolderThatIsGoneNamesWhereTheFileIs(t *testing.T) {
 	cc, out, cid := newTrashTestContext(t)
 	childRoot := filepath.Join(t.TempDir(), "Shared")
-	trashDir := childTrashDir(cid, "binding-docs")
+	trashDir := childTrashDir(cid)
 	id := seedTrashEntryIn(t, trashDir, childRoot, "report.txt", localtrash.ReasonReleased)
 
 	err := runTrashRestore(t.Context(), cc, id)

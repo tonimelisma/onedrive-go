@@ -284,10 +284,7 @@ func TestRunWatch_ABlockingCaseIsADeclaredStep(t *testing.T) {
 		cancel, done := runWatchInBackground(t, orch)
 		waitUntilDrivesRun(t, started)
 		answered := make(chan int, 1)
-		go func() {
-			statusCode, _ := postControlJSONAnyStatus(t, cfg.ControlSocketPath, synccontrol.PathReload, nil)
-			answered <- statusCode
-		}()
+		go func() { answered <- postReloadWithoutAssertions(t.Context(), cfg.ControlSocketPath) }()
 		receiveWithin(t, compiling, "the reload to compile the config")
 
 		requireDeclaredStepWhileBlocked(t, orch, clock, reloadStep)
@@ -336,4 +333,22 @@ func TestRunWatch_ABlockingCaseIsADeclaredStep(t *testing.T) {
 		close(blocked.release)
 		stopWatch(t, cancel, done)
 	})
+}
+
+// postReloadWithoutAssertions asks the watch at socketPath for a reload and
+// returns the status it answered with, or zero when the request failed. It
+// makes no assertion, so a test can send it from a goroutine of its own.
+func postReloadWithoutAssertions(ctx context.Context, socketPath string) int {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, synccontrol.HTTPBaseURL+synccontrol.PathReload, http.NoBody)
+	if err != nil {
+		return 0
+	}
+	// #nosec G704 -- fixed Unix-domain test socket client.
+	resp, err := controlTestClient(socketPath).Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode
 }

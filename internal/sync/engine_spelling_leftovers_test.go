@@ -70,7 +70,7 @@ func TestRunOnce_SpellingRenameLeftoverIsPutBackBeforeThePlan(t *testing.T) {
 	plainInfo, err := os.Stat(plain)
 	require.NoError(t, err, "the file is back under its plain name")
 	assert.True(t, os.SameFile(leftoverInfo, plainInfo), "the entry itself is put back, not downloaded again")
-	data, err := os.ReadFile(plain)
+	data, err := os.ReadFile(plain) //nolint:gosec // the test reads the file it planted
 	require.NoError(t, err)
 	assert.Equal(t, "alpha\n", string(data))
 	item, ok := remote.itemAt("Docs/A.txt")
@@ -102,10 +102,10 @@ func TestRunOnce_SpellingRenameLeftoverWhosePlainNameIsTakenIsKeptAndReported(t 
 	_, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 
-	leftoverData, err := os.ReadFile(leftover)
+	leftoverData, err := os.ReadFile(leftover) //nolint:gosec // the test reads the file it planted
 	require.NoError(t, err, "the leftover is never deleted")
 	assert.Equal(t, "alpha\n", string(leftoverData))
-	plainData, err := os.ReadFile(plain)
+	plainData, err := os.ReadFile(plain) //nolint:gosec // the test reads the file it planted
 	require.NoError(t, err)
 	assert.Equal(t, "other\n", string(plainData), "the entry that took the name is never replaced")
 	_, ok := remote.itemAt("Docs/A.txt")

@@ -303,21 +303,16 @@ func postControlJSON(t *testing.T, socketPath string, path string, body []byte) 
 	return decoded
 }
 
-// postControlJSONAnyStatus sends one control request, retrying only until the
-// socket accepts it, and returns whatever status the owner answered with.
-func postControlJSONAnyStatus(
-	t *testing.T,
-	socketPath string,
-	path string,
-	body []byte,
-) (int, synccontrol.MutationResponse) {
+// postControlReloadAnyStatus sends one reload request, retrying only until
+// the socket accepts it, and returns whatever status the owner answered with.
+func postControlReloadAnyStatus(t *testing.T, socketPath string) (int, synccontrol.MutationResponse) {
 	t.Helper()
 
 	client := controlTestClient(socketPath)
 	var decoded synccontrol.MutationResponse
 	statusCode := 0
 	require.Eventually(t, func() bool {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, synccontrol.HTTPBaseURL+path, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, synccontrol.HTTPBaseURL+synccontrol.PathReload, http.NoBody)
 		// The condition runs on its own goroutine, where require cannot end the test.
 		if !assert.NoError(t, err) {
 			return false
@@ -3256,7 +3251,7 @@ func TestOrchestrator_Reload_InvalidConfig(t *testing.T) {
 	// remain, and the requester must be told the reload did not apply instead
 	// of getting "reloaded".
 	require.NoError(t, os.WriteFile(cfgPath, []byte("{{invalid toml"), 0o600))
-	statusCode, response := postControlJSONAnyStatus(t, cfg.ControlSocketPath, synccontrol.PathReload, nil)
+	statusCode, response := postControlReloadAnyStatus(t, cfg.ControlSocketPath)
 	assert.Equal(t, http.StatusUnprocessableEntity, statusCode)
 	assert.Equal(t, synccontrol.StatusError, response.Status)
 	assert.Equal(t, synccontrol.ErrorReloadFailed, response.Code)
