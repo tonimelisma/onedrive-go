@@ -472,9 +472,24 @@ Three more things name the old email, and the change reaches each (R-3.7.5):
   refusing would leave the change unfinished for good over state the next
   sync rebuilds (`TestMoveStateDBs_MovesTheShortcutChildrensStoresWithTheirDrive`,
   `TestReconcileAccountEmail_RenamesOwnedArtifacts`,
-  `TestReconcileAccountEmail_ACatalogDrivesStoreNamesItsMountIDs`). The trash
-  folders and upload-session records keyed by a store's or mount's name do
-  not move: a trash entry expires, and an upload session is started again.
+  `TestReconcileAccountEmail_ACatalogDrivesStoreNamesItsMountIDs`). A
+  child's move carries the child's own mount IDs.
+- **A store's trash folder and its mount's upload sessions move with it.**
+  A store's trash is named by the store (`localtrash.DirForStatePath`), and
+  a shortcut child's lies under its drive's (`localtrash.ChildDir`); every
+  store move, a child's included, moves its trash folder by one rename,
+  after the stores, and the folder that held the drive's child trash under
+  the old name goes once empty. A trash folder at both names refuses the
+  change before anything moves or is recorded, as a store does: for a new
+  change the new one was there before, for a resumed one the old one was
+  made after the change moved it, and merging them would mix two folders'
+  entries. Upload session files are named by drive and path, not by mount,
+  so only each record's mount ID is rewritten, in place and idempotently
+  (`driveops.SessionStore.RenameMountID`); a record under the old ID would
+  escape its mount's cleanup
+  (`TestMoveStateDBs_MovesTrashFoldersAndUploadSessionsWithTheirStores`,
+  `TestMoveStateDBs_ATrashFolderAtItsNewNameRefusesBeforeAnythingMoves`,
+  `TestSessionStore_RenameMountID_MovesTheRecordsOfOneMount`).
 - **A running watch hears of the change and starts no engine under the old
   name.** A command that applies or finishes a change, or catches up a
   config file, asks a running `sync --watch` to reload at once

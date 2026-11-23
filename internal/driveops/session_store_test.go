@@ -110,6 +110,41 @@ func TestSessionStore_ReopenPreservesUploadSession(t *testing.T) {
 	assert.True(t, rec.CreatedAt.Equal(now))
 }
 
+// An account email change renames the mounts its sessions were written
+// for: every record of the old mount ID takes the new one and keeps the rest,
+// a record of another mount is left as it is, and a second run changes
+// nothing.
+//
+// Validates: R-3.7.5
+func TestSessionStore_RenameMountID_MovesTheRecordsOfOneMount(t *testing.T) {
+	t.Parallel()
+
+	store := NewSessionStore(t.TempDir(), testLogger(t))
+	require.NoError(t, store.Save(testSessionDriveID, "/renamed.bin", &SessionRecord{
+		MountID: "personal:old@example.com", SessionURL: "https://example.com/a", FileHash: "a", FileSize: 1,
+	}))
+	require.NoError(t, store.Save(testSessionDriveID, "/other.bin", &SessionRecord{
+		MountID: "personal:other@example.com", SessionURL: "https://example.com/b", FileHash: "b", FileSize: 2,
+	}))
+
+	renamed, err := store.RenameMountID("personal:old@example.com", "personal:new@example.com")
+	require.NoError(t, err)
+	assert.Equal(t, 1, renamed)
+	again, err := store.RenameMountID("personal:old@example.com", "personal:new@example.com")
+	require.NoError(t, err)
+	assert.Zero(t, again)
+
+	rec, found, err := store.Load(testSessionDriveID, "/renamed.bin")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "personal:new@example.com", rec.MountID)
+	assert.Equal(t, "https://example.com/a", rec.SessionURL, "the rest of the record is kept")
+	other, found, err := store.Load(testSessionDriveID, "/other.bin")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "personal:other@example.com", other.MountID)
+}
+
 // Validates: R-5.2
 func TestSessionStore_DeleteForScope_RemovesMatchingMountOrRoot(t *testing.T) {
 	t.Parallel()

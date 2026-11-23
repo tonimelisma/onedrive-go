@@ -16,6 +16,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
@@ -449,6 +451,136 @@ func TestMoveStateDBs_MovesTheShortcutChildrensStoresWithTheirDrive(t *testing.T
 			assert.Equal(t, []string{"binding-1"}, bindings, "the drive's shortcut records take its new mount ID")
 		})
 	}
+}
+
+// emailChangeDriveWithShortcut is a drive renamed by an account email change,
+// with one shortcut: its store at the old name, recording binding-1 under the old
+// mount ID, and the child store at the old child name.
+type emailChangeDriveWithShortcut struct {
+	dataDir   string
+	oldID     driveid.CanonicalID
+	newID     driveid.CanonicalID
+	move      config.StateDBMove
+	childFrom config.StateDBMove
+}
+
+func seedEmailChangeDriveWithShortcut(t *testing.T) emailChangeDriveWithShortcut {
+	t.Helper()
+
+	dataDir := t.TempDir()
+	oldID := driveid.MustCanonicalID("personal:old@example.com")
+	newID := driveid.MustCanonicalID("personal:new@example.com")
+	move := config.StateDBMove{
+		From: config.DriveStatePathForDataDir(dataDir, oldID), To: config.DriveStatePathForDataDir(dataDir, newID),
+		FromMountID: oldID.String(), ToMountID: newID.String(),
+	}
+	store, err := syncstore.NewSyncStore(t.Context(), move.From, syncfixture.TestLogger(t))
+	require.NoError(t, err)
+	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
+		NamespaceID: oldID.String(), BindingItemID: "binding-1", RelativeLocalPath: "Shared",
+		LocalAlias: "Shared", RemoteDriveID: driveid.New("remote-drive"), RemoteItemID: "remote-item",
+		RemoteIsFolder: true, State: syncshortcut.ShortcutRootStateActive, ProtectedPaths: []string{"Shared"},
+	}}))
+	require.NoError(t, store.Close(t.Context()))
+	child := config.StateDBMove{
+		From:        config.MountStatePathForDataDir(dataDir, config.ChildMountID(oldID.String(), "binding-1")),
+		To:          config.MountStatePathForDataDir(dataDir, config.ChildMountID(newID.String(), "binding-1")),
+		FromMountID: config.ChildMountID(oldID.String(), "binding-1"),
+		ToMountID:   config.ChildMountID(newID.String(), "binding-1"),
+	}
+	require.NoError(t, os.WriteFile(child.From, []byte("the child's sync state"), 0o600))
+
+	return emailChangeDriveWithShortcut{dataDir: dataDir, oldID: oldID, newID: newID, move: move, childFrom: child}
+}
+
+// childTrashDir is the trash folder of the shortcut child whose store is
+// childStatePath, under the trash of the drive whose store is driveStatePath.
+func childTrashDir(driveStatePath, childStatePath string) string {
+	return localtrash.ChildDir(localtrash.DirForStatePath(driveStatePath), childStatePath)
+}
+
+// The trash folders and upload session records named after a store or a
+// mount move with it: the drive's trash and its shortcut child's, kept under
+// the drive's name, take the new names with their entries, the folder that
+// held the child's trash under the old name goes once empty, and every
+// upload session record of either mount takes the mount's new ID. A change
+// resumed after the stores moved finishes the rest.
+//
+// Validates: R-3.7.5
+func TestMoveStateDBs_MovesTrashFoldersAndUploadSessionsWithTheirStores(t *testing.T) {
+	t.Parallel()
+
+	for _, resumed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("resumed=%v", resumed), func(t *testing.T) {
+			t.Parallel()
+
+			drive := seedEmailChangeDriveWithShortcut(t)
+			driveTrashFrom := localtrash.DirForStatePath(drive.move.From)
+			childTrashFrom := childTrashDir(drive.move.From, drive.childFrom.From)
+			for _, dir := range []string{driveTrashFrom, childTrashFrom} {
+				require.NoError(t, os.MkdirAll(filepath.Join(dir, "entry-1"), 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "entry-1", "item"), []byte("kept"), 0o600))
+			}
+			sessions := driveops.NewSessionStore(drive.dataDir, syncfixture.TestLogger(t))
+			require.NoError(t, sessions.Save("remote-drive", "/drive.bin", &driveops.SessionRecord{
+				MountID: drive.oldID.String(), SessionURL: "https://example.com/a", FileHash: "a", FileSize: 1,
+			}))
+			require.NoError(t, sessions.Save("remote-drive", "/child.bin", &driveops.SessionRecord{
+				MountID: drive.childFrom.FromMountID, SessionURL: "https://example.com/b", FileHash: "b", FileSize: 1,
+			}))
+			begin := recordNothing
+			if resumed {
+				// The stores moved before the interruption; the rest did not.
+				require.NoError(t, os.Rename(drive.move.From, drive.move.To))
+				require.NoError(t, os.Rename(drive.childFrom.From, drive.childFrom.To))
+				begin = nil
+			}
+
+			require.NoError(t, MoveStateDBs(t.Context(), drive.dataDir, []config.StateDBMove{drive.move}, begin,
+				syncfixture.TestLogger(t)))
+
+			for _, dir := range []string{
+				localtrash.DirForStatePath(drive.move.To),
+				childTrashDir(drive.move.To, drive.childFrom.To),
+			} {
+				content, err := os.ReadFile(filepath.Join(dir, "entry-1", "item")) //nolint:gosec // test-owned temp path
+				require.NoError(t, err)
+				assert.Equal(t, "kept", string(content), "the trash entry moved with its store")
+			}
+			assert.NoDirExists(t, driveTrashFrom)
+			assert.NoDirExists(t, localtrash.ChildrenDir(driveTrashFrom), "the old folder of the child's trash goes once empty")
+			for path, want := range map[string]string{"/drive.bin": drive.newID.String(), "/child.bin": drive.childFrom.ToMountID} {
+				rec, found, err := sessions.Load("remote-drive", path)
+				require.NoError(t, err)
+				require.True(t, found)
+				assert.Equal(t, want, rec.MountID, "the upload session record of %s takes its mount's new ID", path)
+			}
+		})
+	}
+}
+
+// A trash folder that exists at its new name refuses the change before
+// anything moves or is recorded: merging two trash folders would mix whose
+// entries are whose.
+//
+// Validates: R-3.7.5
+func TestMoveStateDBs_ATrashFolderAtItsNewNameRefusesBeforeAnythingMoves(t *testing.T) {
+	t.Parallel()
+
+	drive := seedEmailChangeDriveWithShortcut(t)
+	require.NoError(t, os.MkdirAll(localtrash.DirForStatePath(drive.move.From), 0o700))
+	require.NoError(t, os.MkdirAll(localtrash.DirForStatePath(drive.move.To), 0o700))
+	recorded := false
+
+	err := MoveStateDBs(t.Context(), drive.dataDir, []config.StateDBMove{drive.move}, func() error {
+		recorded = true
+		return nil
+	}, syncfixture.TestLogger(t))
+
+	require.ErrorContains(t, err, "already exists")
+	assert.False(t, recorded, "the change is not recorded")
+	assert.FileExists(t, drive.move.From, "the store did not move")
+	assert.FileExists(t, drive.childFrom.From, "nor did its child's")
 }
 
 // A store an engine has open refuses the whole move: nothing is renamed, and
