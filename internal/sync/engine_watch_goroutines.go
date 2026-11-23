@@ -85,7 +85,8 @@ func (g *watchGoroutines) start(ctx context.Context, clock syncdomain.SyncClock,
 // runWatchGoroutine runs fn and then closes done. It holds no panic boundary
 // of its own: every fn the watch starts defers a recover that hands the panic
 // to panicguard.Recovered and reports it to the watch, which a boundary here
-// could not do.
+// could not do. The panic-boundary scan follows each call of start
+// to the function it hands over and holds that function to the rule.
 func runWatchGoroutine(ctx context.Context, done chan<- struct{}, fn func(context.Context)) {
 	defer close(done)
 	fn(ctx)

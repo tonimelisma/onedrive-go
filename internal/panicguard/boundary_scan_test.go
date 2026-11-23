@@ -46,9 +46,6 @@ func goroutineBoundaryExceptions() map[string]string {
 			"that makes a panic that action's failure (R-6.3.8); the loop around it only receives from the dispatch channel",
 		"internal/sync/internal/syncexec.closeCompletionsWhenWorkersExit": "it waits for the workers and closes the completions " +
 			"channel through a sync.Once; neither can panic",
-		"internal/sync.runWatchGoroutine": "it only runs a watch goroutine's function and closes its done channel; " +
-			"every function the watch starts there (the observers, the full remote refresh, the socket.io wake source) " +
-			"defers a recover that hands the panic to Recovered and reports it to the watch",
 	}
 }
 
@@ -292,6 +289,19 @@ func clockStartsNamed() { clock.Go(func() { s.loop() }) }
 func clockStartsHelper() { clock.Go(func() { helper() }) }
 
 func (realClock) Go(fn func()) { go fn() }
+
+func (g *group) start(ctx stdcontext.Context, fn func(stdcontext.Context)) {
+	clock.Go(func() { runGroupMember(ctx, done, fn) })
+}
+
+func runGroupMember(ctx stdcontext.Context, done chan struct{}, fn func(stdcontext.Context)) {
+	defer close(done)
+	fn(ctx)
+}
+
+func startsMemberWithoutBoundary() { g.start(ctx, func(stdcontext.Context) { work() }) }
+
+func startsMemberWithBoundary() { g.start(ctx, s.loop) }
 `
 )
 
@@ -315,7 +325,7 @@ func TestBoundaryScans_RejectWhatTheyPolice(t *testing.T) {
 	used := make(map[string]bool)
 	findings := scan.goroutineFindings(exceptions, used)
 
-	assert.Len(t, findings, 11, "%v", findings)
+	assert.Len(t, findings, 12, "%v", findings)
 	assertFindingAt(t, findings, "internal/demo/demo.go:5:", "a literal with no boundary")
 	assertFindingAt(t, findings, "internal/demo/demo.go:20:", "a boundary registered after work")
 	assertFindingAt(t, findings, "internal/demo/demo.go:48:", "a named function with no boundary")
@@ -327,6 +337,7 @@ func TestBoundaryScans_RejectWhatTheyPolice(t *testing.T) {
 	assertFindingAt(t, findings, "internal/demo/timers.go:8:", "a timer callback literal with no boundary")
 	assertFindingAt(t, findings, "internal/demo/timers.go:23:", "a context callback, under a renamed import, of a named function with no boundary")
 	assertFindingAt(t, findings, "internal/demo/timers.go:29:", "a clock's Go call of a literal forwarding to a function with no boundary")
+	assertFindingAt(t, findings, "internal/demo/timers.go:42:", "a starter's function argument with no boundary")
 	assert.True(t, used[demoTrivial])
 	assert.False(t, used[demoNeverUsed], "an exception no go statement uses stays unused")
 
@@ -714,9 +725,16 @@ func (s *packageScan) startedName(start goroutineStart, where string) (string, s
 // on.
 func (s *packageScan) goroutineFindings(exceptions map[string]string, used map[string]bool) []string {
 	var findings []string
+	starters := make(map[string]int)
 	for _, start := range s.launches() {
 		where := s.position(start.at)
 		if literal, ok := start.fn.(*ast.FuncLit); ok {
+			if starter, index, isStarter := s.starterOf(start, literal); isStarter {
+				// The goroutine only runs a function its starter was
+				// handed: the starter's callers are checked instead.
+				starters[starter] = index
+				continue
+			}
 			if callee, forwards := forwardedCall(literal); forwards {
 				start.fn = callee
 			}
@@ -749,6 +767,170 @@ func (s *packageScan) goroutineFindings(exceptions map[string]string, used map[s
 				findings = append(findings, where+" goroutine starts "+name+", which "+problem)
 			}
 		}
+	}
+
+	return append(findings, s.starterArgumentFindings(starters)...)
+}
+
+// starterOf reports whether start is the goroutine of a starter: a function
+// whose goroutine literal only calls a forwarder (a function of the package
+// whose body runs deferred calls and then calls one of its function
+// parameters) and hands it one of the starter's own parameters. The function
+// that parameter receives is what runs on the goroutine, so it is the
+// starter's callers, not the start inside it, that must pass a function with
+// a boundary. It returns the starter's name and that parameter's index.
+func (s *packageScan) starterOf(start goroutineStart, literal *ast.FuncLit) (string, int, bool) {
+	call, ok := forwardedCallExpr(literal)
+	if !ok {
+		return "", 0, false
+	}
+	callee, ok := call.Fun.(*ast.Ident)
+	if !ok || len(s.funcs[callee.Name]) != 1 {
+		return "", 0, false
+	}
+	forwarded, ok := forwardedParameter(s.funcs[callee.Name][0])
+	if !ok || forwarded >= len(call.Args) {
+		return "", 0, false
+	}
+	arg, ok := call.Args[forwarded].(*ast.Ident)
+	if !ok {
+		return "", 0, false
+	}
+	enclosing := s.enclosingFunc(start)
+	if enclosing == nil {
+		return "", 0, false
+	}
+	for index, name := range parameterNames(enclosing.Type) {
+		if name == arg.Name {
+			return enclosing.Name.Name, index, true
+		}
+	}
+
+	return "", 0, false
+}
+
+// forwardedCallExpr is the one call a literal whose whole body is that call
+// makes.
+func forwardedCallExpr(literal *ast.FuncLit) (*ast.CallExpr, bool) {
+	if len(literal.Body.List) != 1 {
+		return nil, false
+	}
+	stmt, ok := literal.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		return nil, false
+	}
+	call, ok := stmt.X.(*ast.CallExpr)
+
+	return call, ok
+}
+
+// forwardedParameter is the index of the function parameter fn calls when its
+// body is deferred calls, none of them a recover, followed by one call of
+// that parameter.
+func forwardedParameter(fn *ast.FuncDecl) (int, bool) {
+	body := fn.Body.List
+	if len(body) == 0 {
+		return 0, false
+	}
+	for _, stmt := range body[:len(body)-1] {
+		deferred, ok := stmt.(*ast.DeferStmt)
+		if !ok {
+			return 0, false
+		}
+		if _, isLiteral := deferred.Call.Fun.(*ast.FuncLit); isLiteral {
+			return 0, false
+		}
+	}
+	last, ok := body[len(body)-1].(*ast.ExprStmt)
+	if !ok {
+		return 0, false
+	}
+	call, ok := last.X.(*ast.CallExpr)
+	if !ok {
+		return 0, false
+	}
+	called, ok := call.Fun.(*ast.Ident)
+	if !ok {
+		return 0, false
+	}
+	for index, name := range parameterNames(fn.Type) {
+		if name == called.Name {
+			return index, true
+		}
+	}
+
+	return 0, false
+}
+
+// parameterNames are a function type's parameter names in order, "_" for an
+// unnamed one.
+func parameterNames(fnType *ast.FuncType) []string {
+	var names []string
+	for _, field := range fnType.Params.List {
+		if len(field.Names) == 0 {
+			names = append(names, "_")
+			continue
+		}
+		for _, name := range field.Names {
+			names = append(names, name.Name)
+		}
+	}
+
+	return names
+}
+
+// enclosingFunc is the declared function of the package whose body holds
+// start.
+func (s *packageScan) enclosingFunc(start goroutineStart) *ast.FuncDecl {
+	for _, decl := range start.file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Body != nil && fn.Body.Pos() <= start.at.Pos() && start.at.End() <= fn.Body.End() {
+			return fn
+		}
+	}
+
+	return nil
+}
+
+// starterArgumentFindings checks every call of a starter: the function it
+// hands the starter to run on a goroutine must have a boundary, as if the
+// call started it.
+func (s *packageScan) starterArgumentFindings(starters map[string]int) []string {
+	var findings []string
+	for _, file := range s.pkg.files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			index, isStarter := starters[calledName(call)]
+			if !isStarter || index >= len(call.Args) {
+				return true
+			}
+			where := s.position(call)
+			switch arg := call.Args[index].(type) {
+			case *ast.FuncLit:
+				if problem := s.boundaryProblem(arg.Body); problem != "" {
+					findings = append(findings, where+" goroutine literal "+problem)
+				}
+			default:
+				name, finding := s.startedName(goroutineStart{at: call, fn: arg, file: file}, where)
+				if finding != "" {
+					findings = append(findings, finding)
+					return true
+				}
+				for _, fn := range s.funcs[name] {
+					if problem := s.boundaryProblem(fn.Body); problem != "" {
+						findings = append(findings, where+" goroutine starts "+name+", which "+problem)
+					}
+				}
+				if len(s.funcs[name]) == 0 {
+					findings = append(findings, where+" goroutine starts "+name+
+						", which this package does not declare; start a function of this package that has a boundary")
+				}
+			}
+			return true
+		})
 	}
 
 	return findings
