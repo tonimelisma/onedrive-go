@@ -27,7 +27,7 @@ func TestFilterStatusSnapshot_IntersectsAccountAndDriveSelectors(t *testing.T) {
 			{Email: "alice@example.com"},
 			{Email: "bob@example.com"},
 		},
-	}, "alice@example.com", []string{bobCID.String()}, slog.New(slog.DiscardHandler))
+	}, &accountTarget{Selector: "alice@example.com", Email: "alice@example.com"}, []string{bobCID.String()}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	assert.Empty(t, filtered.Config.Drives, "account and drive filters should intersect, not widen to a union")

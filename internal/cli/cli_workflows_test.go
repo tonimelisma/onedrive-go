@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -533,4 +535,115 @@ func TestRecycleBinEmpty_CountsOneFailedItemInTheSingular(t *testing.T) {
 	err := runRecycleBinEmptyWithFactory(t.Context(), cc, true, sessionFactory)
 	require.EqualError(t, err, "1 of 1 item failed to delete")
 	assert.Equal(t, "Permanently deleting 1 item...\n  Failed to delete \"old.txt\": gone wrong\n", out.String())
+}
+
+// twinAddressAccounts seeds a personal and a work or school account at one
+// address, each with a saved login and one configured drive of its own, and
+// returns the config path and the two accounts.
+func twinAddressAccounts(t *testing.T) (cfgPath string, personal, business driveid.CanonicalID) {
+	t.Helper()
+
+	personal = driveid.MustCanonicalID("personal:twin-select@example.com")
+	business = driveid.MustCanonicalID("business:twin-select@example.com")
+	cfgPath = filepath.Join(t.TempDir(), "config.toml")
+	for _, account := range []driveid.CanonicalID{personal, business} {
+		require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, account, "~/"+account.DriveType()))
+		seedCatalogAccount(t, account, func(record *config.CatalogAccount) {
+			record.UserID = "user-" + account.DriveType()
+			record.DisplayName = account.DriveType() + " user"
+		})
+		seedCatalogDrive(t, account, func(drive *config.CatalogDrive) {
+			drive.RemoteDriveID = "drive-" + account.DriveType()
+		})
+		writeAccessTokenFile(t, account, "token-"+account.DriveType())
+	}
+
+	return cfgPath, personal, business
+}
+
+// --account takes an account ID, so status can show one of two accounts at
+// one address; the bare address, which names both, is refused with the two
+// IDs to use instead.
+//
+// Validates: R-3.5.2
+func TestStatus_AccountSelectorPicksOneOfTwoAccountsAtOneAddress(t *testing.T) {
+	setTestDriveHome(t)
+	cfgPath, personal, business := twinAddressAccounts(t)
+
+	var out bytes.Buffer
+	cc := newCommandContext(&out, cfgPath)
+	cc.Flags.JSON = true
+	cc.Flags.Account = business.String()
+	require.NoError(t, runStatusCommand(t.Context(), cc, false))
+
+	var document statusOutput
+	require.NoError(t, json.Unmarshal(out.Bytes(), &document))
+	require.Len(t, document.Accounts, 1, "the account ID names one account")
+	assert.Equal(t, "business user", document.Accounts[0].DisplayName)
+	require.Len(t, document.Accounts[0].Drives, 1, "the personal account's drive is not the work account's")
+	assert.Contains(t, document.Accounts[0].Drives[0].Folder, driveid.DriveTypeBusiness)
+
+	out.Reset()
+	cc = newCommandContext(&out, cfgPath)
+	cc.Flags.Account = business.Email()
+	err := runStatusCommand(t.Context(), cc, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "more than one account")
+	assert.Contains(t, err.Error(), "--account "+business.String())
+	assert.Contains(t, err.Error(), "--account "+personal.String())
+	assert.Empty(t, out.String(), "a refused selector shows no account")
+}
+
+// drive search --account takes an account ID too, and refuses an address two
+// accounts share with the IDs to use instead, before it searches anything.
+//
+// Validates: R-3.5.2, R-3.6.2
+func TestDriveSearch_AccountSelectorPicksOneOfTwoAccountsAtOneAddress(t *testing.T) {
+	setTestDriveHome(t)
+	cfgPath, personal, business := twinAddressAccounts(t)
+
+	var siteSearches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case testGraphMePath:
+			kind := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer token-")
+			writeTestResponse(t, w, `{"id":"user-`+kind+`","displayName":"`+kind+` user","mail":"`+business.Email()+`"}`)
+		case testGraphSitesPath:
+			siteSearches.Add(1)
+			assert.Equal(t, "Bearer token-business", r.Header.Get("Authorization"), "only the work account searches")
+			writeTestResponse(t, w, `{"value":[]}`)
+		default:
+			assert.Failf(t, "unexpected graph path", "path=%s", r.URL.Path)
+			http.Error(w, "unexpected graph path", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	run := func(selector string) (string, error) {
+		var out bytes.Buffer
+		cc := newCommandContext(&out, cfgPath)
+		cc.GraphBaseURL = srv.URL
+		cc.Flags.Account = selector
+		err := runDriveSearchWithContext(t.Context(), cc, "marketing")
+
+		return out.String(), err
+	}
+
+	_, err := run(business.Email())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "more than one account")
+	assert.Contains(t, err.Error(), "--account "+business.String())
+	assert.Contains(t, err.Error(), "--account "+personal.String())
+	assert.Zero(t, siteSearches.Load(), "a refused selector searches nothing")
+
+	out, err := run(business.String())
+	require.NoError(t, err)
+	assert.Contains(t, out, `No SharePoint sites found matching "marketing".`)
+	assert.Equal(t, int32(1), siteSearches.Load())
+
+	_, err = run(personal.String())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no business account found for "+personal.String())
+	assert.Equal(t, int32(1), siteSearches.Load(), "a personal account does not search SharePoint")
 }

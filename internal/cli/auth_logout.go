@@ -18,7 +18,7 @@ import (
 
 // resolveLogoutAccountWithCatalog determines the account selector for logout
 // from the offline account view: --account when given, after
-// resolveLogoutTarget accepts it; otherwise plain logout auto-selects only
+// resolveAccountSelector accepts it; otherwise plain logout auto-selects only
 // when exactly one known account still has a usable saved login, and
 // purge-only cleanup may auto-select a single known account even when its
 // saved login is already gone. The selector is the account's email, or its
@@ -32,7 +32,7 @@ func resolveLogoutAccountWithCatalog(
 	logger *slog.Logger,
 ) (string, error) {
 	if accountFlag != "" {
-		if _, err := resolveLogoutTarget(stored, accountFlag); err != nil {
+		if _, err := resolveAccountSelector(stored, accountFlag, "log out"); err != nil {
 			return "", err
 		}
 
@@ -97,130 +97,15 @@ func joinAccountViewSelectors(views, entries []accountView) string {
 	return strings.Join(selectors, "\n  ")
 }
 
-// logoutTarget is the account a logout acts on.
-type logoutTarget struct {
-	// Selector is what --account names it by, as the user gave it or as
-	// accountViewSelector chose it; the purge's rerun command repeats it.
-	Selector string
-	Email    string
-	// Account is the catalog account, zero when the catalog holds none at
-	// Email (a purge of what an account left behind).
-	Account driveid.CanonicalID
-	// SharedAddress means a second catalog account has the same email, so
-	// a drive or a state database under the address belongs to only one of
-	// them.
-	SharedAddress bool
-}
-
-// resolveLogoutTarget reads an --account selector: an email, or the
-// canonical ID of a personal or work or school account. An email that two
-// catalog accounts share is refused, naming the canonical IDs that tell them
-// apart: logout deletes a saved login and drive sections, and guessing which
-// account was meant could delete the other one's.
-func resolveLogoutTarget(stored *config.Catalog, selector string) (logoutTarget, error) {
-	if strings.Contains(selector, ":") {
-		cid, err := driveid.NewCanonicalID(selector)
-		if err != nil || (!cid.IsPersonal() && !cid.IsBusiness()) {
-			return logoutTarget{}, fmt.Errorf(
-				"--account %q is neither an email nor an account ID such as personal:<email> or business:<email>",
-				selector)
-		}
-
-		return logoutTarget{
-			Selector:      selector,
-			Email:         cid.Email(),
-			Account:       cid,
-			SharedAddress: len(catalogAccountsAtEmail(stored, cid.Email())) > 1,
-		}, nil
-	}
-
-	accounts := catalogAccountsAtEmail(stored, selector)
-	switch len(accounts) {
-	case 0:
-		return logoutTarget{Selector: selector, Email: selector}, nil
-	case 1:
-		return logoutTarget{Selector: selector, Email: selector, Account: accounts[0]}, nil
-	default:
-		names := make([]string, 0, len(accounts))
-		for _, cid := range accounts {
-			names = append(names, "--account "+cid.String())
-		}
-
-		return logoutTarget{}, fmt.Errorf(
-			"%s is the email of more than one account; name the account to log out:\n  %s",
-			selector, strings.Join(names, "\n  "))
-	}
-}
-
-// catalogAccountsAtEmail lists the canonical IDs of the catalog accounts
-// with email, sorted.
-func catalogAccountsAtEmail(stored *config.Catalog, email string) []driveid.CanonicalID {
-	if stored == nil || email == "" {
-		return nil
-	}
-
-	var accounts []driveid.CanonicalID
-	for _, key := range stored.SortedAccountKeys() {
-		account := stored.Accounts[key]
-		if account.Email != email {
-			continue
-		}
-		if cid, hasID := account.ID(); hasID {
-			accounts = append(accounts, cid)
-		}
-	}
-
-	return accounts
-}
-
-// drives is the configured drives the logout removes: every drive under the
-// address, or, when a second account shares it, those of the named account
-// alone. A drive goes with the owner its catalog record names; without one
-// a personal drive is the personal account's and a work or SharePoint
-// drive the work or school account's, and a shared folder is neither's, so
-// its section stays.
-func (t *logoutTarget) drives(cfg *config.Config, stored *config.Catalog) []driveid.CanonicalID {
-	all := drivesForAccount(cfg, t.Email)
-	if !t.SharedAddress || t.Account.IsZero() {
-		return all
-	}
-
-	owned := make([]driveid.CanonicalID, 0, len(all))
-	for _, cid := range all {
-		if driveBelongsToAccount(cid, t.Account, stored) {
-			owned = append(owned, cid)
-		}
-	}
-
-	return owned
-}
-
 // ownsStateDB reports whether the state database at path is one the logout
 // may purge (accountStateDBs).
-func (t *logoutTarget) ownsStateDB(stored *config.Catalog) func(string) bool {
+func (t *accountTarget) ownsStateDB(stored *config.Catalog) func(string) bool {
 	if !t.SharedAddress || t.Account.IsZero() {
 		return nil
 	}
 
 	return func(path string) bool {
 		return stateDBBelongsToAccount(path, t.Account, stored)
-	}
-}
-
-func driveBelongsToAccount(cid, account driveid.CanonicalID, stored *config.Catalog) bool {
-	if record, found := stored.DriveByCanonicalID(cid); found {
-		if owner, hasOwner := record.Owner(); hasOwner {
-			return owner.Equal(account)
-		}
-	}
-
-	switch {
-	case cid.IsPersonal():
-		return account.IsPersonal()
-	case cid.IsBusiness(), cid.IsSharePoint():
-		return account.IsBusiness()
-	default:
-		return false
 	}
 }
 
@@ -255,7 +140,7 @@ func executeLogout(
 ) (logoutJSONOutput, error) {
 	w := cc.resultWriter()
 	logger := cc.Logger
-	target, err := resolveLogoutTarget(stored, account)
+	target, err := resolveAccountSelector(stored, account, "log out")
 	if err != nil {
 		return logoutJSONOutput{Account: account, Purged: purge}, err
 	}
@@ -315,7 +200,7 @@ func removeLogoutToken(
 	ctx context.Context,
 	w io.Writer,
 	stored *config.Catalog,
-	target *logoutTarget,
+	target *accountTarget,
 	affected []driveid.CanonicalID,
 	purge bool,
 	logger *slog.Logger,
@@ -368,7 +253,7 @@ func executePurgeLogout(
 	ctx context.Context,
 	w io.Writer,
 	stored *config.Catalog,
-	target *logoutTarget,
+	target *accountTarget,
 	affected []driveid.CanonicalID,
 	removedDrives []driveid.CanonicalID,
 	syncDirs map[driveid.CanonicalID]string,

@@ -683,7 +683,8 @@ func initializeResolvedCLIContext(cmd *cobra.Command, cc *CLIContext) error {
 
 func bindRootFlags(cmd *cobra.Command, bindings *rootFlagBindings) {
 	cmd.PersistentFlags().StringVar(&bindings.configPath, "config", "", "config file path")
-	cmd.PersistentFlags().StringVar(&bindings.account, "account", "", "account for auth commands (e.g., user@example.com)")
+	cmd.PersistentFlags().StringVar(&bindings.account, "account", "",
+		"account email, or account ID when two accounts share it (e.g., user@example.com, business:user@example.com)")
 	cmd.PersistentFlags().StringArrayVar(&bindings.drive, "drive", nil,
 		"drive selector (canonical ID, display name, or partial match); repeatable for sync")
 	cmd.PersistentFlags().BoolVar(&bindings.json, "json", false, "output in JSON format")

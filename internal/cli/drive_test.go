@@ -737,7 +737,7 @@ func TestPrintDriveSearchJSON_EmptySlice(t *testing.T) {
 func TestSearchableBusinessTokenIDs_NoTokens(t *testing.T) {
 	setTestDriveHome(t)
 	views := loadDefaultAccountViews(t)
-	tokens := searchableBusinessTokenIDs(views, "")
+	tokens := searchableBusinessTokenIDs(views, nil)
 	assert.Empty(t, tokens)
 }
 
@@ -752,7 +752,7 @@ func TestSearchableBusinessTokenIDs_HasBusinessToken(t *testing.T) {
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
 	views := loadDefaultAccountViews(t)
-	tokens := searchableBusinessTokenIDs(views, "")
+	tokens := searchableBusinessTokenIDs(views, nil)
 	require.Len(t, tokens, 1)
 	assert.Equal(t, "business:alice@contoso.com", tokens[0].String())
 }
@@ -768,7 +768,7 @@ func TestSearchableBusinessTokenIDs_FilterSelectsOne(t *testing.T) {
 	writeTestTokenFile(t, dataDir, "token_business_bob@fabrikam.com.json")
 
 	views := loadDefaultAccountViews(t)
-	tokens := searchableBusinessTokenIDs(views, "alice@contoso.com")
+	tokens := searchableBusinessTokenIDs(views, &accountTarget{Selector: "alice@contoso.com", Email: "alice@contoso.com"})
 	require.Len(t, tokens, 1)
 	assert.Equal(t, "business:alice@contoso.com", tokens[0].String())
 }
@@ -782,7 +782,7 @@ func TestSearchableBusinessTokenIDs_SkipsPersonal(t *testing.T) {
 	writeTestTokenFile(t, dataDir, "token_personal_user@example.com.json")
 
 	views := loadDefaultAccountViews(t)
-	tokens := searchableBusinessTokenIDs(views, "")
+	tokens := searchableBusinessTokenIDs(views, nil)
 	assert.Empty(t, tokens)
 }
 
