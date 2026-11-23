@@ -1870,6 +1870,62 @@ func TestPlannerPairs_AFileMovedOnOneDriveOntoAFolderItDeletedEndsOnce(t *testin
 	}
 }
 
+// Validates: R-2.17.9, R-2.17.2, R-2.17.10
+//
+// OneDrive deleted a folder and moved another synced item onto its path,
+// while this computer left the folder where it was. A folder that holds what
+// was synced or less is deleted here and the move then lands: x onto p, which
+// held the synced f, its delete of p/f addressed at p/f here and not rebased
+// into x, or p onto the empty x. A folder that holds anything else written
+// here is renamed to a conflict copy with all it holds, and the move lands
+// on its path, whether a folder or a file moves there. Every run keeps
+// every invariant, with each create refused once. Before, the folder made
+// the move wait for good, and a file moved onto its path ended twice.
+func TestPlannerPairs_AFolderOneDriveDeletedGivesWayToAnItemItMovedOntoItsPath(t *testing.T) {
+	t.Parallel()
+
+	registerExCachingDriver(t)
+	for _, tc := range []struct {
+		name   string
+		remote []exEdit
+		local  []exEdit
+	}{
+		{name: "a folder onto a folder as synced", remote: []exEdit{{kind: exDeleteFolder, from: "p"}, {kind: exMoveFolder, from: "x", to: "p"}}},
+		{name: "a folder onto an empty folder", remote: []exEdit{{kind: exDeleteFolder, from: "x"}, {kind: exMoveFolder, from: "p", to: "x"}}},
+		{
+			name:   "a folder onto a folder emptied here",
+			remote: []exEdit{{kind: exDeleteFolder, from: "p"}, {kind: exMoveFolder, from: "x", to: "p"}},
+			local:  []exEdit{{kind: exDeleteFile, from: "p/f"}},
+		},
+		{
+			name:   "a folder onto a folder written into here",
+			remote: []exEdit{{kind: exDeleteFolder, from: "p"}, {kind: exMoveFolder, from: "x", to: "p"}},
+			local:  []exEdit{{kind: exCreateFile, to: "p/g"}},
+		},
+		{
+			name:   "a folder onto a folder whose file was edited here",
+			remote: []exEdit{{kind: exDeleteFolder, from: "p"}, {kind: exMoveFolder, from: "x", to: "p"}},
+			local:  []exEdit{{kind: exEditFile, from: "p/f"}},
+		},
+		{
+			name:   "a file onto a folder written into here",
+			remote: []exEdit{{kind: exDeleteFolder, from: "p"}, {kind: exMoveFile, from: "z", to: "p"}},
+			local:  []exEdit{{kind: exCreateFile, to: "p/g"}},
+		},
+		{
+			name:   "a file onto a folder whose file was renamed here",
+			remote: []exEdit{{kind: exDeleteFolder, from: "p"}, {kind: exMoveFile, from: "z", to: "p"}},
+			local:  []exEdit{{kind: exMoveFile, from: "p/f", to: "p/g"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			requirePairKeepsEveryInvariant(t, &exPair{start: exStartNamed(t, "synced"), local: tc.local, remote: tc.remote})
+		})
+	}
+}
+
 // Validates: R-2.17.6, R-2.1.7
 //
 // Here p moved aside, a new p made, x moved into it as p/x, a new p/x/a made

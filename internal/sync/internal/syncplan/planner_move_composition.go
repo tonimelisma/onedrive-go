@@ -2477,6 +2477,100 @@ func displaceFoldersDeletedHere(inputs *moveInputs, localDeletes map[string]bool
 	}
 }
 
+// giveWayFoldersReplacedOnOneDrive decides how a synced folder OneDrive
+// deleted gives way to another synced item OneDrive moved onto its path
+// (`rm p, mv x p`, `rm p, mv z p`), while this computer left the folder
+// where it was. A folder that holds only what was synced, or less, is
+// deleted here, and the move waits for that delete
+// (displaceFoldersDeletedHere); a folder OneDrive replaced by a folder is
+// reconciled as unchanged at its path, so the delete is planned here in
+// place of the baseline update SQLite gives it, which would bind the path
+// to the moved folder while the deleted one still stood there. A folder
+// that holds anything else written here is renamed to a conflict copy
+// first, with everything in it, and uploaded later as a new folder, so the
+// move lands and nothing written here is lost. Before, the folder made the
+// move wait for good, and a file moved onto its path was downloaded there
+// while its copy here went back to OneDrive as a new file.
+func giveWayFoldersReplacedOnOneDrive(
+	inputs *moveInputs,
+	reconciled []syncdomain.Action,
+	comparisons []syncdomain.SQLiteComparisonRow,
+	views map[string]*syncdomain.PathView,
+	localRows []syncdomain.LocalStateRow,
+) []syncdomain.Action {
+	cmpByPath := make(map[string]*syncdomain.SQLiteComparisonRow, len(comparisons))
+	for i := range comparisons {
+		cmpByPath[comparisons[i].Path] = &comparisons[i]
+	}
+	deleted := localDeletePaths(reconciled)
+	replace := map[string]bool{}
+	for i := range inputs.nodes {
+		n := &inputs.nodes[i]
+		p := n.paths[moveCoordBaseline]
+		cmp := cmpByPath[p]
+		if !replacedOnOneDriveAndLeftHere(n, cmp) {
+			continue
+		}
+		switch {
+		case !holdsOnlySyncedHere(p, localRows, views):
+			n.displace = moveDisplaceConflictCopy
+		case !deleted[p] && cmp.RemoteType == syncdomain.SideFolder:
+			replace[p] = true
+		}
+	}
+	if len(replace) == 0 {
+		return reconciled
+	}
+
+	kept := reconciled[:0:0]
+	for i := range reconciled {
+		p := reconciled[i].Path
+		if replace[p] && reconciled[i].Type == syncdomain.ActionBaselineUpdate {
+			kept = append(kept, makeAction(syncdomain.ActionLocalDelete, views[p]))
+			delete(replace, p)
+			continue
+		}
+		kept = append(kept, reconciled[i])
+	}
+	for _, p := range slices.Sorted(maps.Keys(replace)) {
+		kept = append(kept, makeAction(syncdomain.ActionLocalDelete, views[p]))
+	}
+
+	return kept
+}
+
+// replacedOnOneDriveAndLeftHere reports a synced folder OneDrive deleted,
+// at its baseline path here, whose path OneDrive gives another synced item it
+// moved there (cmp is the comparison row of that path).
+func replacedOnOneDriveAndLeftHere(n *moveNode, cmp *syncdomain.SQLiteComparisonRow) bool {
+	p := n.paths[moveCoordBaseline]
+	return n.itemType == syncdomain.ItemTypeFolder && n.displace == moveDisplaceNever && !n.present(moveCoordRemote) &&
+		n.paths[moveCoordLocal] == p && cmp != nil && cmp.RemoteMoveSource != "" && cmp.RemoteType.Present()
+}
+
+// holdsOnlySyncedHere reports whether every local entry below folder is a
+// synced item at its baseline path, a file with its synced content: what a
+// delete of the folder here would remove is all on record, and OneDrive's
+// delete of the folder covers it. Content of unknown hash is not proven
+// synced.
+func holdsOnlySyncedHere(folder string, localRows []syncdomain.LocalStateRow, views map[string]*syncdomain.PathView) bool {
+	for i := range localRows {
+		row := &localRows[i]
+		if !strings.HasPrefix(row.Path, folder+"/") {
+			continue
+		}
+		view := views[row.Path]
+		if view == nil || view.Baseline == nil || !syncdomain.LocalRowIsBaselineItem(row, view.Baseline) {
+			return false
+		}
+		if row.ItemType == syncdomain.ItemTypeFile && (row.Hash == "" || row.Hash != view.Baseline.LocalHash) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // recreatedSourceVacated reports whether OneDrive no longer holds key at
 // source once the plan's moves have run.
 func recreatedSourceVacated(composition *moveComposition, key string, node *moveNode, source string) bool {

@@ -73,6 +73,7 @@ func (p *Planner) PlanCurrentState(
 		reconciled = append(reconciled, actions...)
 	}
 	inputs := moveCompositionInputs(comparisons, views, remoteRows, localRows)
+	reconciled = giveWayFoldersReplacedOnOneDrive(&inputs, reconciled, comparisons, views, localRows)
 	displaceFoldersDeletedHere(&inputs, localDeletePaths(reconciled))
 	composition := composeMoves(inputs.nodes, inputs.occupancy, inputs.frozen)
 	logMoveNotices(p.logger, composition.notices)
@@ -308,13 +309,23 @@ func rebaseLocalWritesToLocalFolderPositions(actions []syncdomain.Action, remote
 	rebased := make([]syncdomain.Action, len(actions))
 	copy(rebased, actions)
 	for i := range rebased {
-		if rebased[i].Type == syncdomain.ActionLocalMove || !writesLocally(&rebased[i]) {
+		if rebased[i].Type == syncdomain.ActionLocalMove || !writesLocally(&rebased[i]) ||
+			deletesWhatIsHere(&rebased[i]) {
 			continue
 		}
 		rebased[i].Path = rebaseThroughFolderMoves(rebased[i].Path, remoteToLocal)
 	}
 
 	return rebased
+}
+
+// deletesWhatIsHere reports a local delete of the entry this computer has at
+// the action's path. Its path is a local one, the entry it removes, not a
+// remote path to rebase: where OneDrive deleted folder p and moved folder x
+// onto p, the delete of p/f removes the local p/f, and rebased through x's
+// remote move it would have addressed x/f, an entry nobody deleted.
+func deletesWhatIsHere(action *syncdomain.Action) bool {
+	return action.Type == syncdomain.ActionLocalDelete && action.View != nil && action.View.Local != nil
 }
 
 // writesLocally reports remote-origin actions that apply OneDrive's state to
@@ -613,7 +624,9 @@ func keepBothPaths(actions []syncdomain.Action) map[string]bool {
 		if action.Type != syncdomain.ActionConflictCopy || action.View == nil || action.View.Local == nil || action.View.Remote == nil {
 			continue
 		}
-		if action.View.Local.ItemType != action.View.Remote.ItemType {
+		// A folder's conflict copy moves its whole local subtree away, like
+		// one between types.
+		if action.View.Local.ItemType != action.View.Remote.ItemType || action.View.Local.ItemType == syncdomain.ItemTypeFolder {
 			keepBoth[action.Path] = action.View.Remote.ItemType == syncdomain.ItemTypeFolder
 		}
 	}

@@ -145,7 +145,8 @@ func preserveParentFoldersForRunnableDescendants(actions []syncdomain.Action, mo
 	preserved := append([]syncdomain.Action(nil), actions...)
 	for i := range preserved {
 		action := &preserved[i]
-		if !isFolderDelete(action) || !runnableSubtreeActionRequiresParent(preserved, action.Path, mode) {
+		if !isFolderDelete(action) || deletesAFolderOneDriveGaveAway(action) ||
+			!runnableSubtreeActionRequiresParent(preserved, action.Path, mode) {
 			continue
 		}
 
@@ -168,6 +169,18 @@ func preserveParentFoldersForRunnableDescendants(actions []syncdomain.Action, mo
 	}
 
 	return preserved
+}
+
+// deletesAFolderOneDriveGaveAway reports a local delete of a synced folder
+// whose path OneDrive now gives another item (it deleted the folder and
+// moved something onto its path, giveWayFoldersReplacedOnOneDrive). The work
+// planned below that path on OneDrive belongs to the other item, so it does
+// not keep the folder here, and the folder cannot be made again on OneDrive
+// at a path the other item holds.
+func deletesAFolderOneDriveGaveAway(action *syncdomain.Action) bool {
+	view := action.View
+	return action.Type == syncdomain.ActionLocalDelete && view != nil && view.Remote != nil && !view.Remote.IsDeleted &&
+		view.Baseline != nil && view.Remote.ItemID != view.Baseline.ItemID
 }
 
 func isFolderDelete(action *syncdomain.Action) bool {

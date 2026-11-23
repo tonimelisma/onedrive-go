@@ -1,5 +1,3 @@
-synced L[] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held delete-undone
-synced L[] R[rm x, mv p x] :: sides-differ left-held
 synced L[mv p q] R[mv x q, mv p/f x] :: duplicated
 synced L[mv p q] R[mv x q, mv p/f x] refuse download x #1 :: duplicated
 synced L[mv p q] R[mv x q, mv p/f x] refuse upload q/f #1 :: duplicated
@@ -7,71 +5,27 @@ synced L[mv p q] R[rm x, mv p/f x] :: duplicated
 synced L[mv p q] R[rm x, mv p/f x] refuse upload q/f #1 :: duplicated
 synced L[mv p q] R[rm z, mv p/f z] :: duplicated
 synced L[mv p x/p] R[mv x p/x, mv p/f x] :: sides-differ left-held
-synced L[mv p x/p] R[rm x, mv z x] :: duplicated
 synced L[mv p x/p] R[mv z p/z, mv x z] :: sides-differ left-held
 synced L[mv p x/p] R[rm z, mv p/f z] :: duplicated
-synced L[mv p/f p/g] R[rm p, mv x p] :: sides-differ left-held
-synced L[mv p/f p/g] R[rm p, mv z p] :: duplicated
-synced L[mv p/f p/g] R[rm p, mv z p] refuse folder_create p.conflict-14 (remote) #1 :: duplicated
-synced L[mv p/f p/g] R[rm p, mv z p] refuse upload p.conflict-14/g #1 :: duplicated
-synced L[mv p/f p/g] R[rm p, mv z p] refuse upload z #1 :: duplicated
-synced L[mv p/f p/g] R[rm x, mv p x] :: sides-differ left-held
 synced L[mv p/f p/g] R[rm x, mv p/f x] :: duplicated
 synced L[mv p/f p/g] R[rm x, mv p/f x] refuse upload p/g #1 :: duplicated
 synced L[mv p/f p/g] R[rm z, mv p/f z] :: duplicated
-synced L[mv p/f f] R[rm p, mv x p] :: sides-differ left-held
-synced L[mv p/f f] R[rm p, mv x p] refuse upload f #1 :: sides-differ left-held
-synced L[mv p/f f] R[rm x, mv p x] :: sides-differ left-held
 synced L[mv p/f f] R[rm x, mv p/f x] :: duplicated
 synced L[mv p/f f] R[rm x, mv p/f x] refuse upload f #1 :: duplicated
 synced L[mv p/f f] R[rm z, mv p/f z] :: duplicated
-synced L[mv p/f x/f] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held
-synced L[mv p/f x/f] R[rm p, mv x p] refuse upload x/f #1 :: no-quiet-plan sides-differ left-held
-synced L[mv p/f x/f] R[rm p, mv x p] refuse upload x/f #2 :: no-quiet-plan sides-differ left-held
-synced L[mv p/f x/f] R[rm x, mv p x] :: sides-differ left-held
-synced L[mv p/f x/f] R[rm x, mv z x] :: duplicated
 synced L[mv p/f x/f] R[rm z, mv p/f z] :: duplicated
-synced L[rm p/f] R[rm p, mv x p] :: sides-differ left-held
-synced L[rm p/f] R[rm x, mv p x] :: sides-differ left-held
-synced L[edit p/f] R[rm p, mv x p] :: sides-differ left-held
-synced L[edit p/f] R[rm p, mv z p] :: duplicated
-synced L[edit p/f] R[rm p, mv z p] refuse folder_create p.conflict-15 (remote) #1 :: duplicated
-synced L[edit p/f] R[rm p, mv z p] refuse upload p.conflict-15/f #1 :: duplicated
-synced L[edit p/f] R[rm p, mv z p] refuse upload z #1 :: duplicated
-synced L[edit p/f] R[rm x, mv p x] :: sides-differ left-held
-synced L[mv x p/x] R[rm p, mv z p] :: duplicated
-synced L[mv x p/x] R[rm p, mv z p] refuse folder_create p.conflict-14 (remote) #1 :: duplicated
-synced L[mv x p/x] R[rm p, mv z p] refuse upload p.conflict-14/f #1 :: duplicated
-synced L[mv x p/x] R[rm p, mv z p] refuse upload z #1 :: duplicated
 synced L[mv x p/x] R[mv z x/z, mv p z] :: sides-differ left-held
 synced L[mv z g] R[rm p, mv z p] :: duplicated
 synced L[mv z g] R[rm p, mv z p] refuse upload g #1 :: duplicated
 synced L[mv z g] R[rm p/f, mv z p/f] :: duplicated
 synced L[mv z g] R[rm x, mv z x] :: duplicated
 synced L[mv z g] R[rm x, mv z x] refuse upload g #1 :: duplicated
-synced L[mv z p/z] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held
 synced L[mv z p/z] R[rm p/f, mv z p/f] :: duplicated
-synced L[mv z p/z] R[rm x, mv p x] :: sides-differ left-held
 synced L[mv z p/z] R[rm x, mv z x] :: duplicated
 synced L[mv z p/z] R[rm x, mv z x] refuse upload p/z #1 :: duplicated
-synced L[mv z x/z] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held delete-undone
 synced L[mv z x/z] R[rm p, mv z p] :: duplicated
 synced L[mv z x/z] R[rm p, mv z p] refuse upload x/z #1 :: duplicated
 synced L[mv z x/z] R[rm p/f, mv z p/f] :: duplicated
-synced L[mv z x/z] R[rm x, mv p x] :: sides-differ left-held
-synced L[mv z x/z] R[rm x, mv p/f x] :: duplicated
-synced L[new p/g] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held
-synced L[new p/g] R[rm p, mv z p] :: duplicated
-synced L[new p/g] R[rm p, mv z p] refuse folder_create p.conflict-16 (remote) #1 :: duplicated
-synced L[new p/g] R[rm p, mv z p] refuse upload p.conflict-16/f #1 :: duplicated
-synced L[new p/g] R[rm p, mv z p] refuse upload p.conflict-16/g #1 :: duplicated
-synced L[new p/g] R[rm p, mv z p] refuse upload z #1 :: duplicated
-synced L[new p/g] R[rm x, mv p x] :: no-quiet-plan sides-differ left-held
-synced L[new x/g] R[rm p, mv x p] :: no-quiet-plan sides-differ left-held delete-undone
-synced L[new x/g] R[rm p, mv x p] refuse upload x/g #1 :: no-quiet-plan sides-differ left-held delete-undone
-synced L[new x/g] R[rm x, mv p x] :: sides-differ left-held
-synced L[new x/g] R[rm x, mv p/f x] :: duplicated
-synced L[new x/g] R[rm x, mv z x] :: duplicated
 synced L[mv p q, mv q/f p] R[mv p Q] :: duplicated
 synced L[mv p q, mv q/f p] R[mv p Q] refuse download q/f #1 :: duplicated
 synced L[mv p q, mv q/f p] R[mv p Q] refuse upload p #1 :: duplicated
