@@ -29,9 +29,12 @@ const (
 	cmdFormatGofumpt      = 0
 	cmdFormatGoimports    = 1
 	cmdLint               = 2
-	cmdBuild              = 3
-	cmdBuildFirstPlatform = 4
+	cmdBuild              = cmdLint + lintPassCount
+	cmdBuildFirstPlatform = cmdBuild + 1
 )
+
+// lintPassCount is the number of golangci-lint passes the lint step runs.
+const lintPassCount = 3
 
 // The cross-platform builds occupy supportedPlatformCount slots starting at
 // cmdBuildFirstPlatform, so everything after them is expressed relative to
@@ -232,7 +235,9 @@ func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 	assert.Equal(t, []string{
 		"gofumpt -w .",
 		"goimports -local github.com/tonimelisma/onedrive-go",
-		"golangci-lint run --allow-parallel-runners",
+		"golangci-lint run --allow-parallel-runners GOOS=linux",
+		"golangci-lint run --allow-parallel-runners GOOS=darwin",
+		"golangci-lint run --allow-parallel-runners GOOS=freebsd",
 		"go build ./...",
 		"go build ./... GOOS=linux",
 		"go build ./... GOOS=darwin",

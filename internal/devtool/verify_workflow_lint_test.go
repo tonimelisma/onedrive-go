@@ -121,9 +121,9 @@ func TestRunVerifyLintRunsThePinnedActionlintOverEveryWorkflow(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, 2)
+	require.Len(t, runner.runCommands, lintPassCount+1)
 	assert.Equal(t, "golangci-lint", runner.runCommands[0].name)
-	lint := runner.runCommands[1]
+	lint := runner.runCommands[lintPassCount]
 	assert.Equal(t, "go", lint.name)
 	assert.Equal(t, []string{
 		"run", actionlintModule, "-shellcheck=", "-pyflakes=", "-oneline",

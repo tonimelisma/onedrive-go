@@ -177,6 +177,7 @@ type verifyFlags struct {
 	coverageThreshold  float64
 	coverageFile       string
 	shard              string
+	lintPass           string
 	e2eLogDir          string
 	summaryJSONPath    string
 	classifyLiveQuirks bool
@@ -235,6 +236,7 @@ func (f *verifyFlags) options(cmd *cobra.Command, repoRoot string, profile devto
 		CoverageThreshold:  f.coverageThreshold,
 		CoverageFile:       f.coverageFile,
 		Shard:              f.shard,
+		LintPass:           f.lintPass,
 		UnitTimeout:        f.unitTimeout,
 		ShortUnitTimeout:   f.shortUnitTimeout,
 		RaceTimeout:        f.raceTimeout,
@@ -274,6 +276,12 @@ func (f *verifyFlags) registerProfileFlags(cmd *cobra.Command) {
 		"shard",
 		"",
 		"run one slice of the pr, quick or platform profile's short unit tier, as index/count (for example 1/2)",
+	)
+	cmd.Flags().StringVar(
+		&f.lintPass,
+		"lint-pass",
+		"",
+		"run one golangci-lint pass of the lint step (linux, darwin-race or freebsd); default every pass",
 	)
 	cmd.Flags().DurationVar(
 		&f.unitTimeout,

@@ -91,7 +91,7 @@ func resolveVerifyShard(plan verifyPlan, spec string) (verifyShard, error) {
 //     one local command, and what the DoD pre-pr stage runs by default: a host
 //     too small for the race tier can still finish it. Its golangci-lint
 //     covers only the packages changed against origin/main and their direct
-//     importers (runChangedLint); CI's lint job lints every package.
+//     importers (lintChangedPackages); CI's lint job lints every package.
 //
 // The race detector runs in the race profile, the sync tree alone, which CI
 // runs on every push to main, and in default and public beside the coverage
@@ -111,9 +111,9 @@ func runPRLaneVerification(
 	var steps []verifyStep
 	switch {
 	case plan.runLint && plan.lintChangedOnly:
-		steps = append(steps, changedLintSteps()...)
+		steps = append(steps, changedLintSteps(plan.lintPasses)...)
 	case plan.runLint:
-		steps = append(steps, lintSteps()...)
+		steps = append(steps, lintSteps(plan.lintPasses)...)
 	}
 	switch {
 	case plan.runQuickChecks:

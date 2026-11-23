@@ -350,6 +350,9 @@ linters:
 
     forbidigo:
       analyze-types: true
+      # golangci-lint turns this on by default, which skips every Example
+      # function of a test file; an Example is test code like any other.
+      exclude-godoc-examples: false
       forbid:
         - pattern: ^os\.(Open|OpenFile|ReadFile|WriteFile|Create|CreateTemp|Mkdir|MkdirAll|ReadDir|Stat|Lstat|Remove|RemoveAll|Rename|Chmod|Chtimes|Symlink|Readlink|Truncate)$
           msg: use fsroot, synctree, or localpath filesystem boundaries instead of raw os.* calls

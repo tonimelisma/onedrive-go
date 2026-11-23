@@ -126,6 +126,34 @@ func TestGolangciConfig_ForbidigoRefusesFixedWaitAbsenceAssertions(t *testing.T)
 		"no exclusion exempts any file from the fixed-wait rule")
 }
 
+// Validates: R-6.10.17
+//
+// golangci-lint turns forbidigo's exclude-godoc-examples on by default, which
+// skips every Example function of a test file, so a time.Sleep or a t.Fatal
+// there would pass lint. The configuration turns it off.
+func TestGolangciConfig_ForbidigoReadsExampleFunctions(t *testing.T) {
+	t.Parallel()
+
+	config := golangciConfig(t)
+	assert.Equal(t, "false", yamlValue(t, config, "linters", "settings", "forbidigo", "exclude-godoc-examples"))
+}
+
+// Validates: R-6.10.22
+//
+// A lint pass with extra build tags repeats the configuration's on its
+// command line, since --build-tags replaces run.build-tags: the two lists
+// are one fact, held equal here.
+func TestGolangciConfig_BuildTagsAreDevtoolsLintTags(t *testing.T) {
+	t.Parallel()
+
+	config := golangciConfig(t)
+	tags := []string{}
+	for _, tag := range yamlList(t, config, "run", "build-tags") {
+		tags = append(tags, fmt.Sprint(tag))
+	}
+	assert.Equal(t, lintConfigBuildTags(), tags)
+}
+
 // Validates: R-6.10.5
 //
 // Product code prints through the writers internal/cli/root.go and format.go

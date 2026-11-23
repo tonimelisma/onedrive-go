@@ -78,6 +78,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 		"--coverage-threshold", "80.5",
 		"--coverage-file", "/tmp/c.out",
 		"--shard", "2/3",
+		"--lint-pass", "darwin-race",
 		"--e2e-log-dir", "/tmp/e2e",
 		"--summary-json", "/tmp/verify-summary.json",
 		"--classify-live-quirks",
@@ -102,6 +103,7 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 	assert.InDelta(t, 80.5, got.CoverageThreshold, 0.001)
 	assert.Equal(t, "/tmp/c.out", got.CoverageFile)
 	assert.Equal(t, "2/3", got.Shard)
+	assert.Equal(t, "darwin-race", got.LintPass)
 	assert.Equal(t, "/tmp/e2e", got.E2ELogDir)
 	assert.Equal(t, "/tmp/verify-summary.json", got.SummaryJSONPath)
 	assert.True(t, got.ClassifyLiveQuirks)

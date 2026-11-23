@@ -106,6 +106,9 @@ type VerifyOptions struct {
 	CoverageThreshold float64
 	CoverageFile      string
 	Shard             string
+	// LintPass names the one lint pass to run (--lint-pass), a matrix leg of
+	// the CI lint job; empty runs every pass.
+	LintPass string
 	// UnitTimeout is go test's per-package deadline in the full race tier.
 	// Zero derives it from Cores.
 	UnitTimeout time.Duration
@@ -232,7 +235,7 @@ type verifyPlan struct {
 	runQuickChecks  bool
 	runLint         bool
 	// lintChangedOnly lints only the packages changed against origin/main and
-	// their direct importers (runChangedLint): the pr profile's local gate.
+	// their direct importers (lintChangedPackages): the pr profile's local gate.
 	lintChangedOnly   bool
 	runPlatformChecks bool
 	runE2E            bool
@@ -244,6 +247,9 @@ type verifyPlan struct {
 	runFailedTest     bool
 	// checkFormat makes the format step list instead of rewrite (--check-format).
 	checkFormat bool
+	// lintPasses are the golangci-lint passes of the lint step: every pass,
+	// or the one --lint-pass names.
+	lintPasses []lintPass
 }
 
 // setCheckFormat applies --check-format, which only a plan with a format step
@@ -365,10 +371,17 @@ func runVerifyProfileWithEnv(
 }
 
 // applyVerifyFlags checks the flags that only some profiles take against the
-// plan and applies them: --shard, --seed-start and --check-format.
+// plan and applies them: --shard, --seed-start, --lint-pass and
+// --check-format.
 func applyVerifyFlags(plan *verifyPlan, opts *VerifyOptions) (verifyShard, error) {
 	shard, err := resolveVerifyShard(*plan, opts.Shard)
 	if err != nil {
+		return verifyShard{}, err
+	}
+	if opts.LintPass != "" && !plan.runLint && !plan.runPublicChecks {
+		return verifyShard{}, fmt.Errorf("--lint-pass applies to the profiles that lint: default, public, pr and lint")
+	}
+	if plan.lintPasses, err = resolveLintPasses(opts.LintPass); err != nil {
 		return verifyShard{}, err
 	}
 	if opts.SeedStart != 0 && !plan.runSeeds {
@@ -499,7 +512,7 @@ func runPublicVerification(
 	// failure says nothing about the tests, and on the nightly, the one run of
 	// this tier, stopping there would hide the tests' state for a day.
 	publicSteps := []verifyStep{{name: formatStepName, run: formatStep(plan.checkFormat)}}
-	publicSteps = append(publicSteps, lintSteps()...)
+	publicSteps = append(publicSteps, lintSteps(plan.lintPasses)...)
 	publicSteps = append(publicSteps, repoRuleSteps()...)
 	publicSteps = append(publicSteps, verifyStep{name: buildStepName, run: runBuild})
 	stepsErr := runEveryVerifyStep(ctx, runner, repoRoot, env, collector, stdout, stderr, publicSteps)
@@ -707,21 +720,6 @@ func checkFormat(ctx context.Context, runner commandRunner, repoRoot string, env
 		"check format: the formatters would change %s (verify without --check-format rewrites them)",
 		strings.Join(unformatted, ", "),
 	)
-}
-
-func runLint(ctx context.Context, runner commandRunner, repoRoot string, env []string, stdout, stderr io.Writer) error {
-	if err := writeStatus(stdout, "==> golangci-lint\n"); err != nil {
-		return fmt.Errorf("write status: %w", err)
-	}
-	if err := assertLintVersionMatchesCI(ctx, runner, repoRoot, env); err != nil {
-		return err
-	}
-	args := lintCommandArgs(runtime.GOMAXPROCS(0))
-	if err := runner.Run(ctx, repoRoot, env, stdout, stderr, lintBinaryName, args...); err != nil {
-		return fmt.Errorf("lint: %w", err)
-	}
-
-	return nil
 }
 
 // lintCommandArgs is golangci-lint's command line for the cores the run may
@@ -1030,19 +1028,20 @@ const (
 )
 
 // lintSteps are the lint profile's steps, which every profile that lints runs:
-// golangci-lint over the Go code, then actionlint over the workflow files.
-func lintSteps() []verifyStep {
+// golangci-lint over the Go code in each of passes, then actionlint over the
+// workflow files.
+func lintSteps(passes []lintPass) []verifyStep {
 	return []verifyStep{
-		{name: lintStepName, run: runLint},
+		{name: lintStepName, run: lintStepRun(passes, lintWholeModule)},
 		{name: workflowLintStepName, run: runWorkflowLint},
 	}
 }
 
 // changedLintSteps are lintSteps with golangci-lint over the changed packages
-// only (runChangedLint), the pr profile's.
-func changedLintSteps() []verifyStep {
+// only (lintChangedPackages), the pr profile's.
+func changedLintSteps(passes []lintPass) []verifyStep {
 	return []verifyStep{
-		{name: lintStepName, run: runChangedLint},
+		{name: lintStepName, run: lintStepRun(passes, lintChangedPackages)},
 		{name: workflowLintStepName, run: runWorkflowLint},
 	}
 }
