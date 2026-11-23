@@ -186,6 +186,15 @@ type composedRekey struct {
 	newPath string
 }
 
+// composedMerge binds a new folder made here at newPath to the synced folder
+// key, which OneDrive holds there, and deletes key's own copy here, empty at
+// localPath (mergeWithANewFolderHere).
+type composedMerge struct {
+	key       string
+	localPath string
+	newPath   string
+}
+
 type moveNoticeKind int
 
 const (
@@ -209,6 +218,7 @@ type moveNotice struct {
 type moveComposition struct {
 	moves   []composedMove
 	rekeys  []composedRekey
+	merges  []composedMerge
 	notices []moveNotice
 	// deferred holds the keys of relocated items whose moves wait for a
 	// later pass.
@@ -1361,6 +1371,11 @@ func (e *moveEmitter) resolveMove(n *moveNode, side moveCoord, newPath string) b
 	if holder, held := e.folderHolder(side, n.key, newPath); held && holder == n.key {
 		return e.parkAwayFromItsOwnLanding(n.key, side)
 	}
+	if e.mergesWithANewFolderHere(n, side, newPath) {
+		e.result.merges = append(e.result.merges, composedMerge{key: n.key, localPath: n.paths[side], newPath: newPath})
+		e.state[n.key] = moveEmitSettled
+		return true
+	}
 	move, ok := e.planMove(n, side, newPath)
 	if !ok {
 		return e.deferRefusedMove(n.key, side)
@@ -1369,6 +1384,67 @@ func (e *moveEmitter) resolveMove(n *moveNode, side moveCoord, newPath string) b
 	e.state[n.key] = moveEmitSettled
 
 	return true
+}
+
+// mergesWithANewFolderHere reports whether n, a synced folder whose local
+// move to newPath follows OneDrive (it sits there on OneDrive: OneDrive moved
+// it, or this computer's own move of it was undone), lands on a folder made
+// here that is no synced item, while n's own copy here holds nothing. The
+// two folders at the path are one folder by path, as two folders made at one
+// path on both sides are (R-2.17.13): the new folder takes n's item, which
+// composition records at the path with the new folder's identity, and n's
+// empty copy is deleted here, so nothing moves. Before, the move waited for
+// good for the new folder to leave its destination (`rm x, mv p x` on
+// OneDrive from the held start, where x here is the new folder made in the
+// held one's place and p is empty here since f left it). The executor's
+// delete still refuses a copy that gained an entry since the scan. No move of
+// the plan here may carry n's copy or the destination, so both are snapshot
+// paths.
+func (e *moveEmitter) mergesWithANewFolderHere(n *moveNode, side moveCoord, newPath string) bool {
+	source := n.paths[side]
+	if side != moveCoordLocal || n.itemType != syncdomain.ItemTypeFolder || !n.present(moveCoordRemote) ||
+		!sameLocation(e.location(n, moveCoordRemote), e.target[n.key]) || pathAtOrBelow(newPath, source) ||
+		pathAtOrBelow(source, newPath) || !e.occupancy.localFolders[newPath] {
+		return false
+	}
+	if _, isNode := e.occupantAt(side, newPath); isNode {
+		return false
+	}
+	if dir := path.Dir(newPath); dir != "." && !e.localParentPresent(n, dir) {
+		return false
+	}
+
+	return !e.localMoveOfThePlanTouches(source, newPath) && !e.holdsAnythingHere(source)
+}
+
+// localMoveOfThePlanTouches reports whether a local move planned so far
+// leaves from or lands at or above one of paths.
+func (e *moveEmitter) localMoveOfThePlanTouches(paths ...string) bool {
+	for i := range e.result.moves {
+		earlier := &e.result.moves[i]
+		if earlier.side != moveCoordLocal {
+			continue
+		}
+		for _, p := range paths {
+			if pathAtOrBelow(p, earlier.oldPath) || pathAtOrBelow(p, earlier.newPath) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// holdsAnythingHere reports whether the local snapshot holds an entry below
+// folder.
+func (e *moveEmitter) holdsAnythingHere(folder string) bool {
+	for held := range e.occupancy.local {
+		if strings.HasPrefix(held, folder+"/") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // deferRefusedMove decides key, whose move on side planMove refused. It stays
@@ -2499,6 +2575,10 @@ func buildComposedMoveActions(
 		actions = append(actions, makeConflictCopyAction(&copyView))
 	}
 
+	for i := range composition.merges {
+		actions = append(actions, composedMergeActions(&composition.merges[i], nodeByKey, baseline, viewAt)...)
+	}
+
 	for i := range composition.rekeys {
 		rekey := &composition.rekeys[i]
 		node := nodeByKey[rekey.key]
@@ -2519,6 +2599,38 @@ func buildComposedMoveActions(
 	}
 
 	return actions, waiting
+}
+
+// composedMergeActions builds a merge: the baseline update that records the
+// item at the new folder's path with that folder's local identity, and the
+// delete here of the item's own empty copy. Either commit order ends right:
+// the delete removes the row at the copy's path alone, and the update keys
+// the item's row by item ID.
+func composedMergeActions(
+	merge *composedMerge, nodeByKey map[string]*moveNode, baseline syncdomain.BaselineView,
+	viewAt func(string) *syncdomain.PathView,
+) []syncdomain.Action {
+	node := nodeByKey[merge.key]
+	entry, ok := baseline.GetByID(merge.key)
+	if node == nil || !ok {
+		return nil
+	}
+	bind := makeAction(syncdomain.ActionBaselineUpdate, &syncdomain.PathView{
+		Path:        merge.newPath,
+		Remote:      viewAt(node.paths[moveCoordRemote]).Remote,
+		Local:       viewAt(merge.newPath).Local,
+		Baseline:    &entry,
+		TruthStatus: viewAt(merge.newPath).TruthStatus,
+	})
+	bind.OldPath = node.paths[moveCoordBaseline]
+	remove := makeAction(syncdomain.ActionLocalDelete, &syncdomain.PathView{
+		Path:        merge.localPath,
+		Local:       viewAt(merge.localPath).Local,
+		Baseline:    &entry,
+		TruthStatus: viewAt(merge.localPath).TruthStatus,
+	})
+
+	return []syncdomain.Action{bind, remove}
 }
 
 // composedLocalMoveActions builds a remote-origin local move, preceded by the
@@ -2758,114 +2870,6 @@ func giveWayFoldersReplacedOnOneDrive(
 	}
 
 	return kept
-}
-
-// mergeNewFoldersIntoFoldersOneDriveMovedOntoThem merges by path a folder
-// OneDrive moved onto a path where this computer made a new folder of its
-// own (`rm x, mv p x` on OneDrive, a new x made here after the synced x
-// went): the two are one folder by path, as two folders made at one path on
-// both sides are. The new folder here is bound to OneDrive's item, and the
-// item's own folder here, left at its old path, is deleted, so neither side
-// moves anything. Only when that folder holds nothing here: the delete then
-// removes no entry, and the executor's delete checks still refuse a folder
-// that gained one since the scan. Before, the move here waited for good for
-// the new folder to leave the path it lands on, and the sides never met.
-//
-// The node takes the new folder as its position here, so composition
-// re-keys its baseline row to the path, with the new folder's identity
-// (buildComposedMoveActions), and the delete of the old folder is planned
-// beside it. It returns the reconciliation actions with those deletes.
-func mergeNewFoldersIntoFoldersOneDriveMovedOntoThem(
-	inputs *moveInputs,
-	reconciled []syncdomain.Action,
-	comparisons []syncdomain.SQLiteComparisonRow,
-	views map[string]*syncdomain.PathView,
-	localRows []syncdomain.LocalStateRow,
-) []syncdomain.Action {
-	cmpByPath := make(map[string]*syncdomain.SQLiteComparisonRow, len(comparisons))
-	for i := range comparisons {
-		cmpByPath[comparisons[i].Path] = &comparisons[i]
-	}
-	heldHere := make(map[string]bool, len(inputs.nodes))
-	for i := range inputs.nodes {
-		if p := inputs.nodes[i].paths[moveCoordLocal]; p != "" {
-			heldHere[p] = true
-		}
-	}
-	for p := range inputs.identified {
-		heldHere[p] = true
-	}
-	deleted := localDeletePaths(reconciled)
-	merged := map[string]bool{}
-	var deletes []syncdomain.Action
-	for i := range inputs.nodes {
-		n := &inputs.nodes[i]
-		source, target := n.paths[moveCoordBaseline], n.paths[moveCoordRemote]
-		if !movedOnOneDriveOntoANewFolderHere(n, cmpByPath[target], heldHere, inputs.frozen) ||
-			!sameParentOnBothSides(inputs.nodes, path.Dir(target)) || holdsAnythingHere(source, localRows) ||
-			deleted[source] || views[source] == nil {
-			continue
-		}
-		n.paths[moveCoordLocal] = target
-		heldHere[target] = true
-		merged[target] = true
-		deletes = append(deletes, makeAction(syncdomain.ActionLocalDelete, views[source]))
-	}
-	if len(merged) == 0 {
-		return reconciled
-	}
-
-	// The re-key records the item at the path; the baseline update SQLite
-	// planned there, for the same item, would only record it again.
-	kept := reconciled[:0:0]
-	for i := range reconciled {
-		if !merged[reconciled[i].Path] || reconciled[i].Type != syncdomain.ActionBaselineUpdate {
-			kept = append(kept, reconciled[i])
-		}
-	}
-
-	return append(kept, deletes...)
-}
-
-// movedOnOneDriveOntoANewFolderHere reports a synced folder OneDrive moved,
-// left here at its baseline path, whose OneDrive path (at, the comparison
-// row there) holds here a folder that is no synced item's (heldHere: the
-// local positions of the synced items).
-func movedOnOneDriveOntoANewFolderHere(
-	n *moveNode, at *syncdomain.SQLiteComparisonRow, heldHere, frozen map[string]bool,
-) bool {
-	source, target := n.paths[moveCoordBaseline], n.paths[moveCoordRemote]
-	return n.itemType == syncdomain.ItemTypeFolder && !frozen[n.key] && n.paths[moveCoordLocal] == source &&
-		target != "" && target != source && !strings.HasPrefix(target, source+"/") && at != nil &&
-		at.LocalType == syncdomain.SideFolder && at.RemoteItemID == n.key && !heldHere[target]
-}
-
-// sameParentOnBothSides reports whether dir is the sync root or the path of a
-// synced folder both sides hold there, so a folder at dir/name is in the same
-// place on both.
-func sameParentOnBothSides(nodes []moveNode, dir string) bool {
-	if dir == "." || dir == "/" || dir == "" {
-		return true
-	}
-	for i := range nodes {
-		if nodes[i].paths[moveCoordLocal] == dir && nodes[i].paths[moveCoordRemote] == dir {
-			return true
-		}
-	}
-
-	return false
-}
-
-// holdsAnythingHere reports whether the local snapshot holds an entry below
-// folder.
-func holdsAnythingHere(folder string, localRows []syncdomain.LocalStateRow) bool {
-	for i := range localRows {
-		if strings.HasPrefix(localRows[i].Path, folder+"/") {
-			return true
-		}
-	}
-
-	return false
 }
 
 // replacedOnOneDriveAndLeftHere reports a synced folder OneDrive deleted,
@@ -3833,12 +3837,20 @@ func dropReconciliationOfComposedMoves(
 	for i := range composition.moves {
 		moved[composition.moves[i].side][composition.moves[i].key] = true
 	}
-	if len(moved[moveCoordLocal]) == 0 && len(moved[moveCoordRemote]) == 0 && len(composition.deferredMoves) == 0 {
+	merged := map[string]bool{}
+	for i := range composition.merges {
+		merged[composition.merges[i].key] = true
+	}
+	if len(moved[moveCoordLocal]) == 0 && len(moved[moveCoordRemote]) == 0 && len(composition.deferredMoves) == 0 &&
+		len(merged) == 0 {
 		return actions
 	}
 
+	// A merged folder's composed baseline update records it where it is; the
+	// one SQLite planned there would only record it again.
 	movedOrHeld := func(key string) bool {
-		return moved[moveCoordLocal][key] || moved[moveCoordRemote][key] || composition.holdsMoveInMode(key, mode)
+		return moved[moveCoordLocal][key] || moved[moveCoordRemote][key] || merged[key] ||
+			composition.holdsMoveInMode(key, mode)
 	}
 	kept := actions[:0:0]
 	for i := range actions {

@@ -2340,3 +2340,30 @@ func TestPlannerPairs_ANewFolderHereMergesWithTheFolderOneDriveMovedOntoItsPath(
 		requirePairKeepsEveryInvariant(t, &pair)
 	}
 }
+
+// Validates: R-2.17.13, R-2.17.6
+//
+// A cycle of moves across the two sides lands a folder on a new folder made
+// here: from the synced tree, x moved into p and a new x made here while
+// OneDrive moved p into x; from the held start, the held x moved into p here
+// while OneDrive moved p into x. OneDrive's nesting wins, so x's copy here,
+// empty, meets the new x: the two merge by path and p moves into it, and
+// every run, with each create refused once, converges.
+func TestPlannerPairs_AFolderWhoseMoveHereIsUndoneMergesWithANewFolderAtItsPlace(t *testing.T) {
+	t.Parallel()
+
+	for _, pair := range []exPair{
+		{
+			start:  exStartNamed(t, "synced"),
+			local:  []exEdit{{kind: exMoveFolder, from: "x", to: "p/x"}, {kind: exMakeFolder, to: "x"}},
+			remote: []exEdit{{kind: exMoveFolder, from: "p", to: "x/p"}},
+		},
+		{
+			start:  exStartNamed(t, "held"),
+			local:  []exEdit{{kind: exMoveFolder, from: "x2", to: "p/x2"}},
+			remote: []exEdit{{kind: exMoveFolder, from: "p", to: "x/p"}},
+		},
+	} {
+		requirePairKeepsEveryInvariant(t, &pair)
+	}
+}

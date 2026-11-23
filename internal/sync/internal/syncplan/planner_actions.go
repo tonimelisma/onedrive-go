@@ -74,7 +74,6 @@ func (p *Planner) PlanCurrentState(
 	}
 	inputs := moveCompositionInputs(comparisons, views, remoteRows, localRows)
 	reconciled = giveWayFoldersReplacedOnOneDrive(&inputs, reconciled, comparisons, views, localRows)
-	reconciled = mergeNewFoldersIntoFoldersOneDriveMovedOntoThem(&inputs, reconciled, comparisons, views, localRows)
 	displaceFoldersDeletedHere(&inputs, localDeletePaths(reconciled))
 	composition := composeMoves(inputs.nodes, inputs.occupancy, inputs.frozen)
 	logMoveNotices(p.logger, composition.notices)

@@ -3388,3 +3388,39 @@ func TestRunOnce_ReplacingMoveFindingANewFileAtTheFreedNameStillMoves(t *testing
 	assert.Empty(t, h.remote.deletes, "nothing is deleted on OneDrive")
 	requireScenarioQuietPlan(t, h.eng)
 }
+
+// Validates: R-2.17.13, R-2.17.6
+//
+// Here x is moved into P and a new x made, while OneDrive moves P into x: a
+// cycle, in which OneDrive's nesting wins and this computer's move is
+// undone. x's copy here, empty in P, would move back to x, where the new x
+// is: the two are one folder by path, so the new x takes x's item, the copy
+// in P is deleted here and P moves into x. One sync finishes it, with every
+// item still the item it was and nothing uploaded or made on OneDrive.
+func TestRunOnce_AFolderWhoseMoveHereIsUndoneMergesWithANewFolderAtItsPlace(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-x", "root", "x")
+	remote.addFolder("item-P", "root", "P")
+	remote.addFile(t, "item-f", "item-P", "f", "f\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Rename(local("x"), local("P/x")))
+	require.NoError(t, os.Mkdir(local("x"), 0o750))
+	remote.moveAt(t, "P", "x/P")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes it")
+	assert.Zero(t, superseded)
+	want := map[string]string{"x": "/", "x/P": "/", "x/P/f": "f\n"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Equal(t, "x", remote.pathOf("item-x"))
+	assert.Equal(t, "x/P", remote.pathOf("item-P"))
+	assert.Zero(t, remote.uploads, "nothing is uploaded")
+	assert.Empty(t, remote.folderCreates, "nothing is made on OneDrive")
+	assert.Empty(t, remote.deletes, "nothing is deleted on OneDrive")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
