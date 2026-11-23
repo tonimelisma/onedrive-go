@@ -1,0 +1,45 @@
+name: Rerun unstarted CI jobs
+
+# GitHub cancels a CI job it could not find a runner for (macOS runners run
+# short), and the aggregate verify check then fails a change nothing is wrong
+# with. When a CI run finishes failed, this asks devtool whether that is all
+# that went wrong and, if so, reruns it, at most up to the third attempt
+# (R-6.10.39). A job that failed, or was canceled while it ran, is never
+# rerun here: that is a verdict, not a missing runner.
+#
+# workflow_run runs the default branch's copy of this file and of devtool,
+# never a pull request's, so the token below never meets code a pull request
+# wrote.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  rerun-unstarted:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: rerun-unstarted-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Rerun the run if no runner took some of its jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: go run ./cmd/devtool ci rerun-unstarted --run-id "${RUN_ID}"
