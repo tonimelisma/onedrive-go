@@ -404,13 +404,16 @@ or legacy metadata files.
 
 ## Email Reconciliation
 
-Implements: R-3.7.1 [verified], R-3.7.2 [verified], R-3.7.3 [verified]
+Implements: R-3.7.1 [verified], R-3.7.2 [verified], R-3.7.3 [verified], R-3.7.4 [verified]
 
 `config.ReconcileAccountEmail()` owns durable email-change mutation. Given the
 current authenticated account type, stable Graph user GUID, and current Graph
 email, it:
 
 - finds stored personal/business catalog accounts with the same `UserID`
+- warns, naming the account, when the signed-in account's own catalog record
+  holds another `UserID` than the one the sign-in answered with, and renames
+  nothing for it
 - computes exact old → new canonical-ID rewrites
 - refuses the change while any new name is taken (a token or state DB file,
   a config section), naming what to remove, before anything is renamed or

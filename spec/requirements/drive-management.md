@@ -125,6 +125,7 @@ The system shall support all four drive types:
 - R-3.7.1: The system shall store a stable user GUID from the Graph API alongside the email. [verified]
 - R-3.7.2: When a user's email changes, the system shall auto-rename token files, state DBs, and config sections. A state DB shall move with its whole file family and only while no sync has it open; one in use shall leave every name unchanged and say to stop that sync and run again. A drive name the client stored as the default derived from the old email (in the catalog or in a config section's `display_name`) shall follow the new email; a name the user or OneDrive supplied shall stay. A shared folder's state DB that cannot be assigned to one account (two accounts had the old email and nothing records the folder's owner) shall stay under the old email, and the user shall be told which file. [verified]
 - R-3.7.3: An account email change interrupted at any point (a crash, a kill, a failed step) shall be finished by the next command that uses an account, with no sync state lost and nothing deleted at a new name; a name taken when the change starts, or created under an old name while it is unfinished, shall stop it and be named as the one to remove. Until the change is finished, no sync shall start on a drive whose state it moves. [verified]
+- R-3.7.4: When a saved sign-in answers as another user than the one the catalog recorded for its account, email change detection shall rename nothing for it and log a warning naming the account. [verified]
 
 ## R-3.8 Migration [future]
 

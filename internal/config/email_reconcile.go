@@ -317,6 +317,15 @@ func matchingAccountRenames(
 		if cid.DriveType() != currentAccount.DriveType() {
 			continue
 		}
+		if cid == currentAccount && account.UserID != "" && account.UserID != userID {
+			// The saved sign-in answers as another user than the one the
+			// catalog recorded for it: no rename follows from it, and saying
+			// so is the only way the mismatch reaches anyone.
+			logger.Warn("saved sign-in answers as a different user than the catalog records",
+				"account", cid.String(),
+			)
+			continue
+		}
 		if account.UserID != userID || cid.Email() == currentEmail {
 			continue
 		}
