@@ -334,7 +334,7 @@ func TestModel_ChaosSameSeedReplaysIdentically(t *testing.T) {
 	syncfixture.SkipInShort(t)
 	t.Parallel()
 
-	seeds := []uint64{1, 2, chaosRaceSeed}
+	seeds := []uint64{1, 2, 50, chaosRaceSeed}
 	opts := chaosRunOptions()
 	if syncfixture.RaceDetectorEnabled {
 		// The race run is for data races, which one seed exercises; see

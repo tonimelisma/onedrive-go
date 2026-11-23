@@ -130,7 +130,7 @@ func TestPlanBuiltActions_ARemovalOfContentTheOtherSideMovedWaitsForItsCreate(t 
 			{Path: "y", ItemID: "item-y", ItemType: syncdomain.ItemTypeFile, Hash: "y"},
 		},
 		[]syncdomain.LocalStateRow{
-			{Path: "x/g", ItemType: syncdomain.ItemTypeFile, Hash: "f", LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true},
+			{Path: "x/g", ItemType: syncdomain.ItemTypeFile, Hash: contentOfInode(7), LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true},
 			{Path: "y", ItemType: syncdomain.ItemTypeFile, Hash: "y", LocalDevice: 1, LocalInode: 9, LocalHasIdentity: true},
 		},
 	)}

@@ -434,15 +434,15 @@ func vacatesCaseVariantOf(other, a *syncdomain.Action) bool {
 // addContentCarrierDeps makes a delete wait for each create on its side that
 // writes the content of the synced file it deletes at another path
 // (carriesContentOf): on OneDrive the upload of the file here that has the
-// file's local identity, which SQLite plans when it cannot pair a rename
-// because OneDrive keeps another item at the new path, and here the download
-// of the file's item. Run before the create, the delete left that side
-// without the content until a later pass whenever the create, or what it
-// waits for, failed; run after it, the delete is skipped with the failed
-// chain and planned again with it. An edge that would close a dependency
-// cycle is left out (addContentEdges) and returned: there the create waits
-// for the delete through the other rules, as the upload of a file edited in a
-// folder renamed here waits for the folder's move, which waits for the delete
+// file's local identity and content hash, which SQLite plans when it cannot
+// pair a rename because OneDrive keeps another item at the new path, and here
+// the download of the file's item. Run before the create, the delete left
+// that side without the content until a later pass whenever the create, or
+// what it waits for, failed; run after it, the delete is skipped with the
+// failed chain and planned again with it. An edge that would close a
+// dependency cycle is left out (addContentEdges) and returned: there the
+// create waits for the delete through the other rules, as the upload of a
+// file unpaired in a folder renamed here waits for the folder's move, which waits for the delete
 // of the file's old copy, and no order of this plan keeps the content
 // (deletesAheadOfTheirContent holds some such deletes for the next pass).
 func addContentCarrierDeps(deps [][]int, actions []syncdomain.Action, index *dependencyIndex) []contentEdge {
@@ -547,22 +547,42 @@ func waitsFor(deps [][]int, from, to int) bool {
 }
 
 // contentKey names the synced content a create writes and a delete removes:
-// a local identity on OneDrive's side, an item ID on this computer's.
+// a local identity and its content hash on OneDrive's side, an item ID on
+// this computer's. The kernel hands a deleted file's inode to the next file
+// made, so a local identity alone does not name content: a new file that took
+// a deleted file's inode read as carrying the deleted file's content, an
+// ordering edge between unrelated actions that came and went with the
+// kernel's choice of inode. With the hash, a match means the same content,
+// and a file whose hash is unknown carries none. An item ID names one item
+// for good, so it needs no hash.
 type contentKey struct {
 	itemID        string
 	device, inode uint64
+	localHash     string
+}
+
+// localContentKey is the key of the content a local file holds: its identity
+// and its hash, reported only when both are known.
+func localContentKey(hasIdentity bool, device, inode uint64, hash string) (contentKey, bool) {
+	if !hasIdentity || hash == "" {
+		return contentKey{}, false
+	}
+
+	return contentKey{device: device, inode: inode, localHash: hash}, true
 }
 
 // carriedContentKey reports the content an upload or a download writes: the
-// local identity of the file an upload reads, the item a download fetches.
+// local identity and hash of the file an upload reads, the item a download
+// fetches.
 func carriedContentKey(create *syncdomain.Action) (contentKey, bool) {
 	switch create.Type {
 	case syncdomain.ActionUpload:
-		if create.View == nil || create.View.Local == nil || !create.View.Local.LocalHasIdentity {
+		if create.View == nil || create.View.Local == nil {
 			return contentKey{}, false
 		}
+		local := create.View.Local
 
-		return contentKey{device: create.View.Local.LocalDevice, inode: create.View.Local.LocalInode}, true
+		return localContentKey(local.LocalHasIdentity, local.LocalDevice, local.LocalInode, local.Hash)
 	case syncdomain.ActionDownload:
 		return contentKey{itemID: create.ItemID}, create.ItemID != ""
 	case syncdomain.ActionLocalMove, syncdomain.ActionRemoteMove, syncdomain.ActionLocalDelete, syncdomain.ActionRemoteDelete,
@@ -576,7 +596,7 @@ func carriedContentKey(create *syncdomain.Action) (contentKey, bool) {
 
 // deletedContentKey reports the synced file a delete removes from its side,
 // under the key a create of that content on the same side carries: its
-// synced local identity on OneDrive, its item ID here. A download of another
+// synced local identity and hash on OneDrive, its item ID here. A download of another
 // item over the synced file here removes the file's content from this side
 // as a delete does (OneDrive moved the synced item away and put another at
 // its path), so it waits for the download that writes that content where
@@ -588,7 +608,7 @@ func deletedContentKey(deleted *syncdomain.Action) (contentKey, bool) {
 	synced := deleted.View.Baseline
 	switch deleted.Type {
 	case syncdomain.ActionRemoteDelete:
-		return contentKey{device: synced.LocalDevice, inode: synced.LocalInode}, synced.LocalHasIdentity
+		return localContentKey(synced.LocalHasIdentity, synced.LocalDevice, synced.LocalInode, synced.LocalHash)
 	case syncdomain.ActionLocalDelete:
 		return contentKey{itemID: synced.ItemID}, synced.ItemID != ""
 	case syncdomain.ActionDownload:

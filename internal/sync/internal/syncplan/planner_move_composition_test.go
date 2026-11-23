@@ -1778,12 +1778,12 @@ func heldSourceDeleteCases() []heldSourceDeleteCase {
 func heldWriteDeleteCases(folder *syncdomain.PathView) []heldSourceDeleteCase {
 	synced := func(inode uint64, itemID string) *syncdomain.PathView {
 		return &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{
-			ItemType: syncdomain.ItemTypeFile, ItemID: itemID, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
+			ItemType: syncdomain.ItemTypeFile, ItemID: itemID, LocalHash: contentOfInode(inode), LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
 		}}
 	}
 	uploadOf := func(p string, inode uint64) syncdomain.Action {
 		return syncdomain.Action{Type: syncdomain.ActionUpload, Path: p, View: &syncdomain.PathView{Local: &syncdomain.LocalState{
-			ItemType: syncdomain.ItemTypeFile, LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
+			ItemType: syncdomain.ItemTypeFile, Hash: contentOfInode(inode), LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
 		}}}
 	}
 	heldInP := composeNode("f", syncdomain.ItemTypeFolder, "P/f", "x/f", "P/f")
@@ -1917,11 +1917,11 @@ func aheadOfContentDeleteCases() []heldSourceDeleteCase {
 // takes for the same to move into that move's destination.
 func cycledWriteDeleteCases(folder *syncdomain.PathView) []heldSourceDeleteCase {
 	synced := &syncdomain.PathView{Baseline: &syncdomain.BaselineEntry{
-		ItemType: syncdomain.ItemTypeFile, ItemID: "item-z", LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true,
+		ItemType: syncdomain.ItemTypeFile, ItemID: "item-z", LocalHash: contentOfInode(7), LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true,
 	}}
 	uploadOfZ := func(p string) syncdomain.Action {
 		return syncdomain.Action{Type: syncdomain.ActionUpload, Path: p, View: &syncdomain.PathView{Local: &syncdomain.LocalState{
-			ItemType: syncdomain.ItemTypeFile, LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true,
+			ItemType: syncdomain.ItemTypeFile, Hash: contentOfInode(7), LocalDevice: 1, LocalInode: 7, LocalHasIdentity: true,
 		}}}
 	}
 	cycle := []syncdomain.Action{
