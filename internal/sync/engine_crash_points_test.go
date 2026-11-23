@@ -401,7 +401,7 @@ func TestCrashRecovery_EveryCrashPointConverges(t *testing.T) {
 				}
 				// Whether the crash came before the replacing move or between
 				// its two steps, the file it displaced leaves for the trash once.
-				assertTrashHoldsReplacedOnce(t, recovered.eng.trash, crashReplacedPath, crashReplacedContent)
+				assertTrashHoldsReplacedOnce(t, recovered.eng.upkeep.trash, crashReplacedPath, crashReplacedContent)
 			})
 		}
 	}
@@ -453,7 +453,7 @@ func TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry(t *testing
 					assert.False(t, found, "baseline row for %s is gone", p)
 				}
 
-				entries, err := recovered.eng.trash.List()
+				entries, err := recovered.eng.upkeep.trash.List()
 				require.NoError(t, err)
 				var deleted []localtrash.Entry
 				for _, entry := range entries {
@@ -467,7 +467,7 @@ func TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry(t *testing
 				assert.Contains(t, []localtrash.State{localtrash.StatePending, localtrash.StateCommitted}, entry.State)
 				// The entry names the sync folder it came from; the snapshot is a
 				// copy of that tree, so the restore goes back to the original.
-				restoredTo, err := recovered.eng.trash.Restore(entry.ID)
+				restoredTo, err := recovered.eng.upkeep.trash.Restore(entry.ID)
 				require.NoError(t, err, "a trash entry left by a crash restores")
 				assert.Equal(t, filepath.Join(entry.SyncRoot, crashDeletedRemotelyPath), restoredTo)
 				data, err := os.ReadFile(restoredTo) //nolint:gosec // test reads its own temp tree

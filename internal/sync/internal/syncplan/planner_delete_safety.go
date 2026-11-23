@@ -17,7 +17,7 @@ import (
 // contents, or a complete but anomalous remote enumeration. Such a tree reads
 // as "every file was deleted" and every per-item check passes (D-002).
 //
-// Two rules, applied to each direction separately (P-1):
+// Two rules, applied to each direction separately (R-6.2.5):
 //   - structural: a side with no entries at all while the baseline holds files
 //     has not been emptied by a person deleting things one by one; the side
 //     vanished, and every delete toward the other side is held;

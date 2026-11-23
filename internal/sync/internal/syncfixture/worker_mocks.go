@@ -2,7 +2,7 @@ package syncfixture
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"time"
 
@@ -21,7 +21,7 @@ func (m *WorkerMockDownloader) Download(ctx context.Context, driveID driveid.ID,
 		return m.DownloadFn(ctx, driveID, itemID, w)
 	}
 
-	return 0, fmt.Errorf("Download not mocked")
+	return 0, errors.New("Download not mocked")
 }
 
 type WorkerMockUploader struct {
@@ -33,5 +33,5 @@ func (m *WorkerMockUploader) Upload(ctx context.Context, driveID driveid.ID, par
 		return faithfulUploadResult(content, size)(m.UploadFn(ctx, driveID, parentID, name, content, size, mtime, progress))
 	}
 
-	return nil, fmt.Errorf("Upload not mocked")
+	return nil, errors.New("Upload not mocked")
 }

@@ -2,6 +2,7 @@ package devtool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -136,5 +137,5 @@ func parseCoverageTotal(report string) (float64, error) {
 		return coverageTotal, nil
 	}
 
-	return 0, fmt.Errorf("parse coverage total: total line not found")
+	return 0, errors.New("parse coverage total: total line not found")
 }

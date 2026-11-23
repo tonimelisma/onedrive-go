@@ -14,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/graphtransport"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
 
@@ -78,6 +79,13 @@ func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, te
 
 		return enrollErr
 	}
+
+	// The login's source was built over the pending file the install moved:
+	// from here on the sign-in is the one at its final path, and the
+	// command's runtime holds it, so a refresh later in the process writes
+	// that file and never brings the pending one back. A failed enrollment
+	// put the previous sign-in back above and hands nothing on.
+	cc.runtime().AdoptSignIn(finalTokenPath, graph.MovedSignIn(ts, finalTokenPath))
 
 	email := canonicalID.Email()
 	if err := printLoginResult(cc.resultWriter(), canonicalID, orgName, &enrolled, logger); err != nil {
@@ -228,7 +236,7 @@ func runLogoutWithContext(ctx context.Context, cc *CLIContext, purge bool) error
 		return logoutAndReport(ctx, cc, validated.Config, validated.Catalog, account, purge)
 	}
 
-	cfg, catalog := loadLogoutRecoveryState(cc.CfgPath, logger, warnings, err)
+	cfg, catalog := loadLogoutRecoveryState(cc.CfgPath, logger, err)
 	account, autoErr := resolveLogoutAccountWithCatalog(
 		ctx,
 		cfg,
@@ -267,15 +275,15 @@ func logoutAndReport(
 	return nil
 }
 
+// loadLogoutRecoveryState loads the config and the catalog for a logout whose
+// validated load failed (validatedErr), each as best it can. The config's
+// warnings are those of its own lenient load, logged once: the failed
+// validated load read the same file, and its warnings are the same ones.
 func loadLogoutRecoveryState(
 	cfgPath string,
 	logger *slog.Logger,
-	validatedWarnings []config.ConfigWarning,
 	validatedErr error,
 ) (*config.Config, *config.Catalog) {
-	if len(validatedWarnings) > 0 {
-		config.LogWarnings(cfgPath, validatedWarnings, logger)
-	}
 	if validatedErr != nil {
 		logger.Warn("validated logout state unavailable, falling back to best-effort recovery",
 			"error", validatedErr,
@@ -316,8 +324,10 @@ func deviceLoginInstructions(da graph.DeviceAuth, account string, now time.Time)
 		fmt.Fprintf(&b, "Sign in as %s. ", account)
 	}
 	if !da.Expiry.IsZero() {
-		minutes := int(da.Expiry.Sub(now).Round(time.Minute).Minutes())
-		fmt.Fprintf(&b, "The code expires at %s (in %s).", da.Expiry.Local().Format("15:04"), countOf(minutes, "minute"))
+		// The clock time is to the minute, so the wait is said to the minute
+		// too: rounded before it is rendered.
+		left := humanunit.Duration(da.Expiry.Sub(now).Round(time.Minute), humanunit.Wait)
+		fmt.Fprintf(&b, "The code expires at %s (in %s).", da.Expiry.Local().Format("15:04"), left)
 	}
 	b.WriteString("\n")
 	b.WriteString("If a passkey or Windows Hello sign-in ends on an error page, choose \"Other ways to sign in\" and use your password.\n")

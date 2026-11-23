@@ -847,3 +847,27 @@ func TestPlacement_AbandonOfAnEntryWhoseFolderIsGoneSucceeds(t *testing.T) {
 	require.NoError(t, placement.Abandon())
 	assert.NoDirExists(t, filepath.Dir(placement.ItemPath))
 }
+
+// Abandoning an unused entry removes only what the reservation wrote, its
+// record and its empty folder: a folder put into the entry since is never
+// removed with it, and the abandon says it could not remove the entry.
+//
+// Validates: R-6.4.9
+func TestPlacement_AbandonRemovesOnlyWhatTheReservationWrote(t *testing.T) {
+	t.Parallel()
+
+	trash := Open(t.TempDir(), nil)
+	placement, err := trash.Reserve(t.TempDir(), "a.txt", ReasonDeleted)
+	require.NoError(t, err)
+	entryDir := filepath.Dir(placement.ItemPath)
+	planted := filepath.Join(entryDir, "someone-elses")
+	require.NoError(t, os.Mkdir(planted, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(planted, "kept.txt"), []byte("kept"), 0o600))
+
+	require.Error(t, placement.Abandon())
+	assert.FileExists(t, filepath.Join(planted, "kept.txt"), "nothing the reservation did not write is removed")
+
+	require.NoError(t, os.RemoveAll(planted))
+	require.NoError(t, placement.Abandon())
+	assert.NoDirExists(t, entryDir)
+}

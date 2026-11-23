@@ -15,6 +15,7 @@ package syncstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -22,7 +23,7 @@ import (
 
 func validateBlockScope(block *syncdomain.BlockScope) error {
 	if block.Key.IsZero() {
-		return fmt.Errorf("sync: upserting block scope: missing scope key")
+		return errors.New("sync: upserting block scope: missing scope key")
 	}
 	if syncdomain.DescribeScopeKey(block.Key).IsZero() {
 		return fmt.Errorf("sync: upserting block scope %s: unknown scope key", block.Key.String())

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
 
@@ -264,7 +265,7 @@ func (rt *RetryTransport) handleNetworkError(req *http.Request, err error, attem
 	// only after some request gets a response again.
 	if attempt >= 1 && rt.notices().claimUnreachable() {
 		rt.Logger.Warn("can't reach OneDrive, retrying",
-			slog.String("retry_in", HumanDuration(backoff)),
+			slog.String("retry_in", humanunit.Duration(backoff, humanunit.Wait)),
 			slog.Int("attempt", attempt+1),
 			slog.Int("max_attempts", rt.Policy.MaxAttempts),
 			slog.Any("error", err),
@@ -404,7 +405,7 @@ func (rt *RetryTransport) announceLongWait(status int, wait time.Duration) {
 		msg = "OneDrive is limiting requests, waiting before retrying"
 	}
 
-	rt.Logger.Warn(msg, slog.String("retry_in", HumanDuration(wait)))
+	rt.Logger.Warn(msg, slog.String("retry_in", humanunit.Duration(wait, humanunit.Wait)))
 }
 
 // waitForThrottle blocks until the active throttle deadline passes. Called at

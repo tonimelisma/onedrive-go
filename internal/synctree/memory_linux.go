@@ -160,7 +160,7 @@ func nameParts(name string) ([]string, error) {
 		return nil, nil
 	}
 	if filepath.IsAbs(clean) || clean == parentName || strings.HasPrefix(clean, parentName+string(filepath.Separator)) {
-		return nil, fmt.Errorf("path escapes from parent")
+		return nil, errors.New("path escapes from parent")
 	}
 
 	return strings.Split(clean, string(filepath.Separator)), nil

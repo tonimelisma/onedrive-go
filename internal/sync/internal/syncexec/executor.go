@@ -56,7 +56,7 @@ type ExecutorConfig struct {
 	pathConvergence driveops.PathConvergence
 
 	// trash keeps what local deletes remove and what downloads replace
-	// (P-4). Nil only in executor-only tests; then removal is permanent.
+	// (R-6.4.9). Nil only in executor-only tests; then removal is permanent.
 	trash *localtrash.Trash
 
 	// pendingCreates records new files whose empty item exists before their
@@ -102,7 +102,7 @@ type ExecutorInputs struct {
 	SyncRootIdentity *syncdomain.SyncRootIdentity
 	PathConvergence  driveops.PathConvergence
 	// Trash keeps what local deletes remove and what downloads replace
-	// (P-4); nil makes removal permanent.
+	// (R-6.4.9); nil makes removal permanent.
 	Trash *localtrash.Trash
 	// PendingCreates records new files whose empty item exists before their
 	// content is sent (R-5.6.15).

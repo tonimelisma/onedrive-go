@@ -3,6 +3,7 @@ package e2e
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,7 +79,7 @@ type e2eTimingRecorder struct {
 
 func newE2ETimingRecorder(logDir string, roles testutil.DriveRoles) (*e2eTimingRecorder, error) {
 	if logDir == "" {
-		return nil, fmt.Errorf("timing recorder log dir is required")
+		return nil, errors.New("timing recorder log dir is required")
 	}
 
 	events, err := loadTimingEvents(filepath.Join(logDir, timingEventsFileName))

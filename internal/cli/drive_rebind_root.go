@@ -140,7 +140,7 @@ func confirmRebindRootIntent(
 		return nil
 	}
 	if !isWriterTTY(stdinAsWriter(stdin)) {
-		return fmt.Errorf("rebind-root requires confirmation; rerun with --yes or use an interactive terminal")
+		return errors.New("rebind-root requires confirmation; rerun with --yes or use an interactive terminal")
 	}
 	if err := writef(output, "Type REBIND to sync with this folder: "); err != nil {
 		return err
@@ -151,7 +151,7 @@ func confirmRebindRootIntent(
 		return fmt.Errorf("read rebind confirmation: %w", err)
 	}
 	if strings.TrimSpace(line) != "REBIND" {
-		return fmt.Errorf("rebind-root canceled: confirmation token did not match REBIND")
+		return errors.New("rebind-root canceled: confirmation token did not match REBIND")
 	}
 
 	return nil

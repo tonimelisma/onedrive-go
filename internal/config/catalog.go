@@ -146,7 +146,7 @@ func decodeCatalog(path string, data []byte) (*Catalog, error) {
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return nil, fmt.Errorf("decoding catalog: trailing data after top-level object")
+			return nil, errors.New("decoding catalog: trailing data after top-level object")
 		}
 		return nil, fmt.Errorf("decoding catalog trailing data: %w", err)
 	}

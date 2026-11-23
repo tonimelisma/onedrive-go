@@ -38,11 +38,13 @@ func ResetStateDB(ctx context.Context, dbPath string, logger *slog.Logger) error
 }
 
 // RemoveStateDBFiles deletes the SQLite DB family rooted at dbPath
-// (config.StateDBFamily), the database last.
+// (config.StateDBFamily), the database last. The wraps in this file keep
+// their verbs and leave the path to the error under them: a localpath
+// failure, and an *os.File's own read or close error, already names it.
 func RemoveStateDBFiles(dbPath string) error {
 	for _, candidate := range config.StateDBFamily(dbPath) {
 		if err := localpath.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove state DB file %s: %w", candidate, err)
+			return fmt.Errorf("remove state DB file: %w", err)
 		}
 	}
 
@@ -55,7 +57,7 @@ func RemoveStateDBSidecars(dbPath string) error {
 	family := config.StateDBFamily(dbPath)
 	for _, sidecar := range family[:len(family)-1] {
 		if err := localpath.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove state DB file %s: %w", sidecar, err)
+			return fmt.Errorf("remove state DB file: %w", err)
 		}
 	}
 
@@ -90,7 +92,7 @@ func MoveStateDBFamily(from, to string) error {
 				source, targets[i], source, source)
 		}
 		if renameErr := localpath.Rename(source, targets[i]); renameErr != nil {
-			return fmt.Errorf("move state DB file %s: %w", source, renameErr)
+			return fmt.Errorf("move state DB file: %w", renameErr)
 		}
 	}
 
@@ -105,7 +107,7 @@ func StateDBFileExists(path string) (bool, error) {
 	case errors.Is(err, os.ErrNotExist):
 		return false, nil
 	default:
-		return false, fmt.Errorf("check state DB file %s: %w", path, err)
+		return false, fmt.Errorf("check state DB file: %w", err)
 	}
 }
 
@@ -145,11 +147,11 @@ func FoldStateDBLog(ctx context.Context, dbPath string) error {
 func hasSQLiteHeader(dbPath string) (_ bool, err error) {
 	file, err := localpath.OpenRegular(dbPath)
 	if err != nil {
-		return false, fmt.Errorf("open state DB %s: %w", dbPath, err)
+		return false, fmt.Errorf("open state DB: %w", err)
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("close state DB %s: %w", dbPath, closeErr)
+			err = fmt.Errorf("close state DB: %w", closeErr)
 		}
 	}()
 
@@ -158,7 +160,7 @@ func hasSQLiteHeader(dbPath string) (_ bool, err error) {
 		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
 			return false, nil
 		}
-		return false, fmt.Errorf("read state DB %s: %w", dbPath, readErr)
+		return false, fmt.Errorf("read state DB: %w", readErr)
 	}
 
 	return string(header) == sqliteHeader, nil
@@ -192,4 +194,51 @@ func RebindSyncRoot(ctx context.Context, dbPath string, logger *slog.Logger) (er
 	}
 
 	return nil
+}
+
+// ForgetMountBoundary forgets that path, relative to the sync folder, was a
+// crossed mount point, keeping everything else, and reports whether it was
+// recorded. The next scan then reads the folder as an ordinary folder of the
+// sync folder's own disk: its content is compared with the baseline like any
+// other, so a disk's content restored into a plain folder is kept, not
+// deleted and uploaded again (R-6.2.18). The caller holds the store's
+// offline-change lock (LockDriveForOfflineChange) and has checked that the
+// folder holds content on the sync folder's disk: forgetting the record of an
+// empty folder would make a disk that is not mounted read as deletes.
+func ForgetMountBoundary(ctx context.Context, dbPath string, path string, logger *slog.Logger) (_ bool, err error) {
+	if logger != nil {
+		logger.Info("forgetting recorded mount point",
+			slog.String("db_path", dbPath),
+			slog.String("path", path),
+		)
+	}
+
+	store, err := NewSyncStore(ctx, dbPath, logger)
+	if err != nil {
+		return false, fmt.Errorf("open sync store: %w", err)
+	}
+	defer func() {
+		if closeErr := store.Close(ctx); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close sync store: %w", closeErr))
+		}
+	}()
+
+	result, err := store.db.ExecContext(ctx, `DELETE FROM mount_boundaries WHERE path = ?`, path)
+	if err != nil {
+		return false, fmt.Errorf("sync: forgetting mount boundary %s: %w", path, err)
+	}
+	removed, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("sync: forgetting mount boundary %s: %w", path, err)
+	}
+
+	return removed > 0, nil
+}
+
+// ReadMountBoundaries reads, through a read-only inspector, the folders the
+// drive's sync state at dbPath records as crossed mount points.
+func ReadMountBoundaries(ctx context.Context, dbPath string, logger *slog.Logger) ([]string, error) {
+	return readWithInspector(dbPath, logger, func(inspector *storeInspector) ([]string, error) {
+		return listMountBoundariesTx(ctx, inspector.db)
+	})
 }

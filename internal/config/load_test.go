@@ -1001,7 +1001,7 @@ ignore_junk_files = false
 
 	omitted := cfg.Drives[driveid.MustCanonicalID("personal:toni@outlook.com")]
 	assert.Nil(t, omitted.IgnoreJunkFiles)
-	assert.True(t, omitted.JunkFilesIgnored(), "junk is skipped unless a drive opts out (P-2)")
+	assert.True(t, omitted.JunkFilesIgnored(), "junk is skipped unless a drive opts out (R-2.4.14)")
 
 	optedOut := cfg.Drives[driveid.MustCanonicalID("business:alice@contoso.com")]
 	require.NotNil(t, optedOut.IgnoreJunkFiles)

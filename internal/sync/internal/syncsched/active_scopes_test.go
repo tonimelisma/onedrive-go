@@ -257,3 +257,29 @@ func TestFindBlockingScope_DiskLocal_DownloadsOnly(t *testing.T) {
 		})
 	}
 }
+
+// dueTrials returns the active scope keys whose trial is due at now. Scopes
+// with zero NextTrialAt are excluded.
+func dueTrials(blocks []syncdomain.ActiveScope, now time.Time) []syncdomain.ScopeKey {
+	var due []syncdomain.ScopeKey
+
+	for i := range blocks {
+		if blocks[i].NextTrialAt.IsZero() {
+			continue
+		}
+		if !now.Before(blocks[i].NextTrialAt) {
+			due = append(due, blocks[i].Key)
+		}
+	}
+
+	return due
+}
+
+// scopeKeys returns the active scope keys in slice order.
+func scopeKeys(blocks []syncdomain.ActiveScope) []syncdomain.ScopeKey {
+	keys := make([]syncdomain.ScopeKey, len(blocks))
+	for i := range blocks {
+		keys[i] = blocks[i].Key
+	}
+	return keys
+}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -17,7 +18,7 @@ const syncRootDirPerms = 0o700
 
 func materializeDriveSyncDir(syncDir string) error {
 	if syncDir == "" {
-		return fmt.Errorf("sync_dir is empty")
+		return errors.New("sync_dir is empty")
 	}
 
 	expanded := config.ExpandTilde(syncDir)

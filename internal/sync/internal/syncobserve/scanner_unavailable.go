@@ -23,10 +23,10 @@ import (
 //   - a synced path now occupied by a symlink sync does not follow, or by a
 //     FIFO, socket or device (D-004);
 //   - a synced item renamed to a name OneDrive refuses or a path too long, or
-//     into an excluded name such as a dotfile (D-004, P-5), recognized by its
+//     into an excluded name such as a dotfile (D-004, R-6.2.14), recognized by its
 //     filesystem identity reappearing under the skipped name;
 //   - a folder that is a mount point for another filesystem, which sync does
-//     not cross by default (D-003, P-11). The boundary is a read boundary, so
+//     not cross by default (D-003, R-6.2.15). The boundary is a read boundary, so
 //     whatever the baseline holds beneath it stays unavailable, and an
 //     unmounted disk leaves an empty folder that never held synced content.
 //
@@ -217,7 +217,7 @@ func (o *LocalObserver) recordSyncedItemMovedOutOfReach(
 
 // isForeignMountPoint records the folder's device and reports whether the
 // folder is the mount point of another filesystem that the scan must not
-// cross (P-11). Only current devices are compared (the folder and its parent,
+// cross (R-6.2.15). Only current devices are compared (the folder and its parent,
 // both read in this scan), because device numbers can change between boots.
 // A mount point crossed under cross_filesystems is remembered in the scan
 // result, so a later scan can tell its unmounted, empty folder from deleted

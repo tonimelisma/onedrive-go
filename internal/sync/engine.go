@@ -58,10 +58,8 @@ type Engine struct {
 	remoteRootDeltaCapable bool
 	logger                 *slog.Logger
 	perfCollector          *perf.Collector
-	sessionStore           *driveops.SessionStore // for CleanStale() housekeeping
-	trash                  *localtrash.Trash      // local deletes and replaced files (R-6.4.9)
-	transferWorkers        int                    // goroutine count for the worker pool
-	checkWorkers           int                    // goroutine limit for parallel file hashing
+	transferWorkers        int // goroutine count for the worker pool
+	checkWorkers           int // goroutine limit for parallel file hashing
 	contentFilter          syncdomain.ContentFilterConfig
 	// protectedRoots are the shortcut child roots below this mount, which
 	// observation and housekeeping leave alone; the set guards itself.
@@ -130,7 +128,7 @@ type Engine struct {
 // DriveID is zero.
 func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	if cfg.DriveID.IsZero() {
-		return nil, fmt.Errorf("sync: engine requires non-zero drive ID")
+		return nil, errors.New("sync: engine requires non-zero drive ID")
 	}
 
 	if !syncobserve.SyncRootExists(cfg.SyncRoot) {
@@ -189,8 +187,6 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		driveVerifier:          cfg.DriveVerifier,
 		folderDelta:            cfg.FolderDelta,
 		recursiveLister:        cfg.RecursiveLister,
-		sessionStore:           sessionStore,
-		trash:                  trash,
 		accountCanonicalID:     cfg.AccountCanonicalID,
 		dataDir:                cfg.DataDir,
 		syncRoot:               cfg.SyncRoot,
@@ -398,8 +394,8 @@ func (e *Engine) Close(ctx context.Context) error {
 	// Clean stale upload session files. A failure does not stop the close, but
 	// it is reported at Warn with the count removed, as after a sync pass: a
 	// session file that cannot be removed would otherwise go unseen.
-	if e.sessionStore != nil {
-		if n, err := e.sessionStore.CleanStale(driveops.StaleSessionAge); err != nil {
+	if e.upkeep != nil && e.upkeep.sessionStore != nil {
+		if n, err := e.upkeep.sessionStore.CleanStale(driveops.StaleSessionAge); err != nil {
 			e.logger.Warn("failed to clean stale sessions on close",
 				slog.Int("deleted", n),
 				slog.Any("error", err),
@@ -489,6 +485,7 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 	required bool,
 	proof driveIdentityProof,
 	proofErr error,
+	clearRequirement func(ctx context.Context, dataDir string, account driveid.CanonicalID) error,
 ) error {
 	if !required {
 		return nil
@@ -497,12 +494,12 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 		return nil
 	}
 	if !proof.attempted {
-		return fmt.Errorf("sync: revalidating catalog auth requirement: drive verifier required")
+		return errors.New("sync: revalidating catalog auth requirement: drive verifier required")
 	}
 	if proofErr != nil {
 		return proofErr
 	}
-	clearRequirement := e.hooks.clearAccountAuthRequirement
+	// clearRequirement is the run's hook (flow.hooks), nil in production.
 	if clearRequirement == nil {
 		clearRequirement = config.ClearAccountAuthRequirement
 	}

@@ -335,7 +335,7 @@ func fillMutationContentFromBaseline(mutation *syncdomain.BaselineMutation, base
 
 func PublicationMutationFromAction(action *syncdomain.Action, defaultDriveID driveid.ID) (*syncdomain.BaselineMutation, error) {
 	if action == nil {
-		return nil, fmt.Errorf("sync: building publication mutation: nil action")
+		return nil, errors.New("sync: building publication mutation: nil action")
 	}
 	if !action.Type.IsMember() || !syncdomain.IsPublicationOnlyActionType(action.Type) {
 		return nil, fmt.Errorf("sync: building publication mutation: %s is not publication-only", action.Type.String())
@@ -395,7 +395,7 @@ func PublicationMutationFromAction(action *syncdomain.Action, defaultDriveID dri
 // nothing can fail: an error always means nothing was committed.
 func (s *SyncStore) CommitMutation(ctx context.Context, outcome *syncdomain.BaselineMutation) (err error) {
 	if outcome == nil {
-		return fmt.Errorf("sync: commit mutation requires outcome")
+		return errors.New("sync: commit mutation requires outcome")
 	}
 
 	if !outcome.Success {

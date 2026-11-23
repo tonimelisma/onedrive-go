@@ -173,12 +173,12 @@ type dodReviewThreadGateSummary struct {
 
 func RunVerifyDOD(ctx context.Context, runner commandRunner, opts *VerifyOptions) error {
 	if opts == nil {
-		return fmt.Errorf("dod verify options are required")
+		return errors.New("dod verify options are required")
 	}
 	stdout, stderr := resolveVerifyWriters(opts)
 	stage := opts.DODStage
 	if stage == "" {
-		return fmt.Errorf("dod verify: --stage is required")
+		return errors.New("dod verify: --stage is required")
 	}
 	gh := newGHClient(runner, nil)
 
@@ -326,7 +326,7 @@ func runDODPrePR(ctx context.Context, runner commandRunner, gh ghClient, opts *V
 
 func runDODPreMerge(ctx context.Context, runner commandRunner, gh ghClient, opts *VerifyOptions, stdout io.Writer) error {
 	if opts.DODPR == 0 {
-		return fmt.Errorf("dod pre-merge: --pr is required")
+		return errors.New("dod pre-merge: --pr is required")
 	}
 	ciWait, err := newCIWaitConfig(opts, opts.RepoRoot, ciEventPullRequest, stdout)
 	if err != nil {
@@ -374,13 +374,13 @@ func runDODPreMergeNightly(
 
 func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opts *VerifyOptions, stdout, stderr io.Writer) error {
 	if opts.DODPR == 0 {
-		return fmt.Errorf("dod post-merge: --pr is required")
+		return errors.New("dod post-merge: --pr is required")
 	}
 	if opts.DODWorktree == "" {
-		return fmt.Errorf("dod post-merge: --worktree is required")
+		return errors.New("dod post-merge: --worktree is required")
 	}
 	if opts.DODBranch == "" {
-		return fmt.Errorf("dod post-merge: --branch is required")
+		return errors.New("dod post-merge: --branch is required")
 	}
 	// The wait's policy is read before the merge, so a missing workflow fails
 	// the stage while nothing has happened yet.
@@ -1279,7 +1279,7 @@ func mainWorktreePath(ctx context.Context, runner commandRunner, repoRoot string
 			return worktree.Path, nil
 		}
 	}
-	return "", fmt.Errorf("dod main worktree not found")
+	return "", errors.New("dod main worktree not found")
 }
 
 func cleanupMergedIncrement(

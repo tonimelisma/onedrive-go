@@ -89,6 +89,30 @@ func TestDefaultDataDir_XDGOverride(t *testing.T) {
 	assert.Equal(t, filepath.Join(xdgDir, appName), result)
 }
 
+// Validates: R-4.1.2
+//
+// A relative XDG root is ignored, as the XDG Base Directory specification
+// asks: the client keeps its data and config in the home folder's default,
+// never below whatever folder a command runs in.
+func TestDefaultDirs_IgnoreARelativeXDGRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	wantData, wantConfig := DefaultDataDir(), DefaultConfigDir()
+
+	t.Setenv("XDG_DATA_HOME", filepath.Join("relative", "data"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join("relative", "config"))
+
+	assert.Equal(t, wantData, DefaultDataDir())
+	assert.Equal(t, wantConfig, DefaultConfigDir())
+	assert.True(t, filepath.IsAbs(DefaultDataDir()), DefaultDataDir())
+
+	err := CheckDevSafe()
+	require.ErrorIs(t, err, ErrDevBuildUnsafe, "a relative root is no isolation")
+	assert.Contains(t, err.Error(), "(missing: XDG_DATA_HOME, XDG_CONFIG_HOME)")
+}
+
 func TestDefaultDataDir_XDGFallback(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 	require.NoError(t, os.Unsetenv("XDG_DATA_HOME"))

@@ -136,7 +136,7 @@ func StateDBFamilyExists(dbPath string) (bool, error) {
 		case err == nil:
 			return true, nil
 		case !errors.Is(err, os.ErrNotExist):
-			return false, fmt.Errorf("check state DB file %s: %w", candidate, err)
+			return false, fmt.Errorf("check state DB file: %w", err)
 		}
 	}
 

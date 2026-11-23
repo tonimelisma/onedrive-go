@@ -36,7 +36,7 @@ func runRecycleBinListWithFactory(
 	items, err := session.ListRecycleBinItems(ctx)
 	if err != nil {
 		if errors.Is(err, graph.ErrBadRequest) {
-			return fmt.Errorf("recycle bin listing is not available on Personal OneDrive accounts")
+			return errors.New("recycle bin listing is not available on Personal OneDrive accounts")
 		}
 
 		return fmt.Errorf("listing recycle bin: %w", err)
@@ -91,7 +91,7 @@ func runRecycleBinEmptyWithFactory(
 	sessionFactory recycleBinSessionFactory,
 ) error {
 	if !confirm {
-		return fmt.Errorf("--confirm flag required to permanently delete all recycle bin items")
+		return errors.New("--confirm flag required to permanently delete all recycle bin items")
 	}
 
 	session, err := sessionFactory(ctx)
@@ -102,7 +102,7 @@ func runRecycleBinEmptyWithFactory(
 	items, err := session.ListRecycleBinItems(ctx)
 	if err != nil {
 		if errors.Is(err, graph.ErrBadRequest) {
-			return fmt.Errorf("recycle bin listing is not available on Personal OneDrive accounts")
+			return errors.New("recycle bin listing is not available on Personal OneDrive accounts")
 		}
 
 		return fmt.Errorf("listing recycle bin: %w", err)

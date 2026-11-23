@@ -59,6 +59,7 @@ linters:
     - nilerr
     - nilnil
     - noctx
+    - perfsprint
     - nolintlint
     - rowserrcheck
     - sloglint
@@ -74,6 +75,20 @@ linters:
     - wrapcheck
 
   settings:
+    # An error whose message has no format verb is errors.New: perfsprint's
+    # errorf check alone, its other rewrites of fmt calls left off.
+    perfsprint:
+      integer-format: false
+      int-conversion: false
+      error-format: true
+      err-error: false
+      errorf: true
+      string-format: false
+      sprintf1: false
+      strconcat: false
+      bool-format: false
+      hex-format: false
+      concat-loop: false
     govet:
       enable-all: true
       disable:
@@ -289,6 +304,7 @@ linters:
             - "**/internal/driveid/*.go"
             - "**/internal/errclass/*.go"
             - "**/internal/filelock/*.go"
+            - "**/internal/humanunit/*.go"
             - "**/internal/localpath/*.go"
             - "**/internal/loglevel/*.go"
             - "**/internal/namekey/*.go"
@@ -314,16 +330,17 @@ linters:
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/
               desc: tokenfile imports no internal package but fsroot, through which every token file is read and written, and filelock, through which it is locked
-        retry-only-perf:
+        retry-only-perf-and-humanunit:
           list-mode: lax
           files:
             - "**/internal/retry/*.go"
             - "!$test"
           allow:
             - github.com/tonimelisma/onedrive-go/internal/perf$
+            - github.com/tonimelisma/onedrive-go/internal/humanunit$
           deny:
             - pkg: github.com/tonimelisma/onedrive-go/internal/
-              desc: retry imports no internal package but perf, which counts its retries
+              desc: retry imports no internal package but perf, which counts its retries, and humanunit, which words its waits
         fsroot-only-localpath:
           list-mode: lax
           files:

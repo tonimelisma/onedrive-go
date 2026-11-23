@@ -19,7 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
-func testRemoteCreateEvent(path string, itemID string, driveID string) syncdomain.RemoteItem {
+func testRemoteCreateItem(path string, itemID string, driveID string) syncdomain.RemoteItem {
 	return syncdomain.RemoteItem{ObservedItem: syncdomain.ObservedItem{
 		Path:     path,
 		ItemID:   itemID,
@@ -96,7 +96,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t
 	ctx := t.Context()
 
 	batch := buildPrimaryWatchBatch(eng.logger, nil, []syncdomain.RemoteItem{
-		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
+		testRemoteCreateItem("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
@@ -112,15 +112,16 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCommitsObservedRowsAndCursor(t
 func TestHandleRemoteObservationBatch_FilteredPrimaryWatchDoesNotMarkDirty(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.contentFilter = syncdomain.ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.ContentFilter = syncdomain.ContentFilterConfig{IgnoredDirs: []string{"hidden"}}
+	})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 	ctx := t.Context()
 
 	batch := buildPrimaryWatchBatch(eng.logger, nil, []syncdomain.RemoteItem{
-		testRemoteCreateEvent("hidden/remote.txt", "item-hidden", eng.driveID.String()),
+		testRemoteCreateItem("hidden/remote.txt", "item-hidden", eng.driveID.String()),
 	}, "cursor-hidden")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
@@ -204,7 +205,7 @@ func TestHandleRemoteObservationBatch_MountRootWatchCommitsObservedRowsAndPendin
 		eng.Engine,
 		syncdomain.RemoteObservationModeDelta,
 		[]syncdomain.RemoteItem{
-			testRemoteCreateEvent("shared-watch.txt", "item-shared", eng.driveID.String()),
+			testRemoteCreateItem("shared-watch.txt", "item-shared", eng.driveID.String()),
 		},
 		pendingCursor,
 		syncdomain.NewRemoteObservationFindingsBatch(),
@@ -306,7 +307,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchClearsRemoteReadDeniedFindings
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(ctx, &findings))
 
 	batch := buildPrimaryWatchBatch(eng.logger, nil, []syncdomain.RemoteItem{
-		testRemoteCreateEvent("primary-watch.txt", "item-primary", eng.driveID.String()),
+		testRemoteCreateItem("primary-watch.txt", "item-primary", eng.driveID.String()),
 	}, "cursor-primary")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
@@ -332,7 +333,7 @@ func TestHandleRemoteObservationBatch_PrimaryWatchCanceledContextReturnsCommitEr
 	cancel()
 
 	batch := buildPrimaryWatchBatch(eng.logger, nil, []syncdomain.RemoteItem{
-		testRemoteCreateEvent("primary-canceled.txt", "item-canceled", eng.driveID.String()),
+		testRemoteCreateItem("primary-canceled.txt", "item-canceled", eng.driveID.String()),
 	}, "cursor-canceled")
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.Error(t, err)

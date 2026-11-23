@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -302,7 +303,7 @@ func (rt *watchRuntime) handleWatchReplanSignal(
 			return false, nil
 		}
 
-		return false, fmt.Errorf("sync: dirty scheduler stopped unexpectedly")
+		return false, errors.New("sync: dirty scheduler stopped unexpectedly")
 	}
 
 	return false, rt.handleWatchReplanReady(ctx, p, batch)
@@ -474,7 +475,7 @@ func (rt *watchRuntime) handleObserverExit(_ *watchPipeline, shuttingDown bool) 
 	if rt.resources.lastObserverErr != nil {
 		return fmt.Errorf("sync: stopped watching for changes: %w", rt.resources.lastObserverErr)
 	}
-	return fmt.Errorf("sync: stopped watching for changes")
+	return errors.New("sync: stopped watching for changes")
 }
 
 // logObserverError reports one observer's exit while the other keeps
@@ -595,7 +596,7 @@ func (rt *watchRuntime) handleWatchCompletionsClosed(
 	default:
 	}
 
-	return fmt.Errorf("sync: action completions channel closed unexpectedly")
+	return errors.New("sync: action completions channel closed unexpectedly")
 }
 
 func (rt *watchRuntime) handleWatchObserverError(

@@ -2,6 +2,7 @@ package tokenfile
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"golang.org/x/oauth2"
@@ -9,7 +10,7 @@ import (
 
 func marshalTokenFile(tok *oauth2.Token) ([]byte, error) {
 	if tok == nil {
-		return nil, fmt.Errorf("tokenfile: refusing to save nil token")
+		return nil, errors.New("tokenfile: refusing to save nil token")
 	}
 
 	tf := File{Token: tok}

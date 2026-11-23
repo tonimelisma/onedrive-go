@@ -58,7 +58,11 @@ hold and its confirmation matching and for the store's delete ledger. A
 no product code read it, and it is gone with its type, as is a change event's
 source (`changeSource`), which every event carried and only one check read: a
 remote projection skipping events that were not remote, which no caller ever
-handed it.
+handed it. The local observer's entries are `LocalEntry` values, with only the
+fields a local entry has: the change type the remote side once set and the
+remote-only fields (item and parent IDs, drive, name, tags, the unknown-size
+mark, the re-upload mark) went with the old shared change event, which the
+remote side stopped using once it reported `RemoteItem` values.
 
 `IssueType` (`issue_types.go`) names every sync condition: the issue type of
 an observation issue, the condition type of a retry_work row, a scope's

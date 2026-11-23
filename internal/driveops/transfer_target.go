@@ -92,7 +92,7 @@ func (localTarget) Abs(name string) (string, error) {
 }
 
 // newFileMode is the mode for a downloaded file that replaces nothing:
-// 0666 minus the process umask, what any other program would create (P-8).
+// 0666 minus the process umask, what any other program would create (R-5.10.2).
 // Partials stay 0600 while they are written, because they may hold personal
 // data before the rename publishes them. The umask is probed once per
 // TransferManager.
@@ -169,7 +169,7 @@ func probeUmaskWithFile() os.FileMode {
 // downloadedFileMode is the mode the finished download gets: the replaced
 // target's permission bits (Perm drops setuid, setgid and sticky, which new
 // bytes must not inherit), so +x and group access survive every remote edit,
-// or the umask default for a new file (D-044, P-8). Downloads used to be
+// or the umask default for a new file (D-044, R-5.10.2). Downloads used to be
 // 0600 always, and a replaced file lost its mode on every remote edit.
 func (tm *TransferManager) downloadedFileMode(target TargetFS, targetName string) (os.FileMode, error) {
 	info, err := target.Stat(targetName)

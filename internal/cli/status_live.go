@@ -13,8 +13,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
-	"github.com/tonimelisma/onedrive-go/internal/retry"
 )
 
 // statusLiveBudget is how long status waits for OneDrive's live details,
@@ -175,7 +175,7 @@ func statusLiveUnansweredReason(ctx, askCtx context.Context, err error) string {
 	// The context's cause, not the error chain: a response body cut off by
 	// the budget reports the context's error without its cause.
 	case errors.Is(context.Cause(askCtx), errStatusLiveBudgetSpent):
-		return "OneDrive did not answer within " + retry.HumanDuration(statusLiveBudget)
+		return "OneDrive did not answer within " + humanunit.Duration(statusLiveBudget, humanunit.Wait)
 	default:
 		return plainErrorReason(err)
 	}
@@ -324,10 +324,10 @@ func statusStorageFromGraphDrive(drive graph.Drive) statusStorage {
 	storage := statusStorage{
 		UsedBytes:  drive.QuotaUsed,
 		TotalBytes: drive.QuotaTotal,
-		Used:       formatSize(drive.QuotaUsed),
+		Used:       humanunit.Size(drive.QuotaUsed),
 	}
 	if drive.QuotaTotal > 0 {
-		storage.Total = formatSize(drive.QuotaTotal)
+		storage.Total = humanunit.Size(drive.QuotaTotal)
 	}
 	return storage
 }

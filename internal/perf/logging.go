@@ -242,7 +242,6 @@ func appendStaleWorkSnapshotAttrs(attrs *[]slog.Attr, snapshot *Snapshot) {
 	appendIntAttr(attrs, "superseded_pending_replan_retirement", snapshot.SupersededPendingReplanRetirementCount)
 	appendIntAttr(attrs, "local_obs_scoped_commits", snapshot.LocalObservationScopedCommitCount)
 	appendIntAttr(attrs, "local_obs_scoped_upserts", snapshot.LocalObservationScopedUpsertCount)
-	appendIntAttr(attrs, "local_obs_exact_deletes", snapshot.LocalObservationExactDeleteCount)
 	appendIntAttr(attrs, "local_obs_prefix_deletes", snapshot.LocalObservationPrefixDeleteCount)
 	appendIntAttr(attrs, "local_obs_full_snapshot_replacements", snapshot.LocalObservationFullSnapshotReplacementCount)
 	appendIntAttr(attrs, "local_obs_suspect_dropped_events", snapshot.LocalObservationSuspectDroppedEventsCount)

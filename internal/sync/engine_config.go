@@ -2,7 +2,7 @@ package sync
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -55,22 +55,22 @@ func NewMountEngine(
 	verifyDrive bool,
 ) (*Engine, error) {
 	if session == nil {
-		return nil, fmt.Errorf("sync: session is required")
+		return nil, errors.New("sync: session is required")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if mountCfg == nil {
-		return nil, fmt.Errorf("sync: mount config is required")
+		return nil, errors.New("sync: mount config is required")
 	}
 	if mountCfg.SyncRoot == "" {
-		return nil, fmt.Errorf("sync: sync root is required")
+		return nil, errors.New("sync: sync root is required")
 	}
 	if mountCfg.DBPath == "" {
-		return nil, fmt.Errorf("sync: state DB path is required")
+		return nil, errors.New("sync: state DB path is required")
 	}
 	if mountCfg.DriveID.IsZero() {
-		return nil, fmt.Errorf("sync: drive ID is required")
+		return nil, errors.New("sync: drive ID is required")
 	}
 
 	pathConvergence := driveops.NewMountSession(session, mountCfg.RemoteRootItemID)

@@ -1,6 +1,7 @@
 package multisync
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -48,7 +49,7 @@ func TestClassifyShortcutChildDrainResultsOnlyCleanIsAckable(t *testing.T) {
 				Failed:         1,
 				LastPassFailed: 1,
 				Errors: []error{
-					fmt.Errorf("upload blocked"),
+					errors.New("upload blocked"),
 				},
 			},
 		},

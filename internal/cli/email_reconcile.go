@@ -329,7 +329,7 @@ func (cc *CLIContext) applyEmailReconcileResult(result *config.EmailReconcileRes
 
 func (cc *CLIContext) reloadResolvedDriveFromFlags() error {
 	if cc == nil {
-		return fmt.Errorf("BUG: CLIContext is nil")
+		return errors.New("BUG: CLIContext is nil")
 	}
 
 	driveSelector, err := cc.Flags.SingleDrive()

@@ -2,6 +2,7 @@ package syncexec
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -248,7 +249,7 @@ func TestWorkerPool_SendResultDropsWhenContextCancellationWins(t *testing.T) {
 			Type: syncdomain.ActionUpload,
 			Path: "dropped.txt",
 		},
-	}, nil, fmt.Errorf("shutdown won"))
+	}, nil, errors.New("shutdown won"))
 
 	require.Len(t, pool.completions, 1, "canceled sendResult should not enqueue another item")
 
@@ -469,7 +470,7 @@ func TestWorkerPool_FailedOutcome(t *testing.T) {
 	// Configure a download mock that always fails.
 	cfg.downloads = &syncfixture.WorkerMockDownloader{
 		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
-			return 0, fmt.Errorf("simulated download failure")
+			return 0, errors.New("simulated download failure")
 		},
 	}
 	cfg.transferMgr = driveops.NewTransferManager(cfg.downloads, cfg.uploads, nil, synctest.TestLogger(t))
@@ -829,7 +830,7 @@ func TestExtractHTTPStatus_WrappedGraphError(t *testing.T) {
 func TestExtractHTTPStatus_NonGraphError(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, 0, syncdomain.ExtractHTTPStatus(fmt.Errorf("network timeout")))
+	assert.Equal(t, 0, syncdomain.ExtractHTTPStatus(errors.New("network timeout")))
 }
 
 func TestExtractHTTPStatus_Nil(t *testing.T) {
@@ -854,7 +855,7 @@ func TestEngineOwnsCounters(t *testing.T) {
 	cfg.downloads = &syncfixture.WorkerMockDownloader{
 		DownloadFn: func(_ context.Context, _ driveid.ID, itemID string, w io.Writer) (int64, error) {
 			if itemID == "fail-id" {
-				return 0, fmt.Errorf("simulated failure")
+				return 0, errors.New("simulated failure")
 			}
 			n, err := w.Write([]byte("ok"))
 			return int64(n), err

@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 )
 
 func newStatCmd() *cobra.Command {
@@ -113,7 +114,7 @@ func printStatText(w io.Writer, item *graph.Item, opts statPrintOptions) error {
 	if err := writef(w, "Type:     %s\n", itemType(item)); err != nil {
 		return err
 	}
-	if err := writef(w, "Size:     %s (%s)\n", formatSize(item.Size), countOf(item.Size, "byte")); err != nil {
+	if err := writef(w, "Size:     %s (%s)\n", humanunit.Size(item.Size), countOf(item.Size, "byte")); err != nil {
 		return err
 	}
 	if err := writef(w, "Modified: %s\n", formatExactTime(item.ModifiedAt)); err != nil {

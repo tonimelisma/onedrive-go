@@ -45,7 +45,7 @@ func runFailedTestVerification(
 	failedLogPath string,
 ) error {
 	if failedLogPath == "" {
-		return fmt.Errorf("verify failed-test: --failed-log is required")
+		return errors.New("verify failed-test: --failed-log is required")
 	}
 
 	return collector.runStep(failedTestRerunStepName, func() error {
@@ -174,7 +174,7 @@ func lastFailedGoTestTarget(log string) (failedGoTestTarget, error) {
 	parsed := parseGoTestLog(log)
 	last, ok := parsed.lastFailure()
 	if !ok {
-		return failedGoTestTarget{}, fmt.Errorf("verify failed-test: no failed Go test found in log")
+		return failedGoTestTarget{}, errors.New("verify failed-test: no failed Go test found in log")
 	}
 	replay, err := replayOfFailure(seedReplaysFromLog(log), last)
 	if err != nil {

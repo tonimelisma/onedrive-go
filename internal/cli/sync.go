@@ -121,7 +121,7 @@ func resolveSyncDryRun(cfgDryRun bool, override *bool, watch bool) (bool, error)
 	}
 
 	if watch && effectiveDryRun {
-		return false, fmt.Errorf("watch mode does not support dry-run; disable config dry_run or pass --dry-run=false")
+		return false, errors.New("watch mode does not support dry-run; disable config dry_run or pass --dry-run=false")
 	}
 
 	return effectiveDryRun, nil
@@ -146,7 +146,7 @@ func syncModeFromFlags(cmd *cobra.Command) syncdomain.SyncMode {
 
 const allowRootFlag = "allow-root"
 
-// errSyncAsRoot is the refusal to sync as root without --allow-root (P-9).
+// errSyncAsRoot is the refusal to sync as root without --allow-root (R-6.3.7).
 // A root sync writes root-owned files and folders into the user's sync
 // folder, which the user's own later syncs, editors and backups then cannot
 // change or delete; it is almost always an accident (sudo, a system unit

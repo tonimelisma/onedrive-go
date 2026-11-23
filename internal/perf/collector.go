@@ -90,7 +90,6 @@ type Snapshot struct {
 
 	LocalObservationScopedCommitCount            int `json:"local_observation_scoped_commit_count,omitempty"`
 	LocalObservationScopedUpsertCount            int `json:"local_observation_scoped_upsert_count,omitempty"`
-	LocalObservationExactDeleteCount             int `json:"local_observation_exact_delete_count,omitempty"`
 	LocalObservationPrefixDeleteCount            int `json:"local_observation_prefix_delete_count,omitempty"`
 	LocalObservationFullSnapshotReplacementCount int `json:"local_observation_full_snapshot_replacement_count,omitempty"`
 	LocalObservationSuspectDroppedEventsCount    int `json:"local_observation_suspect_dropped_events_count,omitempty"`
@@ -280,11 +279,10 @@ func (c *Collector) RecordSuperseded(source SupersededSource, count int) {
 	})
 }
 
-func (c *Collector) RecordLocalObservationScopedCommit(upserts, exactDeletes, prefixDeletes int) {
+func (c *Collector) RecordLocalObservationScopedCommit(upserts, prefixDeletes int) {
 	c.apply(func(snapshot *Snapshot) {
 		snapshot.LocalObservationScopedCommitCount++
 		snapshot.LocalObservationScopedUpsertCount += upserts
-		snapshot.LocalObservationExactDeleteCount += exactDeletes
 		snapshot.LocalObservationPrefixDeleteCount += prefixDeletes
 	})
 }

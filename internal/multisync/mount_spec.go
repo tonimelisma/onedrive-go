@@ -1,6 +1,7 @@
 package multisync
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -174,23 +175,6 @@ func buildStandaloneMountSpecs(configs []StandaloneMountConfig) ([]*mountSpec, e
 	}
 
 	return mounts, nil
-}
-
-func buildRuntimeWork(
-	standaloneMounts []StandaloneMountConfig,
-	snapshots map[mountID]syncshortcut.ShortcutChildWorkSnapshot,
-	dataDir string,
-) (*runtimeWorkSet, error) {
-	parents, err := buildStandaloneMountSpecs(standaloneMounts)
-	if err != nil {
-		return nil, err
-	}
-	decisions, err := buildRuntimeWorkForParents(parents, snapshots, dataDir, nil)
-	if err != nil {
-		return nil, err
-	}
-	decisions.CleanupScopeAllParents = true
-	return decisions, nil
 }
 
 func buildRuntimeWorkForParents(
@@ -373,7 +357,7 @@ func buildStandaloneMountSpec(cfg *StandaloneMountConfig) (*mountSpec, error) {
 
 func newParentMountSpec(cfg *StandaloneMountConfig) (parentMountSpec, error) {
 	if cfg == nil || cfg.CanonicalID.IsZero() {
-		return parentMountSpec{}, fmt.Errorf("standalone mount canonical ID is required")
+		return parentMountSpec{}, errors.New("standalone mount canonical ID is required")
 	}
 	if cfg.StatePath == "" {
 		return parentMountSpec{}, fmt.Errorf("state path is required for %s", cfg.CanonicalID)
@@ -446,7 +430,7 @@ func buildChildMountFromCommand(
 	dataDir string,
 ) (*mountSpec, error) {
 	if parent == nil || command == nil {
-		return nil, fmt.Errorf("parent-declared child run command is incomplete")
+		return nil, errors.New("parent-declared child run command is incomplete")
 	}
 	childMountID, err := validateChildRunCommand(command)
 	if err != nil {
@@ -737,13 +721,6 @@ func (m *mountSpec) childParentMountID() mountID {
 
 func (m *mountSpec) isFinalDrainChild() bool {
 	return m != nil && m.child != nil && m.child.mode == syncshortcut.ShortcutChildRunModeFinalDrain
-}
-
-func (m *mountSpec) expectedChildRootIdentity() *syncshortcut.ShortcutRootIdentity {
-	if m == nil || m.child == nil {
-		return nil
-	}
-	return m.child.engine.LocalRootIdentity
 }
 
 func (m *mountSpec) shortcutChildAckRef() syncshortcut.ShortcutChildAckRef {

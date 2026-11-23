@@ -44,7 +44,8 @@ const (
 	cmdE2EFullCompile   = cmdUnitTests + 1
 	cmdTaggedVetE2E     = cmdE2EFullCompile + 1
 	cmdTaggedVetInteg   = cmdTaggedVetE2E + 1
-	cmdE2EAuthPreflight = cmdTaggedVetInteg + 1
+	cmdTaggedVetRace    = cmdTaggedVetInteg + 1
+	cmdE2EAuthPreflight = cmdTaggedVetRace + 1
 	cmdE2EFastPreflight = cmdE2EAuthPreflight + 1
 	cmdE2ESuite         = cmdE2EFastPreflight + 1
 
@@ -246,6 +247,7 @@ func TestRunVerifyPublicRunsExpectedSteps(t *testing.T) {
 		"go test -c",
 		"go vet -tags=e2e e2e_full",
 		"go vet -tags=integration",
+		"go vet -tags=race",
 	}, gotSequence)
 
 	e2eCompile := runner.runCommands[cmdE2EFullCompile]

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -51,7 +52,7 @@ func ensureCatalogDriveRecordForDrive(
 	switch {
 	case cid.IsPersonal(), cid.IsBusiness():
 		if fetch == nil {
-			return fmt.Errorf("recover: nil fetcher")
+			return errors.New("recover: nil fetcher")
 		}
 
 		recoveredDrive, fetchErr := fetch(ctx, driveID)
@@ -59,7 +60,7 @@ func ensureCatalogDriveRecordForDrive(
 			return fmt.Errorf("recover: %w", fetchErr)
 		}
 		if recoveredDrive == nil || recoveredDrive.RemoteDriveID == "" {
-			return fmt.Errorf("recover: empty drive ID")
+			return errors.New("recover: empty drive ID")
 		}
 
 		recoveredDrive.CanonicalID = cid.String()
@@ -77,12 +78,12 @@ func ensureCatalogDriveRecordForDrive(
 		return nil
 
 	case cid.IsSharePoint():
-		return fmt.Errorf("missing catalog drive record for SharePoint test drive; re-run scripts/bootstrap-test-credentials.sh")
+		return errors.New("missing catalog drive record for SharePoint test drive; re-run scripts/bootstrap-test-credentials.sh")
 
 	case cid.IsShared():
-		return fmt.Errorf("missing catalog drive record for shared-root test drive; re-run scripts/bootstrap-test-credentials.sh")
+		return errors.New("missing catalog drive record for shared-root test drive; re-run scripts/bootstrap-test-credentials.sh")
 
 	default:
-		return fmt.Errorf("missing catalog drive record for unsupported test drive")
+		return errors.New("missing catalog drive record for unsupported test drive")
 	}
 }

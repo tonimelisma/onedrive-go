@@ -28,8 +28,16 @@ import (
 func newSingleOwnerEngine(t *testing.T) *testEngine {
 	t.Helper()
 
+	return newSingleOwnerEngineWith(t, nil)
+}
+
+// newSingleOwnerEngineWith is newSingleOwnerEngine with a last word on the
+// engine's inputs.
+func newSingleOwnerEngineWith(t *testing.T, configure func(*engineInputs)) *testEngine {
+	t.Helper()
+
 	mock := &syncfixture.EngineMockClient{}
-	eng, _ := newTestEngine(t, mock)
+	eng, _ := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), configure)
 	eng.hooks.clock = syncfixture.NewManualClock(time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC))
 	setupWatchEngine(t, eng)
 
@@ -425,10 +433,10 @@ func installManualClockForTestEngine(eng *testEngine, clock *syncfixture.ManualC
 	}
 
 	if rt, ok := lookupTestWatchRuntime(eng); ok {
-		rt.deps = newRuntimeDeps(eng.Engine)
+		rt.deps = newRuntimeDeps(eng.Engine, &eng.hooks)
 	}
 	if flow, ok := lookupTestEngineFlow(eng); ok {
-		flow.deps = newRuntimeDeps(eng.Engine)
+		flow.deps = newRuntimeDeps(eng.Engine, &eng.hooks)
 	}
 }
 

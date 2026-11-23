@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -171,4 +172,28 @@ func TestLogout_ACanonicalIDSelectorRemovesOnlyThatAccount(t *testing.T) {
 			assert.Contains(t, cfg.Drives, other, "the other account's drive section stays")
 		})
 	}
+}
+
+// A logout whose catalog cannot be read falls back to its recovery load, and
+// the config's warning (an unknown key) is logged once, not once for the
+// failed validated load and again for the recovery load of the same file.
+//
+// Validates: R-3.1.3
+func TestLogout_AnUnreadableCatalogWarnsOfTheConfigOnce(t *testing.T) {
+	setTestDriveHome(t)
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("made_up_logout_key = true\n"), 0o600))
+	catalogPath := config.CatalogPathForDataDir(config.DefaultDataDir())
+	require.NoError(t, os.MkdirAll(filepath.Dir(catalogPath), 0o700))
+	require.NoError(t, os.WriteFile(catalogPath, []byte("{not a catalog"), 0o600))
+
+	var logs bytes.Buffer
+	cc := newCommandContext(&bytes.Buffer{}, cfgPath)
+	cc.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	//nolint:errcheck // with no account signed in the logout's outcome is not under test, only its warnings
+	runLogoutWithContext(t.Context(), cc, false)
+
+	assert.Contains(t, logs.String(), "logout recovery could not load catalog")
+	assert.Equal(t, 1, strings.Count(logs.String(), "made_up_logout_key"), logs.String())
 }

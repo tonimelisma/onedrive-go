@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 )
 
 func newRecycleBinCmd() *cobra.Command {
@@ -103,7 +104,7 @@ func printRecycleBinTable(w io.Writer, items []graph.Item) error {
 	for i := range items {
 		rows = append(rows, []string{
 			items[i].Name,
-			formatSize(items[i].Size),
+			humanunit.Size(items[i].Size),
 			itemType(&items[i]),
 			formatTime(items[i].ModifiedAt),
 			items[i].ID,

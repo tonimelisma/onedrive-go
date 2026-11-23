@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -65,7 +66,7 @@ func (o *Orchestrator) retireWatchRunner(ctx context.Context, runners map[mountI
 
 	o.requestWatchRunnerStop(wr)
 	if !o.waitWithin(wr.done, watchRunnerStopTimeout-o.clockNow().Sub(wr.stopRequestedAt)) {
-		return o.markWatchRunnerStuck(wr, "waited "+humanDelay(watchRunnerStopTimeout))
+		return o.markWatchRunnerStuck(wr, "waited "+humanunit.Duration(watchRunnerStopTimeout, humanunit.Wait))
 	}
 	if err := o.closeEngineWithin(ctx, wr.mount, wr.engine); err != nil {
 		wr.stuckErr = err

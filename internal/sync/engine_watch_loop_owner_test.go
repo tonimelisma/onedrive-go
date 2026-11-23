@@ -368,9 +368,8 @@ func TestWatchRuntime_IdleReplanLocalObservationFailureReschedulesDirtySignal(t 
 func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	t.Parallel()
 
-	eng := newSingleOwnerEngine(t)
-	eng.perfCollector = perf.NewCollector(nil)
-	eng.transferWorkers = 2
+	eng := newSingleOwnerEngineWith(t, func(inputs *engineInputs) { inputs.PerfCollector = perf.NewCollector(nil) })
+	eng.transferWorkers = 2 // below the pool's floor: the pools run four workers
 	recorder := attachDebugEventRecorder(eng)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
@@ -402,7 +401,7 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 			event.Count == 1 &&
 			event.Outbox == 1 &&
 			event.Running == 0 &&
-			event.IdleWorkers == 2
+			event.IdleWorkers == 4
 	}, 1, "pending replan should record queue and idle-worker counters before retiring old outbox")
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
 		return event.Type == syncdomain.EngineDebugEventOldOutboxRetired &&
@@ -411,7 +410,7 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 			event.Count == 1 &&
 			event.Outbox == 0 &&
 			event.Running == 0 &&
-			event.IdleWorkers == 2
+			event.IdleWorkers == 4
 	}, 1, "retired outbox instrumentation should record timestamped post-retirement counters")
 }
 
@@ -419,9 +418,8 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *testing.T) {
 	t.Parallel()
 
-	eng := newSingleOwnerEngine(t)
-	eng.perfCollector = perf.NewCollector(nil)
-	eng.transferWorkers = 2
+	eng := newSingleOwnerEngineWith(t, func(inputs *engineInputs) { inputs.PerfCollector = perf.NewCollector(nil) })
+	eng.transferWorkers = 2 // below the pool's floor: the pools run four workers
 	clock := syncfixture.NewManualClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	advance := clock.Advance
 	installManualClockForTestEngine(eng, clock)
@@ -470,7 +468,7 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 		return event.Type == syncdomain.EngineDebugEventWaitingForRunningActions &&
 			!event.At.IsZero() &&
 			event.Running == 1 &&
-			event.IdleWorkers == 1
+			event.IdleWorkers == 3
 	}, 1, "pending replan should record that old running work is still draining")
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
 		return event.Type == syncdomain.EngineDebugEventOldOutboxRetired &&
@@ -479,7 +477,7 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 			event.Count == 1 &&
 			event.Outbox == 0 &&
 			event.Running == 0 &&
-			event.IdleWorkers == 2
+			event.IdleWorkers == 4
 	}, 1, "ready dependents released by old running work should be timestamped as retired frontier")
 }
 

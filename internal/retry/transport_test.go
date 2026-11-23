@@ -1273,29 +1273,11 @@ func TestRetryTransport_LongRateLimitWaitIsAnnouncedOnce(t *testing.T) {
 
 			assert.Equal(t, tt.wantWarns, warnMessages(t, logBuf.Bytes()),
 				"two throttled attempts in one episode produce at most one line")
+			if tt.wantWarns != nil {
+				assert.Contains(t, logBuf.String(), `"retry_in":"2 min"`, "the wait is said in human units")
+			}
 			assert.Len(t, slept, 2)
 		})
-	}
-}
-
-// Validates: R-6.6.8
-func TestHumanDuration(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		in   time.Duration
-		want string
-	}{
-		{in: 0, want: "1 s"},
-		{in: 400 * time.Millisecond, want: "1 s"},
-		{in: 2100 * time.Millisecond, want: "2 s"},
-		{in: 59 * time.Second, want: "59 s"},
-		{in: 2 * time.Minute, want: "2 min"},
-		{in: 90 * time.Second, want: "1 min 30 s"},
-	}
-
-	for _, tt := range tests {
-		assert.Equal(t, tt.want, retry.HumanDuration(tt.in), tt.in.String())
 	}
 }
 

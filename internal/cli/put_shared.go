@@ -10,6 +10,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 )
 
 func runSharedPut(cmd *cobra.Command, args []string, cc *CLIContext, fi os.FileInfo) error {
@@ -32,7 +33,7 @@ func runSharedPut(cmd *cobra.Command, args []string, cc *CLIContext, fi os.FileI
 	}
 
 	progress := func(uploaded, total int64) {
-		cc.Progressf("Uploading: %s / %s", formatSize(uploaded), formatSize(total))
+		cc.Progressf("Uploading: %s / %s", humanunit.Size(uploaded), humanunit.Size(total))
 	}
 
 	store := driveops.NewSessionStore(config.DefaultDataDir(), cc.Logger)
@@ -60,7 +61,7 @@ func runSharedPut(cmd *cobra.Command, args []string, cc *CLIContext, fi os.FileI
 		})
 	}
 
-	cc.Statusf("Uploaded %s (%s)\n", cc.SharedTarget.Selector(), formatSize(fi.Size()))
+	cc.Statusf("Uploaded %s (%s)\n", cc.SharedTarget.Selector(), humanunit.Size(fi.Size()))
 
 	return nil
 }

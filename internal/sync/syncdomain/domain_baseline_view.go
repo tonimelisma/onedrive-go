@@ -78,17 +78,3 @@ func (b *BaselineSnapshot) ForEachPath(fn func(path string, entry BaselineEntry)
 		fn(path, *entry)
 	}
 }
-
-// CopyBaselineEntries returns the values of entries, or nil for none: what a
-// view hands out instead of the pointers it indexes.
-func CopyBaselineEntries(entries []*BaselineEntry) []BaselineEntry {
-	if len(entries) == 0 {
-		return nil
-	}
-	values := make([]BaselineEntry, len(entries))
-	for i, entry := range entries {
-		values[i] = *entry
-	}
-
-	return values
-}

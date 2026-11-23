@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -243,7 +244,7 @@ func shortcutSentinelReachable(
 	t.Helper()
 
 	if fixture.SharedItem.Selector == "" {
-		return fmt.Errorf("shortcut shared target selector was not resolved")
+		return errors.New("shortcut shared target selector was not resolved")
 	}
 
 	downloadRoot := filepath.Join(t.TempDir(), "shared-target")
@@ -655,7 +656,7 @@ func resolveSharedFileFixture(t *testing.T, rawLink string) resolvedSharedFileFi
 func discoverSharedFileFixture(_ *testing.T, rawLink string) (resolvedSharedFileFixture, error) {
 	candidateDriveIDs := sharedFixtureCandidateDriveIDs()
 	if len(candidateDriveIDs) == 0 {
-		return resolvedSharedFileFixture{}, fmt.Errorf("shared-file fixture requires at least one configured drive candidate")
+		return resolvedSharedFileFixture{}, errors.New("shared-file fixture requires at least one configured drive candidate")
 	}
 
 	var candidates []sharedFileCandidate

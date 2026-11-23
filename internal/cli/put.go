@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -103,7 +104,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 	}
 
 	progress := func(uploaded, total int64) {
-		cc.Progressf("Uploading: %s / %s", formatSize(uploaded), formatSize(total))
+		cc.Progressf("Uploading: %s / %s", humanunit.Size(uploaded), humanunit.Size(total))
 	}
 
 	store := driveops.NewSessionStore(config.DefaultDataDir(), logger)
@@ -132,7 +133,7 @@ func runPut(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	cc.Statusf("Uploaded %s (%s)\n", putPrintedPath(remotePath), formatSize(fi.Size()))
+	cc.Statusf("Uploaded %s (%s)\n", putPrintedPath(remotePath), humanunit.Size(fi.Size()))
 
 	return nil
 }

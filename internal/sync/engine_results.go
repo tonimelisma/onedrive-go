@@ -5,7 +5,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -206,13 +205,6 @@ func (e *Engine) nowFunc() time.Time {
 
 func (e *Engine) since(start time.Time) time.Duration {
 	return e.nowFunc().Sub(start)
-}
-
-// workerPoolSize is how many workers this engine's pools run: the configured
-// transfer workers with the pool's floor, or one when serialized (D-090). It
-// is the ceiling a fresh plan's slow start doubles toward (R-6.8.25).
-func (e *Engine) workerPoolSize() int {
-	return syncexec.PoolWorkerCount(e.transferWorkers, e.hooks.serializeWorkers)
 }
 
 // resultStats returns the engine-owned counters and error list.

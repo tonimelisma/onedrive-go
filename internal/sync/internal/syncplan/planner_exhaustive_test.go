@@ -939,7 +939,7 @@ func (w *exWorld) planPass() *syncdomain.ActionPlan {
 // it was synced and whose name OneDrive takes for a synced sibling's still
 // here, or for another such entry's, and what lies below it.
 func (w *exWorld) localCaseCollisions() []string {
-	var events []syncdomain.ChangeEvent
+	var events []syncdomain.LocalEntry
 	names := make(syncobserve.ScanNames)
 	for _, p := range sortedKeys(w.local) {
 		item := w.local[p]
@@ -948,7 +948,7 @@ func (w *exWorld) localCaseCollisions() []string {
 		if synced && row.folder == item.folder && row.inode == item.inode && (item.folder || row.localContent == item.content) {
 			continue
 		}
-		events = append(events, syncdomain.ChangeEvent{Path: p, ItemType: pmType(item.folder)})
+		events = append(events, syncdomain.LocalEntry{Path: p, ItemType: pmType(item.folder)})
 	}
 	_, skipped := syncobserve.DetectCaseCollisions(events, names)
 	paths := make([]string, 0, len(skipped))

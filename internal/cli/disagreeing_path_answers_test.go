@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	stdsync "sync"
 	"testing"
 	"time"
@@ -227,4 +229,95 @@ func TestRunPut_UploadsNothingWhereAnswersNameDifferentFolders(t *testing.T) {
 			})
 		}
 	}
+}
+
+// requireOneSentenceWithoutItemIDs asserts that the error of a command whose
+// answers for path disagree prints one sentence that names path once and no
+// item ID, and that --verbose's details keep the chain with the IDs.
+func requireOneSentenceWithoutItemIDs(t *testing.T, err error, path string) {
+	t.Helper()
+
+	plain := commandErrorText(err, false)
+	assert.Equal(t, "Error: OneDrive's answers for "+path+" do not agree on which folder holds it. "+
+		"This usually settles within a few minutes: wait, then check it and run the command again.", plain)
+	for _, id := range []string{"x-c", "x-b", "c-id", "right-f", "right-d"} {
+		assert.NotContains(t, plain, id, "no item ID in the sentence")
+	}
+
+	verbose := commandErrorText(err, true)
+	_, details, found := strings.Cut(verbose, "\nDetails: ")
+	require.True(t, found, verbose)
+	assert.Contains(t, details, "x-c", "--verbose keeps the chain, item IDs included")
+	assert.Equal(t, 1, strings.Count(verbose, "Error: "), "the error is printed once")
+}
+
+// A command whose path's answers disagree says so in one sentence of its own
+// that names the path once and no item ID, rm before it deletes anything and
+// put at the end of its wait for its folder alike; --verbose's details keep
+// the chain. The sentence does not say that nothing changed: a confirmation
+// wait meets the same disagreement after its change landed.
+//
+// Validates: R-6.6.26, R-6.7.22
+func TestCommandErrorText_DisagreeingAnswersForAPathAreOneSentence(t *testing.T) {
+	for shape, answers := range disagreeingShapes() {
+		t.Run(shape+"/rm", func(t *testing.T) {
+			setTestDriveHome(t)
+			fake := &disagreeingDrive{t: t, answers: answers}
+			cc := disagreeingDriveContext(t, fake)
+
+			run := runFileCommand(t, "onedrive-go rm", cc, false, "/a/b/c/f.txt")
+
+			require.ErrorIs(t, run.err, graph.ErrPathAnswersDisagree)
+			requireOneSentenceWithoutItemIDs(t, run.err, "/a/b/c/f.txt")
+		})
+
+		t.Run(shape+"/put", func(t *testing.T) {
+			setTestDriveHome(t)
+			local := t.TempDir()
+			writeEmptyLocalFiles(t, local, "f.txt")
+			fake := &disagreeingDrive{t: t, answers: answers}
+			cc := disagreeingDriveContext(t, fake)
+
+			run := runFileCommand(t, putCommand, cc, false, filepath.Join(local, "f.txt"), "/a/b/c/d/f.txt")
+
+			var notVisible *driveops.PathNotVisibleError
+			require.ErrorAs(t, run.err, &notVisible)
+			require.ErrorIs(t, run.err, graph.ErrPathAnswersDisagree)
+			requireOneSentenceWithoutItemIDs(t, run.err, disagreeingSubject(run.err))
+		})
+	}
+}
+
+// disagreeingSubject is the path the sentence for err names: the path the
+// command recorded, or the path its visibility wait ran out on.
+func disagreeingSubject(err error) string {
+	var op *remoteOpError
+	if errors.As(err, &op) {
+		return op.path
+	}
+	var notVisible *driveops.PathNotVisibleError
+	if errors.As(err, &notVisible) {
+		return notVisible.Path
+	}
+
+	return "the path"
+}
+
+// A name with ':' is read through its parent folder's listing, never by its
+// path, so a missing one is one sentence that names the path once, with the
+// folder to list; --verbose keeps the chain.
+//
+// Validates: R-6.6.26, R-6.7.38
+func TestCommandErrorText_ANameAPathCannotCarryIsOneSentence(t *testing.T) {
+	setTestDriveHome(t)
+	fake := &disagreeingDrive{t: t, answers: map[string]string{}}
+	cc := disagreeingDriveContext(t, fake)
+
+	run := runFileCommand(t, "onedrive-go stat", cc, false, "/a/b:c.txt")
+
+	require.ErrorIs(t, run.err, graph.ErrNotFound)
+	require.NotErrorIs(t, run.err, graph.ErrNameNotPathAddressable, "the name is looked up in its folder, not refused")
+	assert.Equal(t, "Error: /a/b:c.txt was not found on OneDrive. "+
+		"Run 'onedrive-go ls /a' to see what is there.", commandErrorText(run.err, false))
+	assert.Contains(t, commandErrorText(run.err, true), "\nDetails: resolving \"/a/b:c.txt\": ")
 }

@@ -188,6 +188,27 @@ func TestFailures_NameARelativePathAsItWasGiven(t *testing.T) {
 	assert.Equal(t, filepath.Join(dir, "rel", "missing"), pathErr.Path)
 }
 
+// FailedPath names the path an os error names as the caller gave it when a
+// call of this package failed on that very path, the os error's own path
+// when the error names another one (a parent MkdirAll could not create) or
+// came from outside this package, and nothing for an error on no path.
+//
+// Validates: R-6.6.26
+func TestFailedPath_IsThePathAsTheCallerGaveIt(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	require.NoError(t, os.WriteFile("file", nil, 0o600))
+
+	_, openErr := Open(filepath.Join("rel", "missing"))
+	mkdirErr := MkdirAll(filepath.Join("file", "sub"), 0o700)
+	_, osErr := os.Open(filepath.Join(dir, "absent")) //nolint:gosec // the test opens a path under its own temp folder
+
+	assert.Equal(t, filepath.Join("rel", "missing"), FailedPath(fmt.Errorf("reading: %w", openErr)))
+	assert.Equal(t, filepath.Join(dir, "file"), FailedPath(mkdirErr), "the parent the os error names")
+	assert.Equal(t, filepath.Join(dir, "absent"), FailedPath(osErr))
+	assert.Empty(t, FailedPath(errors.New("no path here")))
+}
+
 // A failure answers errors.Is and errors.As as the os error it holds does:
 // the errno and its fs sentinel, the *fs.PathError with its operation and
 // absolute path, the *os.LinkError of a rename, this package's own

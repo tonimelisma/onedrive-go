@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -15,9 +16,7 @@ type sharedFileCandidate struct {
 
 func selectSharedFileFixture(candidates []sharedFileCandidate) (resolvedSharedFileFixture, error) {
 	if len(candidates) == 0 {
-		return resolvedSharedFileFixture{}, fmt.Errorf(
-			"shared-file fixture did not resolve for any configured recipient account",
-		)
+		return resolvedSharedFileFixture{}, errors.New("shared-file fixture did not resolve for any configured recipient account")
 	}
 
 	if len(candidates) == 1 {

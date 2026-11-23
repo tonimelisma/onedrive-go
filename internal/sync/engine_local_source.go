@@ -30,9 +30,10 @@ type localSource struct {
 	hooks syncobserve.Hooks
 }
 
-// localSource is the engine's local side as it is now. A run takes it once
-// (flowInputs).
-func (e *Engine) localSource() *localSource {
+// localSource is the engine's local side as it is now, with the observer
+// seams of hooks. A run takes it once (flowInputs), with its own copy of the
+// hooks.
+func (e *Engine) localSource(hooks *engineHooks) *localSource {
 	return &localSource{
 		syncTree:     e.syncTree,
 		store:        e.baseline,
@@ -40,7 +41,7 @@ func (e *Engine) localSource() *localSource {
 		checkWorkers: e.checkWorkers,
 		logger:       e.logger,
 		clock:        e.wallClock,
-		hooks:        e.hooks.observe,
+		hooks:        hooks.observe,
 	}
 }
 
@@ -86,7 +87,7 @@ func (s *localSource) commitSnapshotBinding(
 	ctx context.Context, commit *syncstore.LocalSnapshotCommit, expected *synctree.RootIdentity,
 ) (syncstore.LocalSnapshotCommitResult, *synctree.RootIdentity, error) {
 	if expected == nil {
-		return syncstore.LocalSnapshotCommitResult{}, nil, fmt.Errorf("sync: binding sync folder: no identity was taken at startup")
+		return syncstore.LocalSnapshotCommitResult{}, nil, errors.New("sync: binding sync folder: no identity was taken at startup")
 	}
 	bind := *expected
 	bind.Token = ""

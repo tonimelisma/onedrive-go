@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +76,25 @@ func TestRemoveStateDBFiles_RemovesALeftoverJournal(t *testing.T) {
 
 	assert.NoFileExists(t, dbPath+"-journal")
 	assert.NoFileExists(t, dbPath)
+}
+
+// A state file the reset cannot remove is named once in the error: the wrap
+// keeps its verb and leaves the path to the failure under it. A non-empty
+// folder at the log's name refuses removal whatever the user's rights.
+//
+// Validates: R-2.1.3
+func TestRemoveStateDBFiles_AFileThatCannotBeRemovedIsNamedOnce(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	stuck := dbPath + "-wal"
+	require.NoError(t, os.MkdirAll(filepath.Join(stuck, "keep"), 0o700))
+
+	err := RemoveStateDBFiles(dbPath)
+
+	require.Error(t, err)
+	assert.Equal(t, 1, strings.Count(err.Error(), stuck), err.Error())
+	assert.True(t, strings.HasPrefix(err.Error(), "remove state DB file: "), err.Error())
 }
 
 // SQLite pairs a write-ahead log with a database by file name alone, and the

@@ -90,7 +90,12 @@ Check each stream separately, once, at startup:
   actionable set, observer, canonical ID, item ID, or Go error chains.
 - **Paths relative to the sync folder**, the folder itself shown once with `~`.
 - **Human units.** "6 s", "2 min 10 s", "300 MB", never `5.571055002s` or
-  `"duration":1636185931`.
+  `"duration":1636185931`. One package words them, `internal/humanunit`,
+  at one of two precisions: a wait, a delay or a limit in whole seconds and
+  never below "1 s"; a measured time in tenths of a second below a minute
+  ("5.6 s"). Both round before they split ("1 min", never "60.0 s"), drop a
+  zero part ("2 min"), and from an hour up say hours and whole minutes
+  ("1 h 15 min"). A caller that wants a round number rounds the value first.
 - **Errors**: one line `Error: <what happened>`, then `Reason:` and `Action:`
   lines. The underlying error chain belongs at `--debug` or in the log.
 - **Retries are visible while they happen**: "Can't reach OneDrive (connection

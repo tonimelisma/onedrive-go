@@ -8,9 +8,10 @@ import (
 
 func newDriveCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:         "drive",
-		Short:       "Manage drives (list, add, remove, search, rebind-root, reset-sync-state)",
-		Long:        "List, add, remove, or search drives in the configuration; rebind a moved sync folder or reset a drive's sync state.",
+		Use:   "drive",
+		Short: "Manage drives (list, add, remove, search, rebind-root, forget-mount, reset-sync-state)",
+		Long: "List, add, remove, or search drives in the configuration; rebind a moved sync folder, " +
+			"forget a recorded mount point, or reset a drive's sync state.",
 		Annotations: map[string]string{skipConfigAnnotation: skipConfigValue},
 	}
 
@@ -18,6 +19,7 @@ func newDriveCmd() *cobra.Command {
 	cmd.AddCommand(newDriveAddCmd())
 	cmd.AddCommand(newDriveRemoveCmd())
 	cmd.AddCommand(newDriveRebindRootCmd())
+	cmd.AddCommand(newDriveForgetMountCmd())
 	cmd.AddCommand(newDriveResetSyncStateCmd())
 	cmd.AddCommand(newDriveSearchCmd())
 

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -440,10 +441,10 @@ func (c *syncConsole) reportSummary(tally *activityTally, r *syncengine.Report, 
 	}
 
 	if len(parts) == 0 && !left.Any() {
-		return fmt.Sprintf("Up to date (%s).", humanDuration(r.Duration))
+		return fmt.Sprintf("Up to date (%s).", humanunit.Duration(r.Duration, humanunit.Measured))
 	}
 
-	line := "Done in " + humanDuration(r.Duration)
+	line := "Done in " + humanunit.Duration(r.Duration, humanunit.Measured)
 	if len(parts) > 0 {
 		line += ": " + strings.Join(parts, ", ")
 	}
@@ -469,7 +470,7 @@ func (t *activityTally) parts() []string {
 		}
 		text := verb + " " + countOf(n, noun)
 		if b := t.bytes[kind]; b > 0 {
-			text += " (" + formatSize(b) + ")"
+			text += " (" + humanunit.Size(b) + ")"
 		}
 		parts = append(parts, text+suffix)
 	}
@@ -573,7 +574,7 @@ func activitySuccessLine(a *syncengine.Activity) string {
 		return fmt.Sprintf("%s %s -> %s", verb, a.OldPath, a.Path)
 	case syncengine.ActivityDownload, syncengine.ActivityUpload:
 		if a.SizeKnown && !a.Planned {
-			return fmt.Sprintf("%s %s (%s)", verb, a.Path, formatSize(a.Size))
+			return fmt.Sprintf("%s %s (%s)", verb, a.Path, humanunit.Size(a.Size))
 		}
 	case syncengine.ActivityLocalDelete, syncengine.ActivityRemoteDelete:
 		if a.Folder {
@@ -733,18 +734,6 @@ func (c *syncConsole) printErr(prefix, line string) {
 
 	if err != nil && c.recordStatusError != nil {
 		c.recordStatusError(fmt.Errorf("write sync console line: %w", err))
-	}
-}
-
-// humanDuration renders an elapsed time the way a person would say it.
-func humanDuration(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%.1f s", d.Seconds())
-	case d < time.Hour:
-		return fmt.Sprintf("%d min %d s", int(d/time.Minute), int((d%time.Minute)/time.Second))
-	default:
-		return fmt.Sprintf("%d h %d min", int(d/time.Hour), int((d%time.Hour)/time.Minute))
 	}
 }
 

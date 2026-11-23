@@ -367,10 +367,10 @@ func createCanonicalSchema(ctx context.Context, db *sql.DB) (err error) {
 	if err != nil {
 		return fmt.Errorf("begin schema transaction: %w", err)
 	}
+	// A rollback after a failed commit answers sql.ErrTxDone, which says
+	// nothing about the failure; finalizeTxRollback leaves it out.
 	defer func() {
-		if err != nil {
-			err = errors.Join(err, tx.Rollback())
-		}
+		err = finalizeTxRollback(err, tx, "rollback schema transaction")
 	}()
 
 	if _, err = tx.ExecContext(ctx, canonicalSchemaSQL); err != nil {

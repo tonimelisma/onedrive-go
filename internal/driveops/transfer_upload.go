@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 )
@@ -79,15 +80,15 @@ func (r validatingReaderAt) ReadAt(p []byte, off int64) (int, error) {
 // clear error messages instead of confusing downstream failures.
 func validateUploadParams(parentID, name, localPath string) error {
 	if parentID == "" {
-		return fmt.Errorf("upload: parent ID must not be empty")
+		return errors.New("upload: parent ID must not be empty")
 	}
 
 	if name == "" {
-		return fmt.Errorf("upload: file name must not be empty")
+		return errors.New("upload: file name must not be empty")
 	}
 
 	if localPath == "" {
-		return fmt.Errorf("upload: local path must not be empty")
+		return errors.New("upload: local path must not be empty")
 	}
 
 	return nil
@@ -95,11 +96,11 @@ func validateUploadParams(parentID, name, localPath string) error {
 
 func validateUploadToItemParams(itemID, localPath string) error {
 	if itemID == "" {
-		return fmt.Errorf("upload: item ID must not be empty")
+		return errors.New("upload: item ID must not be empty")
 	}
 
 	if localPath == "" {
-		return fmt.Errorf("upload: local path must not be empty")
+		return errors.New("upload: local path must not be empty")
 	}
 
 	return nil
@@ -167,7 +168,7 @@ func (tm *TransferManager) uploadGraphItem(
 			createForCreated: func(itemID, createdETag string) (*graph.UploadSession, error) {
 				isu, ok := tm.uploads.(ItemSessionUploader)
 				if !ok {
-					return nil, fmt.Errorf("uploader cannot open a session for an existing item")
+					return nil, errors.New("uploader cannot open a session for an existing item")
 				}
 				return isu.CreateUploadSessionForItem(ctx, driveID, itemID, createdETag, size, mtime)
 			},
@@ -456,5 +457,5 @@ func (tm *TransferManager) deleteSession(driveID, localPath string) {
 // sentinel supplies the limit, so the limit is stated once, and the caller
 // names the file.
 func fileTooLargeForOneDriveError(size int64) error {
-	return fmt.Errorf("the file is %s: %w", formatSize(size), ErrFileExceedsOneDriveLimit)
+	return fmt.Errorf("the file is %s: %w", humanunit.Size(size), ErrFileExceedsOneDriveLimit)
 }

@@ -164,7 +164,7 @@ func LoadLiveTestConfig(moduleRoot string) (LiveTestConfig, error) {
 	}
 
 	if cfg.PrimaryDrive == "" {
-		return LiveTestConfig{}, fmt.Errorf("load live test config: ONEDRIVE_TEST_DRIVE not set")
+		return LiveTestConfig{}, errors.New("load live test config: ONEDRIVE_TEST_DRIVE not set")
 	}
 
 	applyShortcutFixtureDefaults(&cfg)

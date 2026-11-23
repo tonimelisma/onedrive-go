@@ -198,7 +198,7 @@ func TestPlanner_EmptiedLocalSideHoldsEvenFewDeletes(t *testing.T) {
 func listEngineTrash(t *testing.T, eng *testEngine) []localtrash.Entry {
 	t.Helper()
 
-	entries, err := eng.trash.List()
+	entries, err := eng.upkeep.trash.List()
 	require.NoError(t, err)
 	return entries
 }
@@ -241,7 +241,7 @@ func TestRunOnce_DownloadOverwriteKeepsPreviousVersionInTrash(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, "keep.txt", entries[0].Path)
 	assert.Equal(t, localtrash.ReasonReplaced, entries[0].Reason)
-	old, err := os.ReadFile(filepath.Join(eng.trash.Dir(), entries[0].ID, "item"))
+	old, err := os.ReadFile(filepath.Join(eng.upkeep.trash.Dir(), entries[0].ID, "item"))
 	require.NoError(t, err)
 	assert.Equal(t, "keep\n", string(old), "the replaced version is recoverable")
 }

@@ -162,7 +162,7 @@ func resumeSingleDriveWithNow(ctx context.Context, cc *CLIContext, now func() ti
 // failures are reported together.
 func resumeAllDrivesWithNow(ctx context.Context, cc *CLIContext, now func() time.Time, cfg *config.Config) error {
 	if len(cfg.Drives) == 0 {
-		return fmt.Errorf("no drives configured")
+		return errors.New("no drives configured")
 	}
 
 	resumed := 0

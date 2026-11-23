@@ -1022,7 +1022,7 @@ func TestFullDelta_SkipsUntrackedDeletedItemWithKnownParentButEmptyName(t *testi
 	assert.Equal(t, "delta-link", token)
 }
 
-func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []syncdomain.RemoteItem {
+func fullDeltaSingleItem(t *testing.T, item *graph.Item) []syncdomain.RemoteItem {
 	t.Helper()
 
 	fetcher := &mockDeltaFetcher{
@@ -1048,7 +1048,7 @@ func fullDeltaSingleItemEvents(t *testing.T, item *graph.Item) []syncdomain.Remo
 func TestFullDelta_SkipsItemWithEmptyItemID(t *testing.T) {
 	t.Parallel()
 
-	events := fullDeltaSingleItemEvents(t, &graph.Item{
+	events := fullDeltaSingleItem(t, &graph.Item{
 		ID:       "",
 		Name:     "bad.txt",
 		ParentID: "root",
@@ -1062,7 +1062,7 @@ func TestFullDelta_SkipsItemWithEmptyItemID(t *testing.T) {
 func TestFullDelta_NonDeletedItem_MissingNameSkipped(t *testing.T) {
 	t.Parallel()
 
-	events := fullDeltaSingleItemEvents(t, &graph.Item{
+	events := fullDeltaSingleItem(t, &graph.Item{
 		ID:       "f1",
 		Name:     "",
 		ParentID: "root",
@@ -1076,7 +1076,7 @@ func TestFullDelta_NonDeletedItem_MissingNameSkipped(t *testing.T) {
 func TestFullDelta_DeletedItem_WithoutRecoverablePathSkipped(t *testing.T) {
 	t.Parallel()
 
-	events := fullDeltaSingleItemEvents(t, &graph.Item{
+	events := fullDeltaSingleItem(t, &graph.Item{
 		ID:        "gone",
 		Name:      "",
 		ParentID:  "",

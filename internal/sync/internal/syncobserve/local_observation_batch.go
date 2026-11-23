@@ -14,9 +14,9 @@ type LocalObservation struct {
 
 	// rows are the patch's upserts, or every row of the snapshot's scan.
 	Rows []syncdomain.LocalStateRow
-	// deletedPaths and deletedPrefixes are the patch's exact and subtree
-	// deletes.
-	DeletedPaths    []string
+	// DeletedPrefixes are the patch's deletes. Every local delete removes the
+	// path's whole subtree (a path is its own prefix), so there is no
+	// separate list of exact deletes.
 	DeletedPrefixes []string
 	// dirty asks the patch's apply to mark the runtime dirty.
 	Dirty bool
@@ -64,7 +64,7 @@ const unknownLocalObservationKind = "unknown"
 // and every row below it. A deleted path takes its subtree whatever it was: a
 // folder neither the baseline nor the watch set knows can still have rows
 // below it.
-func localObservationBatchForEvent(event *syncdomain.ChangeEvent) LocalObservation {
+func localObservationBatchForEvent(event *syncdomain.LocalEntry) LocalObservation {
 	if event == nil || event.Path == "" {
 		return LocalObservation{}
 	}
@@ -79,7 +79,7 @@ func localObservationBatchForEvent(event *syncdomain.ChangeEvent) LocalObservati
 	return batch
 }
 
-func localStateRowFromEvent(event *syncdomain.ChangeEvent) syncdomain.LocalStateRow {
+func localStateRowFromEvent(event *syncdomain.LocalEntry) syncdomain.LocalStateRow {
 	return syncdomain.LocalStateRow{
 		Path:             event.Path,
 		ItemType:         event.ItemType,

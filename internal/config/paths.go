@@ -30,11 +30,28 @@ const (
 	runtimeControlSocketName = "sock"
 )
 
+// xdgRoot is the value of the XDG Base Directory variable name when it is an
+// absolute path, and "" when it is unset, empty or relative. The
+// specification says relative paths are invalid and should be ignored: a
+// relative root would put the client's config or data below whatever folder
+// a command happens to run in, while every other reader (a warning that
+// names the data folder, a check of the folders the client keeps for itself)
+// would name another one.
+func xdgRoot(name string) string {
+	value := os.Getenv(name)
+	if !filepath.IsAbs(value) {
+		return ""
+	}
+
+	return value
+}
+
 // DefaultConfigDir returns the platform-specific directory for config files.
-// XDG_CONFIG_HOME is checked first on ALL platforms (enables test isolation).
+// XDG_CONFIG_HOME is checked first on ALL platforms (enables test isolation),
+// when it is absolute (xdgRoot).
 // Fallbacks: Linux ~/.config, macOS ~/Library/Application Support, other ~/.config.
 func DefaultConfigDir() string {
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+	if xdg := xdgRoot("XDG_CONFIG_HOME"); xdg != "" {
 		return filepath.Join(xdg, appName)
 	}
 
@@ -53,10 +70,11 @@ func DefaultConfigDir() string {
 
 // DefaultDataDir returns the platform-specific directory for application data
 // (state databases, logs, tokens).
-// XDG_DATA_HOME is checked first on ALL platforms (enables test isolation).
+// XDG_DATA_HOME is checked first on ALL platforms (enables test isolation),
+// when it is absolute (xdgRoot).
 // Fallbacks: Linux ~/.local/share, macOS ~/Library/Application Support, other ~/.local/share.
 func DefaultDataDir() string {
-	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+	if xdg := xdgRoot("XDG_DATA_HOME"); xdg != "" {
 		return filepath.Join(xdg, appName)
 	}
 
@@ -80,13 +98,14 @@ var ErrDevBuildUnsafe = errors.New("refusing to run a development build without 
 // CheckDevSafe refuses a dev build (version=="dev") that is running without
 // full XDG isolation. Partial isolation is unsafe: setting only one of the two
 // XDG roots the client reads still leaves config or data operations falling
-// back to production paths. It returns a plain error rather than panicking,
+// back to production paths. A relative root is ignored like an unset one
+// (xdgRoot), so it counts as missing. It returns a plain error rather than panicking,
 // because anyone who builds from source without the version ldflag gets a dev
 // build.
 func CheckDevSafe() error {
 	var missing []string
 	for _, name := range []string{"XDG_DATA_HOME", "XDG_CONFIG_HOME"} {
-		if os.Getenv(name) == "" {
+		if xdgRoot(name) == "" {
 			missing = append(missing, name)
 		}
 	}
@@ -95,7 +114,7 @@ func CheckDevSafe() error {
 	}
 
 	return fmt.Errorf("%w, so it cannot touch your real OneDrive settings or data. "+
-		"For development, set XDG_DATA_HOME and XDG_CONFIG_HOME (missing: %s), "+
+		"For development, set XDG_DATA_HOME and XDG_CONFIG_HOME to absolute paths (missing: %s), "+
 		"for example with 'source scripts/dev-env.sh'. To use it for real, build it with a version as shown "+
 		"in README.md under Building from Source",
 		ErrDevBuildUnsafe, strings.Join(missing, ", "))
@@ -107,7 +126,7 @@ func CheckDevSafe() error {
 func ControlSocketPath() (string, error) {
 	dir := DefaultDataDir()
 	if dir == "" {
-		return "", fmt.Errorf("resolve control socket path: no data directory available")
+		return "", errors.New("resolve control socket path: no data directory available")
 	}
 
 	return ControlSocketPathForDataDir(dir)

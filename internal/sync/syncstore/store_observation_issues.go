@@ -3,6 +3,7 @@ package syncstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
@@ -185,7 +186,7 @@ func (s *SyncStore) upsertObservationIssuesTx(
 	for i := range issues {
 		issue := &issues[i]
 		if issue.Path == "" {
-			return fmt.Errorf("sync: upsert observation issue: missing path")
+			return errors.New("sync: upsert observation issue: missing path")
 		}
 		// Never write what scanObservationIssueRow would refuse to read.
 		if !issue.IssueType.IsMember() {
@@ -236,7 +237,7 @@ func scanObservationIssueRow(
 	contentDriveID driveid.ID,
 ) error {
 	if row == nil {
-		return fmt.Errorf("sync: scanning observation issue row: nil destination")
+		return errors.New("sync: scanning observation issue row: nil destination")
 	}
 
 	var issueType, scopeKey string

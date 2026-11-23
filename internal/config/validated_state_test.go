@@ -52,10 +52,29 @@ func TestLoadValidatedState_RejectsConfiguredDriveMissingCatalogEntry(t *testing
 
 	_, _, err := LoadValidatedState(cfgPath, testConfigLogger())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "is in config.toml")
+	assert.Contains(t, err.Error(), "is in "+cfgPath)
 	assert.Contains(t, err.Error(), "not in onedrive-go's drive inventory")
 	assert.Contains(t, err.Error(), "run 'onedrive-go drive add personal:user@example.com'",
 		"drive add completes a section the inventory lacks, for every kind of drive")
+}
+
+// Validates: R-3.1.5
+//
+// A config given by --config under another name than config.toml is the
+// file the refusal names, both where the drive is and where to remove it.
+func TestLoadValidatedState_TheMissingDriveRefusalNamesTheConfigGiven(t *testing.T) {
+	setConfigTestHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "work.toml")
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	require.NoError(t, AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
+
+	_, _, err := LoadValidatedState(cfgPath, testConfigLogger())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "drive personal:user@example.com is in "+cfgPath+" but not")
+	assert.Contains(t, err.Error(), "remove its section from "+cfgPath)
+	assert.NotContains(t, err.Error(), "config.toml")
 }
 
 // Validates: R-3.1.5
@@ -71,7 +90,7 @@ func TestLoadValidatedState_NamesTheFirstConfiguredDriveMissingFromTheCatalog(t 
 	}
 
 	_, _, err := LoadValidatedState(cfgPath, testConfigLogger())
-	require.ErrorContains(t, err, "drive personal:a@example.com is in config.toml")
+	require.ErrorContains(t, err, "drive personal:a@example.com is in "+cfgPath)
 }
 
 // Validates: R-3.1.5
@@ -176,10 +195,10 @@ func TestLoadValidatedState_WarnsOnceAboutASyncDirHoldingTheDataFolder(t *testin
 			case tc.dataBeside:
 				dataHome = filepath.Join(home, "data")
 			case tc.noHome:
-				// The data folder as a path relative to the working folder,
-				// the way an unexpanded default is.
-				t.Chdir(t.TempDir())
-				dataHome = filepath.Join("~", "OneDrive", "data")
+				// A relative XDG root is ignored, so the data folder is an
+				// absolute one; without a home folder the default sync_dir
+				// cannot be expanded, so nothing is compared with it.
+				dataHome = filepath.Join(t.TempDir(), "data")
 			}
 			t.Setenv("XDG_DATA_HOME", dataHome)
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))

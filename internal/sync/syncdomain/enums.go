@@ -22,54 +22,26 @@ func OutsideTheEnum(value fmt.Stringer) string {
 }
 
 // string constants for enum serialization (shared by String() and Parse*).
-// Unexported: only used within this file for typed constant definitions
-// and String()/Parse* methods.
+// Most are used only in this file; StrFile, StrFolder and StrRoot are
+// exported for the packages that spell item types, and StrDownload with them
+// so the action-type group reads as one set.
 const (
 	strRemote         = "remote"
 	strLocal          = "local"
-	strCreate         = "create"
-	strModify         = "modify"
 	StrFile           = "file"
 	StrFolder         = "folder"
 	StrRoot           = "root"
 	StrDownload       = "download"
 	strUpload         = "upload"
-	strDelete         = "delete"
 	strLocalDelete    = "local_delete"
 	strRemoteDelete   = "remote_delete"
 	strLocalMove      = "local_move"
 	strRemoteMove     = "remote_move"
-	strMove           = "move"
 	strFolderCreate   = "folder_create"
 	strConflictCopy   = "conflict_copy"
 	strBaselineUpdate = "baseline_update"
 	strCleanup        = "cleanup"
 )
-
-// changeType classifies what kind of change occurred.
-type changeType int
-
-const (
-	changeCreate changeType = iota
-	ChangeModify
-	ChangeDelete
-	ChangeMove
-)
-
-func (t changeType) String() string {
-	switch t {
-	case changeCreate:
-		return strCreate
-	case ChangeModify:
-		return strModify
-	case ChangeDelete:
-		return strDelete
-	case ChangeMove:
-		return strMove
-	default:
-		return fmt.Sprintf("ChangeType(%d)", int(t))
-	}
-}
 
 // ItemType classifies the kind of item (file, folder, or drive root).
 // Stored as TEXT in SQLite ("file"/"folder"/"root").

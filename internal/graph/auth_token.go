@@ -202,6 +202,26 @@ func newTokenBridge(
 	}
 }
 
+// MovedSignIn is the token source of a sign-in whose file was moved to path
+// after ts was built over its old path, as login installs the sign-in it
+// wrote to a pending file: a source over path that holds ts's token, so
+// every token a later refresh produces is written to path and never to the
+// old path again. ts is left as it was and must not be used after the move.
+// A source this package did not build (a test's fixed token) writes no file
+// and is returned as it is.
+func MovedSignIn(ts TokenSource, path string) TokenSource {
+	bridge, ok := ts.(*tokenBridge)
+	if !ok {
+		return ts
+	}
+
+	bridge.mu.Lock()
+	tok := bridge.tok
+	bridge.mu.Unlock()
+
+	return newTokenBridge(bridge.cfg, bridge.authHTTP, path, tok, bridge.logger)
+}
+
 // SaveError is the failure of the last write of the newest refreshed
 // sign-in, wrapping ErrTokenNotSaved, or nil once the file holds it.
 func (b *tokenBridge) SaveError() error {

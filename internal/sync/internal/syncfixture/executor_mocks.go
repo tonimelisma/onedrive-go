@@ -30,7 +30,7 @@ func (m *ExecutorMockDownloader) Download(ctx context.Context, driveID driveid.I
 		return m.DownloadFn(ctx, driveID, itemID, w)
 	}
 
-	return 0, fmt.Errorf("Download not mocked")
+	return 0, errors.New("Download not mocked")
 }
 
 type ExecutorMockUploader struct {
@@ -49,7 +49,7 @@ func (m *ExecutorMockUploader) Upload(ctx context.Context, driveID driveid.ID, p
 		return faithfulUploadResult(content, size)(m.UploadFn(ctx, driveID, parentID, name, content, size, mtime, progress))
 	}
 
-	return nil, fmt.Errorf("Upload not mocked")
+	return nil, errors.New("Upload not mocked")
 }
 
 func (m *ExecutorMockUploader) UploadToItem(ctx context.Context, driveID driveid.ID, itemID, ifMatch string, content io.ReaderAt, size int64, mtime time.Time, progress graph.ProgressFunc) (*graph.Item, error) {
@@ -60,7 +60,7 @@ func (m *ExecutorMockUploader) UploadToItem(ctx context.Context, driveID driveid
 		return faithfulUploadResult(content, size)(m.UploadFn(ctx, driveID, "", "", content, size, mtime, progress))
 	}
 
-	return nil, fmt.Errorf("UploadToItem not mocked")
+	return nil, errors.New("UploadToItem not mocked")
 }
 
 // faithfulUploadResult makes a mocked upload answer like a server that

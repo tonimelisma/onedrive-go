@@ -532,7 +532,7 @@ The target is the relocating side's location. When both sides relocated an
 item: to the same place, nothing moves and a publication-only
 `ActionBaselineUpdate` with `OldPath` re-keys the baseline row and its subtree,
 keeping the content facts of a side that also edited the item so the edit is
-still transferred; to different places, OneDrive's location wins (policy P-6,
+still transferred; to different places, OneDrive's location wins (R-2.17.6,
 chosen because neither choice loses data and remote-wins needs no remote
 mutation) and the local copy is moved there, with an Info notice. A cycle in the
 target tree (local A→B/A while OneDrive moved B→A/B) undoes the local
@@ -957,7 +957,7 @@ the source behind to be uploaded again as a duplicate. The destination's
 baseline item now gives way (`moveDisplacement`) when it no longer exists
 online: a file whose local copy is provably the synced version is replaced by
 the local move (`Action.ReplaceLocalTarget`; the executor re-verifies it through
-the descriptor it keeps in the trash, P-4), an edited one is renamed to a
+the descriptor it keeps in the trash, R-6.4.9), an edited one is renamed to a
 conflict copy first and uploaded later as a new file, and anything else (a
 folder, unknown content) makes the move wait. A file at the destination that
 is not the baseline item at all (the node has no local position: another
@@ -1127,7 +1127,7 @@ reaches execution, ordinary actions are mount-local concrete work.
 synced; they cannot tell an intended mass delete from a wrong tree that
 passed every identity check (an fscrypt folder with its key unloaded, a
 restored folder without its contents, a complete but anomalous remote
-enumeration). So, per direction (product decision P-1):
+enumeration). So, per direction (R-6.2.5):
 
 - **structural**: when the planner-visible snapshot of one side has no
   non-root entries while the baseline holds items, every delete toward the
@@ -1291,4 +1291,13 @@ difference with its reason in the seed's failure context
 (`TestPlannerModel_RandomTriplesConverge`); the engine model does the same for
 every pass through the `shadowPlanned` engine hook
 (`TestRunOnce_RandomizedBidirectionalEditsConverge`). The shadow plan is never
-executed and never recorded.
+executed and never recorded. A watch replan compares the two only for a pass the shadow planner models:
+bidirectional, with no content filter path rules and no shortcut roots; a
+download-only or upload-only watch, a filter that hides paths and a drive with
+shared-folder mounts are not compared, since every difference there would be
+only what the shadow planner leaves out
+(`TestRunSteadyStateReplan_ComparesNoShadowPlanInAModeItDoesNotModel`,
+`TestShadowPlanModels_OnlyBidirectionalUnfilteredPassesWithoutShortcutRoots`).
+`BenchmarkPlanIdentityKeyed` times the shadow planner over a synced tree of 1k
+and 10k files with edits on both sides, the number to read against the
+replan's own planning time.

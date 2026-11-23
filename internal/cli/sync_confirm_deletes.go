@@ -91,7 +91,7 @@ func confirmDeletesToRunningWatch(
 		if err := writeHeldSets(cc, sets); err != nil {
 			return err
 		}
-		return fmt.Errorf("confirm held deletes: the held deletes changed since they were shown; " +
+		return errors.New("confirm held deletes: the held deletes changed since they were shown; " +
 			"nothing was confirmed. The sets held now are listed above")
 	}
 
@@ -164,7 +164,7 @@ func confirmDeletesAnswerError(err error) error {
 		return fmt.Errorf("confirm held deletes: %s; nothing was confirmed. Run 'onedrive-go sync --confirm-deletes' "+
 			"to see the set held now", daemonErr.message)
 	case errors.As(err, &daemonErr) && daemonErr.code == synccontrol.ErrorNoHeldDeletes:
-		return fmt.Errorf("confirm held deletes: the running sync holds no deletes for this drive now; nothing was confirmed")
+		return errors.New("confirm held deletes: the running sync holds no deletes for this drive now; nothing was confirmed")
 	case controlOwnerDidNotAnswer(err):
 		return fmt.Errorf("confirm held deletes: the running 'sync --watch' is busy and confirmed nothing; try again: %w", err)
 	default:

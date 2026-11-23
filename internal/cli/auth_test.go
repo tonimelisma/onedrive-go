@@ -268,23 +268,26 @@ func TestDeviceLoginInstructions_ExplainCodeExpiryAndWaiting(t *testing.T) {
 	assert.Contains(t, text, "https://login.microsoft.com/device")
 	assert.Contains(t, text, "    ABCD1234E\n")
 	assert.Contains(t, text, "Sign in as user@example.com.")
-	assert.Contains(t, text, "expires at 22:15 (in 15 minutes)")
+	assert.Contains(t, text, "expires at 22:15 (in 15 min)")
 	assert.Contains(t, text, "Other ways to sign in")
 	assert.Contains(t, text, "Waiting for you to finish signing in")
 }
 
-// Validates: R-6.6.24
-func TestDeviceLoginInstructions_OneMinuteLeftIsSingular(t *testing.T) {
+// The wait is rounded to the minute, as the clock time is, and said in
+// human units.
+//
+// Validates: R-6.6.24, R-6.6.38
+func TestDeviceLoginInstructions_TheWaitIsSaidToTheMinute(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 10, 23, 22, 0, 0, 0, time.Local)
 	text := deviceLoginInstructions(graph.DeviceAuth{
 		UserCode:        "ABCD1234E",
 		VerificationURI: "https://login.microsoft.com/device",
-		Expiry:          now.Add(time.Minute),
+		Expiry:          now.Add(time.Minute + 20*time.Second),
 	}, "", now)
 
-	assert.Contains(t, text, "\n\nThe code expires at 22:01 (in 1 minute).\n")
+	assert.Contains(t, text, "\n\nThe code expires at 22:01 (in 1 min).\n")
 }
 
 // Validates: R-6.8.30

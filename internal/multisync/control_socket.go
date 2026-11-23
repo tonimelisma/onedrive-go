@@ -138,7 +138,7 @@ type controlSocketServer struct {
 func startControlSocketServer(ctx context.Context, cfg *controlServerConfig) (*controlSocketServer, error) {
 	path, handler, logger := cfg.path, cfg.handler, cfg.logger
 	if path == "" {
-		return nil, fmt.Errorf("control socket path is empty")
+		return nil, errors.New("control socket path is empty")
 	}
 	socketDir := filepath.Dir(path)
 	if err := localpath.MkdirAll(socketDir, controlSocketDirPerm); err != nil {
@@ -554,7 +554,7 @@ func controlBusyResponse() controlResponse {
 	return controlResponse{
 		StatusCode: http.StatusServiceUnavailable,
 		Code:       synccontrol.ErrorBusy,
-		Err:        fmt.Errorf("the running sync is busy and did not take the request; nothing was changed"),
+		Err:        errors.New("the running sync is busy and did not take the request; nothing was changed"),
 	}
 }
 
@@ -773,11 +773,11 @@ func perfCaptureOptionsFromRequest(
 	request *synccontrol.PerfCaptureRequest,
 ) (perf.CaptureOptions, error) {
 	if request == nil {
-		return perf.CaptureOptions{}, fmt.Errorf("missing perf capture request")
+		return perf.CaptureOptions{}, errors.New("missing perf capture request")
 	}
 
 	if request.DurationMS <= 0 {
-		return perf.CaptureOptions{}, fmt.Errorf("perf capture duration must be greater than zero")
+		return perf.CaptureOptions{}, errors.New("perf capture duration must be greater than zero")
 	}
 	// Compared in milliseconds, before the conversion, so a huge request
 	// cannot overflow into a small duration that passes.

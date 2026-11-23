@@ -82,3 +82,46 @@ func TestRunSteadyStateReplan_ReportsNothingWhenTheShadowPlanAgrees(t *testing.T
 		return event.Type == syncdomain.EngineDebugEventShadowPlanDiffered
 	}))
 }
+
+// A watch whose mode the shadow planner does not model compares nothing: the
+// seeded difference of a bidirectional pass is not reported for an
+// upload-only one.
+//
+// Validates: R-2.3.1
+func TestRunSteadyStateReplan_ComparesNoShadowPlanInAModeItDoesNotModel(t *testing.T) {
+	t.Parallel()
+
+	eng, syncRoot, _ := newUnclassifiedPlanTestEngine(t)
+	eng.hooks.decideOverride = decideNewLocalFileAsNoop
+	recorder := attachDebugEventRecorder(eng)
+	ctx := t.Context()
+	setupWatchEngine(t, eng)
+	bl, err := eng.baseline.Load(ctx)
+	require.NoError(t, err)
+	syncfixture.WriteLocalFile(t, syncRoot, "new.txt", "local content")
+
+	rt := testWatchRuntime(t, eng)
+	setWatchPhase(rt, watchPhaseRunning)
+	_, err = rt.runSteadyStateReplan(ctx, &watchPipeline{bl: bl, mode: syncdomain.SyncUploadOnly}, syncobserve.DirtyBatch{})
+	require.NoError(t, err)
+
+	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
+		return event.Type == syncdomain.EngineDebugEventShadowPlanDiffered
+	}), "an upload-only pass is not compared with the shadow plan")
+}
+
+// Validates: R-2.3.1
+func TestShadowPlanModels_OnlyBidirectionalUnfilteredPassesWithoutShortcutRoots(t *testing.T) {
+	t.Parallel()
+
+	flow := &engineFlow{}
+	assert.True(t, flow.shadowPlanModels(syncdomain.SyncBidirectional))
+	assert.False(t, flow.shadowPlanModels(syncdomain.SyncDownloadOnly))
+	assert.False(t, flow.shadowPlanModels(syncdomain.SyncUploadOnly))
+
+	flow.cfg.contentFilter = syncdomain.ContentFilterConfig{IgnoredDirs: []string{"build"}}
+	assert.False(t, flow.shadowPlanModels(syncdomain.SyncBidirectional))
+	flow.cfg.contentFilter = syncdomain.ContentFilterConfig{IgnoreDotfiles: true}
+	assert.True(t, flow.shadowPlanModels(syncdomain.SyncBidirectional),
+		"name rules the local scan applies hide nothing the shadow planner sees")
+}

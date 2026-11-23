@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"math"
 	"os"
 	"path/filepath"
@@ -249,7 +250,7 @@ func TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t *test
 	eng := newSingleOwnerEngine(t)
 	flow := testEngineFlow(t, eng)
 
-	handled, err := flow.applyTrialReclassification(t.Context(), &syncdomain.ResultDecision{
+	row, err := flow.applyTrialReclassification(t.Context(), &syncdomain.ResultDecision{
 		Class:    errclass.ClassScopeBlockingTransient,
 		ScopeKey: syncdomain.SKDiskLocal(),
 	}, &syncdomain.ActionCompletion{
@@ -258,7 +259,9 @@ func TestEngineFlow_ApplyTrialReclassification_RehomesDiskScopeRetryWork(t *test
 		ErrMsg:     "disk full",
 	}, nil)
 	require.NoError(t, err)
-	assert.True(t, handled)
+	require.NotNil(t, row, "the reclassification returns the row the store wrote")
+	assert.True(t, row.Blocked)
+	assert.Equal(t, syncdomain.SKDiskLocal(), row.ScopeKey)
 
 	assert.True(t, isTestBlockScopeed(eng, syncdomain.SKDiskLocal()))
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
@@ -288,7 +291,7 @@ func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissi
 		AttemptCount: 1,
 	}))
 
-	handled, err := flow.applyTrialReclassification(t.Context(), &syncdomain.ResultDecision{}, &syncdomain.ActionCompletion{
+	row, err := flow.applyTrialReclassification(t.Context(), &syncdomain.ResultDecision{}, &syncdomain.ActionCompletion{
 		Path:          "accessible/file.txt",
 		ActionType:    syncdomain.ActionDownload,
 		Err:           os.ErrPermission,
@@ -296,7 +299,8 @@ func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissi
 		TrialScopeKey: scopeKey,
 	}, nil)
 	require.NoError(t, err)
-	assert.True(t, handled)
+	require.NotNil(t, row, "the reclassification returns the row the store wrote")
+	assert.False(t, row.Blocked)
 
 	retryRows := listRetryWorkForTest(t, eng.baseline, t.Context())
 	require.Len(t, retryRows, 1)
@@ -613,14 +617,12 @@ func TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange(t 
 			held := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "retry.txt", DriveID: eng.driveID}, 1, nil)
 			require.NotNil(t, held)
 			work := syncdomain.RetryWorkKeyForAction(&held.Action)
-			flow.retryWork.rows[work] = syncdomain.RetryWorkRow{
+			flow.holdActionFromPersistedRetryState(held, &syncdomain.RetryWorkRow{
 				Path:         work.Path,
 				ActionType:   work.ActionType,
 				AttemptCount: 1,
 				NextRetryAt:  tc.stored,
-			}
-
-			require.NoError(t, flow.holdActionFromPersistedRetryState(held, work))
+			})
 
 			nextRetry, timed := flow.sched.EarliestHeldRetryAt()
 			require.True(t, timed, "the held retry has a time the retry timer arms for")
@@ -628,6 +630,53 @@ func TestEngineFlow_HoldFromPersistedRetryState_ReadsBothEndsOfTheStoredRange(t 
 			assert.Equal(t, tc.wantDue, flow.sched.HasDueHeldWork(eng.nowFunc()))
 		})
 	}
+}
+
+// The hold is taken from the row the store mutator returned, not from the
+// run's retry cache: with no cached row for the work, the action is still
+// held as the returned row says, blocked under its scope or timed.
+// Validates: R-2.10.33
+func TestEngineFlow_HoldFromPersistedRetryState_UsesTheReturnedRowNotTheCache(t *testing.T) {
+	t.Parallel()
+
+	eng := newSingleOwnerEngine(t)
+	rt := testWatchRuntime(t, eng)
+	flow := testEngineFlow(t, eng)
+	scopeKey := syncdomain.SKService()
+
+	blockedAction := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "blocked.txt", DriveID: eng.driveID}, 1, nil)
+	require.NotNil(t, blockedAction)
+	blockedWork := syncdomain.RetryWorkKeyForAction(&blockedAction.Action)
+	timedAction := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "timed.txt", DriveID: eng.driveID}, 2, nil)
+	require.NotNil(t, timedAction)
+	timedWork := syncdomain.RetryWorkKeyForAction(&timedAction.Action)
+	nextRetry := eng.nowFunc().Add(time.Hour)
+
+	_, cachedBlocked := flow.retryWork.row(blockedWork)
+	_, cachedTimed := flow.retryWork.row(timedWork)
+	require.False(t, cachedBlocked, "the cache holds no row for the blocked work")
+	require.False(t, cachedTimed, "the cache holds no row for the timed work")
+
+	flow.holdActionFromPersistedRetryState(blockedAction, &syncdomain.RetryWorkRow{
+		Path:         blockedWork.Path,
+		ActionType:   blockedWork.ActionType,
+		ScopeKey:     scopeKey,
+		Blocked:      true,
+		AttemptCount: 1,
+	})
+	flow.holdActionFromPersistedRetryState(timedAction, &syncdomain.RetryWorkRow{
+		Path:         timedWork.Path,
+		ActionType:   timedWork.ActionType,
+		AttemptCount: 1,
+		NextRetryAt:  nextRetry.UnixNano(),
+	})
+
+	assert.Equal(t, 2, flow.sched.HeldCount(), "both actions are held from the returned rows")
+	assert.Equal(t, 1, flow.sched.HeldUnderScope(scopeKey), "the blocked row holds its action under its scope")
+	earliest, timed := flow.sched.EarliestHeldRetryAt()
+	require.True(t, timed, "the timed row's retry time arms the retry timer")
+	assert.Equal(t, time.Unix(0, nextRetry.UnixNano()), earliest)
+	assert.False(t, flow.sched.HasDueHeldWork(eng.nowFunc()), "neither held action is due now")
 }
 
 // Validates: R-2.10.33
@@ -656,4 +705,11 @@ func TestEngineFlow_ScopeHasBlockedRetryWork_AnswersForOneScope(t *testing.T) {
 	blocked, err = flow.scopeHasBlockedRetryWork(ctx, testThrottleScope())
 	require.NoError(t, err)
 	assert.False(t, blocked, "no row under the scope")
+}
+
+// recordBlockedRetryWork records retry_work for an action that is currently
+// blocked by an active scope. Blocked rows have no retry timing until the
+// scope is released or trialed.
+func (flow *engineFlow) recordBlockedRetryWork(ctx context.Context, action *syncdomain.Action, scopeKey syncdomain.ScopeKey) error {
+	return flow.persistBlockedRetryWork(ctx, syncdomain.RetryWorkKeyForAction(action), scopeKey)
 }

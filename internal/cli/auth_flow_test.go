@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/authstate"
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
@@ -314,4 +316,40 @@ func TestLogin_APendingSignInItCannotRemoveJoinsTheLoginsError(t *testing.T) {
 	require.ErrorContains(t, err, "remove the pending sign-in")
 	require.ErrorIs(t, err, os.ErrPermission)
 	assert.FileExists(t, f.pendingPath)
+}
+
+// Validates: R-6.8.27, R-6.8.26
+//
+// Once login has installed its sign-in, the command's runtime holds the
+// login's sign-in at its final path, the one every later request of the
+// process uses, and the pending file the login signed in to is gone.
+func TestCompleteLogin_TheRuntimeHoldsTheSignInAtItsFinalPath(t *testing.T) {
+	f := newLoginFixture(t, false)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case testGraphMePath:
+			writeTestResponse(t, w, `{"id":"`+loginTestUserID+`","displayName":"`+loginTestDisplayName+`","mail":"`+f.cid.Email()+`"}`)
+		case primaryDrivePath:
+			writeTestResponse(t, w, `{"id":"`+loginTestNewDriveID+`","name":"OneDrive","driveType":"`+f.cid.DriveType()+`"}`)
+		default:
+			http.Error(w, "unexpected graph path", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	cc := newCommandContext(&bytes.Buffer{}, f.cfgPath)
+	cc.Runtime = newDiscoverAccountTestRuntime(srv.URL)
+	loaded := 0
+	cc.Runtime.TokenSourceFn = func(string, *slog.Logger) (graph.TokenSource, error) {
+		loaded++
+		return staticTokenSource{}, nil
+	}
+
+	require.NoError(t, completeLogin(t.Context(), cc, staticTokenSource{}, f.pendingPath))
+
+	assert.NoFileExists(t, f.pendingPath)
+	assert.FileExists(t, f.tokenPath)
+	_, err := cc.Runtime.BootstrapClient(f.tokenPath)
+	require.NoError(t, err)
+	assert.Zero(t, loaded, "the runtime uses the login's sign-in instead of loading the file again")
 }

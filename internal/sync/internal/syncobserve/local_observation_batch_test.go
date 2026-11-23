@@ -16,7 +16,7 @@ import (
 func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 	t.Parallel()
 
-	batch := localObservationBatchForEvent(&syncdomain.ChangeEvent{
+	batch := localObservationBatchForEvent(&syncdomain.LocalEntry{
 		Path:             "new.txt",
 		ItemType:         syncdomain.ItemTypeFile,
 		Hash:             "hash",
@@ -38,7 +38,6 @@ func TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow(t *testing.T) {
 		LocalInode:       78,
 		LocalHasIdentity: true,
 	}}, batch.Rows)
-	assert.Empty(t, batch.DeletedPaths)
 	assert.Empty(t, batch.DeletedPrefixes)
 }
 
@@ -48,14 +47,13 @@ func TestLocalObservationBatchForEvent_FileDeleteRemovesSubtree(t *testing.T) {
 
 	// A removal carries no kind: whatever the path was, its rows go with
 	// every row below it, so a file and a folder are removed the same way.
-	batch := localObservationBatchForEvent(&syncdomain.ChangeEvent{
+	batch := localObservationBatchForEvent(&syncdomain.LocalEntry{
 		Path:      "gone",
 		IsDeleted: true,
 	})
 
 	assert.True(t, batch.Dirty)
 	assert.Empty(t, batch.Rows)
-	assert.Empty(t, batch.DeletedPaths)
 	assert.Equal(t, []string{"gone"}, batch.DeletedPrefixes,
 		"a removed path can still have rows below it")
 }

@@ -317,7 +317,12 @@ the store, holding a cache of the table that it writes only from what a store
 call returned (R-2.10.33). The table is the one authority; the cache is
 compared with it after every completion when invariant checks are on, and a
 test holds the sources to the one write path
-(`TestRetryWork_IsTheOnlyEngineWriterOfRetryWork`).
+(`TestRetryWork_IsTheOnlyEngineWriterOfRetryWork`). A failure's action is
+held from the row the store mutator returned for it (the failure's own
+recording, a trial's reclassification, a permission probe's evidence), never
+from a cache read after the write, so a hold cannot disagree with what was
+persisted and there is no "missing row" path
+(`TestEngineFlow_HoldFromPersistedRetryState_UsesTheReturnedRowNotTheCache`).
 
 One goroutine, the one running `RunOnce` or `RunWatch`, owns all of them, and
 none has a lock -- the scheduler's scopes, the watch timers and the dependency
@@ -371,6 +376,15 @@ filter, local rules, shortcut namespace, websocket switch) arrives as
 taken in one place, `Engine.flowInputs`, which also takes the run's ID
 (`TestEngine_EachRunGetsADistinctRunID`), and `newEngineFlow` builds the flow
 from that `flowInputs` value (`TestEngine_FlowInputsCopyTheConfigurationAndHooks`).
+`flowInputs` copies the hooks once and builds everything else of the run from
+that copy (the pool size, the run clock in `runtimeDeps`, the remote source's
+wake-source factory, the local source's observer seams), and the run reads its
+pause wait, pass bound and the startup proof's catalog clear from `flow.hooks`,
+so a hook a test sets on the engine after a flow exists reaches the next run
+and never one already running
+(`TestEngineHooks_SetAfterAFlowExistsDoNotReachThatFlow`). Only reads before a
+run has a flow read `Engine.hooks`: the owner-check factory in `beginRun` and
+the engine's own clock (`Engine.runClock`) between runs.
 
 They were reached through a back-pointer to the whole `Engine`, and the flow
 no longer holds one (`TestRuntimeArchitecture_NoRunStateHoldsTheEngine`).

@@ -2,7 +2,7 @@ package syncstore
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
@@ -35,7 +35,7 @@ func (s *SyncStore) ReadShortcutRootStatusSnapshot(
 	parentSyncRoot string,
 ) ([]syncshortcut.ShortcutRootStatusView, error) {
 	if s == nil {
-		return nil, fmt.Errorf("read shortcut root status snapshot: nil store")
+		return nil, errors.New("read shortcut root status snapshot: nil store")
 	}
 
 	inspector := &storeInspector{

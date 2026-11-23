@@ -78,7 +78,7 @@ func (k ComparisonKind) String() string {
 	case ComparisonDiverged:
 		return "diverged"
 	default:
-		return fmt.Sprintf("comparisonKind(%d)", uint8(k))
+		return fmt.Sprintf("ComparisonKind(%d)", uint8(k))
 	}
 }
 
@@ -180,7 +180,7 @@ func (k ReconciliationKind) String() string {
 	case ReconcileReplaceLocal:
 		return "replace_local"
 	default:
-		return fmt.Sprintf("reconciliationKind(%d)", uint8(k))
+		return fmt.Sprintf("ReconciliationKind(%d)", uint8(k))
 	}
 }
 

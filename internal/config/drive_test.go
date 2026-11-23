@@ -681,6 +681,28 @@ func TestCollectOtherSyncDirs_WithCatalogAccount(t *testing.T) {
 	assert.Contains(t, dirs, "~/OneDrive - Contoso Ltd")
 }
 
+// Validates: R-4.1.5
+//
+// A shared drive whose section sets display_name and no sync_dir has one
+// default folder: the one it syncs into is the one the other drives count it
+// as for their collisions.
+func TestDefaultSyncDir_ASharedDriveIsOneFolderForItselfAndForTheOthers(t *testing.T) {
+	setTestDataDir(t)
+
+	cfg := DefaultConfig()
+	personalCID := driveid.MustCanonicalID("personal:self@example.com")
+	sharedCID := driveid.MustCanonicalID("shared:self@example.com:b!drive123:item456")
+	cfg.Drives[personalCID] = Drive{SyncDir: "~/OneDrive"}
+	cfg.Drives[sharedCID] = Drive{DisplayName: "Team Plans"}
+
+	own := EffectiveSyncDir(cfg, sharedCID, "", testLogger(t))
+	others := CollectOtherSyncDirs(cfg, personalCID, testLogger(t))
+
+	require.Len(t, others, 1)
+	assert.Equal(t, ExpandTilde("~/OneDrive-Shared/Team Plans"), own)
+	assert.Equal(t, own, ExpandTilde(others[0]))
+}
+
 func TestCollectOtherSyncDirs_SkipsEmptyBaseName(t *testing.T) {
 	setTestDataDir(t)
 

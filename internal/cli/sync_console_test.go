@@ -147,7 +147,7 @@ func TestSyncConsole_SummaryInHumanUnits(t *testing.T) {
 	c, out, _ := testSyncConsole()
 	for i := range 3 {
 		c.Activity(mountActivity(&syncengine.Activity{
-			Kind: syncengine.ActivityDownload, Path: fmt.Sprintf("f%d", i), Size: sizeMB, SizeKnown: true, Success: true,
+			Kind: syncengine.ActivityDownload, Path: fmt.Sprintf("f%d", i), Size: 1 << 20, SizeKnown: true, Success: true,
 		}))
 	}
 	c.Activity(mountActivity(&syncengine.Activity{Kind: syncengine.ActivityFolderCreate, Path: "d", Success: true}))
@@ -607,14 +607,6 @@ func TestCommandErrorText_NetworkFailureIsOnePlainLine(t *testing.T) {
 	assert.Equal(t, "Error: can't reach OneDrive through the configured proxy (connection refused). Check your network connection, then run the command again.", text)
 
 	assert.Contains(t, commandErrorText(err, true), "\nDetails: run sync engine once:", "--verbose keeps the full chain")
-}
-
-func TestHumanDuration(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, "0.4 s", humanDuration(400*time.Millisecond))
-	assert.Equal(t, "2 min 10 s", humanDuration(130*time.Second))
-	assert.Equal(t, "1 h 5 min", humanDuration(65*time.Minute))
 }
 
 // Validates: R-6.6.28

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -89,7 +90,7 @@ type statusIssueJSON struct {
 
 func validateStatusJSONContract(status statusJSON) error {
 	if !status.Summary.hasTotalDrives {
-		return fmt.Errorf("status json missing summary.total_drives")
+		return errors.New("status json missing summary.total_drives")
 	}
 	actualDrives := countStatusDrives(status)
 	if status.Summary.TotalDrives != actualDrives {

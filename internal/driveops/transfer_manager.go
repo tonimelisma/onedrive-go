@@ -2,7 +2,6 @@ package driveops
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"math"
 	"os"
@@ -104,33 +103,7 @@ func NewTransferManager(
 	return tm
 }
 
-// Binary size units for formatSize. OneDrive's own limits (250 GB) are
-// binary, so the same units keep messages consistent with them.
-const (
-	sizeKB = 1 << 10
-	sizeMB = 1 << 20
-	sizeGB = 1 << 30
-	sizeTB = 1 << 40
-)
-
-// formatSize renders a byte count in human units ("1.5 GB") for error and
-// warning text a user reads at default verbosity.
-func formatSize(bytes int64) string {
-	switch {
-	case bytes >= sizeTB:
-		return fmt.Sprintf("%.1f TB", float64(bytes)/float64(sizeTB))
-	case bytes >= sizeGB:
-		return fmt.Sprintf("%.1f GB", float64(bytes)/float64(sizeGB))
-	case bytes >= sizeMB:
-		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(sizeMB))
-	case bytes >= sizeKB:
-		return fmt.Sprintf("%.1f KB", float64(bytes)/float64(sizeKB))
-	default:
-		return fmt.Sprintf("%d B", bytes)
-	}
-}
-
-// clampToInt64 converts a statfs byte count for formatSize. Free space beyond
+// clampToInt64 converts a statfs byte count for humanunit.Size. Free space beyond
 // int64 range (8 EiB) does not occur on real filesystems.
 func clampToInt64(v uint64) int64 {
 	if v > math.MaxInt64 {

@@ -399,3 +399,30 @@ func TestExecutor_LocalMove_StaleSourceLeavesTheReplacedDestinationInPlace(t *te
 	require.NoError(t, err)
 	assert.Empty(t, entries, "nothing went to the trash for a move that did not run")
 }
+
+// A download that would replace a synced file whose trash entry cannot be
+// reserved fails as a failure, not as a target already gone: the old version
+// stays at its name.
+//
+// Validates: R-6.4.9
+func TestExecutor_Download_AReservationThatFailsKeepsTheReplacedFile(t *testing.T) {
+	t.Parallel()
+
+	dl := &syncfixture.ExecutorMockDownloader{
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			n, err := w.Write([]byte("new"))
+			return int64(n), err
+		},
+	}
+	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, dl, &syncfixture.ExecutorMockUploader{})
+	cfg.trash = reservationLosingItsFolder(t)
+	syncfixture.WriteExecTestFile(t, syncRoot, "app.db", "old")
+
+	o := NewExecution(cfg, syncfixture.EmptyBaseline()).ExecuteDownload(t.Context(), syncfixture.DatabaseDownloadAction())
+
+	syncfixture.RequireOutcomeFailure(t, &o)
+	require.NotErrorIs(t, o.Error, syncdomain.ErrActionPreconditionChanged)
+	require.NotErrorIs(t, o.Error, os.ErrNotExist)
+	require.ErrorContains(t, o.Error, "reserving a trash entry")
+	requireExecFileContent(t, syncRoot, "app.db", "old")
+}

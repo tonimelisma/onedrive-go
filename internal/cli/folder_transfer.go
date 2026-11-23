@@ -2,6 +2,7 @@ package cli
 
 import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
@@ -62,7 +63,7 @@ func (r *folderTransferReport) finish(
 		failed = bulkTransferError(nil, r.noun, r.failures)
 	} else {
 		r.cc.Statusf("%s %s, %s (%s)\n", r.verb,
-			countOf(summary.Files, "file"), countOf(summary.Folders, "folder"), formatSize(summary.Bytes))
+			countOf(summary.Files, "file"), countOf(summary.Folders, "folder"), humanunit.Size(summary.Bytes))
 		failed = bulkTransferError(r.cc, r.noun, r.failures)
 	}
 

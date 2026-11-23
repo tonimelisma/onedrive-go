@@ -3,7 +3,6 @@ package syncdomain
 import (
 	"errors"
 	"fmt"
-	"slices"
 )
 
 // SideType is what one side (the baseline, the local tree, OneDrive) holds at
@@ -68,11 +67,6 @@ func ParseSideType(s string) (SideType, error) {
 	}
 
 	return SideTypeOf(itemType), nil
-}
-
-// AllSideTypes lists every SideType member.
-func AllSideTypes() []SideType {
-	return []SideType{SideAbsent, SideFile, SideFolder, SideRoot}
 }
 
 // DecisionState is everything the decision table reads about one path: what
@@ -421,10 +415,12 @@ var errInvalidDecisionState = errors.New("sync: decision state contradicts its s
 // Valid reports whether the comparison query can produce s: each rule is one
 // line of a flag's definition there (a flag about an absent side is false; a
 // type change is a content change; a folder has no content to change; ...).
-// The decision table is held to its properties over the valid states.
+// The decision table is held to its properties over the valid states. The
+// rules are evaluated into an array on the stack, so a check allocates
+// nothing however often the planner and its tests call it.
 func (s DecisionState) Valid() error {
-	for _, rule := range decisionStateRules() {
-		if !rule.holds(s) {
+	for _, rule := range decisionStateChecks(s) {
+		if !rule.holds {
 			return fmt.Errorf("%w: %s", errInvalidDecisionState, rule.name)
 		}
 	}
@@ -432,102 +428,118 @@ func (s DecisionState) Valid() error {
 	return nil
 }
 
-// decisionStateRule is one line of the flag definitions.
-type decisionStateRule struct {
+// decisionStateCheck is one line of the flag definitions, evaluated for one
+// state.
+type decisionStateCheck struct {
 	name  string
-	holds func(DecisionState) bool
+	holds bool
 }
+
+// decisionStateRuleCount is how many lines the flag definitions have.
+const decisionStateRuleCount = 22
 
 func implies(a, b bool) bool { return !a || b }
 
-func decisionStateRules() []decisionStateRule {
-	return slices.Concat(contentRules(), sideFactRules(), placementRules())
-}
-
-// contentRules are the rules of the content-change flags.
-func contentRules() []decisionStateRule {
-	return []decisionStateRule{
-		{"local_changed needs baseline and local", func(s DecisionState) bool {
-			return implies(s.LocalChanged, s.Baseline.Present() && s.Local.Present())
-		}},
-		{"remote_changed needs baseline and remote", func(s DecisionState) bool {
-			return implies(s.RemoteChanged, s.Baseline.Present() && s.Remote.Present())
-		}},
-		{"a local type change is a local change", func(s DecisionState) bool {
-			return implies(s.LocalTypeChanged(), s.LocalChanged)
-		}},
-		{"a remote type change is a remote change", func(s DecisionState) bool {
-			return implies(s.RemoteTypeChanged(), s.RemoteChanged)
-		}},
-		{"a synced folder that is still a folder locally has no local change", func(s DecisionState) bool {
-			return implies(s.Baseline == SideFolder && s.Local == SideFolder, !s.LocalChanged)
-		}},
-		{"a synced folder that is still a folder online has no remote change", func(s DecisionState) bool {
-			return implies(s.Baseline == SideFolder && s.Remote == SideFolder, !s.RemoteChanged)
-		}},
-	}
-}
-
-// sideFactRules are the rules of the replacement, subtree, kept-folder,
-// equality and drift flags.
-func sideFactRules() []decisionStateRule {
-	return []decisionStateRule{
-		{"local_item_replaced needs baseline and local", func(s DecisionState) bool {
-			return implies(s.LocalItemReplaced, s.Baseline.Present() && s.Local.Present())
-		}},
-		{"remote_item_replaced needs baseline and remote", func(s DecisionState) bool {
-			return implies(s.RemoteItemReplaced, s.Baseline.Present() && s.Remote.Present())
-		}},
-		{"local_subtree_changed is asked of a folder OneDrive replaced with a file", func(s DecisionState) bool {
-			return implies(s.LocalSubtreeChanged, s.Baseline == SideFolder && s.Local == SideFolder &&
-				s.Remote.Present() && s.Remote != SideFolder)
-		}},
-		{"remote_subtree_changed is asked of a folder the user replaced with a file", func(s DecisionState) bool {
-			return implies(s.RemoteSubtreeChanged, s.Baseline == SideFolder && s.Remote == SideFolder &&
-				s.Local.Present() && s.Local != SideFolder)
-		}},
-		{"kept_local_folder is an unsynced local-only folder", func(s DecisionState) bool {
-			return implies(s.KeptLocalFolder, !s.Baseline.Present() && !s.Remote.Present() && s.Local == SideFolder)
-		}},
-		{"current_equal needs both sides of one type", func(s DecisionState) bool {
-			return implies(s.CurrentEqual, s.Local.Present() && s.Local == s.Remote)
-		}},
-		{"two folders are equal", func(s DecisionState) bool {
-			return implies(s.Local == SideFolder && s.Remote == SideFolder, s.CurrentEqual)
-		}},
-		{"metadata_drift needs all three sides", func(s DecisionState) bool {
-			return implies(s.MetadataDrift, s.Baseline.Present() && s.Local.Present() && s.Remote.Present())
-		}},
-	}
-}
-
-// placementRules are the rules of the move pairing and ancestor-move flags.
-func placementRules() []decisionStateRule {
-	return []decisionStateRule{
-		{"a local move source is a baseline path", func(s DecisionState) bool {
-			return implies(s.LocalMoveSource, s.Baseline.Present())
-		}},
-		{"a local move destination is an unsynced local path", func(s DecisionState) bool {
-			return implies(s.LocalMoveDest, s.Local.Present() && !s.Baseline.Present())
-		}},
-		{"a remote move source still holds the synced item locally", func(s DecisionState) bool {
-			return implies(s.RemoteMoveSource, s.Baseline.Present() && s.Local == s.Baseline)
-		}},
-		{"a remote move destination is a remote path no unsynced local entry holds", func(s DecisionState) bool {
-			return implies(s.RemoteMoveDest, s.Remote.Present() && implies(s.Local.Present(), s.Baseline.Present()))
-		}},
-		{"a shadowed remote move is a remote path", func(s DecisionState) bool {
-			return implies(s.RemoteMoveShadowed, s.Remote.Present())
-		}},
-		{"a remote create waiting for an ancestor's move is a remote path", func(s DecisionState) bool {
-			return implies(s.RemoteCreateAwaitsAncestorMove, s.Remote.Present())
-		}},
-		{"a local copy waiting for an ancestor's move is a local path", func(s DecisionState) bool {
-			return implies(s.LocalCopyAwaitsAncestorMove, s.Local.Present())
-		}},
-		{"a delete waiting for an ancestor's move is a synced path gone locally", func(s DecisionState) bool {
-			return implies(s.DeleteAwaitsAncestorMove, s.Baseline.Present() && !s.Local.Present())
-		}},
+// decisionStateChecks evaluates every line of the flag definitions for s.
+// Each line is one boolean rule, so the count of branches is the count of
+// rules, not nested logic.
+//
+//nolint:gocyclo // one flat list of the definitions' rules
+func decisionStateChecks(s DecisionState) [decisionStateRuleCount]decisionStateCheck {
+	return [decisionStateRuleCount]decisionStateCheck{
+		// The content-change flags.
+		{
+			name:  "local_changed needs baseline and local",
+			holds: implies(s.LocalChanged, s.Baseline.Present() && s.Local.Present()),
+		},
+		{
+			name:  "remote_changed needs baseline and remote",
+			holds: implies(s.RemoteChanged, s.Baseline.Present() && s.Remote.Present()),
+		},
+		{
+			name:  "a local type change is a local change",
+			holds: implies(s.LocalTypeChanged(), s.LocalChanged),
+		},
+		{
+			name:  "a remote type change is a remote change",
+			holds: implies(s.RemoteTypeChanged(), s.RemoteChanged),
+		},
+		{
+			name:  "a synced folder that is still a folder locally has no local change",
+			holds: implies(s.Baseline == SideFolder && s.Local == SideFolder, !s.LocalChanged),
+		},
+		{
+			name:  "a synced folder that is still a folder online has no remote change",
+			holds: implies(s.Baseline == SideFolder && s.Remote == SideFolder, !s.RemoteChanged),
+		},
+		// The side facts.
+		{
+			name:  "local_item_replaced needs baseline and local",
+			holds: implies(s.LocalItemReplaced, s.Baseline.Present() && s.Local.Present()),
+		},
+		{
+			name:  "remote_item_replaced needs baseline and remote",
+			holds: implies(s.RemoteItemReplaced, s.Baseline.Present() && s.Remote.Present()),
+		},
+		{
+			name: "local_subtree_changed is asked of a folder OneDrive replaced with a file",
+			holds: implies(s.LocalSubtreeChanged, s.Baseline == SideFolder && s.Local == SideFolder &&
+				s.Remote.Present() && s.Remote != SideFolder),
+		},
+		{
+			name: "remote_subtree_changed is asked of a folder the user replaced with a file",
+			holds: implies(s.RemoteSubtreeChanged, s.Baseline == SideFolder && s.Remote == SideFolder &&
+				s.Local.Present() && s.Local != SideFolder),
+		},
+		{
+			name:  "kept_local_folder is an unsynced local-only folder",
+			holds: implies(s.KeptLocalFolder, !s.Baseline.Present() && !s.Remote.Present() && s.Local == SideFolder),
+		},
+		{
+			name:  "current_equal needs both sides of one type",
+			holds: implies(s.CurrentEqual, s.Local.Present() && s.Local == s.Remote),
+		},
+		{
+			name:  "two folders are equal",
+			holds: implies(s.Local == SideFolder && s.Remote == SideFolder, s.CurrentEqual),
+		},
+		{
+			name:  "metadata_drift needs all three sides",
+			holds: implies(s.MetadataDrift, s.Baseline.Present() && s.Local.Present() && s.Remote.Present()),
+		},
+		// The placement flags.
+		{
+			name:  "a local move source is a baseline path",
+			holds: implies(s.LocalMoveSource, s.Baseline.Present()),
+		},
+		{
+			name:  "a local move destination is an unsynced local path",
+			holds: implies(s.LocalMoveDest, s.Local.Present() && !s.Baseline.Present()),
+		},
+		{
+			name:  "a remote move source still holds the synced item locally",
+			holds: implies(s.RemoteMoveSource, s.Baseline.Present() && s.Local == s.Baseline),
+		},
+		{
+			name:  "a remote move destination is a remote path no unsynced local entry holds",
+			holds: implies(s.RemoteMoveDest, s.Remote.Present() && implies(s.Local.Present(), s.Baseline.Present())),
+		},
+		{
+			name:  "a shadowed remote move is a remote path",
+			holds: implies(s.RemoteMoveShadowed, s.Remote.Present()),
+		},
+		{
+			name:  "a remote create waiting for an ancestor's move is a remote path",
+			holds: implies(s.RemoteCreateAwaitsAncestorMove, s.Remote.Present()),
+		},
+		{
+			name:  "a local copy waiting for an ancestor's move is a local path",
+			holds: implies(s.LocalCopyAwaitsAncestorMove, s.Local.Present()),
+		},
+		{
+			name:  "a delete waiting for an ancestor's move is a synced path gone locally",
+			holds: implies(s.DeleteAwaitsAncestorMove, s.Baseline.Present() && !s.Local.Present()),
+		},
 	}
 }
 

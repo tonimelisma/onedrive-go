@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/loglevel/loglevel.go, internal/sdnotify/sdnotify.go
 
-Implements: R-1 [implemented], R-6.2.17 [verified], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.36 [verified], R-6.6.33 [verified], R-6.6.37 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.8.28 [verified], R-6.8.31 [verified]
+Implements: R-1 [implemented], R-6.2.17 [verified], R-6.2.18 [verified], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.36 [verified], R-6.6.33 [verified], R-6.6.37 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.8.28 [verified], R-6.8.31 [verified]
 
 ## Overview
 
@@ -41,6 +41,7 @@ are inserted, updated, pruned, and validated.
 | `trash list/restore/empty` read and change one configured drive's local trash offline, together with the trash of each of its shortcut children (R-6.4.12; a child is a mount, not a selectable drive, and each entry names its sync folder); restore never overwrites, never re-creates a sync folder that is gone and then names where the file is in the trash, and creates the file's missing folders with the user-tree folder mode (R-5.10.2); empty needs `--confirm`. `trash list` words each reason by one exhaustive switch over the declared reasons (`trashReasonText`): `released` says the file's shared folder was removed from this account, and a reason outside the set is listed with its stored word (R-6.4.13). | `TestTrashCommands_ListRestoreAndEmpty`, `TestTrashRestore_NeverOverwrites`, `TestTrash_RestoreRefusesAMissingSyncFolder`, `TestTrash_RestoreCreatesMissingFoldersThatFollowTheUmask`, `TestTrashCommands_TheDrivesTrashCoversItsShortcutChildren`, `TestTrashList_ReleasedEntrySaysItsSharedFolderWasRemoved`, `TestTrashRestore_IntoASyncFolderThatIsGoneNamesWhereTheFileIs`, `TestTrashReasonText_NamesEveryDeclaredReason` |
 | `get` of a shared folder downloads through the tree download every folder `get` uses (`driveops.DownloadTree`, `drive-transfers.md`), listed by item ID; a shared file `get` into a folder lands under its remote name there, as a drive path's does, through the same downloader (R-1.2.5, R-1.2.6). Given no local path or a local folder, a file `get` takes the remote name as the file's name only when it is one plain local name, and otherwise refuses before anything is written and asks for a local file (R-1.2.7). The sync folder `login` and `drive add` create is the one folder the client makes in user space on its own initiative: it is private, 0700 (`syncRootDirPerms`). | `TestRunGet_SharedFolderDownloadsItsTree`, `TestRunGet_SharedFileDownloadsIntoTheGivenFolder`, `TestLocalFileTarget_DownloadsIntoDirectories`, `TestLocalFileTarget_RefusesAnUnsafeRemoteName`, `TestRunGet_SharedFileWithAnUnsafeNameIsRefused` |
 | `drive rebind-root` shows the remembered and present file counts, needs `--yes` or a typed REBIND, clears the recorded sync-folder fingerprint, keeps the rest of the state (recorded mount points included, so a disk that is not mounted stays unavailable truth), needs `--drive`, and refuses while a sync owner holds the drive. | `TestRunDriveRebindRoot_RequiresDrive`, `TestRunDriveRebindRoot_KeepsStateAndReportsRebind`, `TestRunDriveRebindRoot_RequiresConfirmationWithoutYes`, `TestRunDriveRebindRoot_RefusesLiveSyncOwner` |
+| `drive forget-mount <path>` forgets one recorded mount point whose folder now holds the disk's content as a plain folder of the sync folder's own disk (a whole-tree restore), so the next sync compares that content with OneDrive instead of reporting "Disk not mounted"; nothing is deleted (R-6.2.18). It takes the folder relative to the sync folder, as `status` names it, or its absolute path; needs `--drive` and `--yes` or a typed FORGET after it shows the folder's file count; refuses, changing nothing, a folder that is not recorded (listing the recorded ones), missing or empty (a disk that is not mounted, whose content forgetting would let the next sync delete on OneDrive), still on another device, or outside the sync folder; and refuses while a sync owner or an engine holds the drive (`changeDriveStateUnderLock`). | `TestRunDriveForgetMount_ForgetsAPlainFolderWithContent`, `TestRunDriveForgetMount_TakesAnAbsolutePathAndReportsJSON`, `TestRunDriveForgetMount_RefusesWhatCouldLoseContent`, `TestRunDriveForgetMount_RefusesLiveSyncOwner`, `TestNewDriveCmd_HasForgetMount` |
 | `drive reset-sync-state` remains the only destructive sync-state recreate surface and requires explicit drive selection plus confirmation. It and `drive rebind-root` refuse while a sync owner holds the drive, and also while any engine holds the drive's sync folder or its state store (R-6.3.9). `drive remove --purge` and `logout --purge` remove the config sections, tell a running watch, and then delete each state store under the same locks, keeping one an engine still has open and naming the command that finishes (R-3.3.8, R-3.1.4). | `TestNewDriveResetSyncStateCmd_HasYesFlag`, `TestRunDriveResetSyncStateWithInput_RequiresDrive`, `TestRunDriveResetSyncStateWithInput_RequiresInteractiveConfirmationWithoutYes`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB`, `TestRunDriveResetSyncStateWithInput_RefusesLiveSyncOwner`, `TestOfflineStateChanges_RefuseWhileAnEngineHoldsTheDrive`, `TestDriveRemovePurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestLogoutPurge_KeepsTheStateWhileAnEngineHoldsIt`, `TestDriveRemovePurge_NotifiesTheWatchBeforeDeleting`, `TestLogoutPurge_NotifiesTheWatchBeforeDeleting` |
 | `pause` and `resume` remain CLI-owned config mutations rather than direct sync-store writes. | `TestPauseCommand_PersistsTimedPause`, `TestResumeCommand_ClearsPausedKeys`, `TestClearPausedKeys_RemovesBothKeys` |
 | After a config change the CLI says what the running watch did with it: picked up, being applied (`reload_in_progress`), busy (the owner's `busy` or the client's deadline, on the probe or the reload), or rejected (`reload_failed`); the reload's client timeout outlasts the owner's waits; `status` says when the running sync did not answer, and says nothing about it when the user stopped `status` (R-2.9.3). | `TestNotifyDaemon_BusySyncSaysItWillPickTheChangeUp`, `TestNotifyDaemon_ReloadInProgressSaysSo`, `TestDecodeControlJSONResponse_BodyTimeoutReadsAsDidNotAnswer`, `TestRunStatusCommand_PerfProbesTheSocketOnce`, `TestNotifyDaemon_ReloadRejectedByRunningSyncIsAWarning`, `TestProbeControlOwner_ClassifiesOutcomes`, `TestControlSocketClientReloadAndPostJSON`, `TestControlSocketErrorClassification`, `TestRunStatusCommand_SaysWhenTheRunningSyncDidNotAnswer`, `TestRunStatusCommand_AStoppedStatusSaysNothingAboutTheRunningSync` |
@@ -54,13 +55,13 @@ are inserted, updated, pruned, and validated.
 | A panic ends a command with exit 1 and never Go's 2 (R-6.3.10): on the command's goroutine through the last line of defense in `mainWithWriters` (the log file and stderr both get the stack), in the signal handler, the systemd keepalive or the performance logger through the command's context, and in a one-shot helper as its unit's failure; a watch a panic ended sets its failure `STATUS=`. In a folder `get` or `put`, a panic in one file's transfer is that file's failure, and a panic while the command renders an event fails the command (`drive-transfers.md`). | `TestMainWithWriters_PanicExitsOne`, `TestMainWithWriters_APanicOnTheCommandsGoroutineWritesOnePerformanceSummary`, `TestFormatWatchStartupError_KeepsAPanicTheErrorCarries`, `TestWithCommandPanic_AHelpersPanicIsTheCommandsError`, `TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError`, `TestShutdownContext_HandlerPanicStopsTheRequestInFlight`, `TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError`, `TestRunSyncDaemon_WatchdogPanicStopsTheWorkInFlight`, `TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne`, `TestSession_UpdatePanicEndsTheCommandWithThePanic`, `TestSession_UpdatePanicStopsTheRequestInFlight`, `TestSession_CompleteReleasesTheCommandContext`, `TestDiscoverAvailableDrives_APanicIsThatAccountsDegradedNotice`, `TestDownloadTree_APanickingTransferFailsOnlyThatFile`, `TestDownloadTree_APanickingReportFailsTheRun` |
 | `sync --watch` reports READY/STATUS/RELOADING/STOPPING/WATCHDOG to systemd through `internal/sdnotify`, and nothing outside systemd. | `TestRunSyncDaemon_NotifiesSystemdOfLifecycle`, `TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode`, `TestRunSyncDaemon_NoDrivesIsAConfigFailure`, `TestSyncNotifierWatchingStatus`, `TestOpenSyncNotifier_BadSocketWarnsAndContinues`, `TestNotifier_SendsProtocolMessages`, `TestOpen_AbstractSocket`, `TestOpen_WatchdogInterval`, `TestRunWatch_ReportsLifecycleTransitions` |
 | The watchdog keepalive goes out only while the watch loop's heartbeat shows progress; a silence is logged once at Error and the keepalive resumes when the loop beats again (R-6.6.36). | `TestSyncNotifier_KeepaliveOnlyWhileTheLoopMakesProgress` |
-| User-facing output agrees across commands: `drive list` and `status` derive a configured drive's state through one function (`configuredDriveState`); `stat` prints local times like `ls`; `ls` on a file lists that file; every transport failure, before or while reading the response, and every sign-in outcome is one plain line; health checks do not log a token load. | `TestBuildConfiguredDriveEntries_StateMatchesStatus`, `TestFormatExactTime_IsLocalWithZone`, `TestLs_OnAFileListsThatFile`, `TestCommandErrorText_EveryTransportFailureIsPlain`, `TestCommandErrorText_SignInOutcomesSayRunLoginAgain`, `TestInspectSavedLogin_DoesNotLogATokenLoad` |
+| User-facing output agrees across commands: `drive list` and `status` derive a configured drive's state through one function (`configuredDriveState`); `stat` prints local times like `ls`; `ls` on a file lists that file; every transport failure, before or while reading the response, and every sign-in outcome is one plain line; health checks do not log a token load. | `TestBuildConfiguredDriveEntries_StateMatchesStatus`, `TestFormatExactTime_IsLocalWithZone`, `TestLs_OnAFileListsThatFile`, `TestCommandErrorText_EveryTransportFailureIsPlain`, `TestCommandErrorText_AStalledAnswerAndALostConnectionAreKnownByType`, `TestCommandErrorText_SignInOutcomesSayRunLoginAgain`, `TestInspectSavedLogin_DoesNotLogATokenLoad` |
 | Every runnable command honors `--json` (one document on stdout, or JSON lines for `sync`) or refuses it as a usage error; the mutating commands report their result as JSON. | `TestCommandTree_EveryLeafHonorsJSON`, `TestDriveAdd_JSONWithoutSelectorIsAUsageError`, `TestPauseCommand_JSONReportsDriveAndEndTime`, `TestResumeCommand_JSONReportsEveryDriveOutcome`, `TestDriveRemove_JSONReportsWhatWasRemoved`, `TestDriveAdd_JSONReportsAddedThenAlreadyConfigured`, `TestLogoutCommand_JSONNamesAccountAndDrives`, `TestRecycleBinEmpty_JSONListsDeletedAndFailedAndStillFails` |
 | Every byte of `--json` output is encoded in `json_output.go`, with HTML escaping off, and an encoding failure and a write failure are told apart; a list prints `[]`, never `null`, and `accounts_requiring_auth` is always present; a `sync --json` line that cannot be written is reported once on stderr and the sync goes on (R-6.6.33, R-6.6.28, R-3.3.10, R-3.3.11). | `TestWriteJSONDocument_Format`, `TestWriteJSONLine_Format`, `TestWriteJSONOutput_WriteFailureIsNamed`, `TestJSONOutputTypes_NoListPrintsNull`, `TestListDepth_FindsTheDeepestList`, `TestJSONOutputCalls_PrintDeclaredTypesWithTheirListsFilled`, `TestCommandTree_EveryLeafHonorsJSON`, `TestGetFolderJSONOutput_EmptyErrors`, `TestGetFolderJSONOutput_Golden`, `TestPutFolderJSONOutput_Golden`, `TestPrintDriveListJSON_NilSlicesRenderAsEmptyArrays`, `TestPrintDriveSearchJSON_EmptySlice`, `TestSyncConsole_EmitJSONFailureIsReported` |
 | Command-level side-effect contracts are tested at the CLI boundary: read-only commands do not mutate managed state, and mutating commands fail selector/path validation before remote mutation. | `TestRunLs_DoesNotMutateManagedState`, `TestRunRm_RequiresExplicitPathBeforeGraphMutation` |
 | `status` asks every account's live details at the same time under one budget (`statusLiveBudget`, 10 s, for all accounts together); an account whose answers did not arrive, or whose profile request failed for a reason other than sign-in, shows its local state with one stderr note naming the reason, `--json` stdout stays one document, and the command exits 0; a 401 still marks the account as needing sign-in, and a stopped command adds no note; the budget covers each request's token refresh and retry waits, so the note names the answer OneDrive gave when it gave one; one account's throttle never reaches another account, and a failure of Microsoft sign-in is named as that (R-6.8.28). | `TestStatus_PrintsLocalStateWhenOneDriveDoesNotAnswerInTheBudget`, `TestStatus_AsksAccountsAtTheSameTime`, `TestStatus_StorageCutShortByTheBudgetIsNoted`, `TestStatus_SaysWhyOneDriveGaveNoDetails`, `TestStatus_AStorageServerErrorIsNoted`, `TestStatus_ASlowTokenRefreshIsCutByTheBudget`, `TestStatus_OneAccountsThrottleLeavesTheOtherAlone`, `TestStatus_ASignInConnectionFailureIsNamedInTheNote`, `TestStatus_ASignInFailureStillMarksTheAccount`, `TestStatus_AStoppedCommandAddsNoNote` |
 | The account identity check never fails or stalls a command: a failure other than sign-in leaves the stored identity and the command goes on, the check ends at its 5 s budget, it is asked only when due (24 hours after an answer or a sign-in, 15 minutes after a failure, at once for a record without the time or one a clock that went back left), a check the command's own stop cut short records nothing, an email change it learns of is still applied, and several accounts are checked at the same time with each record kept; `drive list` runs its drive discovery and shared search side by side (R-6.8.31). | `TestSession_AFailedIdentityCheckDoesNotFailTheCommand`, `TestSession_AnIdentityCheckThatDoesNotAnswerEndsAtItsBudget`, `TestSession_ASignInFailureFromTheIdentityCheckStillFailsTheCommand`, `TestProbeAccountIdentity_SkipsWhileNotDue`, `TestProbeAccountIdentity_AsksWhenDue`, `TestProbeAccountIdentity_AFailureIsRetriedAfterFifteenMinutes`, `TestProbeAccountIdentity_AnEmailChangeIsStillAppliedWhenDue`, `TestProbeAccountIdentity_AnInterruptedCheckRecordsNothing`, `TestAccountViewSnapshot_AsksEveryAccountAtOnceAndKeepsEachRecord`, `TestSharedTarget_AFailedIdentityCheckDoesNotFailTheCommand`, `TestDriveList_ASlowIdentityAnswerDoesNotDelayTheListing`, `TestLogin_RecordsTheIdentityCheck` |
-| Every account-level Graph client a command builds (identity probe, `drive list` and `drive search` discovery, shared discovery, the `status` live overlay, shared-drive naming, share-URL bootstrap) comes from the command's session runtime, which also picks the Graph base URL in one place (`CLIContext.runtime`); only login holds a token source of its own, the one the sign-in produced (R-6.8.27). | `TestCLIBootstrapClientsUseTheSessionRuntime`, `TestCLIContextSession_ProbeAndSessionShareOneTokenSource` |
+| Every account-level Graph client a command builds (identity probe, `drive list` and `drive search` discovery, shared discovery, the `status` live overlay, shared-drive naming, share-URL bootstrap) comes from the command's session runtime, which also picks the Graph base URL in one place (`CLIContext.runtime`); only login holds a token source of its own, the one the sign-in produced, until it installs the sign-in and hands that source, moved to the final path, to the runtime (R-6.8.27). The command's setup builds no runtime of its own: the runtime is built when the command first needs it, and a data command's is built over its resolved config (a runtime built before the resolution is handed that config's holder, `SessionRuntime.UseHolder`), so a command holds one runtime. | `TestCLIBootstrapClientsUseTheSessionRuntime`, `TestCLIContextSession_ProbeAndSessionShareOneTokenSource`, `TestPersistentPreRunE_ADataCommandBuildsOneSessionRuntime` |
 
 ## Log Files Are Owner-Only
 
@@ -565,11 +566,17 @@ is the one that logs "loaded saved token".
 Transport failures are recognized whether they happen before the response
 (`*url.Error`) or while reading it (`*graph.ResponseReadError`, set on every
 response body by the Graph client): timeouts, including a response-header
-timeout, are "OneDrive did not answer in time"; certificate, TLS record and
-TLS alert failures are "the secure connection to OneDrive failed"; EOF,
-unexpected EOF, resets, closed connections and HTTP/2 stream or connection
-errors (matched by net/http's fixed "stream error:"/"http2: " text, since those
-types are unexported) are "the connection to OneDrive was interrupted". A disk
+timeout, and an answer the Graph client abandoned because its body brought no
+byte for the stall window (`graph.ErrResponseStalled`, read by type: it has no
+`Timeout`, and over HTTP/2 it carries a closed body's "http2:" text), are
+"OneDrive did not answer in time"; certificate, TLS record and TLS alert
+failures are "the secure connection to OneDrive failed"; EOF, unexpected EOF,
+resets, closed connections, a connection whose health-check ping went
+unanswered (`graph.ErrConnectionLost`, read by type) and the HTTP/2 stream or
+connection errors net/http does not export (matched by their fixed
+"stream error:"/"http2: " text, the one place text is read) are "the
+connection to OneDrive was interrupted"
+(`TestCommandErrorText_AStalledAnswerAndALostConnectionAreKnownByType`). A disk
 error io.Copy returns during a download carries neither mark and is never
 described as a OneDrive problem. When the failed request was one to Microsoft
 sign-in (a token refresh, or a login flow's request), which the graph client
@@ -594,7 +601,23 @@ prints it if it is a file; any other failure is reported unchanged.
 File commands wrap failures in `remoteOpError` (action, path, cause) instead
 of `fmt.Errorf("<action> %q: %w")`; its `Error()` text is unchanged, but
 `commandErrorText` uses the path to print one plain sentence for the Graph
-failure classes and missing or unreadable local files (R-6.6.26). Command-line
+failure classes and missing or unreadable local files (R-6.6.26). Answers
+for one path that name different folders for it (`graph.ErrPathAnswersDisagree`,
+recognized with `errors.Is`, so the end of a visibility wait, whose
+`driveops.PathNotVisibleError` carries it as its cause, is caught too) are one
+sentence that names the command's path once (the wait's path when the command
+recorded none), says the answers do not agree on which folder holds it and
+that this usually settles: it says nothing about whether anything changed,
+since a wait that confirms a delete, a move or a new folder meets it after the
+change landed; the folders' item IDs are only in `--verbose`'s details
+(`TestCommandErrorText_DisagreeingAnswersForAPathAreOneSentence`). A name with `:`
+is read through its parent folder's listing (R-6.7.38), so a command that
+does not find it names the path once with the `ls` of its folder, as any
+missing path does (`TestCommandErrorText_ANameAPathCannotCarryIsOneSentence`);
+where `graph.ErrNameNotPathAddressable` still reaches the command, the
+sentence names the path once and the character, or says a name is too long
+for a path route.
+Command-line
 mistakes become `usageError` through cobra's flag-error hook, a wrapper on
 every command's `Args` validator, and a flag-group check that runs before
 `initializeCLIContext`; `main` prints them with a `--help` pointer and exits 2.
@@ -767,6 +790,7 @@ The mutating commands' documents:
 | `drive remove` | `drive`, `removed_from_config`, `purged` |
 | `drive reset-sync-state` | `drive`, `reset` |
 | `drive rebind-root` | `drive`, `rebound`, `synced_files`, `files_in_folder` |
+| `drive forget-mount` | `drive`, `path`, `forgotten`, `files_in_folder` |
 | `trash list` | `drive`, `entries[]` (the drive's own and its shortcut children's) of `id`, `path`, `sync_root`, `reason` (`deleted`, `replaced`, `released`), `size`, `trashed_at`, `state` (`committed`, `pending`, `orphan`) |
 | `trash restore` | `drive`, `id`, `restored_to`, `warning` (what failed after the file was put back; the command then exits 1 although the file is at `restored_to`; omitted for a clean restore) |
 | `trash empty` | `drive`, `removed` |
@@ -855,7 +879,7 @@ Sync intent is derived from observation snapshots and planner reconciliation,
 then applied by the sync executor through concrete file and remote side effects.
 
 `sync` refuses to run as root (effective UID 0) unless `--allow-root` is
-given (P-9): a root sync writes root-owned files into the user's folder that
+given (R-6.3.7): a root sync writes root-owned files into the user's folder that
 the user's later syncs and editors cannot change. The refusal is a usage
 error raised before config is read (`refuseSyncAsRoot`,
 `TestSync_RefusesRootWithoutAllowRoot`).
@@ -1128,7 +1152,8 @@ a one-shot owner answers status in the handler. `drive reset-sync-state`
 refuses on it as on any probe that could not tell.
 
 The probe sees only an owner that holds the control socket. After the
-confirmation, `drive reset-sync-state` and `drive rebind-root` both run
+confirmation, `drive reset-sync-state`, `drive rebind-root` and
+`drive forget-mount` all run
 their change through `changeDriveStateUnderLock`, which holds the locks an
 engine with that store open holds (`syncengine.LockDriveForOfflineChange`,
 the engine's own `flock`s, in its order: the folder now at the sync path,
@@ -1167,7 +1192,13 @@ the sign-in file under its lock (`graph.Logout`), and a purge removes the
 lock file too; `login` installs its pending sign-in under the same lock
 (`tokenfile.Install`) and undoes it under the lock on a failed enrollment
 (`TestLogin_InstallsTokenUnderLock`; graph-client.md, Refresh Across
-Processes, R-6.8.30).
+Processes, R-6.8.30). The login's own token source was built over the
+pending file; once the enrollment succeeds, the command's runtime adopts it,
+moved to the final path (`graph.MovedSignIn`, `SessionRuntime.AdoptSignIn`),
+so a refresh later in the process writes the installed file and never the
+pending one, and the process keeps one source for the sign-in
+(`TestCompleteLogin_TheRuntimeHoldsTheSignInAtItsFinalPath`,
+`TestMovedSignIn_ARefreshWritesOnlyTheNewPath`).
 
 `status` says, on stderr, when a sync holds the socket but its live state is
 missing: "the running sync did not answer in time" for an unresponsive owner,
@@ -1211,7 +1242,9 @@ alive and about to apply the change.
 damaged. The CLI first tries validated state, but if that fails it falls back
 to best-effort config and catalog loads, logs warnings, resolves the selected
 account from the recoverable durable facts, and continues the purge instead of
-refusing all cleanup.
+refusing all cleanup. The config's warnings are those of the recovery's own
+lenient load, logged once: the failed validated load read the same file
+(`TestLogout_AnUnreadableCatalogWarnsOfTheConfigOnce`).
 
 ## State DB Handling
 

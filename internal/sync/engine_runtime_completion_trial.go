@@ -63,12 +63,10 @@ func (flow *engineFlow) applyTrialRearmOrDiscardDecision(
 	if err != nil {
 		return err
 	}
-	if !reclassified {
+	if reclassified == nil {
 		return flow.applyTrialRetryFallback(ctx, current, decision, r, trialScopeKey)
 	}
-	if err := flow.holdActionFromPersistedRetryState(current, syncdomain.RetryWorkKeyForCompletion(r)); err != nil {
-		return err
-	}
+	flow.holdActionFromPersistedRetryState(current, reclassified)
 
 	return flow.rearmOrDiscardScope(ctx, trialScopeKey)
 }
@@ -138,18 +136,22 @@ func shouldTransitionTrialFallbackScope(decision *syncdomain.ResultDecision) boo
 		!decision.ScopeKey.IsZero()
 }
 
+// applyTrialReclassification persists a failed trial as the condition its
+// evidence names instead of as retry work of the trial's scope, and returns
+// the retry_work row the store wrote, or nil when the evidence did not
+// reclassify the trial.
 func (flow *engineFlow) applyTrialReclassification(
 	ctx context.Context,
 	decision *syncdomain.ResultDecision,
 	r *syncdomain.ActionCompletion,
 	bl syncdomain.BaselineView,
-) (bool, error) {
-	handled, err := flow.applyTrialPermissionReclassification(ctx, r, bl)
+) (*syncdomain.RetryWorkRow, error) {
+	row, err := flow.applyTrialPermissionReclassification(ctx, r, bl)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	if handled {
-		return true, nil
+	if row != nil {
+		return row, nil
 	}
 
 	if decision.Class == errclass.ClassScopeBlockingTransient && decision.ScopeKey == syncdomain.SKDiskLocal() {
@@ -159,13 +161,17 @@ func (flow *engineFlow) applyTrialReclassification(
 			ConditionType: decision.ScopeKey.ConditionType(),
 		})
 		if err != nil {
-			return false, err
+			return nil, err
 		}
-		if _, err := flow.recordActivatingBlockedRetryWork(ctx, syncdomain.RetryWorkKeyForCompletion(r), activation); err != nil {
-			return false, err
+		row, err := flow.recordActivatingBlockedRetryWork(ctx, syncdomain.RetryWorkKeyForCompletion(r), activation)
+		if err != nil {
+			return nil, err
 		}
-		return true, flow.applyBlockActivation(ctx, activation)
+		if err := flow.applyBlockActivation(ctx, activation); err != nil {
+			return nil, err
+		}
+		return row, nil
 	}
 
-	return false, nil
+	return nil, nil //nolint:nilnil // no row: the trial persisted nothing
 }

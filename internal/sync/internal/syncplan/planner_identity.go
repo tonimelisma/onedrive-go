@@ -1,6 +1,7 @@
 package syncplan
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -116,7 +117,7 @@ type identityOutcome struct {
 // deterministic: the actions come out ordered by the paths they act on.
 func PlanIdentityKeyed(in *IdentityInputs) (*syncdomain.ActionPlan, error) {
 	if in == nil || in.Baseline == nil {
-		return nil, fmt.Errorf("sync: identity planner needs a baseline snapshot")
+		return nil, errors.New("sync: identity planner needs a baseline snapshot")
 	}
 
 	nodes := joinIdentityNodes(in)
@@ -619,7 +620,7 @@ func decideNewIdentityNode(node *identityNode, driveID driveid.ID) (identityOutc
 		act.addCreate(false, node.remote.Path, node.remote.ItemType)
 		out.claims, out.remoteContent = node.remote.Path, true
 	default:
-		return out, fmt.Errorf("sync: identity planner built an empty node")
+		return out, errors.New("sync: identity planner built an empty node")
 	}
 	out.actions = act.actions
 

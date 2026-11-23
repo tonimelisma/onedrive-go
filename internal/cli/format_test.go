@@ -12,27 +12,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
-func TestFormatSize(t *testing.T) {
-	tests := []struct {
-		name  string
-		bytes int64
-		want  string
-	}{
-		{"zero", 0, "0 B"},
-		{"bytes", 512, "512 B"},
-		{"kilobytes", 1536, "1.5 KB"},
-		{"megabytes", 5242880, "5.0 MB"},
-		{"gigabytes", 1610612736, "1.5 GB"},
-		{"terabytes", 1099511627776, "1.0 TB"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, formatSize(tt.bytes))
-		})
-	}
-}
-
 func TestItemType_File(t *testing.T) {
 	t.Parallel()
 

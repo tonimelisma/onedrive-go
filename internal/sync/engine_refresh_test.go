@@ -25,7 +25,7 @@ import (
 // ProjectRemoteObservations projection tests
 // ---------------------------------------------------------------------------
 
-func TestChangeEventsToObservedItems_MapsAllFields(t *testing.T) {
+func TestProjectRemoteObservations_MapsAllFields(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(syncfixture.TestDriveID)
@@ -324,7 +324,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 	// Should hold file1's row (it exists in the baseline) and the orphan
 	// delete of file2.
 	var live, deletes int
-	for _, ev := range full.events {
+	for _, ev := range full.items {
 		if !ev.IsDeleted {
 			live++
 			assert.Equal(t, "file1.txt", ev.Path)
@@ -344,7 +344,7 @@ func TestObserveRemoteFull_IntegratesOrphans(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Validates: R-6.7.28
-func TestChangeEventsToObservedItems_SkipsEmptyItemID(t *testing.T) {
+func TestProjectRemoteObservations_SkipsEmptyItemID(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(syncfixture.TestDriveID)

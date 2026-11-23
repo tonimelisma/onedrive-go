@@ -18,36 +18,19 @@ type SkippedItem struct {
 	BlocksReadBoundary bool      // true when observation proved an unreadable subtree boundary
 }
 
-// ChangeEvent is an immutable observation fact the local observer produces.
-// It is not the durable sync truth and is never stored in the database; it
-// reaches the runtime only through the local observer's own paths (scan
-// results, LocalObservation). The remote side reports RemoteItem values
-// instead.
-//
-// Field contract:
-//
-//	LocalObserver populates: Path and ItemType for a scan's change list;
-//	  for a watch handler's observation, the row facts (ItemType, Size,
-//	  Hash, Mtime, filesystem identity when available), or Path and
-//	  IsDeleted for a removal. Never sets: Type, Name, ItemID, ParentID,
-//	  DriveID, ETag, CTag.
-type ChangeEvent struct {
-	Type     changeType
-	Path     string     // NFC-normalized, relative to sync root
-	OldPath  string     // for moves only
-	ItemID   string     // server-assigned (remote only; empty for local)
-	ParentID string     // server parent ID (remote only)
-	DriveID  driveid.ID // normalized (lowercase, zero-padded to 16 chars)
+// LocalEntry is one entry the local observer saw: a scan's change list
+// entry (Path and ItemType), a watch handler's row facts (ItemType, Size,
+// Hash, Mtime, filesystem identity when available), or a removal (Path and
+// IsDeleted). It is not durable sync truth and is never stored; it reaches
+// the runtime only through the local observer's own paths (scan results,
+// LocalObservation). OneDrive's side reports RemoteItem values instead, so
+// the type carries no remote-only field.
+type LocalEntry struct {
+	Path     string // NFC-normalized, relative to sync root
 	ItemType ItemType
-	Name     string // verbatim from Graph, NFC-normalized
 	Size     int64
-	// SizeUnknown marks a remote size Graph reported as negative: it is
-	// stored as unknown (NULL), never as a size (R-2.4.16).
-	SizeUnknown bool
-	// Hash is a QuickXorHash (base64) on both sides: driveops.SelectHash
-	// returns only QuickXor, so a remote item with SHA digests alone is
-	// hashless here, never compared against a local QuickXor. Empty for
-	// folders.
+	// Hash is a QuickXorHash (base64), the hash OneDrive's side is compared
+	// in. Empty for folders.
 	Hash             string
 	Mtime            int64 // Unix nanoseconds
 	LocalCtime       int64 // local inode change time, files only; zero means unknown
@@ -55,13 +38,7 @@ type ChangeEvent struct {
 	LocalInode       uint64
 	LocalBirthTime   int64 // entry birth time (Unix nanoseconds); zero means unknown
 	LocalHasIdentity bool
-	ETag             string // remote only
-	CTag             string // remote only
 	IsDeleted        bool
-	// ReuploadLocal marks a synthesized remote delete for an item a resync
-	// asked to be uploaded again (R-2.15.3): its synced agreement is
-	// forgotten, so a surviving local copy is a new upload, never a delete.
-	ReuploadLocal bool
 }
 
 // BaselineEntry represents the confirmed synced state of a single path.

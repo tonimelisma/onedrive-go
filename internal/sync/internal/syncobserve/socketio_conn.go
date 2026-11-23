@@ -25,7 +25,7 @@ func (s *socketIOWakeSource) connect(
 	endpoint *graph.SocketIOEndpoint,
 ) (*socketIOConn, time.Time, string, error) {
 	if endpoint == nil {
-		return nil, time.Time{}, "", fmt.Errorf("socket.io endpoint response is nil")
+		return nil, time.Time{}, "", errors.New("socket.io endpoint response is nil")
 	}
 
 	wsURL, err := socketIONotificationURLToWebsocketURL(endpoint.NotificationURL)

@@ -3,6 +3,7 @@ package syncobserve
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -101,7 +102,7 @@ func parseSocketIOEventName(packet string) (string, bool, error) {
 	if strings.HasPrefix(payload, "/") {
 		comma := strings.IndexByte(payload, ',')
 		if comma < 0 {
-			return "", false, fmt.Errorf("socket.io parsing event packet: missing namespace payload")
+			return "", false, errors.New("socket.io parsing event packet: missing namespace payload")
 		}
 		payload = payload[comma+1:]
 	}
@@ -125,7 +126,7 @@ func parseSocketIOEventName(packet string) (string, bool, error) {
 func socketIONotificationURLToWebsocketURL(raw graph.SocketIONotificationURL) (string, error) {
 	parsed, err := url.Parse(string(raw))
 	if err != nil {
-		return "", fmt.Errorf("socket.io parsing notification URL: invalid URL")
+		return "", errors.New("socket.io parsing notification URL: invalid URL")
 	}
 
 	switch parsed.Scheme {

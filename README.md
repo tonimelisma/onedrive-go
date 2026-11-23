@@ -173,6 +173,7 @@ limits.
 | `shared` | List files and folders shared with you |
 | `drive list`, `add`, `remove`, `search` | Choose which drives are configured; find SharePoint libraries (`drive list --all` lifts the SharePoint site cap) |
 | `drive reset-sync-state`, `drive rebind-root` | Start a drive's sync state over (your files are not touched) / accept a moved or restored sync folder, keeping the state |
+| `drive forget-mount` | Forget that a folder was another disk's mount point once its content is back as a plain folder, so sync compares it instead of reporting the disk not mounted (nothing is deleted) |
 | `trash list`, `restore`, `empty` | Files sync deleted or replaced on this computer, kept for 30 days per drive |
 | `recycle-bin list`, `restore`, `empty` | Work or school and SharePoint drives only |
 | `perf capture` | Save CPU, heap and goroutine profiles from a running sync |

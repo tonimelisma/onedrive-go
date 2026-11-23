@@ -16,6 +16,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/loglevel"
 	"github.com/tonimelisma/onedrive-go/internal/retry"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -80,15 +81,16 @@ type RemoteObserver struct {
 	// after a 410 with the engine's full refresh, the only path that also
 	// finds the deletes the expired window lost (R-2.15.3). It returns the
 	// batch to emit; the batch's cursor token becomes the watch token.
-	recoverExpiredDelta deltaExpiredRecovery
+	recoverExpiredDelta DeltaExpiredRecovery
 
 	// debugEvents is the engine's debug event sink, set by the watch runtime
 	// before Watch; nil reports nothing.
 	debugEvents func(syncdomain.EngineDebugEvent)
 }
 
-// deltaExpiredRecovery runs a full refresh for an expired delta token.
-type deltaExpiredRecovery func(ctx context.Context, kind syncdomain.ResyncKind) (RemoteObservationBatch, error)
+// DeltaExpiredRecovery is the full refresh the engine hands the observer to
+// run for an expired delta token.
+type DeltaExpiredRecovery func(ctx context.Context, kind syncdomain.ResyncKind) (RemoteObservationBatch, error)
 
 // SetClock replaces the observer's time capability. Must be called before
 // the observer fetches.
@@ -103,7 +105,7 @@ func (o *RemoteObserver) SetDebugEvents(emit func(syncdomain.EngineDebugEvent)) 
 }
 
 // SetDeltaExpiredRecovery wires the full refresh Watch runs after a 410.
-func (o *RemoteObserver) SetDeltaExpiredRecovery(recovery deltaExpiredRecovery) {
+func (o *RemoteObserver) SetDeltaExpiredRecovery(recovery DeltaExpiredRecovery) {
 	o.recoverExpiredDelta = recovery
 }
 
@@ -364,7 +366,7 @@ func (o *RemoteObserver) Watch(
 		// this time can be in what the poll sees, and the watch loop judges
 		// create intents by it (RemoteObservationBatch.pollStartedAt).
 		pollStartedAt := o.clock.Now()
-		polledEvents, newToken, topology, windowItems, err := o.fullDelta(ctx, token, nil)
+		polledItems, newToken, topology, windowItems, err := o.fullDelta(ctx, token, nil)
 		if stuck.observe(o.clock.Now(), token, err) {
 			o.logger.Warn("OneDrive has failed every check of the saved change-list position for hours; rescanning the whole drive",
 				slog.Duration("failing_for", cursorServerErrorResetAfter),
@@ -396,7 +398,7 @@ func (o *RemoteObserver) Watch(
 		outage.Recovered(ctx, o.logger, "Checking OneDrive for changes works again")
 
 		result := o.handleWatchBatch(
-			ctx, batches, pollStartedAt, polledEvents, windowItems, newToken, topology, interval, bo, wakeCh, handleBatch,
+			ctx, batches, pollStartedAt, polledItems, windowItems, newToken, topology, interval, bo, wakeCh, handleBatch,
 		)
 		if result.err != nil {
 			return result.err
@@ -411,7 +413,7 @@ func (o *RemoteObserver) handleWatchBatch(
 	ctx context.Context,
 	batches chan<- RemoteObservationBatch,
 	pollStartedAt time.Time,
-	polledEvents []syncdomain.RemoteItem,
+	polledItems []syncdomain.RemoteItem,
 	windowItems int,
 	newToken string,
 	topology syncshortcut.ShortcutTopologyBatch,
@@ -423,16 +425,16 @@ func (o *RemoteObserver) handleWatchBatch(
 	// Only a window that carried no items is empty. A window of items that all
 	// converted to nothing (deletes of never-synced items) must still advance
 	// the token, or every poll replays it forever.
-	if windowItems == 0 && len(polledEvents) == 0 && !topology.ShouldApply() {
+	if windowItems == 0 && len(polledItems) == 0 && !topology.ShouldApply() {
 		return o.handleZeroEventPoll(ctx, batches, pollStartedAt, interval, bo, wakeCh)
 	}
 
 	batch := RemoteObservationBatch{
-		Changes: remoteChangesOf(polledEvents),
+		Changes: remoteChangesOf(polledItems),
 	}
 	if handleBatch != nil {
 		var handleErr error
-		batch, handleErr = handleBatch(ctx, polledEvents, newToken, topology)
+		batch, handleErr = handleBatch(ctx, polledItems, newToken, topology)
 		if handleErr != nil {
 			if syncdomain.RunEnded(ctx, handleErr) {
 				return watchStepResult{stop: true}
@@ -939,19 +941,6 @@ func (o *RemoteObserver) classifyWindow(
 	return events
 }
 
-// WaitText renders a retry delay or interval in human units for console
-// messages ("8 s", "5 min", "1 h"), never a raw Go duration.
-func WaitText(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%d s", int(d.Round(time.Second)/time.Second))
-	case d < time.Hour:
-		return fmt.Sprintf("%d min", int(d.Round(time.Minute)/time.Minute))
-	default:
-		return fmt.Sprintf("%d h", int(d.Round(time.Hour)/time.Hour))
-	}
-}
-
 // PollOutageLog reports a polling loop's failures once per outage instead of
 // once per attempt. The first failure after a success is a Warn with the plain
 // reason and the retry delay; later attempts in the same outage are Debug; the
@@ -970,7 +959,7 @@ func (l *PollOutageLog) Failed(logger *slog.Logger, msg string, err error, delay
 
 	fields := append([]any{
 		slog.Any("error", err),
-		slog.String("retry_in", WaitText(delay)),
+		slog.String("retry_in", humanunit.Duration(delay, humanunit.Wait)),
 	}, attrs...)
 	if l.failing {
 		logger.Debug(msg, fields...)

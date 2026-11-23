@@ -114,7 +114,7 @@ func (c *emailChanger) reconcile(
 		return EmailReconcileResult{}, nil
 	}
 	if !currentAccount.IsPersonal() && !currentAccount.IsBusiness() {
-		return EmailReconcileResult{}, fmt.Errorf("email reconciliation requires a personal or business account CID")
+		return EmailReconcileResult{}, errors.New("email reconciliation requires a personal or business account CID")
 	}
 
 	// The common case is no change and no journal: answer it without the lock.
@@ -315,6 +315,15 @@ func matchingAccountRenames(
 			continue
 		}
 		if cid.DriveType() != currentAccount.DriveType() {
+			continue
+		}
+		if cid == currentAccount && account.UserID != "" && account.UserID != userID {
+			// The saved sign-in answers as another user than the one the
+			// catalog recorded for it: no rename follows from it, and saying
+			// so is the only way the mismatch reaches anyone.
+			logger.Warn("saved sign-in answers as a different user than the catalog records",
+				"account", cid.String(),
+			)
 			continue
 		}
 		if account.UserID != userID || cid.Email() == currentEmail {

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
@@ -16,7 +17,7 @@ func runDriveRemoveWithContext(ctx context.Context, cc *CLIContext, purge bool) 
 	}
 
 	if driveSelector == "" {
-		return fmt.Errorf("--drive is required (specify which drive to remove)")
+		return errors.New("--drive is required (specify which drive to remove)")
 	}
 
 	cfg, err := config.LoadOrDefault(cc.CfgPath, logger)

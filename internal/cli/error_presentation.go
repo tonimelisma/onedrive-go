@@ -18,6 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/sharedref"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
@@ -44,14 +45,12 @@ func newPresentedError(message string, err error) error {
 // remoteOpError names the OneDrive path a command was working on when it
 // failed, so main can say "/docs/a.txt was not found on OneDrive" instead of
 // printing the whole wrapped chain. Error() keeps the familiar
-// `<action> "<path>": <cause>` text for --verbose details and logs. noParent
-// marks a path with no parent folder a list could show, such as a shared
-// file's selector.
+// `<action> "<path>": <cause>` text for --verbose details and logs. The path
+// is a OneDrive path or a shared item's selector (sharedref.Prefix).
 type remoteOpError struct {
-	action   string
-	path     string
-	err      error
-	noParent bool
+	action string
+	path   string
+	err    error
 }
 
 func (e *remoteOpError) Error() string {
@@ -112,8 +111,12 @@ func failedService(err error) string {
 
 // transportErrorReason covers network failures after the connection was
 // made: timeouts (including a response-header timeout), TLS problems, and
-// connections that dropped or were reset, HTTP/2 stream resets included. It
-// only applies to errors that came from the HTTP transport: a *url.Error
+// connections that dropped or were reset, HTTP/2 stream resets included. The
+// graph client's own marks are read by type first: a body that went silent
+// for the stall window (graph.ErrResponseStalled) has no Timeout and, over
+// HTTP/2, a closed body's text, so it would otherwise read as interrupted or
+// as nothing at all; a connection whose health-check ping went unanswered
+// (graph.ErrConnectionLost) is interrupted. It only applies to errors that came from the HTTP transport: a *url.Error
 // (before the response) or a *graph.ResponseReadError (while reading it). So
 // a local file timeout, or a disk error io.Copy returned during a download,
 // is never described as a network problem. service names the one whose
@@ -127,11 +130,12 @@ func transportErrorReason(err error, service string) string {
 	}
 
 	switch {
-	case fromURL && urlErrorTimedOut(urlErr), !fromURL && isTimeout(readErr.Err):
+	case errors.Is(err, graph.ErrResponseStalled),
+		fromURL && urlErrorTimedOut(urlErr), !fromURL && isTimeout(readErr.Err):
 		return service + " did not answer in time"
 	case isTLSFailure(err):
 		return "the secure connection to " + service + " failed (" + innermostErrorText(err) + ")"
-	case isDroppedConnection(err):
+	case errors.Is(err, graph.ErrConnectionLost), isDroppedConnection(err):
 		return "the connection to " + service + " was interrupted"
 	default:
 		return ""
@@ -164,8 +168,11 @@ func isTLSFailure(err error) bool {
 }
 
 // isDroppedConnection recognizes a connection that ended mid-exchange. net/http
-// does not export its HTTP/2 stream and connection errors, so those are
-// recognized by their fixed "stream error:" and "http2:" text.
+// does not export its HTTP/2 stream and connection errors (a stream reset, a
+// GOAWAY, a connection closed under the request), so those, and only those,
+// are recognized by their fixed "stream error:" and "http2: " text; the
+// graph client's lost connection and stalled answer are read by type before
+// this runs (transportErrorReason).
 func isDroppedConnection(err error) bool {
 	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) ||
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) {
@@ -178,7 +185,9 @@ func isDroppedConnection(err error) bool {
 }
 
 // remoteFailureSubject returns the path a command recorded for its failure
-// (or "the item") and, when the path has a parent, a hint to list it.
+// (or "the item") and, when the path has a parent, a hint to list it. A
+// shared item's selector has no parent a list could show: 'ls' of what
+// path.Dir makes of it lists the user's own drive, where the item is not.
 func remoteFailureSubject(err error) (*remoteOpError, string, string) {
 	var op *remoteOpError
 	if !errors.As(err, &op) {
@@ -186,11 +195,58 @@ func remoteFailureSubject(err error) (*remoteOpError, string, string) {
 	}
 
 	hint := ""
-	if parent := path.Dir(op.path); parent != op.path && !op.noParent {
+	if parent := path.Dir(op.path); parent != op.path && !strings.HasPrefix(op.path, sharedref.Prefix) {
 		hint = " Run 'onedrive-go ls " + parent + "' to see what is there."
 	}
 
 	return op, op.path, hint
+}
+
+// unnamedPathSubject names a path in a sentence when the command recorded none.
+const unnamedPathSubject = "the path"
+
+// pathAnswersDisagreeText is the sentence for a path whose answers from
+// OneDrive name different folders for it (graph.ErrPathAnswersDisagree),
+// whether a read or listing met it or a visibility wait ran out on it
+// (driveops.PathNotVisibleError carries it as its cause). It names the path
+// once and never the folders' item IDs, which only --verbose's details show.
+// It does not say whether anything changed: a wait that confirms a delete, a
+// move or a new folder meets the disagreement after the change landed, while
+// put's wait for its folder meets it before anything was sent, and the
+// sentence is the same for both.
+func pathAnswersDisagreeText(err error, op *remoteOpError) string {
+	subject := unnamedPathSubject
+	var notVisible *driveops.PathNotVisibleError
+	switch {
+	case op != nil:
+		subject = op.path
+	case errors.As(err, &notVisible):
+		subject = notVisible.Path
+	}
+
+	return "OneDrive's answers for " + subject + " do not agree on which folder holds it. " +
+		"This usually settles within a few minutes: wait, then check it and run the command again."
+}
+
+// unaddressableNameText is the sentence for a path holding a name OneDrive
+// cannot take in a path-addressed request (graph.ErrNameNotPathAddressable):
+// one holding ':', which ends the path in such a request, or one too long
+// for it. A shared item's selector is no path, and holds ':' of its own.
+func unaddressableNameText(op *remoteOpError) string {
+	if op == nil || strings.HasPrefix(op.path, sharedref.Prefix) {
+		return "The path holds a name OneDrive cannot read by its path: one with ':' or one too long."
+	}
+	subject := op.path
+	if !strings.Contains(subject, ":") {
+		return "A name in " + subject + " is too long for OneDrive to read by its path."
+	}
+
+	hint := ""
+	if parent := path.Dir(subject); parent != subject && !strings.Contains(parent, ":") {
+		hint = " Run 'onedrive-go ls " + parent + "' to see what is there."
+	}
+
+	return subject + " holds ':', which OneDrive cannot carry in a path." + hint
 }
 
 func notImplementedMessage(err error) string {
@@ -205,6 +261,8 @@ func notImplementedMessage(err error) string {
 // remoteFailureText turns the OneDrive failures a user can understand into
 // one sentence with a next step, naming the path when the command recorded
 // one. It returns "" for failures it does not recognize.
+//
+//nolint:gocyclo // one flat switch, a case per failure a user can act on
 func remoteFailureText(err error) string {
 	op, subject, parentHint := remoteFailureSubject(err)
 	movesOrCopies := op != nil && (strings.HasPrefix(op.action, "moving") || strings.HasPrefix(op.action, "copying"))
@@ -212,6 +270,10 @@ func remoteFailureText(err error) string {
 	switch {
 	case graph.IsQuotaExhausted(err):
 		return "Your OneDrive storage is full. Free up space or add storage, then run the command again."
+	case errors.Is(err, graph.ErrPathAnswersDisagree):
+		return pathAnswersDisagreeText(err, op)
+	case errors.Is(err, graph.ErrNameNotPathAddressable):
+		return unaddressableNameText(op)
 	case errors.Is(err, graph.ErrNotFound):
 		return subject + " was not found on OneDrive." + parentHint
 	case errors.Is(err, graph.ErrForbidden):
@@ -252,11 +314,12 @@ func localFailureText(err error) string {
 		return "The local disk is full (or below the min_free_space reserve). Free up space, then run the command again."
 	}
 
-	var pathErr *fs.PathError
-	if !errors.As(err, &pathErr) {
+	// The path is named as the user gave it (a relative "ro/b.txt" stays
+	// relative), as the --verbose details name it.
+	subject := localpath.FailedPath(err)
+	if subject == "" {
 		return ""
 	}
-	subject := pathErr.Path
 	if driveops.IsOwnedTransferArtifactName(filepath.Base(subject)) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return ""

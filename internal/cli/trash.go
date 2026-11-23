@@ -10,12 +10,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 )
 
 // The local trash keeps what sync removed or replaced on this computer for
-// localtrash.Retention (P-4). It is per drive and lives under the data
+// localtrash.Retention (R-6.4.9). It is per drive and lives under the data
 // directory, so these commands work without network access. A drive's trash
 // commands also cover the trash of each of its shortcut children
 // (localtrash.Trash.Children): a child is a mount, not a configured drive,
@@ -261,7 +262,7 @@ func writeTrashEntryLine(cc *CLIContext, entry *localtrash.Entry) error {
 		suffix = " [interrupted, recoverable]"
 	}
 	return writef(cc.Output(), "%s  %s  %s %s (%s)%s%s\n",
-		entry.ID, entry.TrashedAt.Local().Format(time.DateTime), what, entry.Path, formatSize(entry.Size), why, suffix)
+		entry.ID, entry.TrashedAt.Local().Format(time.DateTime), what, entry.Path, humanunit.Size(entry.Size), why, suffix)
 }
 
 // trashReasonText is how `trash list` words why a file is in the trash: the
@@ -337,7 +338,7 @@ type trashEmptyJSONOutput struct {
 
 func runTrashEmpty(_ context.Context, cc *CLIContext, confirm bool) error {
 	if !confirm {
-		return fmt.Errorf("trash empty permanently deletes every file in the local trash; rerun with --confirm")
+		return errors.New("trash empty permanently deletes every file in the local trash; rerun with --confirm")
 	}
 	trash, err := openDriveTrash(cc, "empty")
 	if err != nil {

@@ -256,7 +256,7 @@ type verifyPlan struct {
 // takes.
 func (p *verifyPlan) setCheckFormat(checkFormat bool) error {
 	if checkFormat && !p.runPublicChecks && !p.runQuickChecks {
-		return fmt.Errorf("--check-format applies to the profiles with a format step: default, public, pr and quick")
+		return errors.New("--check-format applies to the profiles with a format step: default, public, pr and quick")
 	}
 	p.checkFormat = checkFormat
 
@@ -286,7 +286,7 @@ func runVerifyProfileWithEnv(
 	ctx context.Context, runner commandRunner, opts *VerifyOptions, baseEnv []string,
 ) (runErr error) {
 	if opts == nil {
-		return fmt.Errorf("verify options are required")
+		return errors.New("verify options are required")
 	}
 
 	profile := opts.Profile
@@ -379,13 +379,13 @@ func applyVerifyFlags(plan *verifyPlan, opts *VerifyOptions) (verifyShard, error
 		return verifyShard{}, err
 	}
 	if opts.LintPass != "" && !plan.runLint && !plan.runPublicChecks {
-		return verifyShard{}, fmt.Errorf("--lint-pass applies to the profiles that lint: default, public, pr and lint")
+		return verifyShard{}, errors.New("--lint-pass applies to the profiles that lint: default, public, pr and lint")
 	}
 	if plan.lintPasses, err = resolveLintPasses(opts.LintPass); err != nil {
 		return verifyShard{}, err
 	}
 	if opts.SeedStart != 0 && !plan.runSeeds {
-		return verifyShard{}, fmt.Errorf("--seed-start applies to the seeds profile only")
+		return verifyShard{}, errors.New("--seed-start applies to the seeds profile only")
 	}
 
 	return shard, plan.setCheckFormat(opts.CheckFormat)

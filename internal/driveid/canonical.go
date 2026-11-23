@@ -2,6 +2,7 @@ package driveid
 
 import (
 	"encoding"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -162,11 +163,11 @@ func MustCanonicalID(raw string) CanonicalID {
 // required site and library fields. For shared drives, use ConstructShared().
 func Construct(driveType, email string) (CanonicalID, error) {
 	if driveType == DriveTypeSharePoint {
-		return CanonicalID{}, fmt.Errorf("driveid: use ConstructSharePoint() for SharePoint drives")
+		return CanonicalID{}, errors.New("driveid: use ConstructSharePoint() for SharePoint drives")
 	}
 
 	if driveType == DriveTypeShared {
-		return CanonicalID{}, fmt.Errorf("driveid: use ConstructShared() for shared drives")
+		return CanonicalID{}, errors.New("driveid: use ConstructShared() for shared drives")
 	}
 
 	return NewCanonicalID(driveType + ":" + email)
@@ -176,11 +177,11 @@ func Construct(driveType, email string) (CanonicalID, error) {
 // Returns an error if any required field is empty or the type is invalid.
 func ConstructSharePoint(email, site, library string) (CanonicalID, error) {
 	if email == "" {
-		return CanonicalID{}, fmt.Errorf("driveid: SharePoint canonical ID requires non-empty email")
+		return CanonicalID{}, errors.New("driveid: SharePoint canonical ID requires non-empty email")
 	}
 
 	if site == "" || library == "" {
-		return CanonicalID{}, fmt.Errorf("driveid: SharePoint canonical ID requires non-empty site and library")
+		return CanonicalID{}, errors.New("driveid: SharePoint canonical ID requires non-empty site and library")
 	}
 
 	return CanonicalID{
@@ -195,11 +196,11 @@ func ConstructSharePoint(email, site, library string) (CanonicalID, error) {
 // Returns an error if any required field is empty.
 func ConstructShared(email, sourceDriveID, sourceItemID string) (CanonicalID, error) {
 	if email == "" {
-		return CanonicalID{}, fmt.Errorf("driveid: shared drive canonical ID requires non-empty email")
+		return CanonicalID{}, errors.New("driveid: shared drive canonical ID requires non-empty email")
 	}
 
 	if sourceDriveID == "" || sourceItemID == "" {
-		return CanonicalID{}, fmt.Errorf("driveid: shared drive canonical ID requires non-empty source drive ID and item ID")
+		return CanonicalID{}, errors.New("driveid: shared drive canonical ID requires non-empty source drive ID and item ID")
 	}
 
 	return CanonicalID{
@@ -339,7 +340,7 @@ func (c CanonicalID) SourceItemID() string {
 // Type-specific fields (site/library or shared source IDs) are preserved.
 func (c CanonicalID) WithEmail(email string) (CanonicalID, error) {
 	if c.IsZero() {
-		return CanonicalID{}, fmt.Errorf("driveid: cannot rewrite email on zero canonical ID")
+		return CanonicalID{}, errors.New("driveid: cannot rewrite email on zero canonical ID")
 	}
 
 	switch {

@@ -111,7 +111,7 @@ func (f CLIFlags) SingleDrive() (string, error) {
 	}
 
 	if len(f.Drive) > 1 {
-		return "", fmt.Errorf("multiple --drive values not allowed for this command (use 'sync' for multi-drive)")
+		return "", errors.New("multiple --drive values not allowed for this command (use 'sync' for multi-drive)")
 	}
 
 	return f.Drive[0], nil
@@ -472,7 +472,7 @@ func (cc *CLIContext) Session(ctx context.Context) (*driveops.MountSession, erro
 
 func interactiveMountSessionConfigFromResolvedDrive(rd *config.ResolvedDrive) (*driveops.MountSessionConfig, error) {
 	if rd == nil {
-		return nil, fmt.Errorf("resolved drive is required")
+		return nil, errors.New("resolved drive is required")
 	}
 
 	tokenOwnerCanonical, err := config.TokenAccountCanonicalID(rd.CanonicalID)
@@ -597,7 +597,10 @@ func initializeCLIContext(
 		return err
 	}
 	bootstrapLog.replayInto(ctx, cc.Logger.Handler())
-	cc.Runtime = cc.newSessionRuntime(nil, cc.Logger)
+	// The command's one session runtime is built when it is first needed
+	// (cc.runtime, syncSessionRuntime, initializeResolvedCLIContext), never
+	// here: a data command would otherwise hold this one and the one its
+	// resolved config builds, two token sources for one sign-in file.
 
 	perfSession, perfCtx := newCommandPerfSession(ctx, cmd, cc.Logger)
 	cc.PerfSession = perfSession
@@ -647,8 +650,15 @@ func initializeResolvedCLIContext(cmd *cobra.Command, cc *CLIContext) error {
 	if err := cc.useLoggingConfig(resolved.LoggingConfig); err != nil {
 		return err
 	}
+	// One runtime per command: a runtime a setup step already built through
+	// cc.runtime gets the resolved holder instead of a second runtime beside
+	// it, which would load its own token source for the same sign-in file.
 	holder := config.NewHolder(rawCfg, cc.CfgPath)
-	cc.Runtime = cc.newSessionRuntime(holder, cc.Logger)
+	if cc.Runtime == nil {
+		cc.Runtime = cc.newSessionRuntime(holder, cc.Logger)
+	} else {
+		cc.Runtime.UseHolder(holder)
+	}
 
 	return nil
 }
@@ -1013,7 +1023,7 @@ func loadAndResolve(
 	// valid for the sync command (which handles resolution itself).
 	if cmd.Flags().Changed("drive") {
 		if len(flags.Drive) > 1 {
-			return nil, nil, fmt.Errorf("--drive can only be specified once for this command (use 'sync' for multi-drive)")
+			return nil, nil, errors.New("--drive can only be specified once for this command (use 'sync' for multi-drive)")
 		}
 
 		if len(flags.Drive) == 1 {

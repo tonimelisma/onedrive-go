@@ -2,6 +2,7 @@ package multisync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -97,7 +98,7 @@ func (o *Orchestrator) loadReloadSelection(ctx context.Context) (*config.Config,
 	config.ClearExpiredPauses(ctx, o.cfg.Holder.Path(), newCfg, o.clockNow(), o.logger)
 
 	if o.cfg.ReloadStandaloneMounts == nil {
-		return nil, StandaloneMountSelection{}, fmt.Errorf("standalone mount reload compiler is required")
+		return nil, StandaloneMountSelection{}, errors.New("standalone mount reload compiler is required")
 	}
 	newSelection, err := o.cfg.ReloadStandaloneMounts(newCfg)
 	if err != nil {

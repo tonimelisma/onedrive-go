@@ -21,9 +21,7 @@ import (
 func TestApplyShortcutObservationBatch_ForwardsEmptyCompleteBatch(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
-	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
 	var got []syncshortcut.ShortcutChildWorkSnapshot
 	eng.shortcutChildWorkSink = func(_ context.Context, publication syncshortcut.ShortcutChildWorkSnapshot) error {
 		got = append(got, publication)
@@ -47,9 +45,7 @@ func TestApplyShortcutObservationBatch_ForwardsEmptyCompleteBatch(t *testing.T) 
 func TestApplyShortcutObservationBatch_PersistsParentStateBeforeHandler(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
-	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), withTestShortcutNamespace)
 	eng.shortcutChildWorkSink = func(ctx context.Context, publication syncshortcut.ShortcutChildWorkSnapshot) error {
 		roots, err := eng.baseline.ListShortcutRoots(ctx)
 		require.NoError(t, err)
@@ -108,9 +104,7 @@ func TestRunOncePublishesEmptyCompleteChildChildWorkSnapshotBeforeCommittingCurs
 			}, "cursor-empty-complete"), nil
 		},
 	}
-	eng, _ := newTestEngine(t, mock)
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
-	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, _ := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), withTestShortcutNamespace)
 	var got []syncshortcut.ShortcutChildWorkSnapshot
 	eng.shortcutChildWorkSink = func(_ context.Context, publication syncshortcut.ShortcutChildWorkSnapshot) error {
 		got = append(got, publication)
@@ -139,9 +133,7 @@ func TestRunOnceChildChildWorkSnapshotPublishFailureDoesNotCommitCursor(t *testi
 			}, "cursor-empty-complete"), nil
 		},
 	}
-	eng, _ := newTestEngine(t, mock)
-	eng.shortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
-	eng.protectedRoots.namespaceID = syncfixture.ShortcutNamespaceTestID
+	eng, _ := newTestEngineInDirWith(t, t.Context(), mock, t.TempDir(), withTestShortcutNamespace)
 	applyErr := errors.New("persist topology")
 	eng.shortcutChildWorkSink = func(_ context.Context, _ syncshortcut.ShortcutChildWorkSnapshot) error {
 		return applyErr

@@ -189,7 +189,7 @@ func shortcutChildArtifactCleanups(
 			}
 			childMountID := request.ChildMountID
 			if childMountID == "" {
-				return nil, fmt.Errorf("parent cleanup request is missing child mount ID")
+				return nil, errors.New("parent cleanup request is missing child mount ID")
 			}
 			if request.LocalRoot == "" {
 				return nil, fmt.Errorf("parent cleanup request for child mount %s is missing child local root", childMountID)
@@ -508,14 +508,14 @@ func (e shortcutChildArtifactCleanupExecutor) requireConfigured() error {
 		return classifiedShortcutChildCleanupError(
 			shortcutChildArtifactCleanupSetupFailure,
 			"configure cleanup executor",
-			fmt.Errorf("cleanup executor data dir is not configured"),
+			errors.New("cleanup executor data dir is not configured"),
 		)
 	}
 	if e.remove == nil || e.deleteUploadSessions == nil {
 		return classifiedShortcutChildCleanupError(
 			shortcutChildArtifactCleanupSetupFailure,
 			"configure cleanup executor",
-			fmt.Errorf("cleanup executor is not configured"),
+			errors.New("cleanup executor is not configured"),
 		)
 	}
 	return nil

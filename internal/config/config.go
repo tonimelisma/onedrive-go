@@ -80,7 +80,7 @@ type DriveFilterConfig struct {
 	IncludedDirs   []string `toml:"included_dirs,omitempty"`
 	IgnoredPaths   []string `toml:"ignored_paths,omitempty"`
 	IgnoreDotfiles bool     `toml:"ignore_dotfiles,omitempty"`
-	// IgnoreJunkFiles is on unless a drive sets it to false (P-2): editor
+	// IgnoreJunkFiles is on unless a drive sets it to false (R-2.4.14): editor
 	// swap files, OS metadata and database sidecars churn and confuse other
 	// devices, and there are no existing users whose files it would hide.
 	// It is a pointer so an explicit false survives; read it through
@@ -88,7 +88,7 @@ type DriveFilterConfig struct {
 	IgnoreJunkFiles *bool `toml:"ignore_junk_files,omitempty"`
 	FollowSymlinks  bool  `toml:"follow_symlinks,omitempty"`
 	// CrossFilesystems lets sync descend into folders that are mount points
-	// for another filesystem. Off by default (P-11): a disk mounted inside
+	// for another filesystem. Off by default (R-6.2.15): a disk mounted inside
 	// the sync folder that is later not mounted leaves an empty folder, which
 	// would otherwise read as every file in it deleted.
 	CrossFilesystems bool `toml:"cross_filesystems,omitempty"`

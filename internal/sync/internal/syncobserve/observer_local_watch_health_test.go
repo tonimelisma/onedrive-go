@@ -360,7 +360,7 @@ func TestTrySendLocalObservationBatch_DropRequestsRecoveryScan(t *testing.T) {
 	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
 	obs.SetLocalObservationBatchChannel(make(chan LocalObservation)) // unbuffered, nobody reading
 
-	obs.TrySendLocalObservationBatch(t.Context(), &LocalObservation{DeletedPaths: []string{"x"}})
+	obs.TrySendLocalObservationBatch(t.Context(), &LocalObservation{DeletedPrefixes: []string{"x"}})
 
 	assert.Equal(t, int64(1), obs.DroppedEvents())
 	assert.Len(t, obs.recoveryScanRequests, 1, "a dropped batch asks for a recovery rescan")

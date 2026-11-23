@@ -21,8 +21,9 @@ import (
 func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.perfCollector = perf.NewCollector(nil)
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.PerfCollector = perf.NewCollector(nil)
+	})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
@@ -84,41 +85,12 @@ func TestWatchRuntime_LocalObservationBatchUpsertsScopedRows(t *testing.T) {
 }
 
 // Validates: R-2.8.8, R-6.6.17
-func TestWatchRuntime_LocalObservationBatchDeletesExactPath(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.perfCollector = perf.NewCollector(nil)
-	setupWatchEngine(t, eng)
-	rt := testWatchRuntime(t, eng)
-	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
-
-	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []syncdomain.LocalStateRow{
-		{Path: "deleted.txt", ItemType: syncdomain.ItemTypeFile},
-		{Path: "kept.txt", ItemType: syncdomain.ItemTypeFile},
-	}))
-
-	err := rt.handleWatchLocalObservationBatch(t.Context(), &syncobserve.LocalObservation{
-		DeletedPaths: []string{"deleted.txt"},
-		Dirty:        true,
-	})
-	require.NoError(t, err)
-
-	rows, err := eng.baseline.ListLocalState(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, []syncdomain.LocalStateRow{{Path: "kept.txt", ItemType: syncdomain.ItemTypeFile}}, rows)
-	require.NotNil(t, rt.resources.dirtyBuf.FlushImmediate())
-	snapshot := eng.collector().Snapshot()
-	assert.Equal(t, 1, snapshot.LocalObservationScopedCommitCount)
-	assert.Equal(t, 1, snapshot.LocalObservationExactDeleteCount)
-}
-
-// Validates: R-2.8.8, R-6.6.17
 func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.perfCollector = perf.NewCollector(nil)
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.PerfCollector = perf.NewCollector(nil)
+	})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
@@ -150,8 +122,9 @@ func TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix(t *testing.T) 
 func TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.perfCollector = perf.NewCollector(nil)
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.PerfCollector = perf.NewCollector(nil)
+	})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
@@ -185,8 +158,9 @@ func TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth(t *tes
 func TestWatchRuntime_LocalObservationBatchMarksLocalTruthSuspect(t *testing.T) {
 	t.Parallel()
 
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	eng.perfCollector = perf.NewCollector(nil)
+	eng, _ := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.PerfCollector = perf.NewCollector(nil)
+	})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)

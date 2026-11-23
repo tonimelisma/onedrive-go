@@ -50,7 +50,7 @@ func LoadValidatedState(cfgPath string, logger *slog.Logger) (ValidatedState, []
 		return ValidatedState{}, warnings, fmt.Errorf("loading catalog: %w", err)
 	}
 
-	if err := validateConfiguredDrivesInCatalog(cfg, stored); err != nil {
+	if err := validateConfiguredDrivesInCatalog(cfgPath, cfg, stored); err != nil {
 		return ValidatedState{}, warnings, markInvalidConfig(err)
 	}
 	if err := validateCatalogDriveOwners(stored); err != nil {
@@ -68,12 +68,15 @@ func LoadValidatedState(cfgPath string, logger *slog.Logger) (ValidatedState, []
 	}, warnings, nil
 }
 
-func validateConfiguredDrivesInCatalog(cfg *Config, stored *Catalog) error {
+// validateConfiguredDrivesInCatalog refuses a drive section of the config at
+// cfgPath that the catalog has no record of. The refusal names the config
+// file the load was given, which --config can make any file.
+func validateConfiguredDrivesInCatalog(cfgPath string, cfg *Config, stored *Catalog) error {
 	for _, cid := range sortedDriveIDs(cfg) {
 		if _, found := stored.DriveByCanonicalID(cid); !found {
-			return fmt.Errorf("drive %s is in config.toml but not in onedrive-go's drive inventory (catalog.json); "+
-				"run 'onedrive-go drive add %s' to complete it, or remove its section from config.toml",
-				cid, cid)
+			return fmt.Errorf("drive %s is in %s but not in onedrive-go's drive inventory (catalog.json); "+
+				"run 'onedrive-go drive add %s' to complete it, or remove its section from %s",
+				cid, cfgPath, cid, cfgPath)
 		}
 	}
 

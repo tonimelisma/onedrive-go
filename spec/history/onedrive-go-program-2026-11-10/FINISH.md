@@ -24,7 +24,7 @@ gate fails, and then only the fix for what failed. Every update names a step.
 PR 2 note: built E5, B10, E9, F5, G9, G11; G10 closed without code (an unchanged tree is never rehashed, so there is nothing to save).
 
 ## Last
-- [ ] PR 4: every row of `PARKED.md` still open, plus R12 below; work moved to cloud sessions on 2026-11-23 (no installs, no host soak).
+- [x] PR 4: every row of `PARKED.md` still open, plus R12 below; work moved to cloud sessions on 2026-11-23 (no installs, no host soak). — #974, #975, #976, #977; rows still open are marked in `PARKED.md`
 - [x] 3. R12 (B11) if D14's soak has run; otherwise say so to the owner
   - 2026-11-23: shipped in #974 with deterministic tests in place of the soak (owner decision below).
   - 2026-11-23 (owner decision): the 72-hour soak is replaced by deterministic tests. Prove that the multisync watch loop never blocks outside a step it declares to the heartbeat (`internal/multisync/loop_heartbeat.go`), then ship R12: the systemd keepalive is sent only while `LoopAlive` reports progress. A false alarm costs a restart, not data. Ship it with the parked polish in PR 4.

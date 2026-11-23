@@ -66,13 +66,6 @@ func (e *Executor) vanishedConflictCopySourceOutcome(action *syncdomain.Action) 
 	}
 }
 
-// conflictCopyPath generates a timestamped conflict copy path beside path.
-// "file.txt" -> "file.conflict-20260101-120000.txt"
-// ".bashrc"  -> ".bashrc.conflict-20260101-120000" (dotfile: no separate ext)
-func conflictCopyPath(path string, now time.Time) string {
-	return conflictCopyPathWithOrdinal(path, now, 1)
-}
-
 // conflictCopyPathWithOrdinal is conflictCopyPath for the ordinal-th copy of
 // the same second ("file.conflict-20260101-120000-2.txt" for ordinal 2). The
 // whole name, marker, ordinal and extension included, stays within

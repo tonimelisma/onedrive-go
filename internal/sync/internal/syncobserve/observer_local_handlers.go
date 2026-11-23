@@ -378,7 +378,7 @@ func (o *LocalObserver) handleCreate(
 		return
 	}
 
-	ev := syncdomain.ChangeEvent{
+	ev := syncdomain.LocalEntry{
 		Path:  dbRelPath,
 		Size:  info.Size(),
 		Mtime: info.ModTime().UnixNano(),
@@ -412,7 +412,7 @@ func (o *LocalObserver) handleCreate(
 func (o *LocalObserver) handleDirectoryCreate(
 	ctx context.Context, tree *synctree.Root,
 	fsPath, dbRelPath string, info os.FileInfo,
-	ev *syncdomain.ChangeEvent, watcher FsWatcher,
+	ev *syncdomain.LocalEntry, watcher FsWatcher,
 ) {
 	ev.ItemType = syncdomain.ItemTypeFolder
 
@@ -595,7 +595,7 @@ func (o *LocalObserver) scanNewDirectoryEntry(
 		return
 	}
 
-	fileEv := syncdomain.ChangeEvent{
+	fileEv := syncdomain.LocalEntry{
 		Path:     entryRelPath,
 		ItemType: syncdomain.ItemTypeFile,
 		Size:     info.Size(),
@@ -672,7 +672,7 @@ func (o *LocalObserver) scanNewDirectoryChildDir(
 		o.watchedDirs.add(entryFsPath, info)
 	}
 
-	dirEv := syncdomain.ChangeEvent{
+	dirEv := syncdomain.LocalEntry{
 		Path:     entryRelPath,
 		ItemType: syncdomain.ItemTypeFolder,
 	}
@@ -983,7 +983,7 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 		}
 	}
 
-	ev := syncdomain.ChangeEvent{
+	ev := syncdomain.LocalEntry{
 		Path:     req.DbRelPath,
 		ItemType: syncdomain.ItemTypeFile,
 		Size:     info.Size(),
@@ -1070,7 +1070,7 @@ func (o *LocalObserver) HandleDelete(
 		o.forgetWatchedDescendants(watcher, fsPath, dbRelPath)
 	}
 
-	o.TrySend(ctx, &syncdomain.ChangeEvent{Path: dbRelPath, IsDeleted: true})
+	o.TrySend(ctx, &syncdomain.LocalEntry{Path: dbRelPath, IsDeleted: true})
 }
 
 // rescanIfSkippedEntryHidesSyncedItem runs a safety scan now when a created
@@ -1079,7 +1079,7 @@ func (o *LocalObserver) HandleDelete(
 // a name sync skips (recognized by filesystem identity). The rename's delete
 // half has already reached the runtime; the scan records the synced path as
 // unavailable (scanner_unavailable.go) within the same debounce window, so
-// the replan sees an unavailable path instead of a deleted one (D-004, P-5).
+// the replan sees an unavailable path instead of a deleted one (D-004, R-6.2.14).
 func (o *LocalObserver) rescanIfSkippedEntryHidesSyncedItem(
 	ctx context.Context,
 	tree *synctree.Root,

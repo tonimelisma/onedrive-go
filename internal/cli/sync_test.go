@@ -37,8 +37,8 @@ import (
 func TestRunOnceResultError_DriveFailures(t *testing.T) {
 	t.Parallel()
 
-	errDelta := fmt.Errorf("delta expired")
-	errAuth := fmt.Errorf("auth failed")
+	errDelta := errors.New("delta expired")
+	errAuth := errors.New("auth failed")
 
 	tests := []struct {
 		name    string

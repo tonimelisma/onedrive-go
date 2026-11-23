@@ -45,7 +45,7 @@ func resolveLogoutAccountWithCatalog(
 	}
 	known := knownAccountViews(views)
 	if len(known) == 0 {
-		return "", fmt.Errorf("no accounts configured — nothing to log out")
+		return "", errors.New("no accounts configured — nothing to log out")
 	}
 
 	selectable := logoutSelectableAccountViews(views)

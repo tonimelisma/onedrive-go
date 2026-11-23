@@ -51,7 +51,7 @@ func (s *shortcutRoots) acknowledgeChildFinalDrain(
 	ack syncshortcut.ShortcutChildDrainAck,
 ) (syncshortcut.ShortcutChildWorkSnapshot, error) {
 	if ctx == nil {
-		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: shortcut child drain ack context is required")
+		return syncshortcut.ShortcutChildWorkSnapshot{}, errors.New("sync: shortcut child drain ack context is required")
 	}
 	if s == nil || s.store == nil || s.namespaceID == "" {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, nil
@@ -82,7 +82,7 @@ func (s *shortcutRoots) acknowledgeChildArtifactsPurged(
 	ack syncshortcut.ShortcutChildArtifactCleanupAck,
 ) (syncshortcut.ShortcutChildWorkSnapshot, error) {
 	if ctx == nil {
-		return syncshortcut.ShortcutChildWorkSnapshot{}, fmt.Errorf("sync: shortcut child artifact cleanup ack context is required")
+		return syncshortcut.ShortcutChildWorkSnapshot{}, errors.New("sync: shortcut child artifact cleanup ack context is required")
 	}
 	if s == nil || s.store == nil || s.namespaceID == "" {
 		return syncshortcut.ShortcutChildWorkSnapshot{}, nil
@@ -185,7 +185,7 @@ func ApplyShortcutChildRunCommandToEngineMountConfig(
 		return err
 	}
 	if cfg == nil {
-		return fmt.Errorf("sync: child engine mount config is required")
+		return errors.New("sync: child engine mount config is required")
 	}
 	cfg.SyncRoot = command.Engine.LocalRoot
 	cfg.DriveID = driveid.New(command.Engine.RemoteDriveID)

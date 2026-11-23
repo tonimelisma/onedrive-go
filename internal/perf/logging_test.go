@@ -285,7 +285,6 @@ func TestSnapshotAttrs_IncludesStaleWorkAndObservationCounters(t *testing.T) {
 		SupersededPendingReplanRetirementCount:       6,
 		LocalObservationScopedCommitCount:            7,
 		LocalObservationScopedUpsertCount:            8,
-		LocalObservationExactDeleteCount:             9,
 		LocalObservationPrefixDeleteCount:            10,
 		LocalObservationFullSnapshotReplacementCount: 11,
 		LocalObservationSuspectDroppedEventsCount:    12,
@@ -308,7 +307,7 @@ func TestSnapshotAttrs_IncludesStaleWorkAndObservationCounters(t *testing.T) {
 	assert.Equal(t, int64(6), attrMap["superseded_pending_replan_retirement"])
 	assert.Equal(t, int64(7), attrMap["local_obs_scoped_commits"])
 	assert.Equal(t, int64(8), attrMap["local_obs_scoped_upserts"])
-	assert.Equal(t, int64(9), attrMap["local_obs_exact_deletes"])
+	assert.NotContains(t, attrMap, "local_obs_exact_deletes")
 	assert.Equal(t, int64(10), attrMap["local_obs_prefix_deletes"])
 	assert.Equal(t, int64(11), attrMap["local_obs_full_snapshot_replacements"])
 	assert.Equal(t, int64(12), attrMap["local_obs_suspect_dropped_events"])

@@ -31,7 +31,7 @@ func runDriveAddWithContext(ctx context.Context, cc *CLIContext, args []string) 
 			// listing a script wants is `drive list --json`.
 			return &usageError{
 				commandPath: "onedrive-go drive add",
-				err:         fmt.Errorf("drive add --json needs a drive to add; run 'onedrive-go drive list --json' to see available drives"),
+				err:         errors.New("drive add --json needs a drive to add; run 'onedrive-go drive list --json' to see available drives"),
 			}
 		}
 
@@ -75,7 +75,7 @@ func addDriveFromSharedTarget(ctx context.Context, cc *CLIContext) (driveAddResu
 		return driveAddResult{}, err
 	}
 	if !item.IsFolder {
-		return driveAddResult{}, fmt.Errorf("shared files are direct stat/get/put targets, not drives")
+		return driveAddResult{}, errors.New("shared files are direct stat/get/put targets, not drives")
 	}
 
 	cid, err := driveid.NewCanonicalID(cc.SharedTarget.Selector())
@@ -103,7 +103,7 @@ func addSharedDriveByCanonicalID(ctx context.Context, cc *CLIContext, cid drivei
 		return driveAddResult{}, fmt.Errorf("loading shared item: %w", err)
 	}
 	if !item.IsFolder {
-		return driveAddResult{}, fmt.Errorf("shared files are direct stat/get/put targets, not drives")
+		return driveAddResult{}, errors.New("shared files are direct stat/get/put targets, not drives")
 	}
 
 	return addSharedDrive(ctx, cc.CfgPath, cc.resultWriter(), cid, "", cc.Logger, cc.runtime())

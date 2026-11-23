@@ -119,30 +119,6 @@ func (cc *CLIContext) Status() io.Writer {
 	return statusWriterOrDefault(cc.StatusWriter)
 }
 
-// Size unit constants for human-readable formatting.
-const (
-	sizeKB = 1024
-	sizeMB = 1024 * 1024
-	sizeGB = 1024 * 1024 * 1024
-	sizeTB = 1024 * 1024 * 1024 * 1024
-)
-
-// formatSize returns a human-readable size string (e.g. "1.2 MB").
-func formatSize(bytes int64) string {
-	switch {
-	case bytes >= sizeTB:
-		return fmt.Sprintf("%.1f TB", float64(bytes)/float64(sizeTB))
-	case bytes >= sizeGB:
-		return fmt.Sprintf("%.1f GB", float64(bytes)/float64(sizeGB))
-	case bytes >= sizeMB:
-		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(sizeMB))
-	case bytes >= sizeKB:
-		return fmt.Sprintf("%.1f KB", float64(bytes)/float64(sizeKB))
-	default:
-		return fmt.Sprintf("%d B", bytes)
-	}
-}
-
 // The item types the CLI prints, in text and in --json alike.
 const (
 	typeFile   = "file"

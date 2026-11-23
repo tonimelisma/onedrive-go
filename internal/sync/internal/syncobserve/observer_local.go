@@ -28,6 +28,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -389,17 +390,6 @@ func (r *watchRegistry) descendants(path string) []string {
 	return out
 }
 
-// paths lists every registered directory, for tests and diagnostics.
-func (r *watchRegistry) paths() []string {
-	out := make([]string, 0, len(r.dirs))
-	for path := range r.dirs {
-		out = append(out, path)
-	}
-	slices.Sort(out)
-
-	return out
-}
-
 // FsWatcher abstracts filesystem event monitoring. Satisfied by
 // *fsnotify.Watcher; tests inject a mock implementation.
 type FsWatcher interface {
@@ -683,7 +673,7 @@ func (o *LocalObserver) SetHooks(hooks Hooks) {
 
 // TrySend hands what a watch handler observed for one path to the runtime as
 // a patch, without blocking (TrySendLocalObservationBatch).
-func (o *LocalObserver) TrySend(ctx context.Context, ev *syncdomain.ChangeEvent) {
+func (o *LocalObserver) TrySend(ctx context.Context, ev *syncdomain.LocalEntry) {
 	if ev != nil {
 		batch := localObservationBatchForEvent(ev)
 		o.TrySendLocalObservationBatch(ctx, &batch)
@@ -708,7 +698,6 @@ func (o *LocalObserver) TrySendLocalObservationBatch(ctx context.Context, batch 
 		o.logger.Debug("local observation batch channel full, marking local truth suspect on maintenance",
 			slog.String("kind", batch.Kind.String()),
 			slog.Int("rows", len(batch.Rows)),
-			slog.Int("deleted_paths", len(batch.DeletedPaths)),
 			slog.Int("deleted_prefixes", len(batch.DeletedPrefixes)),
 		)
 	}
@@ -979,7 +968,7 @@ func (o *LocalObserver) adaptToRootFilesystem(syncRoot string) {
 
 	o.logger.Warn("The sync folder is on a network or FUSE filesystem ("+info.kind+"). "+
 		"Changes that reach it without going through this computer may not be reported as they happen; "+
-		"they are noticed by the periodic rescan, every "+WaitText(o.EffectiveSafetyScanInterval())+".",
+		"they are noticed by the periodic rescan, every "+humanunit.Duration(o.EffectiveSafetyScanInterval(), humanunit.Wait)+".",
 		slog.String("filesystem", info.kind),
 	)
 }

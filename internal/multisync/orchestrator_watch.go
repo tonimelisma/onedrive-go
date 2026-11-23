@@ -3,7 +3,6 @@ package multisync
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sort"
 
@@ -219,7 +218,7 @@ func (o *Orchestrator) startWatchRuntime(
 				Summary: summarizeStartupResults(o.cfg.InitialStartupResults),
 			}
 		}
-		return nil, fmt.Errorf("no drives selected for sync")
+		return nil, errors.New("no drives selected for sync")
 	}
 
 	server, err := o.startControlServer(ctx, synccontrol.OwnerModeWatch, commands, fatal)

@@ -696,6 +696,74 @@ func TestRunGet_ASharedFileNotFoundSuggestsNoFolderToList(t *testing.T) {
 	assert.Equal(t, "Error: "+selector+" was not found on OneDrive.", commandErrorText(err, false))
 }
 
+// sharedNotFoundServer answers the shared item's own lookup with item and
+// every other request (an upload, a listing) with not found.
+func sharedNotFoundServer(t *testing.T, itemPath, item string) *httptest.Server {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == itemPath {
+			writeTestResponse(t, w, item)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		writeTestResponse(t, w, `{"error": {"code": "itemNotFound", "message": "Item not found"}}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+// A put to a shared file and a get of a shared folder that OneDrive answers
+// with not found name the shared item by its selector and suggest no folder
+// to list: 'ls' of what a selector's parent would be lists the user's own
+// drive, where the shared item is not.
+//
+// Validates: R-6.6.26
+func TestSharedPutAndFolderGet_NotFoundSuggestsNoFolderToList(t *testing.T) {
+	setTestDriveHome(t)
+	writeTestTokenFile(t, config.DefaultDataDir(), "token_personal_user@example.com.json")
+
+	newContext := func(graphURL, selector string) *CLIContext {
+		return &CLIContext{
+			Logger:       slog.New(slog.DiscardHandler),
+			OutputWriter: &bytes.Buffer{},
+			StatusWriter: &bytes.Buffer{},
+			CfgPath:      config.DefaultConfigPath(),
+			GraphBaseURL: graphURL,
+			SharedTarget: &sharedTarget{Ref: sharedref.MustParse(selector)},
+		}
+	}
+
+	t.Run("put to a shared file", func(t *testing.T) {
+		const selector = "shared:user@example.com:b!drive1234567891:source-item-file"
+		srv := sharedNotFoundServer(t, testSharedFileGetItemPath, `{"id": "source-item-file", "name": "report.txt",
+			"size": 1, "eTag": "etag-1", "file": {"mimeType": "text/plain"},
+			"parentReference": {"id": "parent", "driveId": "b!drive1234567891"}}`)
+		cmd := newPutCmd()
+		cmd.SetContext(context.WithValue(t.Context(), cliContextKey{}, newContext(srv.URL, selector)))
+
+		err := runPut(cmd, []string{createTempFile(t, "report.txt", "new"), selector})
+
+		require.ErrorIs(t, err, graph.ErrNotFound)
+		assert.Equal(t, "Error: "+selector+" was not found on OneDrive.", commandErrorText(err, false))
+	})
+
+	t.Run("get of a shared folder", func(t *testing.T) {
+		const selector = "shared:user@example.com:b!drive1234567890:source-item-folder"
+		srv := sharedNotFoundServer(t, testSharedFolderGetItemPath, `{"id": "source-item-folder", "name": "Shared Folder",
+			"folder": {"childCount": 1}, "parentReference": {"id": "parent", "driveId": "b!drive1234567890"}}`)
+		cmd := newGetCmd()
+		cmd.SetContext(context.WithValue(t.Context(), cliContextKey{}, newContext(srv.URL, selector)))
+
+		err := runGet(cmd, []string{selector, filepath.Join(t.TempDir(), "Shared Folder")})
+
+		require.ErrorIs(t, err, graph.ErrNotFound)
+		assert.Equal(t, "Error: "+selector+" was not found on OneDrive.", commandErrorText(err, false))
+	})
+}
+
 func createTempFile(t *testing.T, name, content string) string {
 	t.Helper()
 

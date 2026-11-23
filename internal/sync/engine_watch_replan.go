@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -26,7 +27,7 @@ func (rt *watchRuntime) runSteadyStateReplan(
 	batch syncobserve.DirtyBatch,
 ) (bool, error) {
 	if p == nil || p.bl == nil {
-		return false, fmt.Errorf("sync: steady-state replan requires loaded baseline")
+		return false, errors.New("sync: steady-state replan requires loaded baseline")
 	}
 
 	rt.deps.logger.Debug("processing watch steady-state replan",

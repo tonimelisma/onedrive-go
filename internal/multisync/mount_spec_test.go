@@ -424,3 +424,27 @@ func TestBuildRuntimeWork_MissingParentSkipsChild(t *testing.T) {
 	require.Len(t, decisions.Skipped, 1)
 	assert.Contains(t, decisions.Skipped[0].Err.Error(), "belongs to a drive that is no longer selected for sync")
 }
+
+func buildRuntimeWork(
+	standaloneMounts []StandaloneMountConfig,
+	snapshots map[mountID]syncshortcut.ShortcutChildWorkSnapshot,
+	dataDir string,
+) (*runtimeWorkSet, error) {
+	parents, err := buildStandaloneMountSpecs(standaloneMounts)
+	if err != nil {
+		return nil, err
+	}
+	decisions, err := buildRuntimeWorkForParents(parents, snapshots, dataDir, nil)
+	if err != nil {
+		return nil, err
+	}
+	decisions.CleanupScopeAllParents = true
+	return decisions, nil
+}
+
+func (m *mountSpec) expectedChildRootIdentity() *syncshortcut.ShortcutRootIdentity {
+	if m == nil || m.child == nil {
+		return nil
+	}
+	return m.child.engine.LocalRootIdentity
+}

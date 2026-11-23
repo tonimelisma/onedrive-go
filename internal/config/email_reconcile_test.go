@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"log/slog"
 	"os"
@@ -305,6 +306,40 @@ sync_dir = "~/Business"
 	require.NoError(t, err)
 	assert.False(t, result.Changed())
 	assert.FileExists(t, DriveTokenPath(current))
+}
+
+// Validates: R-3.7.4
+//
+// A saved sign-in that answers as another user than the one the catalog
+// recorded for it renames nothing and says so in a warning.
+func TestReconcileAccountEmail_WarnsWhenTheSignInAnswersAsAnotherUser(t *testing.T) {
+	setTestDataDir(t)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	current := driveid.MustCanonicalID("business:user@example.com")
+	seedCatalogAccount(t, current, func(account *CatalogAccount) {
+		account.UserID = emailReconcileTestUser123
+		account.DisplayName = emailReconcileTestBusinessUser
+		account.PrimaryDriveID = emailReconcileTestDriveBusiness
+		account.PrimaryDriveCanonical = current.String()
+	})
+	writeManagedFixture(t, DriveTokenPath(current), []byte(`{"token":"business"}`))
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	writeConfigFixture(t, configPath, []byte(`["business:user@example.com"]
+sync_dir = "~/Business"
+`))
+
+	var moved []StateDBMove
+	result, err := ReconcileAccountEmail(t.Context(), configPath, current, "another-user", "renamed@example.com",
+		stateDBMoverForTest(t, &moved), logger)
+	require.NoError(t, err)
+	assert.False(t, result.Changed(), "a sign-in answering as another user renames nothing")
+	assert.FileExists(t, DriveTokenPath(current))
+	assert.Empty(t, moved)
+	assert.Contains(t, logBuf.String(), "level=WARN")
+	assert.Contains(t, logBuf.String(), "saved sign-in answers as a different user than the catalog records")
 }
 
 // Validates: R-3.7.1, R-3.7.2

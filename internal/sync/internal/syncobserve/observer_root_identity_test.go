@@ -23,7 +23,7 @@ func TestFullScan_RootReadDirEIOReturnsError(t *testing.T) {
 	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
 
 	var (
-		events  []syncdomain.ChangeEvent
+		events  []syncdomain.LocalEntry
 		jobs    []hashJob
 		skipped []syncdomain.SkippedItem
 	)

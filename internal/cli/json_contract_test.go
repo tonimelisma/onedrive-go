@@ -27,6 +27,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	syncengine "github.com/tonimelisma/onedrive-go/internal/sync"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synccontrol"
 	"github.com/tonimelisma/onedrive-go/internal/tokenfile"
 )
@@ -247,6 +248,33 @@ func jsonContractConfig(t *testing.T) (string, driveid.CanonicalID) {
 	return cfgPath, cid
 }
 
+// invokeDriveForgetMountJSON forgets a recorded mount point whose folder
+// holds one file, as the contract's drive does.
+func invokeDriveForgetMountJSON(t *testing.T, leaf *cobra.Command) (string, error) {
+	t.Helper()
+
+	cid := driveid.MustCanonicalID(jsonContractDrive)
+	syncDir := filepath.Join(t.TempDir(), "OneDrive")
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
+	seedCatalogAccount(t, cid, func(*config.CatalogAccount) {})
+	seedCatalogDrive(t, cid, func(drive *config.CatalogDrive) { drive.RemoteDriveID = rootTestDrive123 })
+	require.NoError(t, os.MkdirAll(filepath.Join(syncDir, "nas"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(syncDir, "nas", "a.txt"), []byte("a"), 0o600))
+
+	statePath := config.DriveStatePath(cid)
+	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
+	store, err := syncstore.NewSyncStore(t.Context(), statePath, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	_, err = store.RawDBForTest().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES (?)`, "nas")
+	require.NoError(t, err)
+	require.NoError(t, store.Close(t.Context()))
+
+	cc := newCommandContext(&bytes.Buffer{}, cfgPath)
+	cc.Flags.Drive = []string{cid.String()}
+	return runDetachedLeaf(t, leaf, cc, "--yes", "nas")
+}
+
 func jsonContractConfigContext(t *testing.T) (*CLIContext, driveid.CanonicalID) {
 	t.Helper()
 
@@ -385,6 +413,7 @@ func driveJSONContractCases() map[string]jsonContractCase {
 			require.NoError(t, os.MkdirAll(filepath.Dir(config.DriveStatePath(cid)), 0o700))
 			return runDetachedLeaf(t, leaf, cc, "--yes")
 		}},
+		"onedrive-go drive forget-mount": {contract: jsonDocument, schema: schemaOf[driveForgetMountJSONOutput](), invoke: invokeDriveForgetMountJSON},
 		"onedrive-go drive reset-sync-state": {contract: jsonDocument, schema: schemaOf[driveResetSyncStateJSONOutput](), invoke: func(t *testing.T, leaf *cobra.Command) (string, error) {
 			t.Helper()
 			cc, cid := jsonContractConfigContext(t)

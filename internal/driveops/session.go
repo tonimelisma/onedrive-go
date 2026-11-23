@@ -102,7 +102,6 @@ func (s *Session) SetAuthenticatedSuccessHooks(hook func(context.Context)) {
 // OAuth2 refresh token rotation races (two independent refreshes can
 // invalidate each other's refresh tokens).
 type SessionRuntime struct {
-	holder       *config.Holder
 	userAgent    string
 	logger       *slog.Logger
 	GraphBaseURL string
@@ -130,11 +129,14 @@ type SessionRuntime struct {
 	// and never replaced; Notices guards its own state.
 	retryNotices *retry.Notices
 
-	// mu guards the lazily built caches below: tokenSources, bootstrapMeta,
-	// interactiveMeta, interactiveTransfer, and syncClients. Sessions for
-	// different mounts build them concurrently. It is never held while a
-	// sign-in file is read.
+	// mu guards holder and the lazily built caches below: tokenSources,
+	// bootstrapMeta, interactiveMeta, interactiveTransfer, and syncClients.
+	// Sessions for different mounts build them concurrently. It is never
+	// held while a sign-in file is read.
 	mu gosync.Mutex
+	// holder is the command's resolved config, nil until the command has
+	// one (UseHolder).
+	holder *config.Holder
 	// tokenSources holds one load per sign-in file, finished or under way.
 	tokenSources map[string]*tokenSourceLoad
 	// bootstrapMeta holds one bootstrap metadata client per sign-in file, so
@@ -315,7 +317,7 @@ func (r *SessionRuntime) SharedTargetClients(
 // deadline, a status budget's included.
 func (r *SessionRuntime) BootstrapClient(tokenPath string) (*graph.Client, error) {
 	if tokenPath == "" {
-		return nil, fmt.Errorf("bootstrap graph client: token path is required")
+		return nil, errors.New("bootstrap graph client: token path is required")
 	}
 
 	ts, err := r.getOrCreateTokenSource(tokenPath)
@@ -369,6 +371,22 @@ func (r *SessionRuntime) getOrCreateTokenSource(tokenPath string) (graph.TokenSo
 	ts, err = r.TokenSourceFn(tokenPath, r.logger)
 
 	return ts, err
+}
+
+// AdoptSignIn makes ts the runtime's token source of the sign-in file at
+// tokenPath, replacing one loaded before: login, which signs in with a
+// source of its own and then installs its file at tokenPath, hands that
+// source on, so every later request of the process for that sign-in uses the
+// token the login holds, and the process keeps one source for the file
+// (R-6.8.27). A load of the path still under way is left to finish for its
+// waiters and is not kept.
+func (r *SessionRuntime) AdoptSignIn(tokenPath string, ts graph.TokenSource) {
+	adopted := &tokenSourceLoad{done: make(chan struct{}), ts: ts}
+	close(adopted.done)
+
+	r.mu.Lock()
+	r.tokenSources[tokenPath] = adopted
+	r.mu.Unlock()
 }
 
 func (r *SessionRuntime) clientsForTokenPath(
@@ -467,11 +485,27 @@ func (r *SessionRuntime) FlushTokenCache() {
 // config and needs subsequent Session() calls to resolve shared-drive tokens
 // through the updated metadata.
 func (r *SessionRuntime) UpdateConfig(cfg *config.Config) {
-	if r == nil || r.holder == nil || cfg == nil {
+	if r == nil || cfg == nil {
 		return
 	}
 
-	r.holder.Update(cfg)
+	r.mu.Lock()
+	holder := r.holder
+	r.mu.Unlock()
+	if holder != nil {
+		holder.Update(cfg)
+	}
+}
+
+// UseHolder gives a runtime built before its command resolved a config that
+// config's holder, so the command keeps the one runtime, and the token
+// sources it has loaded, instead of building a second one for the same
+// sign-in files.
+func (r *SessionRuntime) UseHolder(holder *config.Holder) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.holder = holder
 }
 
 // BootstrapMeta returns the retrying metadata client for account-level calls

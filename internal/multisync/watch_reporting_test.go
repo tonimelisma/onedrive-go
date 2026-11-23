@@ -444,12 +444,6 @@ func TestRunnerRestartDelay_DoublesUpToTheCap(t *testing.T) {
 	assert.Equal(t, runnerRestartMaxDelay, runnerRestartDelay(100))
 }
 
-func TestHumanDelay_UsesHumanUnits(t *testing.T) {
-	assert.Equal(t, "5 s", humanDelay(5*time.Second))
-	assert.Equal(t, "2 min", humanDelay(2*time.Minute))
-	assert.Equal(t, "2 min 30 s", humanDelay(150*time.Second))
-}
-
 // Validates: R-2.8.11
 func TestWarnOnChange_RepeatsOfTheSameFailureStayBelowWarn(t *testing.T) {
 	capture, logger := synctest.NewLogCapture()

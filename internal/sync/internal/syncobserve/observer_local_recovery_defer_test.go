@@ -40,7 +40,7 @@ func TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations(t *testing.
 	// One undelivered batch is all it takes: the runtime has not drained
 	// what it was already sent.
 	batches := make(chan LocalObservation, 1)
-	batches <- LocalObservation{DeletedPaths: []string{"queued"}}
+	batches <- LocalObservation{DeletedPrefixes: []string{"queued"}}
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, watcher, dir)
@@ -94,7 +94,7 @@ func TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations(t *testing.T)
 		TickCh:          tick,
 	})
 	batches := make(chan LocalObservation, 1)
-	batches <- LocalObservation{DeletedPaths: []string{"queued"}}
+	batches <- LocalObservation{DeletedPrefixes: []string{"queued"}}
 	obs.SetLocalObservationBatchChannel(batches)
 
 	cancel, done := startMockWatch(t, obs, watcher, dir)

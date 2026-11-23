@@ -84,7 +84,7 @@ except that the type had once been public.
 | A full local scan clears every finding it no longer reports and keeps every one it reports again, an interrupted removal's leftover included; every watch-mode full scan (safety, recovery, and the fallback scan while watching is unavailable) sends its finding set in its snapshot even when it is empty; every issue type a scan reports is a managed type of the local findings batch, checked against the scanner's source; only a regular file under a set-aside name is reported as an interrupted removal (R-6.4.9, R-2.8.21, R-2.8.22). | `TestLocalObservationManagedIssueTypes_ManageEveryTypeALocalScanReports`, `TestSyncStore_ReconcileObservationFindings_InterruptedRemovalLastsAsLongAsTheLeftover`, `TestRunOnce_InterruptedRemovalReportClearsOnceTheLeftoverIsGone`, `TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet`, `TestWatchRuntime_FallbackScanRecordsAndClearsFindings`, `TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty`, `TestFullScan_OnlyARegularFileIsReportedAsAnInterruptedRemoval` |
 | A watch Remove or Rename event becomes a delete only when the exact name is really gone, so a lone MOVED_FROM, an atomic save or a misattributed event never deletes a file that is still there. | `TestHandleDelete_PathThatStillExistsEmitsNoDelete`, `TestHandleFsEvent_DeletePassesFsPath` |
 | Whole-drive observation emits normalized observation facts and direct local snapshot rows for `local_state` without writing the sync DB directly, including filesystem identity for files and directories when available. | `TestFullScan_NonexistentSyncRoot_ReturnsError`, `TestFullScan_StoresFilesystemIdentityForFilesAndDirectories`, `TestFullScan_NosyncMarkerDoesNotGuardSync`, `TestResolveDebounce_DefaultIsFiveSeconds` |
-| Watch-mode local observation emits scoped engine-applied batches: exact file rows, subtree deletes for every removed path, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_FileDeleteRemovesSubtree`, `TestHandleDelete_UnwatchedNewDirectoryRemovesSubtreeRows`, `TestHandleDelete_FileDeleteKeepsSiblingsThatShareItsNamePrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesExactPath`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
+| Watch-mode local observation emits scoped engine-applied batches: exact file rows, subtree deletes for every removed path, full safety-scan snapshots, and suspect-local-truth recovery signals. The watch runtime applies those batches to `local_state` and `observation_state`. | `TestLocalObservationBatchForEvent_FileCreateUpsertsExactRow`, `TestLocalObservationBatchForEvent_FileDeleteRemovesSubtree`, `TestHandleDelete_UnwatchedNewDirectoryRemovesSubtreeRows`, `TestHandleDelete_FileDeleteKeepsSiblingsThatShareItsNamePrefix`, `TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch`, `TestWatchRuntime_LocalObservationBatchUpsertsScopedRows`, `TestWatchRuntime_LocalObservationBatchDeletesDirectoryPrefix`, `TestWatchRuntime_LocalObservationBatchFullSnapshotReplacesLocalTruth`, `TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation` |
 | Normal drive content observation suppresses embedded shared-folder shortcut placeholders from content events, including Graph items whose local placeholder is not a folder but whose `remoteItem.folder` target is a folder. Parent drive engines convert those placeholders into parent-owned shortcut-root state before publishing child work commands to the control plane. | `TestFullDeltaWithShortcutTopology_EmitsShortcutFactsAndSuppressesContent`, `TestClassifyItem_EmbeddedSharedPlaceholdersIgnored`, `internal/sync/remote_state_mirror_test.go` |
 | Mount-root runtimes still support remote observation rooted at their configured remote root. Separately configured shared folders and managed shortcut child mounts use this path when their content root is below the backing drive root. | `internal/sync/engine_phase0_test.go` (`TestBootstrapSync_WithChanges`, `TestBootstrapSync_ReconcilesRemoteDeleteDriftWithoutFreshDelta`), `internal/sync/internal/syncobserve/observer_remote_test.go` |
 | A watcher that cannot be created or extended because of an operating-system limit (inotify watches or instances, open files, kernel memory) degrades to periodic full scans with one warning naming the limit and its fix; a descriptor-limit failure after startup stops watching so the watcher's descriptors are released (R-2.8.22). | `TestClassifyWatchAddError_ResourceLimitsAreWatchUnavailable`, `TestClassifyWatcherCreateError_ResourceLimits`, `TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable`, `TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan`, `TestWatch_NewDirectoryEMFILEStopsWatchingForFallback`, `TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval`, `TestRunWatch_WatchFallbackRetriesTheWatcher` |
@@ -549,7 +549,7 @@ stamps ctime from a coarse clock, so two writes in one tick share it).
   (walk stat, watch stat, `computeStableHashWith` pre-stat, which also rejects a
   read during which ctime moved), so a write racing the read leaves a newer
   ctime and forces the next re-read rather than hiding behind the recorded one.
-- A rolling re-verify budget (P-12) is not implemented: content that changes
+- A rolling re-verify budget is not implemented: content that changes
   without any metadata change (bit rot) is still only caught when something
   else forces a read. A created
 directory's own row is emitted before its contents are scanned.
@@ -576,7 +576,7 @@ stops with `watchCauseDescriptorBudget` once those entries plus the root exceed
 `watchDescriptorBudget()`, half of `RLIMIT_NOFILE` (zero, meaning no budget,
 on Linux, where inotify watches are not open files). The runtime then falls
 back to periodic full scans. An FSEvents watcher behind `FsWatcher` is the
-durable fix and is planned separately (P-15).
+durable fix, not yet a requirement or a plan.
 
 At watch start the observer identifies the sync root's filesystem with statfs
 (`localFilesystemKind`, in the platform files). Changes that reach a network or
@@ -769,7 +769,7 @@ subtree:
 - a synced path now occupied by a symlink sync does not follow, or by a FIFO,
   socket or device: `local_unsyncable_replacement` at that path (D-004);
 - a synced item renamed to a name OneDrive refuses, a too-long path, or an
-  excluded name (a dotfile under `ignore_dotfiles`, P-5):
+  excluded name (a dotfile under `ignore_dotfiles`, R-6.2.14):
   `local_unsyncable_replacement` at the old synced path, found by matching the
   skipped entry's (device, inode) against baseline identities; a regular file
   with other hard links is not evidence and is skipped;
@@ -782,7 +782,7 @@ subtree:
   (`truthVerdictForIssueType`, sync-store.md);
 - a folder whose device differs from its parent's, both read in the same scan,
   is a mount point; unless `cross_filesystems = true` it is not descended and
-  is recorded as `local_mount_boundary` (D-003, P-11). Devices are only
+  is recorded as `local_mount_boundary` (D-003, R-6.2.15). Devices are only
   compared within one scan, because device numbers change between boots;
   the sync folder's own device is required, and a scan that cannot read it
   stops as an unavailable sync folder;
@@ -802,7 +802,12 @@ subtree:
   deleted, and the planner's delete-safety hold keeps every such delete toward
   OneDrive for confirmation (sync-planning.md, "mount point gone"). A flag is
   forgotten when its folder is neither synced nor present
-  (`TestRunOnce_ADiskGoneForGoodIsForgottenOnceItsFolderIsRemoved`). Watch safety scans use the flags but
+  (`TestRunOnce_ADiskGoneForGoodIsForgottenOnceItsFolderIsRemoved`), or when
+  the user forgets it with `drive forget-mount` once the folder holds the
+  disk's content as a plain folder of the parent's device (R-6.2.18): the next
+  scan reads it as an ordinary folder and the content is compared with the
+  baseline, so nothing is transferred for what is unchanged (the same path
+  `remountDisk` takes in `TestRunOnce_ARebindKeepsEveryDiskThatIsNotMounted`). Watch safety scans use the flags but
   only one-shot and bootstrap scans record new ones.
 - `local_unsyncable_replacement`, `local_mount_boundary` and
   `local_mount_missing` are managed issue types of the local findings batch

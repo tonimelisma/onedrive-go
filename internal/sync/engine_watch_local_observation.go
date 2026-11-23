@@ -106,7 +106,6 @@ func (rt *watchRuntime) applyLocalSnapshot(ctx context.Context, batch *syncobser
 func (rt *watchRuntime) applyLocalPatch(ctx context.Context, batch *syncobserve.LocalObservation) (bool, error) {
 	changed := batch.Dirty ||
 		len(batch.Rows) > 0 ||
-		len(batch.DeletedPaths) > 0 ||
 		len(batch.DeletedPrefixes) > 0
 	if !changed {
 		return false, nil
@@ -115,14 +114,12 @@ func (rt *watchRuntime) applyLocalPatch(ctx context.Context, batch *syncobserve.
 	if err := rt.deps.store.ApplyLocalStatePatch(
 		ctx,
 		batch.Rows,
-		batch.DeletedPaths,
 		batch.DeletedPrefixes,
 	); err != nil {
 		return false, err
 	}
 	rt.deps.perf.RecordLocalObservationScopedCommit(
 		len(batch.Rows),
-		len(batch.DeletedPaths),
 		len(batch.DeletedPrefixes),
 	)
 

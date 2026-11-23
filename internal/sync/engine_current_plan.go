@@ -106,7 +106,7 @@ func (rt *watchRuntime) runSteadyStateCurrentPlan(
 	if err != nil {
 		return nil, err
 	}
-	rt.reportShadowPlan(&observation.inputs, build.Plan)
+	rt.reportShadowPlan(mode, &observation.inputs, build.Plan)
 
 	return rt.reconcileRuntimeStateStage(ctx, build, syncstore.PassRefreshedLocalOnly)
 }
@@ -574,13 +574,34 @@ func (flow *engineFlow) queryPlannerRowsTx(
 		decide = flow.hooks.decideOverride
 	}
 
-	return syncstore.QueryPlannerRows(
+	comparisons, reconciliations, err := syncstore.QueryPlannerRows(
 		ctx,
 		tx,
 		syncstore.PlannerVisibleLocalStateTable,
 		syncstore.PlannerVisibleRemoteStateTable,
 		decide,
 	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sync: querying planner rows: %w", err)
+	}
+	flow.mustAssertDecisionStatesValid(comparisons)
+
+	return comparisons, reconciliations, nil
+}
+
+// mustAssertDecisionStatesValid holds, under the engine's invariant checks,
+// every row the comparison query produced to the states it can produce
+// (syncdomain.DecisionState.Valid): the decision table's properties are
+// proven over valid states only, so a row outside them is a query bug.
+func (flow *engineFlow) mustAssertDecisionStatesValid(comparisons []syncdomain.SQLiteComparisonRow) {
+	if !flow.invariantChecksEnabled() {
+		return
+	}
+	for i := range comparisons {
+		if err := comparisons[i].DecisionState().Valid(); err != nil {
+			panic(fmt.Sprintf("planning %s: %v", comparisons[i].Path, err))
+		}
+	}
 }
 
 // buildCurrentPlanStage is the shared planning stage after an entrypoint has
@@ -593,7 +614,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	observation *currentObservation,
 ) (*builtCurrentPlan, error) {
 	if observation == nil {
-		return nil, fmt.Errorf("sync: building current plan: missing observed state")
+		return nil, errors.New("sync: building current plan: missing observed state")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("sync: building current plan from observed state: %w", err)
@@ -662,7 +683,7 @@ func (flow *engineFlow) reconcileRuntimeStateStage(
 	observed syncstore.PassObservation,
 ) (*runtimePlan, error) {
 	if build == nil {
-		return nil, fmt.Errorf("sync: reconciling runtime state: missing current plan build")
+		return nil, errors.New("sync: reconciling runtime state: missing current plan build")
 	}
 	if err := flow.reconcileRuntimeState(ctx, build.Plan, observed); err != nil {
 		return nil, err

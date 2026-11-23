@@ -94,12 +94,12 @@ func (e *Engine) runOnce(ctx context.Context, mode syncdomain.SyncMode, opts Run
 		executed = executed || result.executed
 		last = result
 
-		reason, again := e.oneShotFollowUp(ctx, pass, result)
+		reason, again := runner.oneShotFollowUp(ctx, pass, result)
 		if !again {
-			reason, again = e.oneShotScopeWait(ctx, runner, pass, result)
+			reason, again = runner.oneShotScopeWait(ctx, pass, result)
 		}
 		if !again {
-			stoppedAtPassBound = pass >= e.oneShotPasses() && oneShotFollowUpWanted(ctx, result)
+			stoppedAtPassBound = pass >= runner.hooks.oneShotPasses() && oneShotFollowUpWanted(ctx, result)
 			break
 		}
 		e.logger.Debug("running a follow-up sync pass for work the previous pass left",
@@ -203,13 +203,13 @@ type oneShotPass struct {
 // engine adds the conditions under which another pass cannot finish it: a
 // pass that made no progress, failed actions (they wait in retry backoff, and
 // the summary already says they will be retried), a canceled run, or the pass
-// bound.
-func (e *Engine) oneShotFollowUp(ctx context.Context, pass int, result oneShotPass) (string, bool) {
+// bound, which the run's own hooks set.
+func (r *oneShotRunner) oneShotFollowUp(ctx context.Context, pass int, result oneShotPass) (string, bool) {
 	if !oneShotFollowUpWanted(ctx, result) {
 		return "", false
 	}
-	if pass >= e.oneShotPasses() {
-		e.logger.Debug("sync pass limit reached; the next sync finishes the remaining work",
+	if pass >= r.hooks.oneShotPasses() {
+		r.deps.logger.Debug("sync pass limit reached; the next sync finishes the remaining work",
 			slog.Int("passes", pass),
 		)
 		return "", false
@@ -256,32 +256,32 @@ const oneShotScopeWaitLimit = 10 * time.Minute
 // 44 seconds (soak of 2026-11-02). When a pause scope still blocks work, its
 // trial is within oneShotScopeWaitLimit and the pass bound allows another
 // pass, the run waits for that trial and passes again (R-2.1.7).
-func (e *Engine) oneShotScopeWait(ctx context.Context, runner *oneShotRunner, pass int, result oneShotPass) (string, bool) {
-	if result.report == nil || ctx.Err() != nil || runner == nil || pass >= e.oneShotPasses() {
+func (r *oneShotRunner) oneShotScopeWait(ctx context.Context, pass int, result oneShotPass) (string, bool) {
+	if result.report == nil || ctx.Err() != nil || pass >= r.hooks.oneShotPasses() {
 		return "", false
 	}
-	trialAt, ok := runner.sched.EarliestPauseTrialAt()
+	trialAt, ok := r.sched.EarliestPauseTrialAt()
 	if !ok {
 		return "", false
 	}
-	left := result.report.LeftForNextSync + runner.countWorkBlockedUnderPause(ctx)
+	left := result.report.LeftForNextSync + r.countWorkBlockedUnderPause(ctx)
 	if left == 0 {
 		return "", false
 	}
-	wait := trialAt.Sub(e.nowFunc())
+	wait := trialAt.Sub(r.deps.now())
 	if wait > oneShotScopeWaitLimit {
-		e.logger.Info("OneDrive paused this drive for longer than a sync waits; the remaining work is the next sync's",
+		r.deps.logger.Info("OneDrive paused this drive for longer than a sync waits; the remaining work is the next sync's",
 			slog.Duration("pause", wait.Round(time.Second)),
 			slog.Int("left", left),
 		)
 		return "", false
 	}
 	if wait > 0 {
-		e.logger.Info("OneDrive asked for a pause; waiting before the next pass",
+		r.deps.logger.Info("OneDrive asked for a pause; waiting before the next pass",
 			slog.Duration("pause", wait.Round(time.Second)),
 			slog.Int("left", left),
 		)
-		if err := e.waitFor(ctx, wait); err != nil {
+		if err := r.waitFor(ctx, wait); err != nil {
 			return "", false
 		}
 	}
@@ -309,26 +309,17 @@ func (r *oneShotRunner) countWorkBlockedUnderPause(ctx context.Context) int {
 	return count
 }
 
-// waitFor blocks for d or until ctx ends, through the engine's wait seam so
-// tests advance their clock instead of sleeping.
-func (e *Engine) waitFor(ctx context.Context, d time.Duration) error {
-	if e.hooks.wait != nil {
-		return e.hooks.wait(ctx, d)
+// waitFor blocks for d or until ctx ends, through the run's wait seam so
+// tests advance their clock instead of sleeping, else on the run's clock.
+func (r *oneShotRunner) waitFor(ctx context.Context, d time.Duration) error {
+	if r.hooks.wait != nil {
+		return r.hooks.wait(ctx, d)
 	}
-	if err := e.runClock().Sleep(ctx, d); err != nil {
+	if err := r.deps.clock.Sleep(ctx, d); err != nil {
 		return fmt.Errorf("sync: one-shot pause wait: %w", err)
 	}
 
 	return nil
-}
-
-// oneShotPasses is the most passes one RunOnce makes.
-func (e *Engine) oneShotPasses() int {
-	if e.hooks.oneShotPassLimit > 0 {
-		return min(e.hooks.oneShotPassLimit, oneShotMaxPasses)
-	}
-
-	return oneShotMaxPasses
 }
 
 // runOneShotLivePass observes both sides, plans and executes one pass.
@@ -640,7 +631,7 @@ func (flow *engineFlow) commitPendingRemoteObservation(
 // fullRemoteObservation is what a full enumeration with orphan detection
 // observed.
 type fullRemoteObservation struct {
-	events   []syncdomain.RemoteItem
+	items    []syncdomain.RemoteItem
 	token    string
 	topology syncshortcut.ShortcutTopologyBatch
 	// orphansUndecided reports an item missing from the enumeration whose
@@ -712,7 +703,7 @@ func (flow *observation) observeRemoteFullWithShortcutTopology(
 		slog.Int("orphans", len(orphans)),
 	)
 
-	return fullRemoteObservation{events: events, token: token, topology: topology, orphansUndecided: undecided}, nil
+	return fullRemoteObservation{items: events, token: token, topology: topology, orphansUndecided: undecided}, nil
 }
 
 // markOrphansForReupload turns confirmed orphans into re-uploads: their

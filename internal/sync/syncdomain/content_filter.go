@@ -23,7 +23,7 @@ type ContentFilterConfig struct {
 	IgnoreJunkFiles bool
 	FollowSymlinks  bool
 	// CrossFilesystems lets local observation descend into mount points
-	// (P-11); see config.DriveFilterConfig.CrossFilesystems.
+	// (R-6.2.15); see config.DriveFilterConfig.CrossFilesystems.
 	CrossFilesystems bool
 }
 
@@ -247,7 +247,7 @@ func hasJunkComponent(parts []string, leafIsFile bool) bool {
 // metadata, editor and IDE temporaries, browser partials, Office owner
 // files, and SQLite sidecars. Each is either rewritten constantly while its
 // owner runs, meaningless on another device, or (sidecars) harmful when
-// synced apart from its database (D-084, P-2, P-3).
+// synced apart from its database (D-084, R-2.4.14, R-2.4.15).
 func IsBundledJunkName(name string) bool {
 	lower := asciiLower(name)
 

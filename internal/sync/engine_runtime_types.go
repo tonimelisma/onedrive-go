@@ -130,8 +130,12 @@ type flowInputs struct {
 }
 
 // flowInputs is the one place a run reads the engine's configuration, hooks
-// and capabilities. Each call takes the next run ID.
+// and capabilities. Each call takes the next run ID. The hooks are copied
+// once and everything built here reads that copy, so a run's pool size,
+// clock, wake source and observer seams all come from the hooks it started
+// with.
 func (e *Engine) flowInputs() *flowInputs {
+	hooks := e.hooks
 	return &flowInputs{
 		cfg: runConfig{
 			driveID:             e.driveID,
@@ -140,7 +144,7 @@ func (e *Engine) flowInputs() *flowInputs {
 			syncRoot:            e.syncRoot,
 			syncTree:            e.syncTree,
 			transferWorkers:     e.transferWorkers,
-			poolSize:            e.workerPoolSize(),
+			poolSize:            hooks.workerPoolSize(e.transferWorkers),
 			checkWorkers:        e.checkWorkers,
 			contentFilter:       e.contentFilter,
 			localRules:          e.localRules,
@@ -148,13 +152,13 @@ func (e *Engine) flowInputs() *flowInputs {
 			enableWebsocket:     e.enableWebsocket,
 			accountCanonicalID:  e.accountCanonicalID,
 		},
-		deps:  newRuntimeDeps(e),
-		hooks: e.hooks,
+		deps:  newRuntimeDeps(e, &hooks),
+		hooks: hooks,
 		runID: e.nextRuntimeRunID(),
 
 		roots:     e.protectedRoots,
-		remote:    e.remoteSource(),
-		local:     e.localSource(),
+		remote:    e.remoteSource(&hooks),
+		local:     e.localSource(&hooks),
 		shortcuts: e.shortcutRoots(),
 
 		planner:    e.planner,

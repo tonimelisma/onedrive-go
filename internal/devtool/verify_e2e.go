@@ -186,16 +186,19 @@ func runE2EFullCompileCheck(
 // taggedVetTargetCount is the number of build-tagged source sets vetted. It is
 // a constant so callers can size against it without the array-length pitfall
 // where len(f()) never calls f.
-const taggedVetTargetCount = 2
+const taggedVetTargetCount = 3
 
 // taggedVetTargets are the build-tagged source sets that a plain `go vet ./...`
 // never sees. Compiling them proves they build; it does not run the analyzers,
 // so vet findings in live-test code could only surface on a live run -- the
-// slowest and least available lane there is.
+// slowest and least available lane there is. The sync tree under the race tag
+// is one such set: its race-only files build only under -race, which no PR
+// lane runs, so a race-only build break otherwise surfaced after the merge.
 func taggedVetTargets() [taggedVetTargetCount][2]string {
 	return [taggedVetTargetCount][2]string{
 		{"-tags=e2e e2e_full", "./e2e"},
 		{"-tags=" + integrationBuildTag, "./internal/graph"},
+		{"-tags=race", "./internal/sync/..."},
 	}
 }
 

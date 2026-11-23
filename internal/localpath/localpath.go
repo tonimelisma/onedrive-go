@@ -17,7 +17,7 @@ import (
 // the working directory, and cleans every other one.
 func cleanPath(path string) (string, error) {
 	if path == "" {
-		return "", fmt.Errorf("path is empty")
+		return "", errors.New("path is empty")
 	}
 
 	return filepath.Clean(path), nil
