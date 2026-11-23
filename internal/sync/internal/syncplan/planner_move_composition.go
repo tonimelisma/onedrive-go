@@ -2446,7 +2446,57 @@ func dropCreatesOntoComposedItems(
 		kept = append(kept, *action)
 	}
 
-	return kept, dropped
+	return dropCreatesBelowDroppedCreates(kept, dropped)
+}
+
+// dropCreatesBelowDroppedCreates removes, with the creates already dropped,
+// every create below one of them on the same side: a dropped folder create
+// leaves its children no folder to land in. A new folder OneDrive made in a
+// folder renamed differently on both sides, at the name of a new file made
+// here, had its create here dropped (the file holds the path), while the
+// download of its child, rebased below the file, was kept: it failed every
+// pass and held the folder's move, so sync never converged (chaos seed 87).
+// The next pass, which has moved the folder, plans both at one path.
+func dropCreatesBelowDroppedCreates(kept, dropped []syncdomain.Action) (stillKept, allDropped []syncdomain.Action) {
+	droppedAt := [moveCoordCount]map[namekey.PathKey]bool{}
+	for i := range dropped {
+		if side, isCreate := createSide(&dropped[i]); isCreate {
+			if droppedAt[side] == nil {
+				droppedAt[side] = map[namekey.PathKey]bool{}
+			}
+			droppedAt[side][namekey.OfPath(dropped[i].Path)] = true
+		}
+	}
+	if droppedAt[moveCoordLocal] == nil && droppedAt[moveCoordRemote] == nil {
+		return kept, dropped
+	}
+
+	stillKept = kept[:0:0]
+	for i := range kept {
+		side, isCreate := createSide(&kept[i])
+		if isCreate && belowDroppedCreate(kept[i].Path, droppedAt[side]) {
+			dropped = append(dropped, kept[i])
+			continue
+		}
+		stillKept = append(stillKept, kept[i])
+	}
+
+	return stillKept, dropped
+}
+
+// belowDroppedCreate reports whether p lies, under OneDrive's name folding,
+// below one of the paths in dropped.
+func belowDroppedCreate(p string, dropped map[namekey.PathKey]bool) bool {
+	if len(dropped) == 0 {
+		return false
+	}
+	for dir := range pathAncestors(namekey.OfPath(p)) {
+		if dropped[dir] {
+			return true
+		}
+	}
+
+	return false
 }
 
 // belowAnotherItemsFolder reports the nearest folder above a create on side

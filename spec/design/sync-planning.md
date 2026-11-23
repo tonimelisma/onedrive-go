@@ -1323,6 +1323,11 @@ set where the planner leaves ready work:
 - `Dropped`: actions removed until the next pass: creates onto a path a
   composed item still holds or at or below the path of a new folder a
   deferred item moves into at its own path (`dropCreatesOntoComposedItems`),
+  and every create below a create it drops on the same side, which has no
+  folder to land in (a new OneDrive folder in a folder renamed differently on
+  both sides, at the name of a new local file: its child's download, rebased
+  below the file, failed every pass and held the folder's move,
+  `TestRunOnce_CreateConflictInsideADivergentlyRenamedFolderKeepsBoth`),
   deletes at or above the source of work held for the next pass or ahead of
   the create that writes their content, with what waits for them except a
   folder's move that carries them along (`withholdDeletesOfHeldWork`), work

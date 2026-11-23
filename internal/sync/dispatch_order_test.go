@@ -231,6 +231,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_LocalDeleteOfAnInterruptedLargeUploadDropsItsSession,
 		TestRunOnce_CreateConflictLocalDirRemoteFileKeepsBoth,
 		TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth,
+		TestRunOnce_CreateConflictInsideADivergentlyRenamedFolderKeepsBoth,
 		TestRunOnce_CreateIntentOfAFileRenamedAwayIsDropped,
 		TestRunOnce_CreateWhoseAnswerWasLostFinishesIntoItsOwnEmptyFile,
 		TestRunOnce_CrossMoveCycleKeepsBothTreesWithoutNesting,
