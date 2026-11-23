@@ -2,8 +2,11 @@ package syncexec
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -261,6 +264,184 @@ func TestExecutor_CreateRemoteFolder_ConflictBesideATwinAdoptsNothing(t *testing
 			}
 			require.ErrorAs(t, o.Error, &taken)
 			assert.Equal(t, "k", taken.remoteName)
+		})
+	}
+}
+
+// conflictFolderPages is how many pages a refused create's folder lists in
+// pagedConflictFolder; the name sits on conflictNamePage.
+const (
+	conflictFolderPages = 3
+	conflictNamePage    = 2
+)
+
+// pagedConflictFolder is the folder a create was refused in, served to the
+// executor as Graph serves it: the read of one name (read) and a listing in
+// conflictFolderPages pages, the child of the name on conflictNamePage. It
+// counts the reads and the pages asked for.
+type pagedConflictFolder struct {
+	read         func(name string) (*graph.Item, error)
+	named        graph.Item
+	reads, pages atomic.Int32
+}
+
+func (f *pagedConflictFolder) itemClient() *syncfixture.ExecutorMockItemClient {
+	return &syncfixture.ExecutorMockItemClient{
+		CreateFolderFn: func(_ context.Context, _ driveid.ID, _, _ string) (*graph.Item, error) {
+			return nil, &graph.GraphError{StatusCode: http.StatusConflict, Code: "nameAlreadyExists", Err: graph.ErrConflict}
+		},
+		GetChildByNameFn: func(_ context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
+			f.reads.Add(1)
+			return f.read(name)
+		},
+		ListChildrenPagesFn: func(_ context.Context, _ driveid.ID, _ string, visit graph.ChildrenPageFunc) error {
+			for page := 1; page <= conflictFolderPages; page++ {
+				f.pages.Add(1)
+				child := graph.Item{ID: fmt.Sprintf("other-%d", page), Name: fmt.Sprintf("other-%d", page)}
+				if page == conflictNamePage {
+					child = f.named
+				}
+				if !visit([]graph.Item{child}) {
+					return nil
+				}
+			}
+
+			return nil
+		},
+		ListChildrenFn: func(_ context.Context, _ driveid.ID, _ string) ([]graph.Item, error) {
+			return nil, errors.New("a refused create lists no whole folder")
+		},
+	}
+}
+
+// answers returns a read that answers item, for any name.
+func answers(item graph.Item) func(string) (*graph.Item, error) {
+	return func(string) (*graph.Item, error) { return &item, nil }
+}
+
+// misses returns a read that fails with err, for any name.
+func misses(err error) func(string) (*graph.Item, error) {
+	return func(string) (*graph.Item, error) { return nil, err }
+}
+
+// A folder create refused with 409 reads the one name first, and lists the
+// parent only when that read cannot settle it, stopping at the page that
+// holds the name as spelled. Every outcome stays: a folder of the name is
+// adopted, a differently spelled sibling is a name collision, a file of the
+// name is no folder to adopt, and a read that fails otherwise is its own
+// failure.
+//
+// Validates: R-5.6.14, R-6.7.37
+func TestExecutor_CreateRemoteFolder_ConflictReadsTheNameBeforeListing(t *testing.T) {
+	t.Parallel()
+
+	folder := graph.Item{ID: "existing-folder", Name: "photos", IsFolder: true}
+	notFound := fmt.Errorf("reading: %w", graph.ErrNotFound)
+	for _, tc := range []struct {
+		label     string
+		read      func(string) (*graph.Item, error)
+		wantPages int32
+		wantItem  string
+		wantTaken bool
+		wantStale bool
+	}{
+		{label: "the read answers the folder", read: answers(folder), wantItem: "existing-folder"},
+		{
+			label: "the read answers another spelling", read: answers(graph.Item{ID: "other", Name: "Photos", IsFolder: true}),
+			wantTaken: true,
+		},
+		{label: "the read answers a file", read: answers(graph.Item{ID: "file", Name: "photos"}), wantStale: true},
+		{label: "the read finds nothing yet", read: misses(notFound), wantPages: conflictNamePage, wantItem: "existing-folder"},
+		{
+			label: "the read answers 400", read: misses(&graph.GraphError{StatusCode: http.StatusBadRequest, Err: graph.ErrBadRequest}),
+			wantPages: conflictNamePage, wantItem: "existing-folder",
+		},
+		{label: "the read fails otherwise", read: misses(&graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError})},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			paged := &pagedConflictFolder{read: tc.read, named: folder}
+			cfg, _ := newTestExecutorConfig(t, paged.itemClient(), &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
+			e := NewExecution(cfg, syncfixture.EmptyBaseline())
+
+			o := e.ExecuteFolderCreate(t.Context(), &syncdomain.Action{
+				Type: syncdomain.ActionFolderCreate, Path: "photos", CreateSide: syncdomain.CreateRemote, View: &syncdomain.PathView{Path: "photos"},
+			})
+			assert.Equal(t, int32(1), paged.reads.Load(), "one read of the name")
+			assert.Equal(t, tc.wantPages, paged.pages.Load(), "the listing stops at the page that holds the name")
+
+			if tc.wantItem != "" {
+				syncfixture.RequireOutcomeSuccess(t, &o)
+				assert.Equal(t, tc.wantItem, o.ItemID)
+				return
+			}
+			syncfixture.RequireOutcomeFailure(t, &o)
+			var taken *RemoteNameTakenError
+			assert.Equal(t, tc.wantTaken, errors.As(o.Error, &taken))
+			assert.Equal(t, tc.wantStale, errors.Is(o.Error, syncdomain.ErrActionPreconditionChanged))
+			if !tc.wantTaken && !tc.wantStale {
+				require.ErrorIs(t, o.Error, graph.ErrServerError, "the read's own failure, not the 409")
+			}
+		})
+	}
+}
+
+// A file create refused with 409 reads the one name first, and lists the
+// folder only when that read cannot settle it, stopping at the page that
+// holds the name as spelled. Every outcome stays: the same spelling is a
+// stale plan, a differently spelled sibling is a name collision, a folder of
+// the name is no file to claim, and a read that fails otherwise is its own
+// failure.
+//
+// Validates: R-5.6.14, R-6.7.37
+func TestExecutor_Upload_CreateConflictReadsTheNameBeforeListing(t *testing.T) {
+	t.Parallel()
+
+	theirs := graph.Item{ID: "theirs", Name: "x.docx", Size: int64(len("theirs"))}
+	notFound := fmt.Errorf("reading: %w", graph.ErrNotFound)
+	for _, tc := range []struct {
+		label     string
+		read      func(string) (*graph.Item, error)
+		wantPages int32
+		wantTaken bool
+		wantStale bool
+	}{
+		{label: "the read answers the same spelling", read: answers(theirs), wantStale: true},
+		{label: "the read answers another spelling", read: answers(graph.Item{ID: "other", Name: "X.DOCX"}), wantTaken: true},
+		{label: "the read answers a folder", read: answers(graph.Item{ID: "dir", Name: "x.docx", IsFolder: true}), wantStale: true},
+		{label: "the read finds nothing yet", read: misses(notFound), wantPages: conflictNamePage, wantStale: true},
+		{label: "the read fails otherwise", read: misses(&graph.GraphError{StatusCode: http.StatusServiceUnavailable, Err: graph.ErrServerError})},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+
+			ul := &syncfixture.ExecutorMockUploader{
+				UploadFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+					return nil, &graph.GraphError{StatusCode: http.StatusConflict, Code: "nameAlreadyExists", Err: graph.ErrConflict}
+				},
+				UploadToItemFn: func(_ context.Context, _ driveid.ID, _, _ string, _ io.ReaderAt, _ int64, _ time.Time, _ graph.ProgressFunc) (*graph.Item, error) {
+					return nil, errors.New("a refused create writes into no item it did not make")
+				},
+			}
+			paged := &pagedConflictFolder{read: tc.read, named: theirs}
+			cfg, syncRoot := newTestExecutorConfig(t, paged.itemClient(), &syncfixture.ExecutorMockDownloader{}, ul)
+			e := NewExecution(cfg, syncfixture.EmptyBaseline())
+			syncfixture.WriteExecTestFile(t, syncRoot, "x.docx", "mine")
+
+			o := e.ExecuteUpload(t.Context(), &syncdomain.Action{
+				Type: syncdomain.ActionUpload, Path: "x.docx", DriveID: driveid.New(synctest.TestDriveID), View: &syncdomain.PathView{Path: "x.docx"},
+			})
+			syncfixture.RequireOutcomeFailure(t, &o)
+			assert.Equal(t, int32(1), paged.reads.Load(), "one read of the name")
+			assert.Equal(t, tc.wantPages, paged.pages.Load(), "the listing stops at the page that holds the name")
+
+			var taken *RemoteNameTakenError
+			assert.Equal(t, tc.wantTaken, errors.As(o.Error, &taken))
+			assert.Equal(t, tc.wantStale, errors.Is(o.Error, syncdomain.ErrActionPreconditionChanged))
+			if !tc.wantTaken && !tc.wantStale {
+				require.ErrorIs(t, o.Error, graph.ErrServerError, "the read's own failure, not the 409")
+			}
 		})
 	}
 }

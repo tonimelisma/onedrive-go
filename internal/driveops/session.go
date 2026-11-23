@@ -1125,7 +1125,7 @@ func FindExistingChild(
 		return ChildByName{}, fmt.Errorf("the read of %q in its folder answered without an item ID", item.Name)
 	case err == nil:
 		return ChildByName{Item: item}, nil
-	case !readCannotSettleName(err):
+	case !graph.ReadCannotSettleName(err):
 		return ChildByName{}, fmt.Errorf("reading the name in its folder: %w", err)
 	}
 
@@ -1141,11 +1141,3 @@ func FindExistingChild(
 	return child, nil
 }
 
-// readCannotSettleName reports whether a failed read of one name leaves the
-// name to the listing of its folder: the read found nothing, the route cannot
-// carry the name, or Graph answered 400.
-func readCannotSettleName(err error) bool {
-	return errors.Is(err, graph.ErrNotFound) ||
-		errors.Is(err, graph.ErrNameNotPathAddressable) ||
-		errors.Is(err, graph.ErrBadRequest)
-}

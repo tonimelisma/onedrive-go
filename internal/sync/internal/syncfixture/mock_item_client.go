@@ -8,6 +8,8 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 type TestMockItemClient struct {
@@ -19,6 +21,60 @@ type TestMockItemClient struct {
 	GetItemFn           func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
 	getItemByPathFn     func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
 	ListChildrenFn      func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	// GetChildByNameFn and ListChildrenPagesFn, when set, replace the reads
+	// derived from ListChildrenFn, for a test that serves pages or counts
+	// requests.
+	GetChildByNameFn    func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+	ListChildrenPagesFn func(ctx context.Context, driveID driveid.ID, parentID string, visit graph.ChildrenPageFunc) error
+}
+
+// TestMockItemClient is pinned to the sync item client it stands in for.
+var _ syncdomain.ItemClient = (*TestMockItemClient)(nil)
+
+// GetChildByName answers a read of one name as Graph answers it, from the
+// folder ListChildrenFn holds (ChildNamed).
+func (m *TestMockItemClient) GetChildByName(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error) {
+	if m.GetChildByNameFn != nil {
+		return m.GetChildByNameFn(ctx, driveID, parentID, name)
+	}
+	children, err := m.ListChildren(ctx, driveID, parentID)
+	if err != nil {
+		return nil, err
+	}
+
+	return ChildNamed(children, name)
+}
+
+// ListChildrenPages hands the folder ListChildrenFn holds over as one page.
+func (m *TestMockItemClient) ListChildrenPages(
+	ctx context.Context, driveID driveid.ID, parentID string, visit graph.ChildrenPageFunc,
+) error {
+	if m.ListChildrenPagesFn != nil {
+		return m.ListChildrenPagesFn(ctx, driveID, parentID, visit)
+	}
+	children, err := m.ListChildren(ctx, driveID, parentID)
+	if err != nil {
+		return err
+	}
+	visit(children)
+
+	return nil
+}
+
+// ChildNamed is what Graph's read of one name answers from a folder holding
+// children: the child that holds the name under OneDrive's name equivalence,
+// the one spelled as asked first (namekey.Find; OneDrive holds one item per
+// name, so a real folder never makes the choice), else graph.ErrNotFound. A
+// folder of children that hold the name in more than one spelling, none as
+// asked, answers ErrNotFound too, so the caller's listing decides.
+func ChildNamed(children []graph.Item, name string) (*graph.Item, error) {
+	match := namekey.Find(children, name, func(child *graph.Item) (string, bool) { return child.Name, true })
+	if !match.Found() {
+		return nil, fmt.Errorf("reading %q: %w", name, graph.ErrNotFound)
+	}
+	child := children[match.Index]
+
+	return &child, nil
 }
 
 func (m *TestMockItemClient) GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error) {

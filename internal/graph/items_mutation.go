@@ -82,7 +82,7 @@ func (c *Client) readCreatedFolderAfterEmptySuccessBody(
 	parentID string,
 	name string,
 ) (*Item, error) {
-	c.logger.Debug("create folder returned empty success body, confirming by parent listing",
+	c.logger.Debug("create folder returned empty success body, reading the folder back by its name",
 		slog.String("drive_id", driveID.String()),
 		slog.String("parent_id", parentID),
 		slog.String("name", name),
@@ -91,16 +91,11 @@ func (c *Client) readCreatedFolderAfterEmptySuccessBody(
 	var lastErr error
 
 	for attempt := range c.policies.createFolderReadback.MaxAttempts {
-		children, err := c.ListChildren(ctx, driveID, parentID)
+		item, err := c.createdFolderNamed(ctx, driveID, parentID, name)
 		if err == nil {
-			if item, ok := findCreatedFolder(children, name); ok {
-				return &item, nil
-			}
-
-			lastErr = ErrNotFound
-		} else {
-			lastErr = err
+			return item, nil
 		}
+		lastErr = err
 
 		if attempt >= c.policies.createFolderReadback.MaxAttempts-1 {
 			break
@@ -128,10 +123,40 @@ func (c *Client) readCreatedFolderAfterEmptySuccessBody(
 	return nil, fmt.Errorf("graph: create folder empty success response: %w", lastErr)
 }
 
-// findCreatedFolder picks the folder a create of name made from its
-// parent's listing (namekey.Find): the folder spelled as asked, else the only
-// one OneDrive treats as that name. Two such folders and none spelled as
-// asked are not found. A folder the listing repeats counts once.
+// createdFolderNamed is one attempt to find the folder a create of name made
+// in parentID: one read of the name (GetChildByName), and the parent's
+// listing, a page at a time up to the page that holds the name as spelled
+// (NameSeek), only when that read cannot settle it (ReadCannotSettleName).
+// A file the read answers settles it: OneDrive holds one item per name, so
+// the folder is not there yet. Not there is ErrNotFound.
+func (c *Client) createdFolderNamed(ctx context.Context, driveID driveid.ID, parentID, name string) (*Item, error) {
+	item, err := c.GetChildByName(ctx, driveID, parentID, name)
+	switch {
+	case err == nil && item.IsFolder:
+		return item, nil
+	case err == nil:
+		return nil, ErrNotFound
+	case !ReadCannotSettleName(err):
+		return nil, err
+	}
+
+	seek := NewNameSeek(name)
+	if err := c.ListChildrenPages(ctx, driveID, parentID, seek.Visit); err != nil {
+		return nil, err
+	}
+	folder, ok := findCreatedFolder(seek.Candidates(), name)
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	return &folder, nil
+}
+
+// findCreatedFolder picks the folder a create of name made from the children
+// of its parent's listing that hold the name (namekey.Find): the folder
+// spelled as asked, else the only one OneDrive treats as that name. Two such
+// folders and none spelled as asked are not found. A folder the listing
+// repeats counts once.
 func findCreatedFolder(children []Item, name string) (Item, bool) {
 	children = WithoutRepeats(children)
 	match := namekey.Find(children, name, func(child *Item) (string, bool) { return child.Name, child.IsFolder })

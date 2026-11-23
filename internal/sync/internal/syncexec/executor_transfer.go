@@ -729,7 +729,7 @@ func (e *Executor) forgetRemovedPlaceholder(ctx context.Context, action *syncdom
 //     taken by that attempt's file, not listed yet, so the intent stays for
 //     the attempt or the observation that sees it.
 //
-// A read that fails while resolving (the store, the folder listing) is that
+// A read that fails while resolving (the store, the name, the folder listing) is that
 // read's failure, classified by its own answer: it proves nothing about the
 // plan. Joined to the 409 it read as a stale precondition under the 409's
 // status, which hid a throttled or failing listing.
@@ -754,10 +754,9 @@ func (e *Executor) resolveCreateConflict(
 	}
 
 	name := filepath.Base(action.Path)
-	children, listErr := e.items.ListChildren(ctx, driveID, parentID)
+	children, listErr := e.childrenHoldingName(ctx, driveID, parentID, name)
 	if listErr != nil {
-		return nil, priorIntent, fmt.Errorf("resolving the refused create of %s: listing its folder: %w",
-			action.Path, listErr)
+		return nil, priorIntent, fmt.Errorf("resolving the refused create of %s: %w", action.Path, listErr)
 	}
 	child, found := classifyCreateConflict(children, name)
 	switch found {
@@ -775,6 +774,33 @@ func (e *Executor) resolveCreateConflict(
 	return nil, priorIntent, conflictErr
 }
 
+// childrenHoldingName are the children of the folder parentID that hold name
+// or a name OneDrive treats as the same, for classifyCreateConflict after a
+// create of name was refused (409). One read of the name answers it, as
+// OneDrive holds one item per name; the folder is listed, a page at a time up
+// to the page that holds the name as spelled (graph.NameSeek), only when that
+// read cannot settle the name (graph.ReadCannotSettleName: not found, as the
+// path route can lag behind the listing, not addressable, or 400). A sibling
+// that only shares the stored form (namekey.Twin) is in neither answer, and
+// was never the wanted item. A large folder thus costs one request per
+// refused create instead of every page. Any other failed read is the error.
+func (e *Executor) childrenHoldingName(ctx context.Context, driveID driveid.ID, parentID, name string) ([]graph.Item, error) {
+	item, err := e.items.GetChildByName(ctx, driveID, parentID, name)
+	switch {
+	case err == nil:
+		return []graph.Item{*item}, nil
+	case !graph.ReadCannotSettleName(err):
+		return nil, fmt.Errorf("reading its name in its folder: %w", err)
+	}
+
+	seek := graph.NewNameSeek(name)
+	if err := e.items.ListChildrenPages(ctx, driveID, parentID, seek.Visit); err != nil {
+		return nil, fmt.Errorf("listing its folder: %w", err)
+	}
+
+	return seek.Candidates(), nil
+}
+
 // createConflictFound is what a refused create's folder holds under the
 // create's name (classifyCreateConflict).
 type createConflictFound uint8
@@ -790,7 +816,7 @@ const (
 	createConflictRival
 )
 
-// classifyCreateConflict reads the listing of the folder a create was refused
+// classifyCreateConflict reads the children of the folder a create was refused
 // in (409: the name is taken) and says what holds the name, by namekey.Find:
 // the item the create wanted, a rival, or nothing it can name. A child
 // without an item ID is no candidate, and a child the listing repeats counts

@@ -590,6 +590,13 @@ func (s *NameSeek) Visit(page []Item) bool {
 	return !s.exact
 }
 
+// Candidates are the children that hold the name, a name OneDrive treats as
+// the same, in the order listed, each once: for a caller whose own rule picks
+// among them (the create conflict of sync, a created folder's read-back).
+func (s *NameSeek) Candidates() []Item {
+	return s.candidates
+}
+
 // Match returns the child that holds the name, when one does, and the
 // lookup's answer: Ambiguous when more than one child holds it and none is
 // spelled as asked.

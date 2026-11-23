@@ -29,6 +29,11 @@ type ItemClient interface {
 	GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
 	GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
 	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	// GetChildByName and ListChildrenPages look one name up in a folder: the
+	// one read first, the listing a page at a time only when the read cannot
+	// settle it, so a lookup does not cost every page of a large folder.
+	GetChildByName(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+	ListChildrenPages(ctx context.Context, driveID driveid.ID, parentID string, visit graph.ChildrenPageFunc) error
 	CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
 	MoveItem(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string, keepModified time.Time) (*graph.Item, error)
 	MoveItemIfMatch(
