@@ -221,6 +221,11 @@ type moveComposition struct {
 	// at its own path there (holdOwnLandings): a later pass makes it, once
 	// the item has left.
 	ownLandings map[moveCoord]map[namekey.PathKey]bool
+	// asideFolders holds the local paths of new folders made here that hold
+	// the source of a folder whose local move lands on their path
+	// (newFolderHoldingItsSource): each is renamed to a conflict copy this
+	// pass, and the folder moves out of it the next.
+	asideFolders []string
 }
 
 // deferredRelocationsInMode counts the deferred relocations mode runs: one
@@ -1297,6 +1302,31 @@ func (e *moveEmitter) resolve(key string) bool {
 	return true
 }
 
+// newFolderHoldingItsSource reports the path of a folder made here, no synced
+// item, that holds n's local move's destination while n's own source lies
+// inside it: OneDrive's move of a folder wins over this computer's, which
+// moved it into a folder that a new folder at its old path now holds (here x
+// moved into Q as Q/renamed-x, a new x made and Q moved into it, while
+// OneDrive moved Q into the old x). The move can never land while the new
+// folder holds the path, and the folder cannot leave it before it lands, so
+// the item waited for good while the creates below it failed on every pass.
+// The new folder is renamed to a conflict copy, kept with everything in it,
+// and the next pass moves the item out of it onto its path.
+func (e *moveEmitter) newFolderHoldingItsSource(n *moveNode, side moveCoord, newPath string) (string, bool) {
+	if side != moveCoordLocal || n.itemType != syncdomain.ItemTypeFolder {
+		return "", false
+	}
+	at := e.snapshotPath(side, newPath)
+	if at != newPath || !e.occupancy.local[at] || e.occupancy.localFiles[at] || !strings.HasPrefix(n.paths[side], at+"/") {
+		return "", false
+	}
+	if _, isNode := e.occupantAt(side, at); isNode {
+		return "", false
+	}
+
+	return at, true
+}
+
 // resolveMove decides n's move on side to newPath: it waits while the folder
 // whose move vacates that path is still to be decided, moves n aside when it
 // lands in a folder made at its own path (parkAwayFromItsOwnLanding), and
@@ -1305,6 +1335,11 @@ func (e *moveEmitter) resolve(key string) bool {
 func (e *moveEmitter) resolveMove(n *moveNode, side moveCoord, newPath string) bool {
 	if e.waitsForVacatingFolder(n, side, newPath) {
 		return false
+	}
+	if aside, holds := e.newFolderHoldingItsSource(n, side, newPath); holds {
+		e.result.asideFolders = append(e.result.asideFolders, aside)
+		e.deferNode(n.key)
+		return true
 	}
 	if holder, held := e.folderHolder(side, n.key, newPath); held && holder == n.key {
 		return e.parkAwayFromItsOwnLanding(n.key, side)
@@ -1343,6 +1378,11 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 	remotePath := ""
 	for i := range e.result.moves {
 		earlier := &e.result.moves[i]
+		if before, lands := e.landsInsideBeforeItMoves(n, side, oldPath, newPath, earlier); lands {
+			newPath = before
+			remotePath = n.paths[moveCoordRemote]
+			continue
+		}
 		if earlier.side != side || !strings.HasPrefix(oldPath, earlier.oldPath+"/") {
 			continue
 		}
@@ -1410,6 +1450,45 @@ func (e *moveEmitter) planMove(n *moveNode, side moveCoord, newPath string) (com
 		remotePath: remotePath,
 		displaced:  displaced,
 	}, true
+}
+
+// landsInsideBeforeItMoves reports where n's local move lands when its
+// target lies below the destination of an earlier local folder move of the
+// plan and its source outside that folder: inside the folder at the path the
+// folder has here now, where the folder's move then carries it
+// (landsInTheFolderMoveCarries orders the folder's move after it), when its
+// parent there is already present. Ordered after the folder's move, it waited
+// for it, while the folder waited for a child to leave, which waited for the
+// path n vacates: here d/c.swap-1.md, parked by an earlier pass of a swap on
+// OneDrive, moving to c.md, c.md moving into d's destination, and d moving.
+func (e *moveEmitter) landsInsideBeforeItMoves(n *moveNode, side moveCoord, oldPath, newPath string, earlier *composedMove) (string, bool) {
+	if side != moveCoordLocal || earlier.side != moveCoordLocal || e.nodes[earlier.key].itemType != syncdomain.ItemTypeFolder ||
+		!strings.HasPrefix(newPath, earlier.newPath+"/") || pathAtOrBelow(oldPath, earlier.oldPath) {
+		return "", false
+	}
+	if !e.childLeavesForPath(earlier.oldPath, oldPath) {
+		return "", false
+	}
+	before := earlier.oldPath + strings.TrimPrefix(newPath, earlier.newPath)
+	if !e.localParentPresent(n, path.Dir(before)) {
+		return "", false
+	}
+
+	return before, true
+}
+
+// childLeavesForPath reports whether an item below folder here has p as its
+// target: that item leaves the folder before the folder moves, so the move
+// that vacates p must not wait for the folder's move.
+func (e *moveEmitter) childLeavesForPath(folder, p string) bool {
+	for _, key := range e.keys {
+		m := e.nodes[key]
+		if m.present(moveCoordLocal) && strings.HasPrefix(m.paths[moveCoordLocal], folder+"/") && e.targetPath(key) == p {
+			return true
+		}
+	}
+
+	return false
 }
 
 // leavesBeforeItsFolder reports whether n, leaving the folder whose move on
@@ -2186,6 +2265,10 @@ func buildComposedMoveActions(
 
 	creates, waiting := recreatedSourceCreates(composition, inputs, nodeByKey, viewAt)
 	actions = append(actions, creates...)
+	for _, aside := range composition.asideFolders {
+		copyView := *viewAt(aside)
+		actions = append(actions, makeConflictCopyAction(&copyView))
+	}
 
 	for i := range composition.rekeys {
 		rekey := &composition.rekeys[i]
@@ -2443,7 +2526,12 @@ func dropCreatesOntoComposedItems(
 			dropped = append(dropped, *action)
 			continue
 		}
-		if atOrBelowOwnLanding(action.Path, composition.ownLandings[side]) {
+		if atOrBelowOwnLanding(action.Path, composition.ownLandings[side]) ||
+			slices.ContainsFunc(composition.asideFolders, func(aside string) bool {
+				return pathAtOrBelow(syncdomain.ActionViewPath(action), aside)
+			}) {
+			// Below a folder renamed to a conflict copy this pass, the create
+			// is planned again at its new path by the next.
 			dropped = append(dropped, *action)
 			continue
 		}

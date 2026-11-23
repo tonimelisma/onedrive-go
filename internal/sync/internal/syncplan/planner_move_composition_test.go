@@ -1423,6 +1423,57 @@ func TestComposeMoves_AnItemMovedIntoANewFolderAtItsOwnPathMovesAsideFirst(t *te
 
 // Validates: R-2.17.6, R-2.17.1
 //
+// An earlier pass parked d/c.md at d/c.swap-1.md for a swap on OneDrive, and
+// OneDrive has since moved d into e and the file at c.md into d. Here the
+// parked file moves to c.md, out of d, before d moves; the file at c.md has
+// its target inside d's destination, so it moves into d at d's path here,
+// where d's move carries it. Ordered after d's move it waited for it, while
+// d waited for the parked file to leave and the parked file for c.md: a cycle
+// dropped on every pass (chaos seeds 189 and 232).
+func TestComposeMoves_AFileWhoseTargetIsInAMovingFolderLandsInsideItFirst(t *testing.T) {
+	t.Parallel()
+
+	nodes := []moveNode{
+		composeNode("e", syncdomain.ItemTypeFolder, "e", "e", "e"),
+		composeNode("d", syncdomain.ItemTypeFolder, "d", "d", "e/d"),
+		composeNode("c", syncdomain.ItemTypeFile, "d/c.swap-1.md", "d/c.swap-1.md", "c.md"),
+		composeNode("r", syncdomain.ItemTypeFile, "c.md", "c.md", "e/d/c.md"),
+	}
+	c := composeForTest(nodes...)
+
+	assert.ElementsMatch(t, []string{"d->e/d", "c.md->d/c.md", "d/c.swap-1.md->c.md"}, composedMovesBySide(&c, moveCoordLocal))
+	assert.Empty(t, c.deferred)
+	actions := composedMoveActions(&c, nodes)
+	kept, _, _ := isolateDependencyCycles(actions, nil)
+	assert.Len(t, kept, len(actions), "every action of the plan has an order")
+}
+
+// Validates: R-2.17.6, R-2.17.2
+//
+// Here x moved into Q as Q/renamed-x, a new x was made and Q moved into it,
+// while OneDrive moved Q into the old x. OneDrive's move wins, so the old x
+// must move back onto x, which the new folder holds while it holds the old
+// x's source too: no move can land. The new folder is renamed to a conflict
+// copy this pass, kept with everything in it, and the old x waits for the
+// next pass, which moves it out of the copy onto its path.
+func TestComposeMoves_AFolderInsideTheNewFolderAtItsPathMovesItAsideFirst(t *testing.T) {
+	t.Parallel()
+
+	nodes := []moveNode{
+		composeNode("x", syncdomain.ItemTypeFolder, "x", "x/Q/renamed-x", "x"),
+		composeNode("Q", syncdomain.ItemTypeFolder, "Q", "x/Q", "x/Q"),
+	}
+	occupancy := composeOccupancy(nodes)
+	occupancy.local["x"] = true
+	c := composeMoves(nodes, occupancy, nil)
+
+	assert.Equal(t, []string{"x"}, c.asideFolders)
+	assert.True(t, c.deferred["x"], "the old x waits for the next pass")
+	assert.Empty(t, composedMovesBySide(&c, moveCoordLocal), "nothing moves into the folder renamed aside")
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
 // Here H moved aside, Y/f moved into a new Y/f/a/f, Y moved into a new folder
 // H as H/Y, and the old H into H/Y/f/a/H, while OneDrive kept H, Y and Y/f.
 // Y's OneDrive move lands in the folder made at H's path, which OneDrive

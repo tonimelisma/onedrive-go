@@ -439,6 +439,95 @@ func TestRunOnce_ARotationThroughNestingSplitAcrossTheSidesKeepsOneDrivesNesting
 	requireScenarioQuietPlan(t, eng)
 }
 
+// Validates: R-2.17.6, R-2.17.1
+//
+// An earlier sync parked d/c.md at d/c.swap-1.md for a swap on OneDrive, and
+// OneDrive has since put that file at c.md, moved the file at c.md into d as
+// d/c.md and moved d into e. Here the parked file leaves d for c.md, the file
+// at c.md moves into d at d's path here, and d's move carries it into e, all
+// in one plan. Before, the file at c.md waited for d's move, d for the parked
+// file to leave, and the parked file for c.md: a cycle dropped on every pass
+// (chaos seeds 189 and 232). One sync converges with nothing moved on
+// OneDrive, uploaded or downloaded.
+func TestRunOnce_AParkedFileLeavesItsFolderBeforeTheFolderMovesOnOneDrive(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-d", "root", "d")
+	remote.addFile(t, "item-c", "item-d", "c.swap-1.md", "c\n")
+	remote.addFolder("item-e", "root", "e")
+	remote.addFile(t, "item-r", "root", "c.md", "r\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+
+	remote.moveAt(t, "c.md", "t.md")
+	remote.moveAt(t, "d/c.swap-1.md", "c.md")
+	remote.moveAt(t, "d", "e/d")
+	remote.moveAt(t, "t.md", "e/d/c.md")
+
+	runs, superseded := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes the moves")
+	assert.Zero(t, superseded)
+
+	want := map[string]string{"c.md": "c\n", "e": "/", "e/d": "/", "e/d/c.md": "r\n"}
+	assert.Equal(t, want, remote.tree(), "OneDrive")
+	assert.Equal(t, want, harnessLocalTree(t, syncRoot), "this computer")
+	assert.Empty(t, remote.moves, "nothing is moved on OneDrive")
+	assert.Zero(t, remote.uploads)
+	assert.Equal(t, downloadsBefore, remote.downloads, "the files are moved here, not downloaded again")
+	assert.NotContains(t, logs.String(), "dependency cycle")
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.6, R-2.17.2
+//
+// Here x moved into Q as Q/renamed-x, with a file written into it, a new x
+// was made and Q moved into it, while OneDrive moved Q into the old x.
+// OneDrive's move wins, so the old x goes back onto x, which the new folder
+// holds while holding the old x's source too. The new folder is renamed to
+// a conflict copy and kept; the next pass moves the old x and Q out of it
+// into place and uploads the new file into the old x. Before, the old x
+// waited for good and every pass failed the create of the new file, whose
+// parent the baseline does not have (chaos seed 275). One sync converges:
+// every file once, at OneDrive's place, and the conflict copy, empty now,
+// on both sides.
+func TestRunOnce_AFolderMovedBackOutOfANewFolderAtItsPathKeepsTheNewFolderAsAConflictCopy(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFolder("item-x", "root", "x")
+	remote.addFile(t, "item-xf", "item-x", "xf.txt", "xf\n")
+	remote.addFolder("item-Q", "root", "Q")
+	remote.addFile(t, "item-qf", "item-Q", "qf.txt", "qf\n")
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+
+	local := scenarioLocalPath(syncRoot)
+	require.NoError(t, os.Rename(local("x"), local("Q/renamed-x")))
+	require.NoError(t, os.WriteFile(local("Q/renamed-x/new.txt"), []byte("new\n"), 0o600))
+	require.NoError(t, os.Mkdir(local("x"), 0o750))
+	require.NoError(t, os.Rename(local("Q"), local("x/Q")))
+	remote.moveAt(t, "Q", "x/Q")
+
+	runs, _ := runScenarioUntilDone(t, eng)
+	assert.Equal(t, 1, runs, "one sync finishes")
+
+	tree := remote.tree()
+	assert.Equal(t, tree, harnessLocalTree(t, syncRoot), "both sides end equal")
+	var copies []string
+	for p := range tree {
+		if strings.HasPrefix(p, "x.conflict-") {
+			copies = append(copies, p)
+			delete(tree, p)
+		}
+	}
+	assert.Len(t, copies, 1, "the new folder is kept as one conflict copy")
+	want := map[string]string{"x": "/", "x/xf.txt": "xf\n", "x/new.txt": "new\n", "x/Q": "/", "x/Q/qf.txt": "qf\n"}
+	assert.Equal(t, want, tree, "every file once, at OneDrive's place")
+	assert.Equal(t, "x", remote.pathOf("item-x"), "the old x is the folder at x")
+	assert.NotContains(t, logs.String(), "has not been synced yet")
+	requireScenarioQuietPlan(t, eng)
+}
+
 // Validates: R-2.17.9, R-2.17.2
 //
 // OneDrive deleted the folder archive, which held a synced file, and moved

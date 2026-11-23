@@ -728,6 +728,10 @@ func moveOrderDependency(a, other *syncdomain.Action, sourceRecreated bool) bool
 		!movesIntoRecreatedSource(other, a, sourceRecreated) {
 		return true
 	}
+	if landsInTheFolderMoveCarries(other, a) {
+		// It lands inside the folder before the folder moves.
+		return true
+	}
 
 	return (isDeleteAction(other) || other.Type == syncdomain.ActionConflictCopy) && other.Path == a.Path
 }
