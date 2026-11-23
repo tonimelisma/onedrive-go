@@ -826,7 +826,8 @@ func waitForBenchRemoteDeltaReady(
 	runtime *benchBidirectionalRuntime,
 	expected benchBidirectionalSideMutations,
 ) (benchDeltaReadyResult, error) {
-	startedAt := time.Now()
+	clock := subject.retryClock()
+	startedAt := clock.now()
 	deadline := startedAt.Add(benchBidirectionalDeltaPollTimeout)
 	var lastProcess benchMeasuredProcess
 	var lastErr error
@@ -839,7 +840,7 @@ func waitForBenchRemoteDeltaReady(
 			plan := parseBenchSyncPlanOutput(process.Stdout, process.Stderr)
 			if benchRemoteDeltaPlanReady(plan, expected) {
 				return benchDeltaReadyResult{
-					WaitMicros: durationMicros(time.Since(startedAt)),
+					WaitMicros: durationMicros(clock.now().Sub(startedAt)),
 					Attempts:   attempt + 1,
 				}, nil
 			}
@@ -848,7 +849,7 @@ func waitForBenchRemoteDeltaReady(
 		if ctx.Err() != nil {
 			return benchDeltaReadyResult{}, fmt.Errorf("wait for remote delta readiness: %w", ctx.Err())
 		}
-		if time.Now().After(deadline) {
+		if clock.now().After(deadline) {
 			if lastErr == nil {
 				lastErr = fmt.Errorf("remote mutations not yet visible in dry-run plan")
 			}
@@ -860,7 +861,9 @@ func waitForBenchRemoteDeltaReady(
 			)
 		}
 
-		time.Sleep(benchPollBackoff(attempt))
+		if err := clock.wait(ctx, benchPollBackoff(attempt)); err != nil {
+			return benchDeltaReadyResult{}, fmt.Errorf("wait for remote delta readiness: %w", err)
+		}
 	}
 }
 

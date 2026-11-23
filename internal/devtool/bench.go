@@ -221,6 +221,31 @@ type preparedBenchSubject struct {
 	metadata benchResultSubject
 	measure  func(context.Context, benchCommandSpec) (benchMeasuredProcess, error)
 	cleanup  func() error
+	// retry is the clock the live benchmark's retries read their deadline
+	// from and wait on between attempts; the zero value is the wall clock.
+	retry benchRetryClock
+}
+
+// benchRetryClock is the clock of the live benchmark's retries: the remote
+// reset, the visibility probe and the delta wait. Tests pass one that
+// records each wait and returns at once.
+type benchRetryClock struct {
+	now  func() time.Time
+	wait func(context.Context, time.Duration) error
+}
+
+// retryClock is the subject's retry clock, the wall clock when none was
+// given.
+func (s preparedBenchSubject) retryClock() benchRetryClock {
+	clock := s.retry
+	if clock.now == nil {
+		clock.now = time.Now
+	}
+	if clock.wait == nil {
+		clock.wait = sleepContext
+	}
+
+	return clock
 }
 
 type preparedBenchScenario struct {

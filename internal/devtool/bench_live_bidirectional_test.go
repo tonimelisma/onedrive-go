@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -226,6 +227,27 @@ func TestWaitForBenchRemoteDeltaReadyReturnsOnceThePlanHoldsTheRemoteChanges(t *
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Attempts)
 	assert.GreaterOrEqual(t, result.WaitMicros, int64(0))
+
+	// A plan that is not ready yet is polled again after a wait on the
+	// injected clock, and the wait it reports is that clock's.
+	calls := 0
+	clock := &recordedBenchClock{}
+	pending := preparedBenchSubject{
+		measure: func(context.Context, benchCommandSpec) (benchMeasuredProcess, error) {
+			calls++
+			if calls == 1 {
+				return benchMeasuredProcess{}, nil
+			}
+
+			return benchMeasuredProcess{Stdout: []byte(benchDryRunRemoteDeltaReady)}, nil
+		},
+		retry: clock.clock(),
+	}
+	result, err = waitForBenchRemoteDeltaReady(t.Context(), pending, &runtime, expected)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Attempts)
+	assert.Equal(t, []time.Duration{benchPollBackoff(0)}, clock.waits)
+	assert.Equal(t, benchPollBackoff(0).Microseconds(), result.WaitMicros)
 }
 
 // Validates: R-6.10.14
