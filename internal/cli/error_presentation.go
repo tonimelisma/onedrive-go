@@ -202,6 +202,50 @@ func remoteFailureSubject(err error) (*remoteOpError, string, string) {
 	return op, op.path, hint
 }
 
+// pathAnswersDisagreeText is the sentence for a path whose answers from
+// OneDrive name different folders for it (graph.ErrPathAnswersDisagree),
+// whether a read or listing met it or a visibility wait ran out on it
+// (driveops.PathNotVisibleError carries it as its cause). It names the path
+// once and never the folders' item IDs, which only --verbose's details show.
+// It does not say whether anything changed: a wait that confirms a delete, a
+// move or a new folder meets the disagreement after the change landed, while
+// put's wait for its folder meets it before anything was sent, and the
+// sentence is the same for both.
+func pathAnswersDisagreeText(err error, op *remoteOpError) string {
+	subject := "the path"
+	var notVisible *driveops.PathNotVisibleError
+	switch {
+	case op != nil:
+		subject = op.path
+	case errors.As(err, &notVisible):
+		subject = notVisible.Path
+	}
+
+	return "OneDrive's answers for " + subject + " do not agree on which folder holds it. " +
+		"This usually settles within a few minutes: wait, then check it and run the command again."
+}
+
+// unaddressableNameText is the sentence for a path holding a name OneDrive
+// cannot take in a path-addressed request (graph.ErrNameNotPathAddressable):
+// one holding ':', which ends the path in such a request, or one too long
+// for it. A shared item's selector is no path, and holds ':' of its own.
+func unaddressableNameText(op *remoteOpError) string {
+	if op == nil || strings.HasPrefix(op.path, sharedref.Prefix) {
+		return "The path holds a name OneDrive cannot read by its path: one with ':' or one too long."
+	}
+	subject := op.path
+	if !strings.Contains(subject, ":") {
+		return "A name in " + subject + " is too long for OneDrive to read by its path."
+	}
+
+	hint := ""
+	if parent := path.Dir(subject); parent != subject && !strings.Contains(parent, ":") {
+		hint = " Run 'onedrive-go ls " + parent + "' to see what is there."
+	}
+
+	return subject + " holds ':', which OneDrive cannot carry in a path." + hint
+}
+
 func notImplementedMessage(err error) string {
 	var graphErr *graph.GraphError
 	if errors.As(err, &graphErr) && graphErr.Message != "" {
@@ -221,6 +265,10 @@ func remoteFailureText(err error) string {
 	switch {
 	case graph.IsQuotaExhausted(err):
 		return "Your OneDrive storage is full. Free up space or add storage, then run the command again."
+	case errors.Is(err, graph.ErrPathAnswersDisagree):
+		return pathAnswersDisagreeText(err, op)
+	case errors.Is(err, graph.ErrNameNotPathAddressable):
+		return unaddressableNameText(op)
 	case errors.Is(err, graph.ErrNotFound):
 		return subject + " was not found on OneDrive." + parentHint
 	case errors.Is(err, graph.ErrForbidden):

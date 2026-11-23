@@ -600,7 +600,21 @@ prints it if it is a file; any other failure is reported unchanged.
 File commands wrap failures in `remoteOpError` (action, path, cause) instead
 of `fmt.Errorf("<action> %q: %w")`; its `Error()` text is unchanged, but
 `commandErrorText` uses the path to print one plain sentence for the Graph
-failure classes and missing or unreadable local files (R-6.6.26). Command-line
+failure classes and missing or unreadable local files (R-6.6.26). Answers
+for one path that name different folders for it (`graph.ErrPathAnswersDisagree`,
+recognized with `errors.Is`, so the end of a visibility wait, whose
+`driveops.PathNotVisibleError` carries it as its cause, is caught too) are one
+sentence that names the command's path once (the wait's path when the command
+recorded none), says the answers do not agree on which folder holds it and
+that this usually settles: it says nothing about whether anything changed,
+since a wait that confirms a delete, a move or a new folder meets it after the
+change landed; the folders' item IDs are only in `--verbose`'s details
+(`TestCommandErrorText_DisagreeingAnswersForAPathAreOneSentence`). A read by
+path of a name with `:` (`graph.ErrNameNotPathAddressable`, refused before
+any request) names the path once and the character, with the `ls` of its
+folder when that folder's path can be read; a name too long for a path route
+is said as such (`TestCommandErrorText_ANameAPathCannotCarryIsOneSentence`).
+Command-line
 mistakes become `usageError` through cobra's flag-error hook, a wrapper on
 every command's `Args` validator, and a flag-group check that runs before
 `initializeCLIContext`; `main` prints them with a `--help` pointer and exits 2.
