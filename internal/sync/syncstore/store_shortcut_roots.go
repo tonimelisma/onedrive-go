@@ -74,10 +74,17 @@ func (s *SyncStore) AcknowledgeShortcutChildArtifactsPurged(
 	return true, nil
 }
 
+// ShortcutChildWorkSnapshot is the child work the stored shortcut roots
+// declare, projected through the parent's content filter: a shortcut the
+// filter excludes has no run command, and a child's filter hides what the
+// parent's hides below the shortcut. The caller owns the filter (it is
+// configuration, not stored state); an empty one would publish work the user
+// excluded.
 func (s *SyncStore) ShortcutChildWorkSnapshot(
 	ctx context.Context,
 	namespaceID string,
 	parentSyncRoot string,
+	parentContentFilter syncdomain.ContentFilterConfig,
 ) (syncshortcut.ShortcutChildWorkSnapshot, error) {
 	if s == nil {
 		return syncshortcut.ShortcutChildWorkSnapshot{NamespaceID: namespaceID}, nil
@@ -87,7 +94,7 @@ func (s *SyncStore) ShortcutChildWorkSnapshot(
 		return syncshortcut.ShortcutChildWorkSnapshot{}, err
 	}
 	return syncshortcut.ShortcutChildWorkSnapshotFromRootsWithParentRoot(
-		namespaceID, parentSyncRoot, syncdomain.ContentFilterConfig{}, records,
+		namespaceID, parentSyncRoot, parentContentFilter, records,
 	), nil
 }
 

@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/permissions_rdonly_bsd.go, internal/sync/permissions_rdonly_linux.go, internal/sync/report_left_work.go, internal/sync/engine_shortcut_alias_mutation.go, internal/sync/syncshortcut/shortcut_root_lifecycle.go, internal/sync/syncshortcut/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go, internal/sync/engine_shadow_plan.go
 
-Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.12.8 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified], R-6.3.8 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.10.29 [verified]
+Implements: R-2.1 [verified], R-2.1.7 [verified], R-2.12.8 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified], R-6.3.8 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.10.29 [verified], R-2.4.18 [verified]
 
 ## Overview
 
@@ -1206,6 +1206,23 @@ observation values and local actions (`noop`, `keepRecord`, `dropRecord`,
 `materializeRoot`, `mutateAlias`, and `moveProjection`) so the shell performs
 Graph, filesystem, and SQLite effects only, then feeds those outcomes back
 through the same transition table.
+
+A shortcut whose local path the parent's content filter excludes
+(`ignored_dirs`, `ignored_paths`, or outside `included_dirs`) is not touched
+(R-2.4.18). One rule decides it, `syncshortcut.ShortcutRootExcludedByContentFilter`,
+and both sides ask it: the child work publication publishes no run command for
+the shortcut and projects the parent's filter below it for every other, and
+the local lifecycle skips the record, so no folder is made at its path, a
+folder already there is left as it is, and a materialized root whose folder
+is gone is not read as the user deleting the alias on OneDrive. Every
+publication path hands the engine's filter to the snapshot, the store's
+`ShortcutChildWorkSnapshot` included: until 2026-11-23 that one passed an
+empty filter, so the snapshot published after a child acknowledgement started
+a child for a shortcut the user excluded, with nothing below it hidden
+(`TestEngine_ShortcutTheFiltersExcludeLeavesNoFolderAndNoWork`,
+`TestSyncStore_ShortcutChildWorkSnapshotProjectsTheParentsFilter`). The
+record itself stays as the remote observation keeps it, so removing the
+filter picks the shortcut up on the next pass.
 
 A child final drain ends by releasing its local tree (below), and when it
 completes, multisync acknowledges that completion to

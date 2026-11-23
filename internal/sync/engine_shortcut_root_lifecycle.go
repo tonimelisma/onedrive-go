@@ -186,6 +186,12 @@ func (s *shortcutRoots) reconcileShortcutRootRecord(
 		syncshortcut.ShortcutRootStateRemovedChildCleanupPending:
 		return normalized, true, false, nil
 	}
+	// A shortcut the user's filters exclude is not touched: no folder is
+	// made for it, a folder already there is left alone, and its alias is
+	// never renamed or deleted on OneDrive from what the local side shows.
+	if syncshortcut.ShortcutRootExcludedByContentFilter(s.contentFilter, normalized.RelativeLocalPath) {
+		return normalized, true, false, nil
+	}
 	observation := s.observeShortcutRootLocalState(&normalized)
 	plan := syncshortcut.PlanShortcutRootLocalObservation(&normalized, &observation)
 	switch plan.Action {

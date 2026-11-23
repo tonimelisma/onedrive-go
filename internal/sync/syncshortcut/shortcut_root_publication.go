@@ -59,6 +59,16 @@ func ShortcutChildWorkSnapshotFromRootsWithParentRoot(
 	return snapshot
 }
 
+// ShortcutRootExcludedByContentFilter reports whether the parent's content
+// filter hides a shortcut's local path. A path the user's filters exclude is
+// not touched: the shortcut gets no child run, no local folder and no local
+// lifecycle step, and an existing folder there is left as it is. The child
+// work publication and the parent's local lifecycle both ask this one rule.
+func ShortcutRootExcludedByContentFilter(parentFilter syncdomain.ContentFilterConfig, relativeLocalPath string) bool {
+	_, visible := projectShortcutChildContentFilter(parentFilter, relativeLocalPath)
+	return !visible
+}
+
 func projectShortcutChildContentFilter(
 	parentFilter syncdomain.ContentFilterConfig, aliasPath string,
 ) (syncdomain.ContentFilterConfig, bool) {
