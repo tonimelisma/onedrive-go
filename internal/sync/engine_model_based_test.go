@@ -373,6 +373,10 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 		order = dispatchOrderShuffle(r.seed)
 	}
 	eng.hooks.serializeWorkers = true
+	// One hash worker: the bubble fixes time, not the order in which
+	// goroutines that run at one instant reach a shared step, and a scan's
+	// parallel hash workers are such goroutines.
+	eng.checkWorkers = 1
 	eng.hooks.shadowPlanned = r.checkShadowPlan
 	eng.hooks.dispatchOrder = order
 	eng.hooks.recordFrontier = r.recordFrontierStep
