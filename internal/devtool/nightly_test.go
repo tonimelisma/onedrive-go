@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -203,6 +204,9 @@ type claimRemote struct {
 	ancestors  map[string]bool
 	beforePush func(remote *claimRemote)
 	pushes     []string
+	// pushForbidden makes every push fail the way a Claude Code cloud
+	// session's git proxy refuses a ref other than the session's branch.
+	pushForbidden bool
 	// jobLogErrs are the failures the job-log fetch of a job id answers
 	// with, in order, before it returns the log; jobLogCalls counts the
 	// fetches. runListErrs does the same for the run list, and labelListErrs
@@ -378,32 +382,54 @@ func (r *claimRemote) github(joined string, args []string) ([]byte, error) {
 			return nil, failures[0]
 		}
 		return []byte(r.jobLogs[id]), nil
-	case strings.HasPrefix(joined, "gh pr view"):
-		body, err := json.Marshal(map[string]string{"body": r.prBody, "headRefName": r.prBranch})
+	case strings.HasPrefix(joined, "gh api "+githubRepoPath+"/pulls/"):
+		body, err := json.Marshal(map[string]any{"body": r.prBody, "head": map[string]string{"ref": r.prBranch}})
 		if err != nil {
-			return nil, fmt.Errorf("encode pr view: %w", err)
+			return nil, fmt.Errorf("encode pull request: %w", err)
 		}
 		return body, nil
-	case strings.HasPrefix(joined, "gh label list"):
-		if len(r.labelListErrs) > 0 {
-			failure := r.labelListErrs[0]
-			r.labelListErrs = r.labelListErrs[1:]
-			return nil, failure
-		}
-		if failure := popRemoteErr(r.labelSearchErrs, ghFields(args)["--search"]); failure != nil {
-			return nil, failure
-		}
-		return r.labelList()
-	case strings.HasPrefix(joined, "gh issue list"):
-		if failure := popRemoteErr(r.issueListErrs, ghFields(args)["--label"]); failure != nil {
-			return nil, failure
-		}
-		return r.openIssueList(ghFields(args)["--label"])
-	case strings.HasPrefix(joined, "gh issue view "):
-		return r.issueView(args[2])
+	}
+	if out, handled, err := r.issueRead(joined, args); handled {
+		return out, err
 	}
 	r.writes = append(r.writes, joined)
 	return r.githubWrite(joined, args)
+}
+
+// issueRead answers the REST reads of labels and issues; handled is false
+// for any other command.
+func (r *claimRemote) issueRead(joined string, args []string) ([]byte, bool, error) {
+	switch {
+	case strings.HasPrefix(joined, "gh api "+githubRepoPath+"/labels/"):
+		if len(r.labelListErrs) > 0 {
+			failure := r.labelListErrs[0]
+			r.labelListErrs = r.labelListErrs[1:]
+			return nil, true, failure
+		}
+		label := strings.TrimPrefix(args[1], githubRepoPath+"/labels/")
+		if failure := popRemoteErr(r.labelSearchErrs, label); failure != nil {
+			return nil, true, failure
+		}
+		if !r.labels[label] {
+			return nil, true, ghFailure("HTTP 404: Not Found (https://api.github.com/repos/o/r/labels/" + label + ")")
+		}
+		return []byte(`{"name":"` + label + `"}`), true, nil
+	case strings.HasPrefix(joined, "gh api --paginate "+githubRepoPath+"/issues?"):
+		label := restIssueListLabel(args[2])
+		if failure := popRemoteErr(r.issueListErrs, label); failure != nil {
+			return nil, true, failure
+		}
+		out, err := r.openIssueList(label)
+		return out, true, err
+	case strings.HasPrefix(joined, "gh api --paginate "+githubRepoPath+"/issues/"):
+		number, _, _ := strings.Cut(strings.TrimPrefix(args[2], githubRepoPath+"/issues/"), "/")
+		out, err := r.issueComments(number)
+		return out, true, err
+	case strings.HasPrefix(joined, "gh api "+githubRepoPath+"/issues/"):
+		out, err := r.issueBody(strings.TrimPrefix(args[1], githubRepoPath+"/issues/"))
+		return out, true, err
+	}
+	return nil, false, nil
 }
 
 // popRemoteErr takes the next failure errs holds for key, nil for none.
@@ -465,41 +491,54 @@ func (r *claimRemote) issue(number string) *fakeIssue {
 	return nil
 }
 
-// labelList answers `gh label list --search`, which prints nothing at all,
-// not an empty list, when no label matches.
-func (r *claimRemote) labelList() ([]byte, error) {
-	if len(r.labels) == 0 {
-		return nil, nil
-	}
-	labels := []map[string]string{}
-	for _, name := range slices.Sorted(maps.Keys(r.labels)) {
-		labels = append(labels, map[string]string{"name": name})
-	}
-	out, err := json.Marshal(labels)
+// restIssueListLabel reads the label an issues list request filters by.
+func restIssueListLabel(path string) string {
+	_, query, _ := strings.Cut(path, "?")
+	values, err := url.ParseQuery(query)
 	if err != nil {
-		return nil, fmt.Errorf("encode labels: %w", err)
+		return ""
+	}
+
+	return values.Get("labels")
+}
+
+// issueBody answers `gh api .../issues/<n>`.
+func (r *claimRemote) issueBody(number string) ([]byte, error) {
+	out, err := json.Marshal(map[string]any{"number": r.issue(number).number, "body": r.issue(number).body})
+	if err != nil {
+		return nil, fmt.Errorf("encode issue: %w", err)
 	}
 	return out, nil
 }
 
-// issueView answers `gh issue view <n> --json body,comments`.
-func (r *claimRemote) issueView(number string) ([]byte, error) {
+// issueComments answers `gh api --paginate .../issues/<n>/comments`, the
+// comments split over two pages as --paginate prints them, one array after
+// another, when there are more than one.
+func (r *claimRemote) issueComments(number string) ([]byte, error) {
 	issue := r.issue(number)
-	comments := make([]map[string]string, 0, len(issue.comments))
-	for _, comment := range issue.comments {
-		comments = append(comments, map[string]string{"body": comment})
+	pages := [][]map[string]string{{}}
+	for i, comment := range issue.comments {
+		if i == 1 {
+			pages = append(pages, []map[string]string{})
+		}
+		pages[len(pages)-1] = append(pages[len(pages)-1], map[string]string{"body": comment})
 	}
-	out, err := json.Marshal(map[string]any{"body": issue.body, "comments": comments})
-	if err != nil {
-		return nil, fmt.Errorf("encode issue view: %w", err)
+	var out []byte
+	for _, page := range pages {
+		data, err := json.Marshal(page)
+		if err != nil {
+			return nil, fmt.Errorf("encode issue comments: %w", err)
+		}
+		out = append(out, data...)
 	}
 	return out, nil
 }
 
-// openIssueList answers `gh issue list --label <label> --state open`, the
-// newest issue first, with each issue's number, title and body.
+// openIssueList answers the REST list of open issues carrying label, the
+// newest issue first, with each issue's number, title and body, and a pull
+// request carrying the label too, which the list must leave out.
 func (r *claimRemote) openIssueList(label string) ([]byte, error) {
-	open := []map[string]any{}
+	open := []map[string]any{{"number": 9999, "title": "a pull request", "pull_request": map[string]string{"url": "x"}}}
 	for i := len(r.issues) - 1; i >= 0; i-- {
 		if r.issues[i].open && slices.Contains(r.issues[i].labels, label) {
 			open = append(open, map[string]any{"number": r.issues[i].number, "title": r.issues[i].title, "body": r.issues[i].body})
@@ -538,6 +577,10 @@ func (r *claimRemote) CombinedOutput(_ context.Context, _ string, _ []string, na
 		hook := r.beforePush
 		r.beforePush = nil
 		hook(r)
+	}
+	if r.pushForbidden {
+		return []byte("error: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403\n" +
+			"fatal: the remote end hung up unexpectedly\n"), errors.New("exit status 1")
 	}
 	lease := strings.TrimPrefix(args[2], "--force-with-lease="+nightlyClaimRefPrefix)
 	key, expect, _ := strings.Cut(lease, ":")
@@ -1571,6 +1614,43 @@ func TestNightlyCheckPrunesConfirmedFixesAndExpiredStaleClaims(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"TestInProgress", "TestNotYetRun"}, remote.claimKeys())
+}
+
+// Validates: R-6.10.23, R-6.10.40
+//
+// A checkout that may not push claim refs, as a Claude Code cloud session may
+// push only its own branch, keeps a retired claim and says so: the claim
+// blocks no one, and a run that can push deletes it.
+func TestNightlyCheckReportsARetiredClaimItMayNotDelete(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, checkConclusionSuccess)
+	remote.seed("e2e.TestConfirmed", &nightlyClaim{
+		State: nightlyStateFixed, Owner: nightlyTestOther, FixCommit: "fix1", Jobs: []string{nightlyTestE2EJob},
+	})
+	remote.ancestors["fix1.."+nightlyTestRunHead] = true
+	remote.pushForbidden = true
+
+	out, err := runNightlyCheck(t, remote)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"e2e.TestConfirmed"}, remote.claimKeys())
+	assert.Contains(t, out, "nightly: kept the retired claim on e2e.TestConfirmed: this checkout may not push claim refs")
+}
+
+// Validates: R-6.10.23, R-6.10.40
+//
+// Taking a claim must reach GitHub: where claim refs may not be pushed, a red
+// night fails the check naming why, instead of leaving the failure unowned.
+func TestNightlyCheckFailsToClaimWhereClaimRefsMayNotBePushed(t *testing.T) {
+	t.Parallel()
+
+	remote := failingNightlyRemote(t)
+	remote.pushForbidden = true
+
+	_, err := runNightlyCheck(t, remote)
+	require.ErrorIs(t, err, errNightlyClaimRefsForbidden)
+	assert.Empty(t, remote.claimKeys())
 }
 
 // Validates: R-6.10.23

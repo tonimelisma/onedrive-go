@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -26,7 +26,6 @@ const (
 	nightlyIssueLabelColor       = "B60205"
 	nightlyIssueLabelDescription = "The scheduled CI run failed"
 	nightlyIssueTitle            = "Nightly CI is failing"
-	nightlyLabelListLimit        = "100"
 
 	// nightlyIssueMaxTests bounds the tests one job's line names, so a run in
 	// which a whole package failed still fits one comment.
@@ -445,14 +444,9 @@ func findNightlyIssue(ctx context.Context, gh ghClient, repoRoot string) (nightl
 		return state, nil
 	}
 
-	out, err := gh.output(ctx, repoRoot, "nightly issue list (GET repos/{owner}/{repo}/issues)",
-		"issue", "list", "--label", nightlyIssueLabel, "--state", "open", "--json", "number", "--limit", "1")
+	issues, err := listOpenLabeledIssues(ctx, gh, repoRoot, "nightly", nightlyIssueLabel)
 	if err != nil {
 		return nightlyIssueState{}, err
-	}
-	var issues []struct{ Number int }
-	if decodeErr := decodeGHList("nightly issue list", out, &issues); decodeErr != nil {
-		return nightlyIssueState{}, decodeErr
 	}
 	if len(issues) == 0 {
 		return state, nil
@@ -466,54 +460,101 @@ func findNightlyIssue(ctx context.Context, gh ghClient, repoRoot string) (nightl
 }
 
 // githubLabelExists reads whether the repository has the label; what names
-// the read in the request's description.
+// the read in the request's description. REST answers 404 for a label that
+// does not exist.
 func githubLabelExists(ctx context.Context, gh ghClient, repoRoot string, what string, label string) (bool, error) {
-	out, err := gh.output(ctx, repoRoot, what+" label list (GET repos/{owner}/{repo}/labels)",
-		"label", "list", "--search", label, "--json", "name", "--limit", nightlyLabelListLimit)
-	if err != nil {
-		return false, err
+	_, err := gh.output(ctx, repoRoot, what+" label (GET repos/{owner}/{repo}/labels/"+label+")",
+		"api", githubRepoPath+"/labels/"+url.PathEscape(label))
+	if err == nil {
+		return true, nil
 	}
-	var labels []struct{ Name string }
-	if decodeErr := decodeGHList(what+" label list", out, &labels); decodeErr != nil {
-		return false, decodeErr
+	if githubHTTPStatus(err) == httpNotFound {
+		return false, nil
 	}
 
-	return slices.ContainsFunc(labels, func(listed struct{ Name string }) bool { return listed.Name == label }), nil
+	return false, err
+}
+
+// githubOpenIssue is an open issue as REST lists it. The issues list holds
+// pull requests too, which carry a pull_request key.
+type githubOpenIssue struct {
+	Number      int             `json:"number"`
+	Title       string          `json:"title"`
+	Body        string          `json:"body"`
+	PullRequest json.RawMessage `json:"pull_request"`
+}
+
+// listOpenLabeledIssues lists the open issues carrying label, newest first,
+// every page of them, pull requests left out; what names the read in the
+// request's description.
+func listOpenLabeledIssues(ctx context.Context, gh ghClient, repoRoot string, what string, label string) ([]githubOpenIssue, error) {
+	out, err := gh.output(ctx, repoRoot, what+" issue list (GET repos/{owner}/{repo}/issues)",
+		"api", "--paginate", githubRepoPath+"/issues?state=open&per_page=100&labels="+url.QueryEscape(label))
+	if err != nil {
+		return nil, err
+	}
+	var pages [][]githubOpenIssue
+	if err := decodeGHPages(what+" issue list", out, &pages); err != nil {
+		return nil, err
+	}
+	issues := []githubOpenIssue{}
+	for _, page := range pages {
+		for _, issue := range page {
+			if len(issue.PullRequest) == 0 || string(issue.PullRequest) == "null" {
+				issues = append(issues, issue)
+			}
+		}
+	}
+
+	return issues, nil
 }
 
 // githubIssueTexts reads an issue's body and comments, the body first; what
 // names the read in the request's description.
 func githubIssueTexts(ctx context.Context, gh ghClient, repoRoot string, what string, issue int) ([]string, error) {
 	number := strconv.Itoa(issue)
-	out, err := gh.output(ctx, repoRoot, what+" issue view (GET repos/{owner}/{repo}/issues/"+number+")",
-		"issue", "view", number, "--json", "body,comments")
+	out, err := gh.output(ctx, repoRoot, what+" issue (GET repos/{owner}/{repo}/issues/"+number+")",
+		"api", githubRepoPath+"/issues/"+number)
 	if err != nil {
 		return nil, err
 	}
 	var view struct {
-		Body     string
-		Comments []struct{ Body string }
+		Body string `json:"body"`
 	}
 	if decodeErr := json.Unmarshal(out, &view); decodeErr != nil {
-		return nil, fmt.Errorf("decode %s issue view %s: %w", what, number, decodeErr)
+		return nil, fmt.Errorf("decode %s issue %s: %w", what, number, decodeErr)
+	}
+	out, err = gh.output(ctx, repoRoot, what+" issue comments (GET repos/{owner}/{repo}/issues/"+number+"/comments)",
+		"api", "--paginate", githubRepoPath+"/issues/"+number+"/comments?per_page=100")
+	if err != nil {
+		return nil, err
+	}
+	var pages [][]struct {
+		Body string `json:"body"`
+	}
+	if err := decodeGHPages(what+" issue comments", out, &pages); err != nil {
+		return nil, err
 	}
 	texts := []string{view.Body}
-	for _, comment := range view.Comments {
-		texts = append(texts, comment.Body)
+	for _, page := range pages {
+		for _, comment := range page {
+			texts = append(texts, comment.Body)
+		}
 	}
 
 	return texts, nil
 }
 
-// decodeGHList decodes a gh list printed as JSON. A list command whose
-// search matched nothing can print nothing at all instead of `[]`, which is
-// an empty list.
-func decodeGHList(what string, out []byte, list any) error {
-	if len(bytes.TrimSpace(out)) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(out, list); err != nil {
-		return fmt.Errorf("decode %s: %w", what, err)
+// decodeGHPages decodes what `gh api --paginate` prints for a list: each
+// page's JSON array, one after another.
+func decodeGHPages[T any](what string, out []byte, pages *[]T) error {
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	for decoder.More() {
+		var page T
+		if err := decoder.Decode(&page); err != nil {
+			return fmt.Errorf("decode %s: %w", what, err)
+		}
+		*pages = append(*pages, page)
 	}
 
 	return nil

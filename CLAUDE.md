@@ -247,7 +247,7 @@ Most work runs in Claude Code cloud sessions: an ephemeral Linux container runni
 - One PR per increment, squash-merged; after the merge, reset the session branch to `origin/main` before the next increment.
 - Builder subagents start from the current integration head, never a stale base. After integrating a builder's work, run `go run ./cmd/devtool worktree prune-merged` (`--dry-run` first to see the verdicts): it removes the clean builder worktrees whose work is in `origin/main`, and their branches, and reports the rest.
 - Run the gate as a non-root user: `go run ./cmd/devtool verify --as-user <user> --dod --stage pre-pr` (or set `DEVTOOL_TEST_USER`).
-- DoD checks that need GitHub (review-thread audit and replies, nightly claims, CI waits) are done with the GitHub connector tools when the devtool stage cannot reach GitHub, and the PR body says which checks were done that way and what they found.
+- The DoD stages run in a cloud session: they read GitHub over REST, and review threads over the session proxy's REST thread routes when GraphQL is refused. Merge with the GitHub connector tools (`gh pr merge` is GraphQL), then run `post-merge`, which reads the server's merge state. A cloud session cannot push `refs/nightly-claims`: on a red night, claim from a checkout that can (`spec/reference/cloud-development.md`), and say so in the PR body.
 - Merge on green CI, then confirm the push-to-`main` run of the merge commit is green.
 - Nothing worth keeping lives only in the container: push it, put it in the PR, or write it to the repo.
 

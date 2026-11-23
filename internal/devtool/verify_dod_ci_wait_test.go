@@ -22,8 +22,9 @@ const (
 	ciWaitMergeSHA = "merge-sha"
 	ciWaitShard    = "verify-unit (macos-latest, 2/3)"
 
-	ciWaitPRViewCommand      = "gh pr view 7 --json " + pullRequestStateFields
-	ciWaitPRHeadCommand      = "gh pr view 7 --json headRefOid"
+	ciWaitPRViewCommand = "gh api --paginate " + githubRepoPath + "/commits/" + ciWaitHeadSHA +
+		"/check-runs?per_page=100 --jq .check_runs[]"
+	ciWaitPRHeadCommand      = "gh api " + githubRepoPath + "/pulls/7"
 	ciWaitRunViewCommand     = "gh run view 111 --json conclusion,headSha,jobs,status,updatedAt,url"
 	ciWaitRerunCommand       = "gh run rerun 111 --failed"
 	ciWaitPushRunViewCommand = "gh run view 222 --json conclusion,headSha,jobs,status,updatedAt,url"
@@ -35,13 +36,12 @@ const (
 	ciWaitSecondStart = "2026-11-11T11:00:00Z"
 	ciWaitNotStarted  = "0001-01-01T00:00:00Z"
 
-	// gh prints a pull request's check states in upper case and a run's own
-	// states in lower case; the fixtures keep that difference.
-	rollupCompleted  = "COMPLETED"
-	rollupInProgress = "IN_PROGRESS"
-	rollupCancelled  = "CANCELLED" //nolint:misspell // GitHub's spelling of the conclusion
-	rollupQueued     = "QUEUED"
-	rollupPending    = "PENDING"
+	// REST prints check run states in lower case, as gh prints a run's.
+	rollupCompleted  = "completed"
+	rollupInProgress = "in_progress"
+	rollupCancelled  = "cancelled" //nolint:misspell // GitHub's spelling of the conclusion
+	rollupQueued     = "queued"
+	rollupPending    = "pending"
 	runInProgress    = "in_progress"
 
 	ciWaitTestStall = 30 * time.Minute
@@ -127,6 +127,10 @@ func (s *ghScript) output(_ string, _ []string, name string, args ...string) ([]
 const ghScriptFailure = "FAIL: "
 
 func scriptedRunner(outputs map[string][]string) (*fakeRunner, *ghScript) {
+	if _, scripted := outputs[ciWaitPRHeadCommand]; !scripted {
+		// Every poll of a pull request's checks reads its head commit first.
+		outputs[ciWaitPRHeadCommand] = []string{prHeadJSON()}
+	}
 	script := newGHScript(outputs)
 
 	return &fakeRunner{outputFunc: script.output}, script
@@ -158,7 +162,7 @@ func recordedRerunKeys(runner *fakeRunner) []string {
 	return keys
 }
 
-// rollupCheck is one statusCheckRollup entry of `gh pr view`.
+// rollupCheck is one check run of the pull request's head commit.
 type rollupCheck struct {
 	name       string
 	status     string
@@ -168,11 +172,11 @@ type rollupCheck struct {
 }
 
 func checkPassed(name string) rollupCheck {
-	return rollupCheck{name: name, status: rollupCompleted, conclusion: "SUCCESS", startedAt: ciWaitFirstStart, runID: ciWaitRunID}
+	return rollupCheck{name: name, status: rollupCompleted, conclusion: checkConclusionSuccess, startedAt: ciWaitFirstStart, runID: ciWaitRunID}
 }
 
 func verifyCheckFailed() rollupCheck {
-	return rollupCheck{name: prCheckVerify, status: rollupCompleted, conclusion: "FAILURE", startedAt: ciWaitFirstStart, runID: ciWaitRunID}
+	return rollupCheck{name: prCheckVerify, status: rollupCompleted, conclusion: checkConclusionFailure, startedAt: ciWaitFirstStart, runID: ciWaitRunID}
 }
 
 func checkCancelled(name string) rollupCheck {
@@ -201,12 +205,11 @@ func (c rollupCheck) inRun(runID int64) rollupCheck {
 
 func (c rollupCheck) checkRun() prCheckRun {
 	return prCheckRun{
-		Name:         c.name,
-		Status:       c.status,
-		Conclusion:   c.conclusion,
-		DetailsURL:   fmt.Sprintf("https://github.com/o/r/actions/runs/%d/job/5", c.runID),
-		StartedAt:    c.startedAt,
-		WorkflowName: "CI",
+		Name:       c.name,
+		Status:     c.status,
+		Conclusion: c.conclusion,
+		DetailsURL: fmt.Sprintf("https://github.com/o/r/actions/runs/%d/job/5", c.runID),
+		StartedAt:  c.startedAt,
 	}
 }
 
@@ -219,32 +222,43 @@ func checkRuns(checks ...rollupCheck) []prCheckRun {
 	return runs
 }
 
-// prViewJSON renders checks with the keys gh itself prints, so the tests also
-// prove that the production structs decode gh's camelCase output.
+// prViewJSON renders checks as `gh api --paginate .../check-runs --jq
+// .check_runs[]` prints them, one per line with GitHub's REST keys, so the
+// tests also prove that the production struct decodes them.
 func prViewJSON(t *testing.T, checks ...rollupCheck) string {
 	t.Helper()
 
-	entries := make([]map[string]string, 0, len(checks))
+	var lines strings.Builder
 	for _, check := range checks {
 		run := check.checkRun()
-		entries = append(entries, map[string]string{
-			"__typename":   "CheckRun",
-			"name":         run.Name,
-			"status":       run.Status,
-			"conclusion":   run.Conclusion,
-			"detailsUrl":   run.DetailsURL,
-			"startedAt":    run.StartedAt,
-			"workflowName": run.WorkflowName,
+		data, err := json.Marshal(map[string]any{
+			"name":        run.Name,
+			"status":      run.Status,
+			"conclusion":  nullableConclusion(run.Conclusion),
+			"details_url": run.DetailsURL,
+			"started_at":  run.StartedAt,
+			"app":         map[string]string{"slug": "github-actions"},
 		})
+		require.NoError(t, err)
+		lines.Write(data)
+		lines.WriteByte('\n')
 	}
-	data, err := json.Marshal(map[string]any{"state": "OPEN", "statusCheckRollup": entries})
-	require.NoError(t, err)
 
-	return string(data)
+	return lines.String()
+}
+
+// nullableConclusion is a check run's conclusion as REST prints it: null
+// until the run completes.
+func nullableConclusion(conclusion string) any {
+	if conclusion == "" {
+		return nil
+	}
+
+	return conclusion
 }
 
 func prHeadJSON() string {
-	return fmt.Sprintf(`{"headRefOid":%q}`, ciWaitHeadSHA)
+	return fmt.Sprintf(`{"state":"open","head":{"ref":"feat/x","sha":%q}}`, ciWaitHeadSHA)
 }
 
 type jobFixture struct {
@@ -431,7 +445,7 @@ func TestWaitForPRCI_CancelledShardIsRerunOnceAndTheWaitThenSucceeds(t *testing.
 		checkPassed("integration"),
 		checkPassed("e2e"),
 	)
-	runner, script := scriptedRunner(map[string][]string{
+	runner, _ := scriptedRunner(map[string][]string{
 		ciWaitPRViewCommand: {canceled, canceled, rerunStarted, rerunPassed},
 		ciWaitPRHeadCommand: {prHeadJSON()},
 		ciWaitRunViewCommand: {
@@ -453,7 +467,6 @@ func TestWaitForPRCI_CancelledShardIsRerunOnceAndTheWaitThenSucceeds(t *testing.
 
 	assert.Equal(t, []string{ciWaitRerunCommand}, recordedRerunKeys(runner))
 	assert.Equal(t, testCleanupRepoRoot, recordedReruns(runner)[0].cwd)
-	assert.Equal(t, 1, script.calls[ciWaitPRHeadCommand], "the head commit is looked up only when a rerun is considered")
 	assert.Contains(t, stdout.String(), ciWaitShard)
 	assert.Contains(t, stdout.String(), "rerun 1 of 2")
 	assert.Equal(t, 3*ciWaitTestPoll, clock.elapsed())
@@ -588,7 +601,7 @@ func TestWaitForPRCI_RealJobFailureIsNotRerun(t *testing.T) {
 	t.Parallel()
 
 	const failedShard = "verify-unit (ubuntu-latest, 1/3)"
-	runner, script := scriptedRunner(map[string][]string{
+	runner, _ := scriptedRunner(map[string][]string{
 		ciWaitPRViewCommand: {canceledShardRollup(t)},
 		ciWaitRunViewCommand: {runViewJSON(t, runFixture{
 			id: ciWaitRunID, headSHA: ciWaitHeadSHA, status: checkStatusCompleted, updatedAt: "2026-11-11T10:20:00Z",
@@ -607,7 +620,6 @@ func TestWaitForPRCI_RealJobFailureIsNotRerun(t *testing.T) {
 	assert.Contains(t, err.Error(), "dod pre-merge PR CI failed")
 	assert.Contains(t, err.Error(), failedShard)
 	assert.Empty(t, recordedReruns(runner))
-	assert.Zero(t, script.calls[ciWaitPRHeadCommand])
 	assert.Zero(t, clock.elapsed(), "a real failure ends the wait on the poll that sees it")
 }
 
@@ -650,7 +662,7 @@ func TestWaitForPRCI_CancelledRequiredCheckIsRerun(t *testing.T) {
 func TestWaitForPRCI_FailureWithoutACancelledJobIsNotRerun(t *testing.T) {
 	t.Parallel()
 
-	runner, script := scriptedRunner(map[string][]string{
+	runner, _ := scriptedRunner(map[string][]string{
 		ciWaitPRViewCommand: {prViewJSON(t, verifyCheckFailed(), checkPassed("integration"), checkPassed("e2e"))},
 		ciWaitRunViewCommand: {runViewJSON(t, runFixture{
 			id: ciWaitRunID, headSHA: ciWaitHeadSHA, status: checkStatusCompleted, updatedAt: "2026-11-11T10:20:00Z",
@@ -669,7 +681,6 @@ func TestWaitForPRCI_FailureWithoutACancelledJobIsNotRerun(t *testing.T) {
 	assert.Contains(t, err.Error(), "dod pre-merge PR CI failed: verify concluded failure")
 	assert.Contains(t, err.Error(), "no failed or canceled job")
 	assert.Empty(t, recordedReruns(runner))
-	assert.Zero(t, script.calls[ciWaitPRHeadCommand])
 }
 
 // Validates: R-6.10.16

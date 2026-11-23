@@ -324,7 +324,7 @@ func TestNightlyReportAppliesTheVerdictWhenTheSeedIssuesCannotBeRead(t *testing.
 	}{
 		"the seed label list": {
 			breakRead: func(remote *claimRemote) { remote.labelSearchErrs = map[string][]error{seedIssueLabel: failing()} },
-			read:      "seed label list",
+			read:      "seed label (GET",
 		},
 		"the seed issue list": {
 			breakRead: func(remote *claimRemote) {

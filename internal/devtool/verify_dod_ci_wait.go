@@ -291,12 +291,16 @@ func waitForPRCI(ctx context.Context, runner commandRunner, repoRoot string, prN
 		label:      prCILabel,
 		failedVerb: "failed",
 		poll: func(ctx context.Context) (ciSnapshot, error) {
-			state, err := loadPullRequestState(ctx, gh, repoRoot, prNumber)
+			head, err := loadPullRequestHead(ctx, gh, repoRoot, prNumber)
+			if err != nil {
+				return ciSnapshot{}, err
+			}
+			checks, err := loadCommitCheckRuns(ctx, gh, repoRoot, head)
 			if err != nil {
 				return ciSnapshot{}, err
 			}
 
-			return classifyPRChecks(state.StatusCheckRollup), nil
+			return classifyPRChecks(checks), nil
 		},
 		headSHA: func(ctx context.Context) (string, error) {
 			return loadPullRequestHead(ctx, gh, repoRoot, prNumber)
@@ -632,7 +636,7 @@ func latestPRCheckRuns(checks []prCheckRun) []prCheckRun {
 	latest := make([]prCheckRun, 0, len(checks))
 	index := make(map[string]int, len(checks))
 	for _, check := range checks {
-		key := check.WorkflowName + "\x00" + strings.ToLower(check.Name)
+		key := strings.ToLower(check.Name)
 		i, seen := index[key]
 		if !seen {
 			index[key] = len(latest)
@@ -663,7 +667,7 @@ func prChecksFingerprint(checks []prCheckRun) string {
 	lines := make([]string, 0, len(checks))
 	for _, check := range checks {
 		lines = append(lines, strings.Join([]string{
-			check.WorkflowName, check.Name, check.Status, check.Conclusion, check.StartedAt,
+			check.Name, check.Status, check.Conclusion, check.StartedAt,
 		}, "|"))
 	}
 	sort.Strings(lines)
@@ -742,23 +746,15 @@ func ciRunIDFromDetailsURL(detailsURL string) int64 {
 }
 
 func loadPullRequestHead(ctx context.Context, gh ghClient, repoRoot string, prNumber int) (string, error) {
-	out, err := gh.output(
-		ctx, repoRoot, fmt.Sprintf("dod gh pr view %d head", prNumber), "pr", "view", strconv.Itoa(prNumber), "--json", "headRefOid",
-	)
+	pr, err := loadPullRequest(ctx, gh, repoRoot, prNumber)
 	if err != nil {
 		return "", err
 	}
-	var head struct {
-		HeadRefOID string
-	}
-	if err := json.Unmarshal(out, &head); err != nil {
-		return "", fmt.Errorf("decode gh pr view %d head: %w", prNumber, err)
-	}
-	if head.HeadRefOID == "" {
-		return "", fmt.Errorf("dod gh pr view %d: no head commit", prNumber)
+	if pr.Head.SHA == "" {
+		return "", fmt.Errorf("dod github pull request %d: no head commit", prNumber)
 	}
 
-	return head.HeadRefOID, nil
+	return pr.Head.SHA, nil
 }
 
 func loadCIRun(ctx context.Context, gh ghClient, repoRoot string, runID int64) (githubRun, error) {
