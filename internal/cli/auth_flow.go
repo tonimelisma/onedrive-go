@@ -79,6 +79,13 @@ func completeLogin(ctx context.Context, cc *CLIContext, ts graph.TokenSource, te
 		return enrollErr
 	}
 
+	// The login's source was built over the pending file the install moved:
+	// from here on the sign-in is the one at its final path, and the
+	// command's runtime holds it, so a refresh later in the process writes
+	// that file and never brings the pending one back. A failed enrollment
+	// put the previous sign-in back above and hands nothing on.
+	cc.runtime().AdoptSignIn(finalTokenPath, graph.MovedSignIn(ts, finalTokenPath))
+
 	email := canonicalID.Email()
 	if err := printLoginResult(cc.resultWriter(), canonicalID, orgName, &enrolled, logger); err != nil {
 		return err

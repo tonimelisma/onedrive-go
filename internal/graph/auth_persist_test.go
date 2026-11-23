@@ -254,3 +254,52 @@ func TestTokenBridge_TokenUnderACallersDeadlineIsSaved(t *testing.T) {
 func TestTokenSaveError_SourceWithoutAFileReportsNone(t *testing.T) {
 	require.NoError(t, TokenSaveError(&forcingToken{}))
 }
+
+// Validates: R-6.8.26
+//
+// A sign-in whose file was moved after its source was built, as login
+// installs the sign-in it wrote to a pending file, refreshes through the
+// moved source and writes the refreshed token to the new path only: the old
+// path is not written again.
+func TestMovedSignIn_ARefreshWritesOnlyTheNewPath(t *testing.T) {
+	dir := t.TempDir()
+	pending := filepath.Join(dir, "pending.json")
+	final := filepath.Join(dir, "final.json")
+	cached := &oauth2.Token{
+		AccessToken: "cached-access-token", TokenType: "Bearer",
+		RefreshToken: savedRefreshToken, Expiry: time.Now().Add(time.Minute),
+	}
+	require.NoError(t, tokenfile.Save(pending, cached))
+	cfg := &oauth2.Config{ClientID: "test", Endpoint: oauth2.Endpoint{TokenURL: refreshingSignIn(t).URL + "/token"}}
+	login := newTokenBridge(cfg, testAuthClient(), pending, cached, slog.New(slog.DiscardHandler))
+
+	undo, err := tokenfile.Install(t.Context(), pending, final)
+	require.NoError(t, err)
+	require.NotNil(t, undo)
+
+	moved, ok := MovedSignIn(login, final).(*tokenBridge)
+	require.True(t, ok)
+	got, err := moved.ForceRefresh(t.Context())
+
+	require.NoError(t, err)
+	assert.Equal(t, refreshedAccessToken, got)
+	assert.Equal(t, rotatedRefreshToken, savedRefreshTokenAt(t, final))
+	assert.NoFileExists(t, pending, "the old path is not written again")
+	require.NoError(t, moved.SaveError())
+}
+
+// Validates: R-6.8.26
+//
+// A source graph did not build writes no file and is returned as it is.
+func TestMovedSignIn_KeepsASourceThatWritesNoFile(t *testing.T) {
+	t.Parallel()
+
+	fixed := fixedTokenSourceForMove("fixed")
+
+	assert.Equal(t, TokenSource(fixed), MovedSignIn(fixed, filepath.Join(t.TempDir(), "final.json")))
+}
+
+// fixedTokenSourceForMove hands out one token and writes no file.
+type fixedTokenSourceForMove string
+
+func (f fixedTokenSourceForMove) Token(context.Context) (string, error) { return string(f), nil }

@@ -373,6 +373,22 @@ func (r *SessionRuntime) getOrCreateTokenSource(tokenPath string) (graph.TokenSo
 	return ts, err
 }
 
+// AdoptSignIn makes ts the runtime's token source of the sign-in file at
+// tokenPath, replacing one loaded before: login, which signs in with a
+// source of its own and then installs its file at tokenPath, hands that
+// source on, so every later request of the process for that sign-in uses the
+// token the login holds, and the process keeps one source for the file
+// (R-6.8.27). A load of the path still under way is left to finish for its
+// waiters and is not kept.
+func (r *SessionRuntime) AdoptSignIn(tokenPath string, ts graph.TokenSource) {
+	adopted := &tokenSourceLoad{done: make(chan struct{}), ts: ts}
+	close(adopted.done)
+
+	r.mu.Lock()
+	r.tokenSources[tokenPath] = adopted
+	r.mu.Unlock()
+}
+
 func (r *SessionRuntime) clientsForTokenPath(
 	tokenPath string,
 	httpClients graphtransport.ClientSet,
