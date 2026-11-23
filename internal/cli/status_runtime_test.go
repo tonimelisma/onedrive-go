@@ -121,11 +121,10 @@ func TestStatusRuntimeOverlayApplyAndSummary(t *testing.T) {
 	t.Parallel()
 
 	accounts := []statusAccount{{
-		Mounts: []statusDrive{{
-			MountID:     "parent",
-			CanonicalID: "parent",
-			State:       driveStateReady,
-			ChildMounts: []statusDrive{{MountID: "child"}, {MountID: "idle-child"}},
+		Drives: []statusDrive{{
+			InternalID:    "parent",
+			State:         driveStateReady,
+			SharedFolders: []statusDrive{{InternalID: "child"}, {InternalID: "idle-child"}},
 		}},
 	}}
 
@@ -137,31 +136,31 @@ func TestStatusRuntimeOverlayApplyAndSummary(t *testing.T) {
 		},
 	})
 
-	parent := accounts[0].Mounts[0]
+	parent := accounts[0].Drives[0]
 	assert.Equal(t, "watch", parent.RuntimeOwner)
 	assert.Equal(t, statusRuntimeStateActive, parent.RuntimeState)
-	assert.Equal(t, statusRuntimeStateActive, parent.ChildMounts[0].RuntimeState)
-	assert.Equal(t, statusRuntimeStateInactive, parent.ChildMounts[1].RuntimeState)
+	assert.Equal(t, statusRuntimeStateActive, parent.SharedFolders[0].RuntimeState)
+	assert.Equal(t, statusRuntimeStateInactive, parent.SharedFolders[1].RuntimeState)
 
 	summary := newStatusOutput(accounts).Summary
 	assert.Equal(t, "watch", summary.RuntimeOwner)
-	assert.Equal(t, 2, summary.RuntimeActiveMounts)
+	assert.Equal(t, 2, summary.RuntimeActiveDrives)
 }
 
 // Validates: R-2.3.3
-func TestPrintMountStatus_ShowsRuntimeState(t *testing.T) {
+func TestPrintDriveStatus_ShowsRuntimeState(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
-	err := printMountStatus(&out, &statusDrive{
-		MountID:      "personal:user@example.com",
-		CanonicalID:  "personal:user@example.com",
-		DisplayName:  "user@example.com",
-		SyncDir:      "~/OneDrive",
+	err := printDriveStatus(&out, asBuiltStatusDrive(&statusDrive{
+		InternalID:   "personal:user@example.com",
+		Kind:         statusDriveKindPersonalOneDrive,
+		Name:         "user@example.com",
+		Folder:       "~/OneDrive",
 		State:        driveStateReady,
 		RuntimeOwner: "watch",
 		RuntimeState: statusRuntimeStateActive,
-	})
+	}), 0)
 
 	require.NoError(t, err)
 	assert.NotContains(t, out.String(), "Runtime:")

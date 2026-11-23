@@ -86,9 +86,6 @@ func applyStatusPerfOverlay(accounts []statusAccount, overlay statusPerfOverlay)
 	}
 
 	for i := range accounts {
-		for j := range accounts[i].Mounts {
-			applyStatusPerfOverlayToDrive(&accounts[i].Mounts[j], overlay)
-		}
 		for j := range accounts[i].Drives {
 			applyStatusPerfOverlayToDrive(&accounts[i].Drives[j], overlay)
 		}
@@ -100,18 +97,8 @@ func applyStatusPerfOverlayToDrive(drive *statusDrive, overlay statusPerfOverlay
 		return
 	}
 
-	internalID := drive.InternalID
-	if internalID == "" {
-		internalID = drive.MountID
-	}
-	if internalID == "" {
-		internalID = drive.CanonicalID
-	}
-	drive.SyncState = overlaySyncState(internalID, drive.SyncState, overlay)
+	drive.SyncState = overlaySyncState(drive.InternalID, drive.SyncState, overlay)
 	finalizeStatusDriveState(drive)
-	for i := range drive.ChildMounts {
-		applyStatusPerfOverlayToDrive(&drive.ChildMounts[i], overlay)
-	}
 	for i := range drive.SharedFolders {
 		applyStatusPerfOverlayToDrive(&drive.SharedFolders[i], overlay)
 	}

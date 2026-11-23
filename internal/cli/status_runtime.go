@@ -64,9 +64,6 @@ func applyStatusRuntimeOverlay(accounts []statusAccount, overlay statusRuntimeOv
 	}
 
 	for i := range accounts {
-		for j := range accounts[i].Mounts {
-			applyStatusRuntimeOverlayToDrive(&accounts[i].Mounts[j], overlay)
-		}
 		for j := range accounts[i].Drives {
 			applyStatusRuntimeOverlayToDrive(&accounts[i].Drives[j], overlay)
 		}
@@ -79,23 +76,13 @@ func applyStatusRuntimeOverlayToDrive(drive *statusDrive, overlay statusRuntimeO
 	}
 
 	drive.RuntimeOwner = string(overlay.ownerMode)
-	internalID := drive.InternalID
-	if internalID == "" {
-		internalID = drive.MountID
-	}
-	if internalID == "" {
-		internalID = drive.CanonicalID
-	}
-	if _, ok := overlay.activeMounts[internalID]; ok {
+	if _, ok := overlay.activeMounts[drive.InternalID]; ok {
 		drive.RuntimeState = statusRuntimeStateActive
 	} else {
 		drive.RuntimeState = statusRuntimeStateInactive
 	}
 	finalizeStatusDriveState(drive)
 
-	for i := range drive.ChildMounts {
-		applyStatusRuntimeOverlayToDrive(&drive.ChildMounts[i], overlay)
-	}
 	for i := range drive.SharedFolders {
 		applyStatusRuntimeOverlayToDrive(&drive.SharedFolders[i], overlay)
 	}

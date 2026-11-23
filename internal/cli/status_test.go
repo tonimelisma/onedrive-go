@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -78,24 +77,6 @@ func queryLiveSyncState(ctx context.Context, statePath string, logger *slog.Logg
 	querier := &liveSyncStateQuerier{logger: logger, examplesLimit: defaultVisiblePaths}
 
 	return querier.QuerySyncState(ctx, statePath, statusStoreRootDrive, syncdomain.ContentFilterConfig{})
-}
-
-// printMountStatus prints one drive the way status prints it inside an
-// account: derived fields filled in first, then the drive block.
-func printMountStatus(w io.Writer, mount *statusDrive) error {
-	drives := []statusDrive{*mount}
-	normalizeStatusDrives(drives)
-
-	return printDriveStatus(w, &drives[0], 0)
-}
-
-// statusMountLabel is the heading status prints for one drive once its
-// derived fields are filled in.
-func statusMountLabel(mount *statusDrive) string {
-	drives := []statusDrive{*mount}
-	normalizeStatusDrives(drives)
-
-	return statusDriveLabel(&drives[0])
 }
 
 // mockSyncStateQuerier returns a fixed sync state for all drives.
@@ -426,7 +407,7 @@ func assertStatusLifecycleText(t *testing.T, mount *statusDrive, tc *shortcutSta
 	t.Helper()
 
 	var text bytes.Buffer
-	require.NoError(t, printMountStatus(&text, mount))
+	require.NoError(t, printDriveStatus(&text, mount, 0))
 	rendered := text.String()
 	assert.NotContains(t, rendered, "onedrive-go ")
 	assert.NotContains(t, rendered, "Run ")
@@ -512,12 +493,13 @@ func TestBuildStatusAccountsFromViews_NestsChildMountsUnderParent(t *testing.T) 
 
 	require.Len(t, accounts, 1)
 	account := accounts[0]
-	require.Len(t, account.Mounts, 1)
-	parent := account.Mounts[0]
-	assert.Equal(t, parentCID.String(), parent.CanonicalID)
-	require.Len(t, parent.ChildMounts, 1)
-	assert.Equal(t, config.ChildMountID(parentCID.String(), "binding-docs"), parent.ChildMounts[0].MountID)
-	assert.Empty(t, parent.ChildMounts[0].CanonicalID)
+	require.Len(t, account.Drives, 1)
+	parent := account.Drives[0]
+	assert.Equal(t, parentCID.String(), parent.InternalID)
+	assert.Empty(t, parent.NamespaceID)
+	require.Len(t, parent.SharedFolders, 1)
+	assert.Equal(t, config.ChildMountID(parentCID.String(), "binding-docs"), parent.SharedFolders[0].InternalID)
+	assert.Equal(t, parentCID.String(), parent.SharedFolders[0].NamespaceID)
 }
 
 // Validates: R-2.10.1
@@ -525,17 +507,17 @@ func TestPrintMountStatus_RendersChildLifecycleReasonAndNextAction(t *testing.T)
 	t.Parallel()
 
 	var buf bytes.Buffer
-	err := printMountStatus(&buf, &statusDrive{
-		MountID:        "child-docs",
-		NamespaceID:    "personal:alice@example.com",
-		ProjectionKind: statusProjectionChild,
-		DisplayName:    "Docs",
-		SyncDir:        "/tmp/sync-root/Shortcuts/Docs",
-		State:          string(syncshortcut.ShortcutRootStateTargetUnavailable),
-		StateLabel:     "Shared folder unavailable",
-		StateReason:    string(syncshortcut.ShortcutRootStateTargetUnavailable),
-		StateDetail:    "OneDrive can't open this shared folder; it may have been unshared, moved or deleted.",
-	})
+	err := printDriveStatus(&buf, asBuiltStatusDrive(&statusDrive{
+		InternalID:  "child-docs",
+		NamespaceID: "personal:alice@example.com",
+		Kind:        statusDriveKindSharedFolder,
+		Name:        "Docs",
+		Folder:      "/tmp/sync-root/Shortcuts/Docs",
+		State:       string(syncshortcut.ShortcutRootStateTargetUnavailable),
+		StateLabel:  "Shared folder unavailable",
+		StateReason: string(syncshortcut.ShortcutRootStateTargetUnavailable),
+		StateDetail: "OneDrive can't open this shared folder; it may have been unshared, moved or deleted.",
+	}), 0)
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -551,19 +533,19 @@ func TestPrintMountStatus_RendersGuidedShortcutRecovery(t *testing.T) {
 
 	autoRetry := true
 	var buf bytes.Buffer
-	err := printMountStatus(&buf, &statusDrive{
-		MountID:                "child-docs",
+	err := printDriveStatus(&buf, asBuiltStatusDrive(&statusDrive{
+		InternalID:             "child-docs",
 		NamespaceID:            "personal:alice@example.com",
-		ProjectionKind:         statusProjectionChild,
-		DisplayName:            "Docs",
-		SyncDir:                "/tmp/sync-root/Shortcuts/Docs",
+		Kind:                   statusDriveKindSharedFolder,
+		Name:                   "Docs",
+		Folder:                 "/tmp/sync-root/Shortcuts/Docs",
 		State:                  string(syncshortcut.ShortcutRootStateRemovedFinalDrain),
 		StateReason:            string(syncshortcut.ShortcutRootStateRemovedFinalDrain),
 		StateDetail:            "This shared folder was removed from your OneDrive; its last local changes are syncing before the local copy is removed.",
 		ProtectedCurrentPath:   "/tmp/sync-root/Shortcuts/Docs",
 		ProtectedReservedPaths: []string{"/tmp/sync-root/Shortcuts/Old Docs"},
 		AutoRetry:              &autoRetry,
-	})
+	}), 0)
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -586,10 +568,10 @@ func TestBuildChildStatusDrive_UsesMountIDWithoutSyntheticSharedCanonical(t *tes
 		nil,
 	)
 
-	assert.Equal(t, config.ChildMountID(parentCID.String(), "binding-docs"), mount.MountID)
-	assert.Equal(t, statusProjectionChild, mount.ProjectionKind)
-	assert.Empty(t, mount.CanonicalID)
-	assert.Equal(t, "Docs", statusMountLabel(&mount))
+	assert.Equal(t, config.ChildMountID(parentCID.String(), "binding-docs"), mount.InternalID)
+	assert.Equal(t, parentCID.String(), mount.NamespaceID)
+	assert.Equal(t, statusDriveKindSharedFolder, mount.Kind)
+	assert.Equal(t, "Docs", mount.Name)
 	assert.Equal(t, string(syncshortcut.ShortcutRootStateBlockedPath), mount.StateReason)
 	assert.Equal(t, "Something else is in the way at this shared folder's local path.", mount.StateDetail)
 	assert.Equal(t, "shortcut alias path is blocked by a local file", mount.StateDebugDetail)
@@ -697,8 +679,8 @@ func TestBuildStatusAccountsFromViews_NeverSyncedDriveIsNotUpToDate(t *testing.T
 	build := func() string {
 		accounts := buildStatusAccountsFromViews(t.Context(), cfg, nil, views, &mockSyncStateQuerier{})
 		require.Len(t, accounts, 1)
-		require.Len(t, accounts[0].Mounts, 1)
-		return accounts[0].Mounts[0].State
+		require.Len(t, accounts[0].Drives, 1)
+		return accounts[0].Drives[0].State
 	}
 
 	assert.Equal(t, driveStateNotSynced, build(), "status and drive list must agree on a drive that never synced")
@@ -746,9 +728,9 @@ func TestBuildStatusAccountsFromViews_SingleAccount(t *testing.T) {
 	assert.Equal(t, authStateReady, acct.AuthState)
 	assert.Equal(t, "Alice", acct.DisplayName)
 
-	require.Len(t, acct.Mounts, 1)
-	assert.Equal(t, "~/OneDrive", acct.Mounts[0].SyncDir)
-	assert.Equal(t, driveStateNotSynced, acct.Mounts[0].State)
+	require.Len(t, acct.Drives, 1)
+	assert.Equal(t, "~/OneDrive", acct.Drives[0].Folder)
+	assert.Equal(t, driveStateNotSynced, acct.Drives[0].State)
 }
 
 // Drives are grouped under their account's email, and accounts are listed
@@ -773,11 +755,11 @@ func TestBuildStatusAccountsFromViews_MultiAccountGrouping(t *testing.T) {
 
 	// Sorted alphabetically by email.
 	assert.Equal(t, "alice@example.com", accounts[0].Email)
-	assert.Len(t, accounts[0].Mounts, 2)
+	assert.Len(t, accounts[0].Drives, 2)
 
 	assert.Equal(t, "bob@example.com", accounts[1].Email)
-	assert.Len(t, accounts[1].Mounts, 1)
-	assert.Equal(t, driveStatePaused, accounts[1].Mounts[0].State)
+	assert.Len(t, accounts[1].Drives, 1)
+	assert.Equal(t, driveStatePaused, accounts[1].Drives[0].State)
 
 	assert.Equal(t, "charlie@example.com", accounts[2].Email)
 }
@@ -823,7 +805,7 @@ func TestBuildStatusAccountsFromViews_AuthenticationRequiredStates(t *testing.T)
 			require.Len(t, accounts, 1)
 			assert.Equal(t, authStateAuthenticationNeeded, accounts[0].AuthState)
 			assert.Equal(t, tc.wantReason, accounts[0].AuthReason)
-			assert.Equal(t, driveStateNotSynced, accounts[0].Mounts[0].State)
+			assert.Equal(t, driveStateNotSynced, accounts[0].Drives[0].State)
 		})
 	}
 }
@@ -841,7 +823,7 @@ func TestBuildStatusAccountsFromViews_EmptySyncDir(t *testing.T) {
 
 	require.Len(t, accounts, 1)
 	// An empty sync_dir does not change the drive's state: it has not synced.
-	assert.Equal(t, driveStateNotSynced, accounts[0].Mounts[0].State)
+	assert.Equal(t, driveStateNotSynced, accounts[0].Drives[0].State)
 }
 
 // A business account with SharePoint libraries is listed once, as the
@@ -870,7 +852,7 @@ func TestBuildStatusAccountsFromViews_SharePointGrouping(t *testing.T) {
 	assert.Equal(t, "alice@contoso.com", acct.Email)
 	assert.Equal(t, "business", acct.DriveType) // business, not sharepoint
 	assert.Equal(t, workflowTestOrgContoso, acct.OrgName)
-	assert.Len(t, acct.Mounts, 3)
+	assert.Len(t, acct.Drives, 3)
 }
 
 func TestReadAccountMeta_UsesProfileFieldOrder(t *testing.T) {
@@ -959,7 +941,7 @@ func TestBuildStatusAccountsFromViews_PersonalDriveUsesAccountFacingName(t *test
 		[]accountView{statusAccountView(authTestDisplayNameAlice, cid)}, &mockSyncStateQuerier{})
 
 	require.Len(t, accounts, 1)
-	assert.Equal(t, "Alice's personal OneDrive", accounts[0].Mounts[0].DisplayName)
+	assert.Equal(t, "Alice's personal OneDrive", accounts[0].Drives[0].Name)
 }
 
 // A paused drive stays paused when its account has no saved login, read
@@ -978,7 +960,7 @@ func TestBuildStatusAccountsFromViews_PausedOverridesNoToken(t *testing.T) {
 	accounts := statusAccountsThroughViews(t, cfg)
 
 	require.Len(t, accounts, 1)
-	assert.Equal(t, driveStatePaused, accounts[0].Mounts[0].State)
+	assert.Equal(t, driveStatePaused, accounts[0].Drives[0].State)
 	assert.Equal(t, authStateAuthenticationNeeded, accounts[0].AuthState)
 	assert.Equal(t, string(authReasonMissingLogin), accounts[0].AuthReason)
 }
@@ -1011,10 +993,10 @@ func TestBuildStatusAccountsFromViews_SyncStatePopulated(t *testing.T) {
 		&mockSyncStateQuerier{state: syncState})
 
 	require.Len(t, accounts, 1)
-	require.Len(t, accounts[0].Mounts, 1)
-	require.NotNil(t, accounts[0].Mounts[0].SyncState)
+	require.Len(t, accounts[0].Drives, 1)
+	require.NotNil(t, accounts[0].Drives[0].SyncState)
 
-	ss := accounts[0].Mounts[0].SyncState
+	ss := accounts[0].Drives[0].SyncState
 	assert.Equal(t, 45, ss.FileCount)
 	assert.Equal(t, 2, ss.ConditionCount)
 }
@@ -1032,7 +1014,7 @@ func TestBuildStatusAccountsFromViews_NilSyncState(t *testing.T) {
 		&mockSyncStateQuerier{state: nil})
 
 	require.Len(t, accounts, 1)
-	assert.Nil(t, accounts[0].Mounts[0].SyncState)
+	assert.Nil(t, accounts[0].Drives[0].SyncState)
 }
 
 func TestQuerySyncState_NoDB(t *testing.T) {
@@ -1357,11 +1339,11 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 			Email:     "alice@example.com",
 			DriveType: "business",
 			AuthState: authStateReady,
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{
-					CanonicalID: "business:alice@example.com",
-					SyncDir:     "~/Work",
-					State:       driveStateReady,
+					InternalID: "business:alice@example.com",
+					Folder:     "~/Work",
+					State:      driveStateReady,
 					SyncState: &syncStateInfo{
 						FileCount:      10,
 						ConditionCount: 2,
@@ -1388,7 +1370,7 @@ func TestPrintStatusJSON_KeepsSameSummaryGroupsSeparatedByScope(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusJSON(&buf, accounts))
+	require.NoError(t, printStatusJSON(&buf, asBuiltStatusAccounts(accounts)))
 
 	var result statusOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
@@ -1444,22 +1426,22 @@ func TestComputeSummary_Mixed(t *testing.T) {
 	accounts := []statusAccount{
 		{
 			AuthState: authStateReady,
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{State: driveStateReady, SyncState: &syncStateInfo{ConditionCount: 3}},
 				{State: driveStatePaused},
 			},
 		},
 		{
 			AuthState: authStateAuthenticationNeeded,
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{State: driveStateReady},
 				{State: driveStateReady, SyncState: &syncStateInfo{ConditionCount: 1}},
 			},
 		},
 	}
 
-	s := newStatusOutput(accounts).Summary
-	assert.Equal(t, 4, s.TotalMounts)
+	s := newStatusOutput(asBuiltStatusAccounts(accounts)).Summary
+	assert.Equal(t, 4, s.TotalDrives+s.TotalSharedFolders)
 	assert.Equal(t, 1, s.Ready)
 	assert.Equal(t, 2, s.Issues)
 	assert.Equal(t, 1, s.Paused)
@@ -1473,17 +1455,17 @@ func TestComputeSummary_IncludesNestedChildMounts(t *testing.T) {
 	accounts := []statusAccount{
 		{
 			AuthState: authStateReady,
-			Mounts: []statusDrive{{
+			Drives: []statusDrive{{
 				State: driveStateReady,
-				ChildMounts: []statusDrive{
+				SharedFolders: []statusDrive{
 					{State: driveStatePaused, SyncState: &syncStateInfo{ConditionCount: 2}},
 				},
 			}},
 		},
 	}
 
-	s := newStatusOutput(accounts).Summary
-	assert.Equal(t, 2, s.TotalMounts)
+	s := newStatusOutput(asBuiltStatusAccounts(accounts)).Summary
+	assert.Equal(t, 2, s.TotalDrives+s.TotalSharedFolders)
 	assert.Equal(t, 1, s.Ready)
 	assert.Equal(t, 1, s.Paused)
 	assert.Equal(t, 2, s.TotalConditions)
@@ -1493,7 +1475,7 @@ func TestComputeSummary_Empty(t *testing.T) {
 	t.Parallel()
 
 	s := newStatusOutput(nil).Summary
-	assert.Equal(t, 0, s.TotalMounts)
+	assert.Equal(t, 0, s.TotalDrives+s.TotalSharedFolders)
 	assert.Equal(t, 0, s.TotalConditions)
 }
 
@@ -1519,19 +1501,19 @@ func TestPrintStatusJSON_WithAccounts(t *testing.T) {
 			Email:     "alice@example.com",
 			DriveType: "personal",
 			AuthState: authStateReady,
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{
-					CanonicalID: "personal:alice@example.com",
-					SyncDir:     "~/OneDrive",
-					State:       driveStateReady,
-					SyncState:   &syncStateInfo{FileCount: 10, ConditionCount: 1},
+					InternalID: "personal:alice@example.com",
+					Folder:     "~/OneDrive",
+					State:      driveStateReady,
+					SyncState:  &syncStateInfo{FileCount: 10, ConditionCount: 1},
 				},
 			},
 		},
 	}
 
 	var buf bytes.Buffer
-	err := printStatusJSON(&buf, accounts)
+	err := printStatusJSON(&buf, asBuiltStatusAccounts(accounts))
 	require.NoError(t, err)
 
 	var result statusOutput
@@ -1553,11 +1535,11 @@ func TestPrintStatusJSON_WithConditions(t *testing.T) {
 			Email:     "alice@example.com",
 			DriveType: "personal",
 			AuthState: authStateReady,
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{
-					CanonicalID: "personal:alice@example.com",
-					SyncDir:     "~/OneDrive",
-					State:       driveStateReady,
+					InternalID: "personal:alice@example.com",
+					Folder:     "~/OneDrive",
+					State:      driveStateReady,
 					SyncState: &syncStateInfo{
 						FileCount:      10,
 						ConditionCount: 3,
@@ -1583,7 +1565,7 @@ func TestPrintStatusJSON_WithConditions(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusJSON(&buf, accounts))
+	require.NoError(t, printStatusJSON(&buf, asBuiltStatusAccounts(accounts)))
 
 	var result statusOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &result))
@@ -1617,18 +1599,18 @@ func TestPrintStatusText_WithDisplayNameAndOrg(t *testing.T) {
 			DriveType:   "business",
 			OrgName:     "Contoso",
 			AuthState:   authStateReady,
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{
-					CanonicalID: "business:alice@contoso.com",
-					SyncDir:     "~/Work",
-					State:       driveStateReady,
+					InternalID: "business:alice@contoso.com",
+					Folder:     "~/Work",
+					State:      driveStateReady,
 				},
 			},
 		},
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, accounts))
+	require.NoError(t, printStatusText(&buf, asBuiltStatusAccounts(accounts)))
 
 	output := buf.String()
 	assert.True(t, strings.HasPrefix(output, "Account: Alice Smith <alice@contoso.com>\n"))
@@ -1664,7 +1646,7 @@ func TestPrintStatusText_HealthySingleDriveIsUserFacing(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, accounts))
+	require.NoError(t, printStatusText(&buf, asBuiltStatusAccounts(accounts)))
 
 	assert.Equal(t, ""+
 		"Account: Test User <user@example.com>\n"+
@@ -1687,18 +1669,18 @@ func TestPrintStatusText_WithAuthRequiredReasonAndAction(t *testing.T) {
 			AuthState:  authStateAuthenticationNeeded,
 			AuthReason: string(authReasonSyncAuthRejected),
 			AuthAction: authAction(authReasonSyncAuthRejected),
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{
-					CanonicalID: "personal:alice@example.com",
-					SyncDir:     "~/OneDrive",
-					State:       driveStateReady,
+					InternalID: "personal:alice@example.com",
+					Folder:     "~/OneDrive",
+					State:      driveStateReady,
 				},
 			},
 		},
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, accounts))
+	require.NoError(t, printStatusText(&buf, asBuiltStatusAccounts(accounts)))
 
 	output := buf.String()
 	assert.Contains(t, output, "Sign-in required:")
@@ -1714,19 +1696,19 @@ func TestPrintStatusText_SyncStateNever(t *testing.T) {
 			Email:     "bob@example.com",
 			DriveType: "personal",
 			AuthState: authStateReady,
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{
-					CanonicalID: "personal:bob@example.com",
-					SyncDir:     "~/OneDrive",
-					State:       driveStateReady,
-					SyncState:   &syncStateInfo{},
+					InternalID: "personal:bob@example.com",
+					Folder:     "~/OneDrive",
+					State:      driveStateReady,
+					SyncState:  &syncStateInfo{},
 				},
 			},
 		},
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, accounts))
+	require.NoError(t, printStatusText(&buf, asBuiltStatusAccounts(accounts)))
 
 	output := buf.String()
 	assert.NotContains(t, output, "No active conditions.")
@@ -1741,18 +1723,18 @@ func TestPrintStatusText_EmptySyncDir(t *testing.T) {
 			Email:     "bob@example.com",
 			DriveType: "personal",
 			AuthState: authStateReady,
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{
-					CanonicalID: "personal:bob@example.com",
-					SyncDir:     "",
-					State:       driveStateReady,
+					InternalID: "personal:bob@example.com",
+					Folder:     "",
+					State:      driveStateReady,
 				},
 			},
 		},
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, printStatusText(&buf, accounts))
+	require.NoError(t, printStatusText(&buf, asBuiltStatusAccounts(accounts)))
 
 	output := buf.String()
 	assert.Contains(t, output, syncDirNotSet)
@@ -1940,7 +1922,7 @@ func findStatusMountRecursive(mount *statusDrive, identity string) (statusDrive,
 	if mount == nil {
 		return statusDrive{}, false
 	}
-	if mount.CanonicalID == identity || mount.MountID == identity {
+	if mount.InternalID == identity {
 		return *mount, true
 	}
 	if identity == "" {
@@ -2118,14 +2100,14 @@ func TestComputeSummary_AggregatesPendingAndRetrying(t *testing.T) {
 
 	accounts := []statusAccount{
 		{
-			Mounts: []statusDrive{
+			Drives: []statusDrive{
 				{State: driveStateReady, SyncState: &syncStateInfo{RemoteDrift: 3, Retrying: 1}},
 				{State: driveStateReady, SyncState: &syncStateInfo{RemoteDrift: 2, Retrying: 4}},
 			},
 		},
 	}
 
-	s := newStatusOutput(accounts).Summary
+	s := newStatusOutput(asBuiltStatusAccounts(accounts)).Summary
 	assert.Equal(t, 5, s.TotalRemoteDrift)
 	assert.Equal(t, 5, s.TotalRetrying)
 }
@@ -2237,17 +2219,17 @@ func TestStatusJSON_MountRefIsOpaqueAndDoesNotLeakIdentifiers(t *testing.T) {
 	require.NoError(t, printStatusJSON(&buf, []statusAccount{{
 		Email: email,
 		Drives: []statusDrive{{
-			MountID:  parentMount,
-			MountRef: config.MountRef(parentMount),
-			Kind:     statusDriveKindPersonalOneDrive,
-			Name:     "personal",
-			State:    driveStateReady,
+			InternalID: parentMount,
+			MountRef:   config.MountRef(parentMount),
+			Kind:       statusDriveKindPersonalOneDrive,
+			Name:       "personal",
+			State:      driveStateReady,
 			SharedFolders: []statusDrive{{
-				MountID:  childMount,
-				MountRef: config.MountRef(childMount),
-				Kind:     statusDriveKindSharedFolder,
-				Name:     "shared",
-				State:    driveStateReady,
+				InternalID: childMount,
+				MountRef:   config.MountRef(childMount),
+				Kind:       statusDriveKindSharedFolder,
+				Name:       "shared",
+				State:      driveStateReady,
 			}},
 		}},
 	}}))
@@ -2287,10 +2269,8 @@ func TestDropStatusDebugDetail_ClearsNestedRawDetailOnly(t *testing.T) {
 	accounts := []statusAccount{{
 		Drives: []statusDrive{{
 			StateDebugDetail: "raw: drive",
-			SharedFolders:    []statusDrive{child},
-			ChildMounts:      []statusDrive{child},
+			SharedFolders:    []statusDrive{child, child},
 		}},
-		Mounts: []statusDrive{{SharedFolders: []statusDrive{child}}},
 	}}
 
 	dropStatusDebugDetail(accounts)
@@ -2299,6 +2279,5 @@ func TestDropStatusDebugDetail_ClearsNestedRawDetailOnly(t *testing.T) {
 	assert.Empty(t, drive.StateDebugDetail)
 	assert.Empty(t, drive.SharedFolders[0].StateDebugDetail)
 	assert.Equal(t, "plain reason", drive.SharedFolders[0].StateDetail)
-	assert.Empty(t, drive.ChildMounts[0].StateDebugDetail)
-	assert.Empty(t, accounts[0].Mounts[0].SharedFolders[0].StateDebugDetail)
+	assert.Empty(t, drive.SharedFolders[1].StateDebugDetail)
 }
