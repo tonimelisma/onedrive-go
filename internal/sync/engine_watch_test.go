@@ -551,7 +551,7 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	}, "local observer started")
 
 	cancel()
-	recorder.WaitUntilSeenOrExit(t, done, func(event syncdomain.EngineDebugEvent) bool {
+	done = recorder.WaitUntilSeenOrExit(t, done, func(event syncdomain.EngineDebugEvent) bool {
 		return event.Type == syncdomain.EngineDebugEventShutdownStarted
 	}, "shutdown started")
 

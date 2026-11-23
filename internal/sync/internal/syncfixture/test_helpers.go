@@ -328,16 +328,22 @@ func (r *DebugEventRecorder) WaitForEvent(
 // result channel. When the run returns first, the awaited event can never
 // arrive, so the run's own error is reported instead of letting the wait
 // expire into a timeout that says nothing about why.
+//
+// It returns the channel the caller reads the run's result from from then
+// on: done itself, or, when the wait took the run's one result because the
+// run returned with the event already recorded, a channel that holds that
+// result. Reading done again after the wait took its value would wait on an
+// empty channel.
 func (r *DebugEventRecorder) WaitUntilSeenOrExit(
 	t *testing.T,
 	done <-chan error,
 	match func(syncdomain.EngineDebugEvent) bool,
 	description string,
-) {
+) <-chan error {
 	t.Helper()
 
 	if r.FindEvent(match) {
-		return
+		return done
 	}
 
 	timer := time.NewTimer(EventWait)
@@ -347,20 +353,24 @@ func (r *DebugEventRecorder) WaitUntilSeenOrExit(
 		select {
 		case event := <-r.Events:
 			if match(event) {
-				return
+				return done
 			}
 			if r.FindEvent(match) {
-				return
+				return done
 			}
 		case err := <-done:
 			if r.FindEvent(match) {
-				return
+				result := make(chan error, 1)
+				result <- err
+				return result
 			}
 
 			require.FailNow(t, "run returned before debug event",
 				"%s: run returned %v", description, err)
+			return done
 		case <-timer.C:
 			require.FailNow(t, "timed out waiting for debug event", description)
+			return done
 		}
 	}
 }
