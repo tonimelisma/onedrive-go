@@ -32,7 +32,7 @@ func newForgetMountFixture(t *testing.T, mounts ...string) *forgetMountFixture {
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
 	cid := driveid.MustCanonicalID("personal:forget@example.com")
 	syncDir := t.TempDir()
-	require.NoError(t, config.AppendDriveSection(cfgPath, cid, syncDir))
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
 
 	statePath := config.DriveStatePath(cid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))

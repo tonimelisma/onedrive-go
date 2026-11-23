@@ -17,6 +17,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 )
 
@@ -224,7 +225,7 @@ func TestTrashList_ReleasedEntrySaysItsSharedFolderWasRemoved(t *testing.T) {
 
 	require.NoError(t, runTrashList(t.Context(), cc))
 	assert.Contains(t, out.String(), id+"  ")
-	assert.Contains(t, out.String(), "released report.txt ("+formatSize(int64(len("kept\n")))+
+	assert.Contains(t, out.String(), "released report.txt ("+humanunit.Size(int64(len("kept\n")))+
 		"): its shared folder was removed from this account")
 	assert.NotContains(t, out.String(), "deleted")
 
