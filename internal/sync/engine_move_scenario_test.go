@@ -259,7 +259,10 @@ func TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn(t *testing.T) {
 	require.NoError(t, os.Rename(filepath.Join(syncRoot, "movesrc"), filepath.Join(syncRoot, "movedst")))
 	runScenarioPass(t, eng)
 
-	assert.Equal(t, []string{"created-folder-1->movedst"}, remote.moves)
+	moved, ok := remote.itemAt("movedst")
+	require.True(t, ok)
+	wantMoves := []string{moved.ID + "->movedst"}
+	assert.Equal(t, wantMoves, remote.moves)
 	assert.Empty(t, remote.deletes)
 	assert.Equal(t, 1, remote.uploads)
 	requireScenarioBaselineMoved(t, eng,
@@ -270,7 +273,7 @@ func TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn(t *testing.T) {
 	// next passes must converge without planning a child move.
 	requireScenarioQuietPlan(t, eng)
 	runScenarioPass(t, eng)
-	assert.Equal(t, []string{"created-folder-1->movedst"}, remote.moves, "no descendant move after the folder move")
+	assert.Equal(t, wantMoves, remote.moves, "no descendant move after the folder move")
 	requireScenarioQuietPlan(t, eng)
 }
 

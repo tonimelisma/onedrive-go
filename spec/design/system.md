@@ -2,12 +2,13 @@
 
 GOVERNS: internal/synctree/*.go, internal/localtrash/*.go, internal/fsroot/*.go, internal/localpath/*.go, internal/perf/*.go, internal/devtool/*.go, internal/errclass/*.go, internal/sharedref/*.go, internal/authstate/*.go, internal/synctest/*.go, internal/namekey/*.go, internal/panicguard/*.go, internal/filelock/*.go, internal/humanunit/*.go, internal/sync/internal/syncfixture/*.go, internal/sync/internal/syncstoretest/*.go
 
-Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.32 [verified], R-6.10.2 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified], R-6.10.22 [verified], R-6.10.23 [verified], R-6.10.24 [verified], R-6.10.25 [verified], R-6.10.26 [verified], R-6.10.27 [verified], R-6.10.28 [verified], R-6.10.29 [verified], R-6.3.10 [verified], R-6.6.38 [verified]
+Implements: R-6.2.2 [verified], R-6.3.1 [verified], R-6.6.17 [verified], R-6.10.1 [verified], R-6.10.32 [verified], R-6.10.33 [verified], R-6.10.2 [verified], R-6.10.5 [verified], R-6.10.7 [verified], R-6.10.8 [verified], R-6.10.9 [verified], R-6.10.11 [verified], R-6.10.12 [verified], R-6.10.13 [verified], R-6.10.16 [verified], R-6.10.17 [verified], R-6.10.21 [verified], R-6.10.22 [verified], R-6.10.23 [verified], R-6.10.24 [verified], R-6.10.25 [verified], R-6.10.26 [verified], R-6.10.27 [verified], R-6.10.28 [verified], R-6.10.29 [verified], R-6.3.10 [verified], R-6.6.38 [verified]
 
 ## Verified By
 
 | Behavior | Evidence |
 | --- | --- |
+| A one-shot model seed runs in virtual time and reports its fault summary, a saved fault log and its replay line when it fails, deadlocks or nears go test's deadline (R-6.10.33). | `TestModel_ChaosRunWaitsInVirtualTime`, `TestModel_ChaosGraphConverges` |
 | Package boundaries and privileged-call discipline remain documented in the owning design docs and exercised by package-level behavior tests. | `cmd/devtool/main_test.go`, `spec/design/sync-control-plane.md`, `spec/design/sync-engine.md`, `spec/design/graph-client.md`, `spec/design/drive-transfers.md` |
 | The product continues to split multi-mount control, single mounted content-root sync, Graph I/O, and rooted filesystem access into explicit authority boundaries. | `spec/design/sync-control-plane.md`, `spec/design/sync-engine.md`, `spec/design/graph-client.md`, `spec/design/drive-transfers.md` |
 | The full live suite runs every bucket after one fails, lists every bucket (`not-run` after a preflight failure) and names the failed tests; `public` and `stress` run every step; every go test deadline a CI job's profile can start fits inside the job's timeout (R-6.10.26). | `TestRunVerifyE2EFullRunsEveryBucketAfterOneFails`, `TestRunVerifyE2EFullReportsEveryFailingBucket`, `TestRunVerifyE2EFullRecordsBucketsNotRunAfterPreflightFailure`, `TestRunVerifyE2EFullDoesNotMaskUnknownFastSuiteFailure`, `TestRunVerifyWritesSummaryJSONOnFailure`, `TestRunVerifyPublicRunsUnitTestsAfterLintFails`, `TestRunVerifyPublicSkipsOnlyTheCoverageGateAfterUnitTestsFail`, `TestRunVerifyStressRunsEveryStepAfterOneFails`, `TestCIJobTimeoutsCoverEveryGoTestDeadline` |
@@ -438,11 +439,33 @@ Static verification is a first-class architectural constraint, not a best-effort
   seed still reruns the same edits and the same plan. The nightly seeds
   profile runs it first (`ONEDRIVE_GO_WATCH_SEEDS`,
   `ONEDRIVE_GO_WATCH_SEED_START`).
+- Every one-shot model run (the engine, crash, replay and chaos families)
+  runs in virtual time, inside a `testing/synctest` bubble of its own
+  (`runModelSeedInVirtualTime`, `engine_model_virtual_time_test.go`): the
+  clock moves only when every goroutine of the run is durably blocked, and
+  then straight to the next instant one waits for, so a storm's 30-second
+  Retry-After, a retry backoff and a ramp's admission instant cost no wall
+  time and the host's speed no longer decides which goroutine runs next.
+  Every goroutine of the run is in the bubble: the engine's, the store's
+  (modernc SQLite is Go over file syscalls), the in-process fake OneDrive's
+  and the chaos layer's; the observers wait on the engine's real clock,
+  which inside the bubble is the bubble's. A chaos seed that took 71 s (seed
+  1) and 119 s (seed 2) on a 4-core host takes about 1 s, waiting about 41 s
+  of virtual time in one batch (`TestModel_ChaosRunWaitsInVirtualTime`). The
+  watch model stays on the wall clock: its local observer waits on the
+  kernel's file events, which do not block durably, so a bubble's clock
+  would never move. A run whose goroutines all block for good is a deadlock
+  the bubble reports at once; the seed then fails with a dump of every
+  goroutine saved to a file it names. A run still going shortly before go
+  test's deadline, which runs no cleanup, prints its fault summary, the
+  saved fault log and its replay line to stderr (`armHangReport`).
 - The chaos model (`TestModel_ChaosGraphConverges`) logs each seed's fault
-  summary from a test cleanup, so a failing seed prints it. Its one `-race`
-  seed is chosen to draw both faults of a create that took effect, a lost
-  create answer and a session that timed out once the empty item existed, and
-  the run asserts that it still does. The large-file session client
+  summary when the seed ends, failing or not, and a failing seed saves its
+  fault log to a file it names (`modelSeedReport`). Its plain run takes seeds
+  1 and 2 and the race seed; its one `-race` seed (79) is chosen to draw both
+  faults of a create that took effect, a lost create answer and a session
+  that timed out once the empty item existed, and the run asserts that it
+  still does. The large-file session client
   (`scenarioSessionClient`) passes through the chaos layer too
   (`TestChaosGraph_SessionRouteDrawsFaults`). The scenario fake's session
   takes fragments, keeps what it accepted across a failed request and answers
@@ -476,15 +499,17 @@ Static verification is a first-class architectural constraint, not a best-effort
   (`TestChaosGraph_StreamDrawsIgnoreHowStreamsInterleave`). It fixes no more:
   how many values a call draws follows what the call meets in the fake (a
   split draws by the size of its page; the roll for a lost answer is drawn
-  only when the inner call succeeded); another client's write draws among
-  the files the tree holds at that moment, and draws nothing when it holds
-  none; a request on a name the fake
-  handed out (an item ID, an upload URL, a delta token, each counted in the
-  order requests arrive) falls in the stream that order gives it; two calls
-  of one stream in flight together take their numbers in the order they
-  reach the layer; and the client releases retry work by elapsed time, so
-  which requests it sends in which step is its own. Two runs of one seed can
-  therefore send different requests and meet different faults. A failing
+  only when the inner call succeeded); another client's write draws from a
+  fixed range before it reads the tree, and the value picks among the files
+  the tree holds at that moment; a delta request falls in the stream its
+  token gives it, and a delta token names a position in the drive's change
+  log, the order of every mutation (item IDs and upload URLs are named from
+  what they name, `nextID` and `openSessionLocked`, not counted in the order
+  requests arrive); two calls of one stream in flight together take their
+  numbers in the order they reach the layer; and the client releases retry
+  work by elapsed time, on the bubble's virtual clock. Two runs of one seed
+  can therefore still send different requests and meet different faults
+  where a random draw outside the seed decides. A failing
   chaos run logs its `seed-replay:` line like the other seeded families, and
   that command reruns its seed, not its run
   (`TestLogSeedReplayOnFailure_LogsTheCommandThatRerunsTheSeed`); no seeded

@@ -304,7 +304,7 @@ func TestChaosGraph_FragmentFaultLeavesAPartUploadedSessionToResume(t *testing.T
 	t.Parallel()
 
 	const (
-		attempts          = 24
+		attempts          = 64
 		fragmentsInAFile  = 3
 		lastFragmentBytes = 1
 	)

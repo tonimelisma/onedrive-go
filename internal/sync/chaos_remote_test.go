@@ -77,19 +77,23 @@ import (
 //     fake, which the calls of other streams change: a split draws by the
 //     size of its page, and the roll for a lost answer is drawn only when the
 //     inner call succeeded;
-//   - the range a value is drawn from, and what it picks, can depend on the
-//     fake too: another client's write draws among the files the tree holds at
-//     that moment, and draws nothing when it holds none;
-//   - which stream a request falls in depends on the order of the fake's
-//     mutations wherever the key is a name the fake handed out: it counts
-//     item IDs, upload URLs and delta tokens in the order they arrive;
+//   - what a value picks can depend on the fake too: another client's write
+//     draws from a fixed range, and the value picks among the files the tree
+//     holds at that moment;
+//   - which stream a delta request falls in depends on the order of the
+//     fake's mutations: a delta token names a position in the drive's change
+//     log, which is the order of every mutation. Item IDs and upload URLs are
+//     named from what they name (nextID, openSessionLocked), not counted in
+//     the order requests arrive;
 //   - two calls of one stream that are in flight together take their numbers
 //     in the order they reach the layer;
 //   - which requests the client sends in which step is the client's own: it
-//     releases retry work by elapsed time.
+//     releases retry work by elapsed time, which a one-shot run measures on
+//     its bubble's virtual clock (engine_model_virtual_time_test.go), so the
+//     host's speed no longer moves it.
 //
-// So two runs of one seed can send different requests and meet different
-// faults. The `seed-replay:` line a failing chaos run logs
+// So two runs of one seed can still send different requests and meet
+// different faults where a random draw outside the seed decides. The `seed-replay:` line a failing chaos run logs
 // (logSeedReplayOnFailure) reruns the seed, not the run.
 
 const (
@@ -102,6 +106,9 @@ const (
 	chaosSeedEnv           = "ONEDRIVE_GO_CHAOS_SEEDS"
 	chaosSeedStartEnv      = "ONEDRIVE_GO_CHAOS_SEED_START"
 	chaosDefaultSeeds      = 2
+	// chaosConcurrentWriteChoices is the fixed range another client's write
+	// draws from, larger than any tree the model builds.
+	chaosConcurrentWriteChoices = 64
 )
 
 type chaosGraph struct {
@@ -743,16 +750,18 @@ func (c *chaosGraph) nextPage(token string) (*graph.DeltaPage, error) {
 
 // concurrentRemoteWrite is another client overwriting a file on OneDrive
 // while the engine is mid-pass: between the observation that planned an
-// action and the call that carries it out. The call draws the file among the
-// files the tree holds at that moment, and draws nothing when it holds none:
-// whether it draws, the range it draws from and the file the value picks all
-// follow what earlier calls left in the fake. The fault log names the file.
+// action and the call that carries it out. The call draws one value from a
+// fixed range (chaosConcurrentWriteChoices) before it reads the tree, so
+// whether it draws and what it draws do not follow the fake; only the file
+// the value picks among the files the tree holds at that moment does, and on
+// an empty tree it writes nothing. The fault log names the file.
 func (r *modelRun) concurrentRemoteWrite(cc *chaosCall) {
+	choice := cc.intN(chaosConcurrentWriteChoices)
 	files := modelEntriesOf(r.remote.tree(), false)
 	if len(files) == 0 {
 		return
 	}
-	p := files[cc.intN(len(files))]
+	p := files[choice%len(files)]
 	cc.record("concurrent-write " + p)
 	content := r.nextContent("concurrent")
 	r.remote.putFileAt(r.t, p, content)
@@ -778,8 +787,10 @@ func (r *modelRun) takeConcurrentEdits() []syncfixture.ModelEdit {
 // modelRaceBatches batches draw both faults of a create that took effect: a
 // create whose own answer was lost and a session that timed out once the
 // empty item existed. The run asserts that the seed still draws both, so a
-// change that renumbers what a seed does cannot quietly drop them.
-const chaosRaceSeed = 2
+// change that renumbers what a seed does cannot quietly drop them. It is the
+// first seed that draws both since item IDs and upload URLs are named from
+// what they name (the seeds below it draw one or neither).
+const chaosRaceSeed = 79
 
 // chaosRaceSeedFaults are the fault kinds chaosRaceSeed must draw.
 func chaosRaceSeedFaults() []string {
@@ -841,19 +852,23 @@ func chaosSeedVars() syncfixture.SeedVars {
 }
 
 // chaosSeeds is the chaos run's seeds: the ones the environment names, else
-// the first chaosDefaultSeeds (chaosRaceSeed alone under -race).
+// the first chaosDefaultSeeds and chaosRaceSeed (chaosRaceSeed alone under
+// -race).
 func chaosSeeds(t *testing.T) []uint64 {
 	t.Helper()
 
-	if syncfixture.RaceDetectorEnabled && !chaosSeedVars().SetIn(os.Getenv) {
+	if chaosSeedVars().SetIn(os.Getenv) {
+		count := chaosDefaultSeeds
+		if syncfixture.RaceDetectorEnabled {
+			count = 1
+		}
+		return syncfixture.SeedsFromEnv(t, chaosSeedVars(), count)
+	}
+	if syncfixture.RaceDetectorEnabled {
 		return []uint64{chaosRaceSeed}
 	}
-	count := chaosDefaultSeeds
-	if syncfixture.RaceDetectorEnabled {
-		count = 1
-	}
 
-	return syncfixture.SeedsFromEnv(t, chaosSeedVars(), count)
+	return append(syncfixture.SeedsFromEnv(t, chaosSeedVars(), chaosDefaultSeeds), chaosRaceSeed)
 }
 
 // Validates: R-5.6.15

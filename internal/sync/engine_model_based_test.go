@@ -235,6 +235,9 @@ type modelRun struct {
 	// numbers the files its second waves create.
 	faults   watchFaultPlan
 	newFiles int
+	// waited is how long a run in virtual time waited on its bubble's
+	// clock (runModelSeedInVirtualTime); zero for a watch run.
+	waited time.Duration
 }
 
 func runModelScenario(t *testing.T, seed uint64) *modelRun {
@@ -270,8 +273,24 @@ func (o modelOptions) batchCount() int {
 	return modelBatches
 }
 
-// runModelScenarioWith runs one seed under opts.
+// runModelScenarioWith runs one seed under opts. A one-shot run runs in
+// virtual time (runModelSeedInVirtualTime); a watch run, whose local
+// observer waits on the kernel's file events, runs on the wall clock with
+// its long waits compressed (modelClock.compressed).
 func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRun {
+	t.Helper()
+
+	report := newModelSeedReport(t, seed)
+	if opts.watch {
+		return runModelSeed(t, seed, opts, report)
+	}
+
+	return runModelSeedInVirtualTime(t, seed, opts, report)
+}
+
+// runModelSeed runs one seed under opts on t, telling report about the chaos
+// layer it builds.
+func runModelSeed(t *testing.T, seed uint64, opts modelOptions, report *modelSeedReport) *modelRun {
 	t.Helper()
 
 	crashes := opts.crashes
@@ -282,10 +301,7 @@ func runModelScenarioWith(t *testing.T, seed uint64, opts modelOptions) *modelRu
 	if opts.chaos {
 		chaos = newChaosGraph(seed)
 		client = chaos.wrap(client)
-		// A cleanup, so a failing seed prints what the storm did too.
-		t.Cleanup(func() {
-			t.Logf("seed %d chaos faults: %s", seed, chaos.faultSummary())
-		})
+		report.setChaos(chaos)
 	}
 	h := newSyncHarnessWithClient(t, remote, client)
 	run := &modelRun{

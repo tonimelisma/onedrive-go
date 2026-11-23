@@ -141,6 +141,14 @@ clock (`wallClock`, which is that value unless a test replaced it through `engin
 safety-scan ticks, retry sleeps, and write-coalesce timers. A pass's full local
 scan, which runs no timer, measures its racily-clean window (R-2.2.4) on the
 run's clock (`TestObserveLocal_MeasuresTheRacilyCleanWindowOnTheRunsClock`).
+The observers stay on the real clock even when a test replaces the run's: a
+timer callback's panic ends the run only on the clock that reports to the
+engine's timer panics (below), and a test clock has none. A test that needs
+the observers' waits in virtual time runs the engine inside a
+`testing/synctest` bubble, where the real clock is the bubble's, as every
+one-shot model run does (system.md, the chaos model). The transfer manager
+judges a recorded upload session's expiry on the run's clock
+(`driveops.WithClock`).
 
 These were five independently injectable function fields (`nowFn`, `afterFunc`,
 `newTicker`, `sleepFn`, `jitterFn`) plus three more on the local observer. Each
