@@ -563,9 +563,6 @@ func (r *moveScenarioRemote) client(t *testing.T) *syncfixture.EngineMockClient 
 		GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
 			return r.getItem(itemID)
 		},
-		GetItemByPathFn: func(_ context.Context, _ driveid.ID, remotePath string) (*graph.Item, error) {
-			return r.getItemByPath(remotePath)
-		},
 		ListChildrenFn: func(_ context.Context, _ driveid.ID, parentID string) ([]graph.Item, error) {
 			return r.listChildren(parentID), nil
 		},

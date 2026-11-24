@@ -19,7 +19,6 @@ type TestMockItemClient struct {
 	DeleteItemFn        func(ctx context.Context, driveID driveid.ID, itemID string) error
 	DeleteItemIfMatchFn func(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error
 	GetItemFn           func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
-	getItemByPathFn     func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
 	ListChildrenFn      func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
 	// GetChildByNameFn and ListChildrenPagesFn, when set, replace the reads
 	// derived from ListChildrenFn, for a test that serves pages or counts
@@ -95,14 +94,6 @@ func DefaultMockGetItem(driveID driveid.ID, itemID string) *graph.Item {
 	}
 }
 
-func (m *TestMockItemClient) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error) {
-	if m.getItemByPathFn != nil {
-		return m.getItemByPathFn(ctx, driveID, remotePath)
-	}
-
-	return nil, graph.ErrNotFound
-}
-
 func (m *TestMockItemClient) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
 	if m.ListChildrenFn != nil {
 		return m.ListChildrenFn(ctx, driveID, parentID)
@@ -170,8 +161,4 @@ func (m *TestMockItemClient) DeleteItemIfMatch(ctx context.Context, driveID driv
 	}
 
 	return errors.New("DeleteItemIfMatch not mocked")
-}
-
-func (m *TestMockItemClient) PermanentDeleteItem(_ context.Context, _ driveid.ID, _ string) error {
-	return errors.New("PermanentDeleteItem not mocked")
 }

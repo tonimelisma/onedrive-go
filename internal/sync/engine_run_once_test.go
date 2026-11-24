@@ -85,10 +85,6 @@ func installDryRunContentMutationGuards(t *testing.T, mock *syncfixture.EngineMo
 		fail("DeleteItemIfMatch")
 		return nil
 	}
-	mock.PermanentDeleteFn = func(_ context.Context, _ driveid.ID, _ string) error {
-		fail("PermanentDeleteItem")
-		return nil
-	}
 	mock.DownloadFn = func(_ context.Context, _ driveid.ID, _ string, _ io.Writer) (int64, error) {
 		fail("Download")
 		return 0, nil
