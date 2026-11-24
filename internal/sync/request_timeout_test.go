@@ -109,7 +109,12 @@ func TestRemoteObserverWatch_AFailedBatchEndsTheWatchUnlessItsRunEnded(t *testin
 			fetcher := &syncfixture.ScriptedDeltaFetcher{Answer: func(int, string) (*graph.DeltaPage, error) {
 				return &graph.DeltaPage{Items: []graph.Item{syncfixture.CursorTestItem("a")}, DeltaLink: "token-after"}, nil
 			}}
-			obs := syncobserve.NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+			obs := syncobserve.NewRemoteObserver(&syncobserve.RemoteObserverInputs{
+				Fetcher:  fetcher,
+				Baseline: syncfixture.EmptyBaseline(),
+				DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+				Logger:   syncfixture.TestLogger(t),
+			})
 			runCtx, endRun := context.WithCancel(t.Context())
 			defer endRun()
 			handle := func(context.Context, []syncdomain.RemoteItem, string, syncshortcut.ShortcutTopologyBatch) (syncobserve.RemoteObservationBatch, error) {

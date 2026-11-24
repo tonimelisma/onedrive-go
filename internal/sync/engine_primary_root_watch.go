@@ -31,19 +31,24 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 		return
 	}
 
-	remoteObs := rt.remote.observer(ctx, bl, rt.deps.logger, rt.cfg.shortcutNamespaceID, rt.roots.current())
-	remoteObs.SetDeltaExpiredRecovery(func(ctx context.Context, kind syncdomain.ResyncKind) (syncobserve.RemoteObservationBatch, error) {
-		batch, err := obs.executeDriveRootFullObservation(ctx, bl, kind)
-		if err != nil {
-			return syncobserve.RemoteObservationBatch{}, err
-		}
-		batch.Source = syncobserve.RemoteObservationBatchPrimaryWatch
-		batch.ArmFullRefreshTimer = true
-		batch.ApplyAck = make(chan error, 1)
+	remoteObs := rt.remote.observer(ctx, &syncobserve.RemoteObserverInputs{
+		Baseline:            bl,
+		Logger:              rt.deps.logger,
+		ShortcutNamespaceID: rt.cfg.shortcutNamespaceID,
+		ProtectedRoots:      rt.roots.current(),
+		DeltaExpiredRecovery: func(ctx context.Context, kind syncdomain.ResyncKind) (syncobserve.RemoteObservationBatch, error) {
+			batch, err := obs.executeDriveRootFullObservation(ctx, bl, kind)
+			if err != nil {
+				return syncobserve.RemoteObservationBatch{}, err
+			}
+			batch.Source = syncobserve.RemoteObservationBatchPrimaryWatch
+			batch.ArmFullRefreshTimer = true
+			batch.ApplyAck = make(chan error, 1)
 
-		return batch, nil
+			return batch, nil
+		},
+		DebugEvents: rt.deps.emit,
 	})
-	remoteObs.SetDebugEvents(rt.deps.emit)
 	rt.resources.remoteObs = remoteObs
 	wakeCh := rt.startSocketIOWakeSource(ctx)
 

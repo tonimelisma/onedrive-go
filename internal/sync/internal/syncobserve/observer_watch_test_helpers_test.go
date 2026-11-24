@@ -33,7 +33,7 @@ func newWatchTestObserver(t *testing.T, watcher FsWatcher, opts watchObserverTes
 		baseline = syncfixture.EmptyBaseline()
 	}
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 
 	// One clock value, not a set of independently overridable function fields:
 	// a never-firing tick and an instant sleep by default, with the real clock
@@ -85,11 +85,12 @@ func requireNoLocalPatch(t *testing.T, batches <-chan LocalObservation, signal s
 	}
 }
 
-// localBatches installs a buffered local observation channel on obs, the one
-// output the watch runtime installs, and returns it.
+// localBatches gives obs a buffered local observation channel, the one
+// output the watch runtime gives it at construction, and returns it. A test
+// of this package may install it after construction, before Watch starts.
 func localBatches(obs *LocalObserver, size int) chan LocalObservation {
 	batches := make(chan LocalObservation, size)
-	obs.SetLocalObservationBatchChannel(batches)
+	obs.localBatchCh = batches
 
 	return batches
 }

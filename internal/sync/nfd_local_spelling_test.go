@@ -380,11 +380,10 @@ func handleTwinDelete(t *testing.T, h *syncHarness) []syncobserve.LocalObservati
 
 	bl, err := h.eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	obs := syncobserve.NewLocalObserver(bl, h.eng.logger, 0)
+	batches := make(chan syncobserve.LocalObservation, 1)
+	obs := syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{Baseline: bl, Logger: h.eng.logger, Batches: batches})
 	obs.PendingTimers = make(map[string]syncdomain.SyncTimer)
 	obs.HashRequests = make(chan syncobserve.HashRequest, syncobserve.HashRequestBufSize)
-	batches := make(chan syncobserve.LocalObservation, 1)
-	obs.SetLocalObservationBatchChannel(batches)
 
 	obs.HandleDelete(t.Context(), syncfixture.NewRecordingFsWatcher(), h.eng.syncTree,
 		filepath.Join(h.syncRoot, syncfixture.TwinSecondName), syncfixture.TwinSyncedName, syncfixture.TwinSyncedName)

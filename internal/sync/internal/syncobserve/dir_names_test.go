@@ -72,7 +72,10 @@ func TestLocalCollisions_ScanJudgesTheNamesOnDisk(t *testing.T) {
 		t.Skip("case-insensitive filesystem: colliding names fold into one file")
 	}
 
-	result, err := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0).
+	result, err := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	}).
 		FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 
@@ -93,7 +96,10 @@ func syncedScanRoot(t *testing.T, files map[string]string) (string, syncdomain.B
 	for name, content := range files {
 		require.NoError(t, os.WriteFile(filepath.Join(syncRoot, name), []byte(content), 0o600))
 	}
-	first, err := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0).
+	first, err := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	}).
 		FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
@@ -147,7 +153,7 @@ func TestFullScan_ModifiedSyncedSiblingOfNewColliderBlocksBoth(t *testing.T) {
 	writeCollider(t, syncRoot, "Report.txt", "report.txt")
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "Report.txt"), []byte("edited since the sync"), 0o600))
 
-	result, err := NewLocalObserver(baseline, synctest.TestLogger(t), 0).
+	result, err := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)}).
 		FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
@@ -164,7 +170,7 @@ func TestFullScan_UnchangedSyncedSiblingKeepsSyncing(t *testing.T) {
 	syncRoot, baseline := syncedScanRoot(t, map[string]string{"Report.txt": "synced"})
 	writeCollider(t, syncRoot, "Report.txt", "report.txt")
 
-	result, err := NewLocalObserver(baseline, synctest.TestLogger(t), 0).
+	result, err := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)}).
 		FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 

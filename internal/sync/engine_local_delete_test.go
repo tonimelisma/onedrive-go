@@ -26,11 +26,14 @@ func watchDeleteRemainingRows(t *testing.T, baseline syncdomain.BaselineView, ro
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
 	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), rows))
 
-	obs := syncobserve.NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	batches := make(chan syncobserve.LocalObservation, 1)
+	obs := syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{
+		Baseline: baseline,
+		Logger:   synctest.TestLogger(t),
+		Batches:  batches,
+	})
 	obs.PendingTimers = make(map[string]syncdomain.SyncTimer)
 	obs.HashRequests = make(chan syncobserve.HashRequest, syncobserve.HashRequestBufSize)
-	batches := make(chan syncobserve.LocalObservation, 1)
-	obs.SetLocalObservationBatchChannel(batches)
 
 	syncRoot := t.TempDir()
 	obs.HandleDelete(t.Context(), syncfixture.NewRecordingFsWatcher(), syncfixture.MustOpenSyncTree(t, syncRoot),

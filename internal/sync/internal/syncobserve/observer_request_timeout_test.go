@@ -30,7 +30,12 @@ func TestFullDelta_RetriesATimedOutPageUpToItsPolicy(t *testing.T) {
 
 	server, _ := syncfixture.NewStalledServer(t)
 	client, dispatched := syncfixture.StalledGraphClient(t, server, &http.Client{Timeout: syncfixture.StalledRequestTimeout})
-	obs := NewRemoteObserver(client, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  client,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+		Logger:   syncfixture.TestLogger(t),
+	})
 	var slept []time.Duration
 	obs.clock = &observerTestClock{SyncClock: syncdomain.RealClock{}, sleep: func(_ context.Context, d time.Duration) error {
 		slept = append(slept, d)
@@ -54,7 +59,12 @@ func TestRemoteObserverWatch_BacksOffAfterATimedOutPollInsteadOfStopping(t *test
 
 	server, _ := syncfixture.NewStalledServer(t)
 	client, dispatched := syncfixture.StalledGraphClient(t, server, &http.Client{Timeout: syncfixture.StalledRequestTimeout})
-	obs := NewRemoteObserver(client, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  client,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+		Logger:   syncfixture.TestLogger(t),
+	})
 	policy := retry.DeltaPagePolicy()
 	ctx, stop := context.WithCancel(t.Context())
 	defer stop()

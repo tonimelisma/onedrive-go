@@ -26,7 +26,12 @@ func TestFullDelta_RepeatedNextLinkIsCursorUnusable(t *testing.T) {
 		// 10,000 pages with every item buffered.
 		return &graph.DeltaPage{Items: []graph.Item{syncfixture.CursorTestItem(fmt.Sprintf("i%d", call))}, NextLink: "page-2"}, nil
 	}}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+		Logger:   syncfixture.TestLogger(t),
+	})
 
 	_, _, err := obs.FullDelta(t.Context(), "saved-token")
 
@@ -87,7 +92,12 @@ func TestFullDelta_ALinkBackToAPageAskedForIsCursorUnusable(t *testing.T) {
 
 				return &page, nil
 			}}
-			obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+			obs := NewRemoteObserver(&RemoteObserverInputs{
+				Fetcher:  fetcher,
+				Baseline: syncfixture.EmptyBaseline(),
+				DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+				Logger:   syncfixture.TestLogger(t),
+			})
 
 			_, _, err := obs.FullDelta(t.Context(), tc.saved)
 
@@ -108,7 +118,12 @@ func TestFullDelta_ASavedTokenThatIsNotALinkIsCursorUnusable(t *testing.T) {
 	fetcher := &syncfixture.ScriptedDeltaFetcher{Answer: func(int, string) (*graph.DeltaPage, error) {
 		return nil, fmt.Errorf("graph: reading delta token: %w", graph.ErrDeltaTokenNotALink)
 	}}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+		Logger:   syncfixture.TestLogger(t),
+	})
 
 	_, _, err := obs.FullDelta(t.Context(), "not-a-link")
 
@@ -127,7 +142,12 @@ func TestFullDelta_RepeatedPageItemsIsCursorUnusable(t *testing.T) {
 			NextLink: fmt.Sprintf("page-%d", call+1),
 		}, nil
 	}}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+		Logger:   syncfixture.TestLogger(t),
+	})
 
 	_, _, err := obs.FullDelta(t.Context(), "saved-token")
 
@@ -148,7 +168,12 @@ func TestFullDelta_EmptyPageWithNextLinkContinues(t *testing.T) {
 			return &graph.DeltaPage{Items: []graph.Item{syncfixture.CursorTestItem("x")}, DeltaLink: "done"}, nil
 		}
 	}}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+		Logger:   syncfixture.TestLogger(t),
+	})
 
 	events, token, err := obs.FullDelta(t.Context(), "saved-token")
 
@@ -179,7 +204,12 @@ func TestFullDelta_SavedTokenRejectedTwiceIsCursorUnusable(t *testing.T) {
 			fetcher := &syncfixture.ScriptedDeltaFetcher{Answer: func(int, string) (*graph.DeltaPage, error) {
 				return nil, tt.rejected
 			}}
-			obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+			obs := NewRemoteObserver(&RemoteObserverInputs{
+				Fetcher:  fetcher,
+				Baseline: syncfixture.EmptyBaseline(),
+				DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+				Logger:   syncfixture.TestLogger(t),
+			})
 			obs.clock = &observerTestClock{SyncClock: syncdomain.RealClock{}, sleep: noopSleep}
 
 			_, _, err := obs.FullDelta(t.Context(), "saved-token")
@@ -211,7 +241,12 @@ func TestFullDelta_OneRejectionOfASavedTokenIsRetried(t *testing.T) {
 		}
 		return &graph.DeltaPage{DeltaLink: "next-token"}, nil
 	}}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+		Logger:   syncfixture.TestLogger(t),
+	})
 
 	_, token, err := obs.FullDelta(t.Context(), "saved-token")
 
@@ -232,7 +267,12 @@ func TestWatch_TransientErrorRetriesAndKeepsToken(t *testing.T) {
 		}
 		return &graph.DeltaPage{DeltaLink: "kept-token"}, nil
 	}}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+		Logger:   syncfixture.TestLogger(t),
+	})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	sleeps := 0
@@ -245,9 +285,9 @@ func TestWatch_TransientErrorRetriesAndKeepsToken(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	}}
-	obs.SetDeltaExpiredRecovery(func(context.Context, syncdomain.ResyncKind) (RemoteObservationBatch, error) {
+	obs.recoverExpiredDelta = func(context.Context, syncdomain.ResyncKind) (RemoteObservationBatch, error) {
 		return RemoteObservationBatch{}, errors.New("a transient failure must not reset the cursor")
-	})
+	}
 	batches := make(chan RemoteObservationBatch, 4)
 	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 
@@ -266,7 +306,12 @@ func TestWatch_SustainedServerErrorsOnTheCursorResetIt(t *testing.T) {
 	fetcher := &syncfixture.ScriptedDeltaFetcher{Answer: func(int, string) (*graph.DeltaPage, error) {
 		return nil, syncfixture.GraphStatusError(http.StatusInternalServerError, graph.ErrServerError)
 	}}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+		Logger:   syncfixture.TestLogger(t),
+	})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	clock := syncfixture.NewManualClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -275,11 +320,11 @@ func TestWatch_SustainedServerErrorsOnTheCursorResetIt(t *testing.T) {
 		return nil
 	}}
 	recovered := make(chan struct{})
-	obs.SetDeltaExpiredRecovery(func(context.Context, syncdomain.ResyncKind) (RemoteObservationBatch, error) {
+	obs.recoverExpiredDelta = func(context.Context, syncdomain.ResyncKind) (RemoteObservationBatch, error) {
 		close(recovered)
 		cancel()
 		return RemoteObservationBatch{}, context.Canceled
-	})
+	}
 	batches := make(chan RemoteObservationBatch, 4)
 	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 
@@ -306,7 +351,12 @@ func TestWatch_RepeatedlyFailingRecoveryBacksOff(t *testing.T) {
 	fetcher := &syncfixture.ScriptedDeltaFetcher{Answer: func(int, string) (*graph.DeltaPage, error) {
 		return nil, syncfixture.DeltaGone("resyncChangesApplyDifferences")
 	}}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+		Logger:   syncfixture.TestLogger(t),
+	})
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -319,13 +369,13 @@ func TestWatch_RepeatedlyFailingRecoveryBacksOff(t *testing.T) {
 	}}
 	const attempts = 5
 	var recoveredAt []time.Time
-	obs.SetDeltaExpiredRecovery(func(context.Context, syncdomain.ResyncKind) (RemoteObservationBatch, error) {
+	obs.recoverExpiredDelta = func(context.Context, syncdomain.ResyncKind) (RemoteObservationBatch, error) {
 		recoveredAt = append(recoveredAt, clock.Now())
 		if len(recoveredAt) == attempts {
 			cancel()
 		}
 		return RemoteObservationBatch{}, syncdomain.NewCursorUnusableError("a page links back to an earlier page", nil)
-	})
+	}
 	batches := make(chan RemoteObservationBatch, 4)
 	_ = startTestRemoteBatchDrain(t, ctx, batches, nil)
 

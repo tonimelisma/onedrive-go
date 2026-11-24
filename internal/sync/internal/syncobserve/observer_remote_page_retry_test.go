@@ -37,7 +37,12 @@ func pageRetryFixture(t *testing.T, pageErr error, failures int) (*RemoteObserve
 			return &graph.DeltaPage{Items: []graph.Item{syncfixture.CursorTestItem("three")}, DeltaLink: "done"}, nil
 		}
 	}}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveid.New(syncfixture.EngineTestDriveID), syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveid.New(syncfixture.EngineTestDriveID),
+		Logger:   syncfixture.TestLogger(t),
+	})
 	slept := &[]time.Duration{}
 	obs.clock = &observerTestClock{SyncClock: syncdomain.RealClock{}, sleep: func(_ context.Context, d time.Duration) error {
 		*slept = append(*slept, d)

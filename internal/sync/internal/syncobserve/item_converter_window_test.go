@@ -38,11 +38,16 @@ func TestFullDelta_CrossPageChildBeforeParentResolvesWithoutFetch(t *testing.T) 
 		{page: &graph.DeltaPage{Items: append([]graph.Item{{ID: "root", IsRoot: true, IsFolder: true, DriveID: driveID}}, children...), NextLink: "page-2"}},
 		{page: &graph.DeltaPage{Items: parents, DeltaLink: "done"}},
 	}}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveID, syncfixture.TestLogger(t))
-	obs.SetItemClient(&syncfixture.EngineMockClient{GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
-		require.Failf(t, "unexpected read", "the folder %s arrives later in the window", itemID)
-		return nil, graph.ErrNotFound
-	}})
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveID,
+		Logger:   syncfixture.TestLogger(t),
+		Items: &syncfixture.EngineMockClient{GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			require.Failf(t, "unexpected read", "the folder %s arrives later in the window", itemID)
+			return nil, graph.ErrNotFound
+		}},
+	})
 
 	events, token, err := obs.FullDelta(t.Context(), "saved")
 
@@ -76,13 +81,18 @@ func TestFullDelta_ManyOrphansCompleteAcrossReplaysWithoutRefetching(t *testing.
 
 	var mu stdsync.Mutex
 	reads := map[string]int{}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveID, syncfixture.TestLogger(t))
-	obs.SetItemClient(&syncfixture.EngineMockClient{GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
-		mu.Lock()
-		reads[itemID]++
-		mu.Unlock()
-		return &graph.Item{ID: itemID, Name: itemID, ParentID: "root", DriveID: driveID, IsFolder: true}, nil
-	}})
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveID,
+		Logger:   syncfixture.TestLogger(t),
+		Items: &syncfixture.EngineMockClient{GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			mu.Lock()
+			reads[itemID]++
+			mu.Unlock()
+			return &graph.Item{ID: itemID, Name: itemID, ParentID: "root", DriveID: driveID, IsFolder: true}, nil
+		}},
+	})
 
 	// The first attempt spends the window's budget and stays incomplete.
 	_, _, err := obs.FullDelta(t.Context(), "saved")

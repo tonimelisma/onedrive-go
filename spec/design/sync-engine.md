@@ -807,7 +807,7 @@ every recovery is the full refresh above, not a bare token-less enumeration
 the token aged out was missed until the next scheduled refresh, up to a day
 later): one-shot drive-root observation falls through to
 `executeDriveRootFullObservation`, watch mode's remote observer calls the same
-function through `SetDeltaExpiredRecovery` and continues from its token, and
+function through `RemoteObserverInputs.DeltaExpiredRecovery` and continues from its token, and
 mount-root delta re-lists with orphan detection. The recovery is marked as a
 full refresh, so the cadence restarts from it (R-2.15.3). In watch mode a recovery
 that fails backs off like any failed poll and keeps the expired token, and

@@ -66,9 +66,13 @@ func TestLocalObserver_RunSafetyScanEmitsFullLocalSnapshotBatch(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "fresh.txt"), []byte("fresh"), 0o600))
 
 	baseline := syncdomain.NewBaselineSnapshot(nil)
-	obs := NewLocalObserver(baseline, syncfixture.TestLogger(t), 1)
 	batches := make(chan LocalObservation, 1)
-	obs.SetLocalObservationBatchChannel(batches)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:     baseline,
+		Logger:       syncfixture.TestLogger(t),
+		CheckWorkers: 1,
+		Batches:      batches,
+	})
 
 	require.True(t, obs.RunSafetyScanForTest(t.Context(), syncfixture.MustOpenSyncTree(t, root)))
 
@@ -120,9 +124,13 @@ func TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet(t *testing.T) {
 	leftover := filepath.Join(root, leftoverName)
 	require.NoError(t, os.WriteFile(leftover, []byte("half-removed\n"), 0o600))
 
-	obs := NewLocalObserver(syncdomain.NewBaselineSnapshot(nil), syncfixture.TestLogger(t), 1)
 	batches := make(chan LocalObservation, 1)
-	obs.SetLocalObservationBatchChannel(batches)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:     syncdomain.NewBaselineSnapshot(nil),
+		Logger:       syncfixture.TestLogger(t),
+		CheckWorkers: 1,
+		Batches:      batches,
+	})
 	tree := syncfixture.MustOpenSyncTree(t, root)
 
 	require.True(t, obs.RunSafetyScanForTest(t.Context(), tree))
@@ -140,9 +148,13 @@ func TestLocalObserver_RunSafetyScanForwardsAnEmptyFindingSet(t *testing.T) {
 func TestLocalObserver_AFullScanSendsItsFindingsWithItsRows(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncdomain.NewBaselineSnapshot(nil), syncfixture.TestLogger(t), 1)
 	batches := make(chan LocalObservation, 1)
-	obs.SetLocalObservationBatchChannel(batches)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:     syncdomain.NewBaselineSnapshot(nil),
+		Logger:       syncfixture.TestLogger(t),
+		CheckWorkers: 1,
+		Batches:      batches,
+	})
 	scan := ScanResult{
 		Rows:          []syncdomain.LocalStateRow{{Path: "disk", ItemType: syncdomain.ItemTypeFolder}},
 		Skipped:       []syncdomain.SkippedItem{{Path: "bad:name.txt", Reason: syncdomain.IssueInvalidFilename}},

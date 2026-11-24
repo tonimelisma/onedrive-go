@@ -97,7 +97,7 @@ func (rt *watchRuntime) applyLocalSnapshot(ctx context.Context, batch *syncobser
 	}
 	rt.deps.perf.RecordLocalObservationFullSnapshotReplacement()
 	if rt.resources.localObs != nil {
-		rt.resources.localObs.SetMountBoundaryFlags(result.MountBoundaries)
+		rt.resources.localObs.ReplaceMountBoundaryFlags(result.MountBoundaries)
 	}
 
 	return result.RowsChanged || result.FindingsChanged, nil

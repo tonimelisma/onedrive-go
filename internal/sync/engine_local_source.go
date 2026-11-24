@@ -45,14 +45,19 @@ func (e *Engine) localSource(hooks *engineHooks) *localSource {
 	}
 }
 
-// observer builds a local observer on the engine's real clock, with the
-// engine's observer test seams. logger is the run's.
-func (s *localSource) observer(bl syncdomain.BaselineView, logger *slog.Logger) *syncobserve.LocalObserver {
-	obs := syncobserve.NewLocalObserver(bl, logger, s.checkWorkers)
-	obs.SetClock(s.clock)
-	obs.SetHooks(s.hooks)
+// observer builds a local observer from in, completed with what the engine's
+// local side owns: the hash worker count, the sync folder identity every scan
+// validates against, the engine's observer test seams, and the engine's real
+// clock when in names none.
+func (s *localSource) observer(in *syncobserve.LocalObserverInputs) *syncobserve.LocalObserver {
+	in.CheckWorkers = s.checkWorkers
+	in.RootIdentity = s.identity
+	in.Hooks = s.hooks
+	if in.Clock == nil {
+		in.Clock = s.clock
+	}
 
-	return obs
+	return syncobserve.NewLocalObserver(in)
 }
 
 // commitSnapshot commits one full local scan in one transaction (its

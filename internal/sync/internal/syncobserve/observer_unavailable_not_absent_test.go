@@ -33,7 +33,10 @@ func (d failingInfoDirEntry) Info() (fs.FileInfo, error) { return nil, syscall.E
 func TestFullScan_EntryLstatEIOIsReadBoundaryNotDelete(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	var (
 		events  []syncdomain.LocalEntry
 		jobs    []hashJob
@@ -56,7 +59,10 @@ func TestFullScan_HashEIOProducesNoUploadAndNoDelete(t *testing.T) {
 
 	dir := t.TempDir()
 	syncfixture.WriteTestFile(t, dir, "a.txt", "content")
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.hooks.HashFile = func(context.Context, string) (string, error) {
 		return "", &fs.PathError{Op: "read", Path: "a.txt", Err: syscall.EIO}
 	}
@@ -79,14 +85,17 @@ func TestFullScan_HashEIOProducesNoUploadAndNoDelete(t *testing.T) {
 func TestIsForeignMountPoint_DoesNotCrossFilesystemsByDefault(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	availability := newScanAvailability(10)
 
 	assert.False(t, obs.isForeignMountPoint(availability, "Docs", synctree.FileIdentity{Device: 10, Inode: 2}, true))
 	assert.True(t, obs.isForeignMountPoint(availability, "Docs/nas", synctree.FileIdentity{Device: 11, Inode: 3}, true),
 		"a folder on another device is a mount point sync does not cross")
 
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{CrossFilesystems: true})
+	obs.filterConfig = syncdomain.ContentFilterConfig{CrossFilesystems: true}
 	assert.False(t, obs.isForeignMountPoint(availability, "Docs/usb", synctree.FileIdentity{Device: 12, Inode: 4}, true),
 		"cross_filesystems opts in")
 
@@ -99,15 +108,18 @@ func TestIsForeignMountPoint_DoesNotCrossFilesystemsByDefault(t *testing.T) {
 func TestIsForeignMountPoint_CrossingRecordsTheBoundary(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{CrossFilesystems: true})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      syncfixture.EmptyBaseline(),
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{CrossFilesystems: true},
+	})
 	availability := newScanAvailability(10)
 
 	assert.False(t, obs.isForeignMountPoint(availability, "nas", synctree.FileIdentity{Device: 11, Inode: 3}, true))
 	assert.Equal(t, []string{"nas"}, availability.crossedMounts)
 
 	// A scan copies the recorded flags into its availability when it starts.
-	obs.SetMountBoundaryFlags([]string{"usb"})
+	obs.ReplaceMountBoundaryFlags([]string{"usb"})
 	availability.mountBoundaryFlags = *obs.mountBoundaryFlags.Load()
 	assert.False(t, obs.isForeignMountPoint(availability, "usb", synctree.FileIdentity{Device: 10, Inode: 4}, true))
 	assert.True(t, obs.flaggedMountIsGone(availability, "usb"), "a flagged mount point back on its parent's device is not mounted")
@@ -137,9 +149,12 @@ func TestFlaggedMountIsGone_MountedButEmptiedDiskIsNotABoundary(t *testing.T) {
 		&syncdomain.BaselineEntry{Path: "nas", ItemID: "nas", ItemType: syncdomain.ItemTypeFolder},
 		&syncdomain.BaselineEntry{Path: "nas/a.txt", ItemID: "a", ItemType: syncdomain.ItemTypeFile},
 	)
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{CrossFilesystems: true})
-	obs.SetMountBoundaryFlags([]string{"nas"})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:           baseline,
+		Logger:             synctest.TestLogger(t),
+		ContentFilter:      syncdomain.ContentFilterConfig{CrossFilesystems: true},
+		MountBoundaryFlags: []string{"nas"},
+	})
 	availability := newScanAvailability(10)
 	availability.tree = syncfixture.MustOpenSyncTree(t, t.TempDir())
 	require.NoError(t, os.Mkdir(filepath.Join(availability.tree.Path(), "nas"), 0o750))

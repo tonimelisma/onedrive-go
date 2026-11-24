@@ -193,7 +193,11 @@ func TestWatchRuntime_MaintenanceMarksLocalTruthSuspectAfterDroppedObservation(t
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	rt.resources.localObs = syncobserve.NewLocalObserver(bl, eng.logger, eng.checkWorkers)
+	rt.resources.localObs = syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{
+		Baseline:     bl,
+		Logger:       eng.logger,
+		CheckWorkers: eng.checkWorkers,
+	})
 	rt.resources.localObs.RestoreDropped(1, 1)
 
 	require.NoError(t, eng.baseline.ReplaceLocalState(t.Context(), []syncdomain.LocalStateRow{
@@ -226,7 +230,11 @@ func TestWatchRuntime_DroppedObservationRescanFailureWarnsOnce(t *testing.T) {
 
 	bl, err := eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	rt.resources.localObs = syncobserve.NewLocalObserver(bl, eng.logger, eng.checkWorkers)
+	rt.resources.localObs = syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{
+		Baseline:     bl,
+		Logger:       eng.logger,
+		CheckWorkers: eng.checkWorkers,
+	})
 	rt.resources.localObs.RestoreDropped(1, 0)
 
 	// A canceled context makes marking local truth suspect fail the same way

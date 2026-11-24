@@ -31,15 +31,7 @@ func TestObservation_OffLoopGoroutinesNeverHoldTheRuntime(t *testing.T) {
 		file, err := parser.ParseFile(fset, name, nil, 0)
 		require.NoError(t, err)
 		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || (sel.Sel.Name != "start" && sel.Sel.Name != "SetDeltaExpiredRecovery") {
-				return true
-			}
-			for _, arg := range call.Args {
+			for _, arg := range offLoopCallbacks(n) {
 				lit, ok := arg.(*ast.FuncLit)
 				if !ok {
 					continue
@@ -56,5 +48,24 @@ func TestObservation_OffLoopGoroutinesNeverHoldTheRuntime(t *testing.T) {
 			return true
 		})
 	}
-	assert.GreaterOrEqual(t, checked, 6, "the observation goroutines and the delta-expiry callback were found")
+	assert.GreaterOrEqual(t, checked, 7,
+		"the observation goroutines, the delta-expiry callback and the protected-root event sink were found")
+}
+
+// offLoopCallbacks are the expressions of n that run off the loop goroutine:
+// the arguments of a goroutine start, and the observer callbacks the
+// observers' inputs carry.
+func offLoopCallbacks(n ast.Node) []ast.Expr {
+	switch node := n.(type) {
+	case *ast.CallExpr:
+		if sel, ok := node.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "start" {
+			return node.Args
+		}
+	case *ast.KeyValueExpr:
+		if key, ok := node.Key.(*ast.Ident); ok &&
+			(key.Name == "DeltaExpiredRecovery" || key.Name == "ProtectedRootEvents") {
+			return []ast.Expr{node.Value}
+		}
+	}
+	return nil
 }

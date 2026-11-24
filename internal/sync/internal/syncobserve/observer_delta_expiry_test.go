@@ -47,7 +47,12 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
 	fetcher := &tokenRecordingFetcher{gone: syncfixture.DeltaGone("resyncChangesUploadDifferences")}
-	obs := NewRemoteObserver(fetcher, syncfixture.EmptyBaseline(), driveID, syncfixture.TestLogger(t))
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: syncfixture.EmptyBaseline(),
+		DriveID:  driveID,
+		Logger:   syncfixture.TestLogger(t),
+	})
 	// Every watch sleep lasts until the test cancels: the loop stops after
 	// the recovery instead of polling on.
 	obs.clock = &observerTestClock{SyncClock: syncdomain.RealClock{}, sleep: func(ctx context.Context, _ time.Duration) error {
@@ -57,7 +62,7 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 
 	recovered := make(chan syncdomain.ResyncKind, 1)
 	orphan := syncdomain.RemoteItem{ObservedItem: syncdomain.ObservedItem{ItemID: "gone", Path: "gone.txt", IsDeleted: true, ReuploadLocal: true}}
-	obs.SetDeltaExpiredRecovery(func(_ context.Context, kind syncdomain.ResyncKind) (RemoteObservationBatch, error) {
+	obs.recoverExpiredDelta = func(_ context.Context, kind syncdomain.ResyncKind) (RemoteObservationBatch, error) {
 		recovered <- kind
 		return RemoteObservationBatch{
 			Observed:              []syncdomain.ObservedItem{orphan.ObservedItem},
@@ -65,7 +70,7 @@ func TestWatch_DeltaExpiredRecoversThroughTheFullRefresh(t *testing.T) {
 			CursorToken:           "token-after-full-refresh",
 			MarkFullRemoteRefresh: true,
 		}, nil
-	})
+	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

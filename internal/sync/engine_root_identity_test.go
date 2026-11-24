@@ -415,8 +415,11 @@ func TestWatchObserver_SeesBindingMadeAfterItWasBuilt(t *testing.T) {
 
 	rebound := resetAndReopen(t, paths, remote)
 	t.Cleanup(func() { closeRootSafetyEngine(t, rebound) })
-	watchObserver := syncobserve.NewLocalObserver(syncfixture.EmptyBaseline(), syncfixture.TestLogger(t), 0)
-	watchObserver.SetSyncRootIdentity(rebound.syncRootIdentity)
+	watchObserver := syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{
+		Baseline:     syncfixture.EmptyBaseline(),
+		Logger:       syncfixture.TestLogger(t),
+		RootIdentity: rebound.syncRootIdentity,
+	})
 
 	runScenarioPass(t, rebound) // binds, writing a new marker
 

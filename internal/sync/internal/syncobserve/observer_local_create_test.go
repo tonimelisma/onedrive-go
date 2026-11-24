@@ -23,7 +23,10 @@ func TestWatch_DetectsFileCreate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)
@@ -40,7 +43,10 @@ func TestWatch_NewDirectoryWatched(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	batches := localBatches(obs, 20)
 	cancel, done := startLocalWatch(t, obs, dir)
@@ -68,7 +74,10 @@ func TestWatch_NewDirectoryPreExistingFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	batches := localBatches(obs, 30)
 	cancel, done := startLocalWatch(t, obs, dir)
@@ -100,7 +109,10 @@ func TestWatch_NewDirectoryNestedRecursion(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	batches := localBatches(obs, 50)
 	cancel, done := startLocalWatch(t, obs, dir)
@@ -167,7 +179,10 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)

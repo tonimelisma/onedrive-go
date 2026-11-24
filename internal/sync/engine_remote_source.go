@@ -10,7 +10,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
-	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
@@ -68,23 +67,17 @@ func (e *Engine) remoteSource(hooks *engineHooks) *remoteSource {
 	}
 }
 
-// observer builds an observer of the drive on the real clock, with the item
-// client, the remote_state path lookup for deleted items and the shortcut
-// topology of the protected roots set. logger is the run's.
-func (s *remoteSource) observer(
-	ctx context.Context,
-	bl syncdomain.BaselineView,
-	logger *slog.Logger,
-	namespaceID string,
-	roots []syncshortcut.ProtectedRoot,
-) *syncobserve.RemoteObserver {
-	obs := syncobserve.NewRemoteObserver(s.fetcher, bl, s.driveID, logger)
-	obs.SetClock(s.clock)
-	obs.SetItemClient(s.items)
-	obs.SetRemotePathLookup(s.pathLookup(ctx))
-	obs.SetShortcutTopology(namespaceID, roots)
+// observer builds an observer of the drive from in, completed with what the
+// engine's remote side owns: the delta fetcher, the drive, the real clock,
+// the item client and the remote_state path lookup for deleted items.
+func (s *remoteSource) observer(ctx context.Context, in *syncobserve.RemoteObserverInputs) *syncobserve.RemoteObserver {
+	in.Fetcher = s.fetcher
+	in.DriveID = s.driveID
+	in.Clock = s.clock
+	in.Items = s.items
+	in.RemotePathLookup = s.pathLookup(ctx)
 
-	return obs
+	return syncobserve.NewRemoteObserver(in)
 }
 
 // pathLookup resolves an item ID to the path the engine's remote_state row

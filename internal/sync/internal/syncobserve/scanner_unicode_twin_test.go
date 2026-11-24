@@ -27,7 +27,10 @@ func syncedTwinScanRoot(t *testing.T) (string, syncdomain.BaselineView, syncdoma
 	syncRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, syncfixture.TwinSyncedName), []byte(syncfixture.TwinSyncedContent), 0o600))
 
-	first, err := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0).
+	first, err := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	}).
 		FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 	require.Len(t, first.Rows, 1)
@@ -70,7 +73,7 @@ func TestFullScan_UnicodeFormTwinOfSyncedFileIsACollision(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(syncRoot, syncfixture.TwinSyncedName), []byte(tt.syncedEdit), 0o600))
 			}
 
-			result, err := NewLocalObserver(baseline, synctest.TestLogger(t), 0).
+			result, err := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)}).
 				FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 			require.NoError(t, err)
 
@@ -100,7 +103,7 @@ func TestFullScan_RemovedUnicodeFormTwinClearsTheCollision(t *testing.T) {
 	twinPath := filepath.Join(syncRoot, syncfixture.TwinSecondName)
 	require.NoError(t, os.WriteFile(twinPath, []byte("twin content, longer\n"), 0o600))
 	tree := syncfixture.MustOpenSyncTree(t, syncRoot)
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 
 	withTwin, err := obs.FullScan(t.Context(), tree)
 	require.NoError(t, err)
@@ -128,7 +131,7 @@ func TestFullScan_UnicodeFormFolderTwinOfSyncedFileIsACollision(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, syncfixture.TwinSecondName), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, syncfixture.TwinSecondName, "child.txt"), []byte("child\n"), 0o600))
 
-	result, err := NewLocalObserver(baseline, synctest.TestLogger(t), 0).
+	result, err := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)}).
 		FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
@@ -154,7 +157,7 @@ func TestFullScan_UnicodeFormFileTwinOfSyncedFolderIsACollision(t *testing.T) {
 		Path: syncfixture.NfcCafe, DriveID: driveid.New(syncfixture.EngineTestDriveID), ItemID: "synced-folder", ItemType: syncdomain.ItemTypeFolder,
 	})
 
-	result, err := NewLocalObserver(baseline, synctest.TestLogger(t), 0).
+	result, err := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)}).
 		FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
