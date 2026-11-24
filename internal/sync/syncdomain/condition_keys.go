@@ -196,7 +196,7 @@ func conditionKeyRank(key ConditionKey) int {
 // in one switch that names every IssueType (the exhaustive linter holds it to
 // that), so a new member gets a family, or none, on purpose. ok is false only
 // where no family is named: for the transient runtime members, which no store
-// keeps and whose results ConditionKeyForRuntimeResult groups by their class,
+// keeps and whose results the engine's conditionKeyForRuntimeResult groups by their class,
 // and for the empty value, which means "no condition". A value outside the
 // enum, which the stores refuse and so only a programming error makes, is
 // ConditionUnexpectedCondition: a lookup used to miss it and let a caller

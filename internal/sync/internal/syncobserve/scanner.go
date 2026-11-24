@@ -1141,7 +1141,7 @@ const sameUnicodeFormCollisionDetail = "another file here has the same name in a
 // ---------------------------------------------------------------------------
 
 // computeStableHash hashes a file and verifies it was not modified during the
-// hash operation by comparing pre/post stat results. Returns ErrFileChangedDuringHash
+// hash operation by comparing pre/post stat results. Returns errFileChangedDuringHash
 // if the file changed (B-119). Caller-specific handling: handleWrite skips
 // (Write events guarantee a follow-up), handleCreate and scanNewDirectory emit
 // with empty hash (Create events and directory scans have no guaranteed follow-up; B-203).

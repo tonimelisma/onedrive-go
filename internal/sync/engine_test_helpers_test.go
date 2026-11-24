@@ -469,7 +469,7 @@ func getTestBlockScope(eng *testEngine, key syncdomain.ScopeKey) (syncdomain.Blo
 		if block, ok := eng.runtime.sched.Scope(key); ok {
 			row, err := blockScopeRowFromActiveScope(block)
 			if err != nil {
-				panic(fmt.Sprintf("BlockScopeRowFromActiveScope: %v", err))
+				panic(fmt.Sprintf("blockScopeRowFromActiveScope: %v", err))
 			}
 			return *row, true
 		}

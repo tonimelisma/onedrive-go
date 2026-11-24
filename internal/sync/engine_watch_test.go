@@ -480,7 +480,7 @@ func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 
 // Validates: R-2.8.22
 // TestRunWatch_WatchLimitExhausted_FallsBackToPolling verifies that when the
-// local observer returns ErrLocalWatchUnavailable, the engine does NOT consider
+// local observer returns syncobserve's errLocalWatchUnavailable, the engine does NOT consider
 // the observer dead. Instead it falls back to periodic full scanning and
 // RunWatch continues until the context is canceled.
 func TestRunWatch_WatchLimitExhausted_FallsBackToPolling(t *testing.T) {

@@ -70,7 +70,7 @@ const (
 )
 
 // maxCoalesceRetries caps the number of re-schedule attempts in hashAndEmit
-// when ErrFileChangedDuringHash is returned. Prevents infinite retry if a file
+// when errFileChangedDuringHash is returned. Prevents infinite retry if a file
 // is being written to continuously.
 const maxCoalesceRetries = 3
 
@@ -169,7 +169,7 @@ const (
 
 // localWatchUnavailableError carries the cause of a watch failure from the
 // observer to the watch runtime, which falls back to periodic full scans.
-// It matches ErrLocalWatchUnavailable with errors.Is.
+// It matches errLocalWatchUnavailable with errors.Is.
 type localWatchUnavailableError struct {
 	cause WatchUnavailableCause
 	err   error
