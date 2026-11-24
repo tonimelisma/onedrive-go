@@ -200,7 +200,7 @@ func (o *LocalObserver) rescanUnlessRootGone(ctx context.Context, tree *synctree
 		o.logger.Debug("sync root deleted, stopping watch",
 			slog.String("sync_root", tree.Path()))
 
-		return false, fmt.Errorf("%w: %w", syncdomain.ErrMountRootUnavailable, syncdomain.ErrSyncRootDeleted)
+		return false, fmt.Errorf("%w: %w", syncdomain.ErrMountRootUnavailable, errSyncRootDeleted)
 	}
 
 	scanned := o.runSafetyScan(ctx, tree)
@@ -250,7 +250,7 @@ func (o *LocalObserver) handleWatcherError(
 		o.logger.Debug("sync root deleted, stopping watch",
 			slog.String("sync_root", syncRoot))
 
-		return true, fmt.Errorf("%w: %w", syncdomain.ErrMountRootUnavailable, syncdomain.ErrSyncRootDeleted)
+		return true, fmt.Errorf("%w: %w", syncdomain.ErrMountRootUnavailable, errSyncRootDeleted)
 	}
 
 	return false, nil
@@ -514,7 +514,7 @@ func syncedPathGone(tree *synctree.Root, dbRelPath string) bool {
 func (o *LocalObserver) stableHashOrEmpty(ctx context.Context, fsPath, dbRelPath string) string {
 	hash, err := computeStableHashWith(ctx, fsPath, o.hooks.HashFile)
 	if err != nil {
-		if errors.Is(err, syncdomain.ErrFileChangedDuringHash) {
+		if errors.Is(err, errFileChangedDuringHash) {
 			o.logger.Debug("file metadata still settling, emitting with empty hash",
 				slog.String("path", dbRelPath))
 		} else {
@@ -959,7 +959,7 @@ func (o *LocalObserver) HashAndEmit(ctx context.Context, tree *synctree.Root, re
 			return
 		}
 
-		if errors.Is(err, syncdomain.ErrFileChangedDuringHash) {
+		if errors.Is(err, errFileChangedDuringHash) {
 			// Still being written after every retry. An empty-hash row
 			// would only plan an upload of a file in mid-write, so the path
 			// stays pending: it is marked unstable and checked again after
@@ -1011,7 +1011,7 @@ func (o *LocalObserver) prepareDeferredHashRequest(req HashRequest) HashRequest 
 }
 
 func (o *LocalObserver) retryDeferredHashOnChange(req HashRequest, err error) bool {
-	if !errors.Is(err, syncdomain.ErrFileChangedDuringHash) || req.Retries >= maxCoalesceRetries {
+	if !errors.Is(err, errFileChangedDuringHash) || req.Retries >= maxCoalesceRetries {
 		return false
 	}
 
@@ -1331,3 +1331,7 @@ func infoKind(info os.FileInfo) syncdomain.ObservedKind {
 
 	return syncdomain.ObservedKindFile
 }
+
+// errSyncRootDeleted is returned when the sync root directory has been deleted
+// or become inaccessible while a watch was running.
+var errSyncRootDeleted = errors.New("it was deleted or can't be read")

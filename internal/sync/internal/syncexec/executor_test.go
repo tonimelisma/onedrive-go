@@ -3370,7 +3370,7 @@ func TestCreateLocalFolder_TraversalBlocked(t *testing.T) {
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
 	syncfixture.RequireOutcomeFailure(t, &o)
-	assert.ErrorIs(t, o.Error, syncdomain.ErrPathEscapesSyncRoot)
+	assert.ErrorIs(t, o.Error, errPathEscapesSyncRoot)
 }
 
 // ---------------------------------------------------------------------------

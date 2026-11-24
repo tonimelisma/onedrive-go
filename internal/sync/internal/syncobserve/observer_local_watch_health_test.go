@@ -91,7 +91,7 @@ func TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable(t *testing.T) {
 	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
 	err := obs.AddWatchesRecursive(t.Context(), watcher, syncfixture.MustOpenSyncTree(t, root))
 
-	require.ErrorIs(t, err, syncdomain.ErrLocalWatchUnavailable)
+	require.ErrorIs(t, err, errLocalWatchUnavailable)
 	cause, ok := WatchUnavailableCauseOf(err)
 	require.True(t, ok)
 	assert.Equal(t, watchCauseFileLimit, cause)
@@ -135,7 +135,7 @@ func TestWatch_NewDirectoryEMFILEStopsWatchingForFallback(t *testing.T) {
 	// keeping the watcher starves transfers and SQLite, so watching stops and
 	// the runtime falls back to periodic scans.
 	err := syncfixture.ReceiveWithin(t, done, "the watch to stop at the descriptor limit")
-	require.ErrorIs(t, err, syncdomain.ErrLocalWatchUnavailable)
+	require.ErrorIs(t, err, errLocalWatchUnavailable)
 	cause, ok := WatchUnavailableCauseOf(err)
 	require.True(t, ok)
 	assert.Equal(t, watchCauseFileLimit, cause)

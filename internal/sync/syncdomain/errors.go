@@ -15,10 +15,6 @@ import (
 // Executor errors
 // ---------------------------------------------------------------------------
 
-// ErrPathEscapesSyncRoot is returned when a relative path would resolve
-// outside the sync root directory (path traversal attack prevention).
-var ErrPathEscapesSyncRoot = errors.New("path leaves the sync folder")
-
 // ErrActionPreconditionChanged is returned when executor-time revalidation
 // proves the planner's item-level preconditions no longer hold.
 var ErrActionPreconditionChanged = errors.New("file changed while it was being synced")
@@ -26,16 +22,6 @@ var ErrActionPreconditionChanged = errors.New("file changed while it was being s
 // ---------------------------------------------------------------------------
 // Observer errors
 // ---------------------------------------------------------------------------
-
-// ErrSyncRootDeleted is returned when the sync root directory has been deleted
-// or become inaccessible while a watch was running.
-var ErrSyncRootDeleted = errors.New("it was deleted or can't be read")
-
-// ErrLocalWatchUnavailable is matched (through localWatchUnavailableError)
-// when the operating system cannot give watch mode the watches it needs: the
-// inotify watch or instance limit, the open-file limit, kernel memory, or the
-// kqueue descriptor budget. The engine falls back to periodic full scans.
-var ErrLocalWatchUnavailable = errors.New("local change watching unavailable")
 
 // ErrDeltaExpired indicates the saved delta token has expired and a full
 // resync is required. Returned when the Graph API responds with HTTP 410.
@@ -140,18 +126,6 @@ var ErrRemoteObservationIncomplete = errors.New("OneDrive change list was incomp
 var ErrMountRootUnavailable = errors.New("sync folder unavailable")
 
 // ---------------------------------------------------------------------------
-// Scanner errors
-// ---------------------------------------------------------------------------
-
-// ErrSyncRootMissing is returned when the sync root directory does not exist
-// or is not a directory. Callers can match with errors.Is.
-var ErrSyncRootMissing = errors.New("sync folder does not exist")
-
-// ErrFileChangedDuringHash is returned when a file's metadata changes between
-// pre-hash stat and post-hash stat, indicating active writing (B-119).
-var ErrFileChangedDuringHash = errors.New("file changed while it was being hashed")
-
-// ---------------------------------------------------------------------------
 // Planner errors
 // ---------------------------------------------------------------------------
 
@@ -189,8 +163,8 @@ func RunEnded(ctx context.Context, err error) bool {
 }
 
 // CancelCauseError is the cause each cancel the worker pool and the one-shot
-// pass make carries, and it answers to context.Canceled as the cause of
-// signal.NotifyContext does. A
+// pass make carries (syncexec and the engine each declare their own), and it
+// answers to context.Canceled as the cause of signal.NotifyContext does. A
 // request interrupted by a cancel carries the cancel's cause in place of
 // context.Canceled, so a cause that did not answer to context.Canceled would
 // make the interrupted work read as a failure; the cause's text says which
@@ -201,12 +175,3 @@ func (e CancelCauseError) Error() string { return string(e) }
 
 // Is answers true for context.Canceled and for nothing else.
 func (CancelCauseError) Is(target error) bool { return target == context.Canceled }
-
-// The causes of the worker contexts' cancels. Neither reaches an action while
-// its run goes on: ErrActionReturned lands after the action returned, and
-// ErrWorkerPoolStopped ends the context the workers were started under, so an
-// action it interrupts completes with RunEnded set, as a shutdown.
-const (
-	ErrActionReturned    CancelCauseError = "sync: action returned"
-	ErrWorkerPoolStopped CancelCauseError = "sync: worker pool stopped"
-)

@@ -61,7 +61,7 @@ func TestAddWatchesRecursive_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), watcher, syncfixture.MustOpenSyncTree(t, root))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, syncdomain.ErrLocalWatchUnavailable,
+	assert.ErrorIs(t, err, errLocalWatchUnavailable,
 		"expected ErrLocalWatchUnavailable, got: %v", err)
 }
 
@@ -78,7 +78,7 @@ func TestAddWatchesRecursive_ENOSPCRollsBackAddedWatches(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), watcher, syncfixture.MustOpenSyncTree(t, root))
 
 	require.Error(t, err)
-	require.ErrorIs(t, err, syncdomain.ErrLocalWatchUnavailable)
+	require.ErrorIs(t, err, errLocalWatchUnavailable)
 	assert.Equal(t, []string{
 		filepath.Join(root, "a"),
 		root,
@@ -165,7 +165,7 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, syncdomain.ErrLocalWatchUnavailable,
+	assert.ErrorIs(t, err, errLocalWatchUnavailable,
 		"Watch should return ErrLocalWatchUnavailable, got: %v", err)
 }
 
@@ -183,7 +183,7 @@ func TestFullScan_NonexistentSyncRoot_ReturnsError(t *testing.T) {
 	_, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, nonexistent))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, syncdomain.ErrSyncRootMissing,
+	assert.ErrorIs(t, err, errSyncRootMissing,
 		"FullScan should return ErrSyncRootMissing, got: %v", err)
 }
 

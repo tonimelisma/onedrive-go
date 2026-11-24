@@ -914,7 +914,7 @@ func normalizeSyncTreePathError(err error) error {
 	// One line, not errors.Join: the console prints this as a failure
 	// reason, and a joined error renders on two lines.
 	if errors.Is(err, synctree.ErrUnsafePath) {
-		return fmt.Errorf("%w: %w", syncdomain.ErrPathEscapesSyncRoot, err)
+		return fmt.Errorf("%w: %w", errPathEscapesSyncRoot, err)
 	}
 
 	return err
@@ -1241,3 +1241,7 @@ func (cfg *ExecutorConfig) reachCrashPoint(point string) error {
 
 	return cfg.hooks.CrashAt(point)
 }
+
+// errPathEscapesSyncRoot is returned when a relative path would resolve
+// outside the sync root directory (path traversal attack prevention).
+var errPathEscapesSyncRoot = errors.New("path leaves the sync folder")

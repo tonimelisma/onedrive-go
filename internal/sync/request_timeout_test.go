@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -149,8 +151,8 @@ func TestCancelCauses_AnswerToCanceledAndNameTheirCancel(t *testing.T) {
 		name  string
 		cause error
 	}{
-		{name: "action returned", cause: syncdomain.ErrActionReturned},
-		{name: "worker pool stopped", cause: syncdomain.ErrWorkerPoolStopped},
+		{name: "action returned", cause: syncexec.ErrActionReturned},
+		{name: "worker pool stopped", cause: syncexec.ErrWorkerPoolStopped},
 		{name: "one-shot pass failed", cause: errOneShotPassFailed},
 		{name: "one-shot pass ended", cause: errOneShotPassEnded},
 	} {
