@@ -48,12 +48,6 @@ type statusAccountLiveOverlay struct {
 	Unanswered string
 }
 
-type configuredStatusDriveClient interface {
-	Me(context.Context) (*graph.User, error)
-	PrimaryDrive(context.Context) (*graph.Drive, error)
-	Drive(context.Context, driveid.ID) (*graph.Drive, error)
-}
-
 // liveOverlayBudgetContext is ctx under the live details' budget: it ends
 // with errStatusLiveBudgetSpent as its cause once statusLiveBudget has passed.
 // A test supplies a context it ends itself, so no test waits for the clock or
@@ -227,7 +221,7 @@ func statusLiveAuthOverlay(err error) statusAccountLiveOverlay {
 // quota).
 func statusConfiguredDriveOverlay(
 	ctx context.Context,
-	client configuredStatusDriveClient,
+	client *graph.Client,
 	snapshot accountViewSnapshot,
 	entry *accountView,
 	logger *slog.Logger,
@@ -293,7 +287,7 @@ func markStatusAccountSignInRequired(ctx context.Context, account driveid.Canoni
 
 func fetchConfiguredStatusDrive(
 	ctx context.Context,
-	client configuredStatusDriveClient,
+	client *graph.Client,
 	stored *config.Catalog,
 	cid driveid.CanonicalID,
 ) (*graph.Drive, bool, error) {

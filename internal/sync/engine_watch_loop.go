@@ -114,7 +114,8 @@ func (rt *watchRuntime) runWatchLoopStep(
 	p *watchPipeline,
 	logC <-chan time.Time,
 ) (bool, error) {
-	rt.beginWatchDrainIfCanceled(ctx)
+	// Whether the drain began is read by the loop steps; here only the drain matters.
+	_ = rt.beginWatchDrainIfContextCanceled(ctx)
 
 	switch rt.phase() {
 	case watchPhaseDraining:
@@ -133,10 +134,6 @@ func (rt *watchRuntime) runWatchLoopStep(
 	}
 
 	return false, fmt.Errorf("sync: no watch loop step in phase %q", rt.phase())
-}
-
-func (rt *watchRuntime) beginWatchDrainIfCanceled(ctx context.Context) {
-	_ = rt.beginWatchDrainIfContextCanceled(ctx)
 }
 
 func (rt *watchRuntime) beginWatchDrainIfContextCanceled(ctx context.Context) bool {
@@ -609,7 +606,8 @@ func (rt *watchRuntime) handleWatchObserverError(
 	}
 
 	rt.logObserverError(ctx, observerErr)
-	rt.beginWatchDrainIfCanceled(ctx)
+	// Whether the drain began is read by the loop steps; here only the drain matters.
+	_ = rt.beginWatchDrainIfContextCanceled(ctx)
 	if err := rt.handleObserverExit(p, ctx.Err() != nil); err != nil {
 		return err
 	}

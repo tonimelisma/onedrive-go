@@ -10,7 +10,6 @@
 //
 // Related files:
 //   - observer_local.go:            LocalObserver struct, constructor, Watch() entry point
-//   - observer_local_collisions.go: case collision detection helpers (cache, peers)
 //   - scanner.go:                   FullScan, walk/hash/filter logic
 
 package syncobserve

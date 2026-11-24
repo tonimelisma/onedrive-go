@@ -9,7 +9,6 @@
 //
 // Related files:
 //   - observer_local_handlers.go:  watch event loop + fsnotify event handlers
-//   - observer_local_collisions.go: case collision detection helpers (cache, peers)
 //   - scanner.go:                   FullScan, walk/hash/filter logic
 
 package syncobserve

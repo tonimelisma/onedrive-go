@@ -189,5 +189,3 @@ func TestWatch_HashFailureStillEmitsCreate(t *testing.T) {
 
 	require.Empty(t, row.Hash, "hash should be empty when computation fails")
 }
-
-// Case collision tests moved to observer_local_collisions_test.go.

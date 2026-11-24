@@ -12,7 +12,7 @@ import (
 )
 
 // TransferManager provides unified download/upload with resume, shared between
-// the CLI (files.go) and the sync engine (executor_transfer.go). Handles
+// the CLI (get.go, put.go) and the sync engine (executor_transfer.go). Handles
 // .partial files, range-based resume, hash verification with retry, session
 // persistence for uploads, disk space pre-checks, and atomic rename.
 type TransferManager struct {
