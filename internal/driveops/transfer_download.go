@@ -22,6 +22,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/humanunit"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/perf"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 	"github.com/tonimelisma/onedrive-go/pkg/quickxorhash"
 )
 
@@ -38,8 +39,8 @@ const maxSaneRetries = 100
 // final mode.
 const (
 	downloadTempFilePerms = 0o600
-	downloadPartialPrefix = ".onedrive-go."
-	downloadPartialSuffix = ".partial"
+	downloadPartialPrefix = synctree.TransferArtifactPrefix
+	downloadPartialSuffix = synctree.TransferArtifactSuffix
 )
 
 const heicMetadataMismatchMessage = "known OneDrive/iOS metadata mismatch, accepting download"
@@ -718,14 +719,6 @@ func downloadPartialName(base, versionTag string) string {
 	}
 
 	return downloadPartialPrefix + head + tag + versionTag + downloadPartialSuffix
-}
-
-// IsOwnedTransferArtifactName reports whether a local basename belongs to
-// onedrive-go's transfer machinery. It intentionally matches only the
-// namespaced form used by this client, not arbitrary user-created *.partial
-// files.
-func IsOwnedTransferArtifactName(name string) bool {
-	return strings.HasPrefix(name, downloadPartialPrefix) && strings.HasSuffix(name, downloadPartialSuffix)
 }
 
 // downloadToPartial streams a remote file to a .partial file while computing

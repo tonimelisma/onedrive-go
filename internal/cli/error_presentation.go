@@ -15,6 +15,8 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
@@ -295,7 +297,7 @@ func localFailureText(err error) string {
 	if subject == "" {
 		return ""
 	}
-	if driveops.IsOwnedTransferArtifactName(filepath.Base(subject)) {
+	if synctree.IsOwnedTransferArtifactName(filepath.Base(subject)) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return ""
 		}

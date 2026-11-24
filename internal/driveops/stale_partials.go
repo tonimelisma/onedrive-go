@@ -57,7 +57,7 @@ func CleanStalePartials(
 
 		name := filepath.Base(path)
 		isJunkPartial := opts.IncludeJunkPartials && strings.HasSuffix(strings.ToLower(name), downloadPartialSuffix)
-		if !IsOwnedTransferArtifactName(name) && !isJunkPartial {
+		if !synctree.IsOwnedTransferArtifactName(name) && !isJunkPartial {
 			return nil
 		}
 

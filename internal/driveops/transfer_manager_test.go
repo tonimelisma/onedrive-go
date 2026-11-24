@@ -17,6 +17,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -2173,7 +2175,7 @@ func TestDownloadPartialName_FitsLocalNameLimit(t *testing.T) {
 	long := strings.Repeat("w", 246) + ".txt" // 250 bytes: valid locally
 	partial := downloadPartialName(long, "")
 	assert.LessOrEqual(t, len(partial), maxLocalNameBytes)
-	assert.True(t, IsOwnedTransferArtifactName(partial))
+	assert.True(t, synctree.IsOwnedTransferArtifactName(partial))
 	assert.Equal(t, partial, downloadPartialName(long, ""), "deterministic, so a resume finds the same partial")
 	assert.NotEqual(t, partial, downloadPartialName(strings.Repeat("w", 246)+".TXT", ""), "different names never share a partial")
 
