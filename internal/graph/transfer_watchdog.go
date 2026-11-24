@@ -27,7 +27,9 @@ var ErrTransferStalled = errors.New("graph: transfer stalled")
 // timeout. It always comes with ErrTransferStalled. A local disk that hangs
 // (a network mount, a FUSE folder) is not the service's silence, so the
 // sync classifier keeps such a stall out of the service window and retries
-// the one file instead (R-6.8.20).
+// the one file instead (R-6.8.20). The transfer does not wait for the stuck
+// call: it is abandoned to the record of abandoned local calls
+// (transfer_local_io.go) and the worker is free.
 var ErrLocalSideStalled = errors.New("graph: the local file stopped moving")
 
 // defaultStallTimeout is how long a body may make no progress before it is
@@ -79,6 +81,15 @@ type stallWatchdog struct {
 	// attempt's body during a retry wait, during the next attempt and after
 	// the transfer has ended, and those reads must not touch the timer.
 	attempt int64
+
+	// stallSignal is closed once the stall timer has fired and canceled the
+	// transfer; hasStalled says it has been. A local file call that is still
+	// stuck then is abandoned (local).
+	stallSignal chan struct{}
+	hasStalled  bool
+	// local runs the transfer's local file calls on a goroutine the
+	// transfer can walk away from.
+	local *localIO
 }
 
 // watchTransfer returns a context that is canceled with ErrTransferStalled
@@ -89,7 +100,8 @@ func (c *Client) watchTransfer(ctx context.Context) (context.Context, *stallWatc
 	timeout := c.stallWindow()
 
 	stallCtx, cancel := context.WithCancelCause(ctx)
-	watchdog := &stallWatchdog{timeout: timeout, cancel: cancel, logger: c.logger}
+	watchdog := &stallWatchdog{timeout: timeout, cancel: cancel, logger: c.logger, stallSignal: make(chan struct{})}
+	watchdog.local = newLocalIO(watchdog.stallSignal, c.abandonedLocalRecord(), c.logger)
 	watchdog.timer = time.AfterFunc(timeout, watchdog.stalled)
 	watchdog.timer.Stop()
 
@@ -97,7 +109,10 @@ func (c *Client) watchTransfer(ctx context.Context) (context.Context, *stallWatc
 }
 
 // stalled is the stall timer's callback: it cancels the transfer with
-// ErrTransferStalled. It runs on a goroutine of its own, so a panic in it is
+// ErrTransferStalled, then signals the stall to a local file call that is
+// stuck, which abandons it. The cancel comes first, so a transfer that
+// returns because its local call was abandoned finds the stall as its
+// context's cause. It runs on a goroutine of its own, so a panic in it is
 // recovered here and fails this one transfer: the transfer is canceled with
 // the panic's error, which explain returns.
 func (w *stallWatchdog) stalled() {
@@ -107,6 +122,20 @@ func (w *stallWatchdog) stalled() {
 		}
 	}()
 	w.cancel(w.stallCause())
+	w.signalStall()
+}
+
+// signalStall closes stallSignal, once: the timer can fire again after a
+// late read of an abandoned attempt re-armed it.
+func (w *stallWatchdog) signalStall() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.hasStalled || w.stallSignal == nil {
+		return
+	}
+	w.hasStalled = true
+	close(w.stallSignal)
 }
 
 // stallCause is the cause a stall cancels the transfer with: ErrTransferStalled,
@@ -128,11 +157,15 @@ func (w *stallWatchdog) waitStarts() {
 	w.retireAttempt()
 }
 
-// stop ends the transfer: it disarms the watchdog for good and releases the
-// request context.
+// stop ends the transfer: it disarms the watchdog for good, releases the
+// request context and ends the transfer's local I/O goroutine (one it
+// abandoned is no longer the transfer's).
 func (w *stallWatchdog) stop() {
 	w.retireAttempt()
 	w.cancel(nil)
+	if w.local != nil {
+		w.local.end()
+	}
 }
 
 // retireAttempt stops the stall timer and makes every reader handed out so
@@ -181,9 +214,24 @@ func (w *stallWatchdog) disarm(attempt int64) {
 	}
 }
 
-// localBody wraps an upload's request body, which reads the local file.
-func (w *stallWatchdog) localBody(r io.Reader) io.Reader {
-	return w.reader(r, true)
+// localBody wraps an upload's request body, which reads the local file
+// named path: its reads run on the transfer's local I/O goroutine, so a read
+// that hangs past the stall timeout is abandoned instead of holding the
+// transport, and with it the worker.
+func (w *stallWatchdog) localBody(r io.Reader, path string) io.Reader {
+	return w.reader(&localReader{inner: r, local: w.local, path: path}, true)
+}
+
+// localWriter wraps a download's local file. Writes to an AbandonableWriter
+// run on the transfer's local I/O goroutine, so a write that hangs past the
+// stall timeout is abandoned; any other writer is written directly, and a
+// write that hangs holds the transfer until it returns.
+func (w *stallWatchdog) localWriter(dst io.Writer) io.Writer {
+	if abandonable, ok := dst.(AbandonableWriter); ok {
+		return &localWriter{inner: abandonable, local: w.local}
+	}
+
+	return dst
 }
 
 // networkBody wraps a download's response body, which reads the network;

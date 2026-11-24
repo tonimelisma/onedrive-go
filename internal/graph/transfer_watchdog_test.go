@@ -191,6 +191,13 @@ func (g *gatedReader) Read([]byte) (int, error) {
 	return 0, g.err
 }
 
+// armedLocalBody is a local body's arming without its local I/O goroutine:
+// the tests of when the timer runs read several attempts' bodies at once,
+// which the goroutine would run one after the other.
+func armedLocalBody(watchdog *stallWatchdog, r io.Reader) io.Reader {
+	return watchdog.reader(r, true)
+}
+
 // newTestStallWatchdog returns a watchdog whose timer never fires by itself,
 // so a test reads whether it is armed without racing the clock.
 func newTestStallWatchdog(t *testing.T) *stallWatchdog {
@@ -217,7 +224,7 @@ func TestStallWatchdog_AWaitThatStartsDuringAReadLeavesTheTimerStopped(t *testin
 	body := bytes.NewReader(bytes.Repeat([]byte("u"), rounds))
 	for round := range rounds {
 		watchdog := newRoundStallWatchdog()
-		reader := watchdog.localBody(body)
+		reader := armedLocalBody(watchdog, body)
 
 		start := make(chan struct{})
 		var both sync.WaitGroup
@@ -254,7 +261,7 @@ func TestStallWatchdog_AnAbandonedAttemptsReadCannotDisarmTheNextAttempt(t *test
 
 	// The first attempt's body is inside a read when its request is abandoned.
 	abandoned := &gatedReader{entered: make(chan struct{}), release: make(chan struct{}), err: io.EOF}
-	first := watchdog.localBody(abandoned)
+	first := armedLocalBody(watchdog, abandoned)
 	firstDone := make(chan struct{})
 	go func() {
 		defer close(firstDone)
@@ -265,7 +272,7 @@ func TestStallWatchdog_AnAbandonedAttemptsReadCannotDisarmTheNextAttempt(t *test
 
 	// The retry wait starts and ends, and the next attempt's body moves.
 	watchdog.waitStarts()
-	second := watchdog.localBody(bytes.NewReader([]byte("uu")))
+	second := armedLocalBody(watchdog, bytes.NewReader([]byte("uu")))
 	_, err := second.Read(make([]byte, 1))
 	require.NoError(t, err)
 
@@ -282,7 +289,7 @@ func TestStallWatchdog_AnAbandonedAttemptsReadCannotDisarmTheNextAttempt(t *test
 // Validates: R-6.8.20
 func TestStallWatchdog_NothingArmsItOnceTheTransferHasEnded(t *testing.T) {
 	watchdog := newTestStallWatchdog(t)
-	reader := watchdog.localBody(bytes.NewReader([]byte("uu")))
+	reader := armedLocalBody(watchdog, bytes.NewReader([]byte("uu")))
 
 	// The transport can still be reading the request body after the call
 	// that owns the transfer has returned.
@@ -382,12 +389,12 @@ func TestUploadChunk_AStallInTheLocalReadSaysTheLocalSideStalled(t *testing.T) {
 
 	client := newNoRetryTestClient(t, srv.URL)
 	client.stallTimeout = testStallTimeout
+	client.abandonedLocal = newAbandonedLocalCalls(maxAbandonedLocalCalls)
 
-	// The local read hangs for longer than the stall timeout, then returns:
-	// the transport does not return before the body read it is inside does.
+	// The local read hangs until the test ends; the transfer abandons it
+	// (TestUploadChunk_AStuckLocalReadIsAbandonedWhileItIsStillBlocked).
 	chunk := &blockingChunk{readable: 1024, release: make(chan struct{})}
-	unblock := time.AfterFunc(4*testStallTimeout, func() { close(chunk.release) })
-	defer unblock.Stop()
+	defer close(chunk.release)
 	_, _, err := client.UploadChunk(t.Context(), &UploadSession{UploadURL: UploadURL(srv.URL + "/s")},
 		chunk, 0, ChunkedUploadChunkSize, ChunkedUploadChunkSize)
 
