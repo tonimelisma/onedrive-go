@@ -60,7 +60,7 @@ func (s *SyncStore) CreateScratchPlanningStore(
 
 	scratchDir, err := os.MkdirTemp("", "onedrive-go-dry-run-*")
 	if err != nil {
-		return nil, nil, fmt.Errorf("sync: creating scratch planning directory: %w", err)
+		return nil, nil, fmt.Errorf("syncstore: creating scratch planning directory: %w", err)
 	}
 
 	scratchPath := filepath.Join(scratchDir, "scratch.db")
@@ -69,7 +69,7 @@ func (s *SyncStore) CreateScratchPlanningStore(
 		if removeErr := localpath.RemoveAll(scratchDir); removeErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove scratch planning directory: %w", removeErr))
 		}
-		return nil, nil, fmt.Errorf("sync: opening scratch planning store: %w", err)
+		return nil, nil, fmt.Errorf("syncstore: opening scratch planning store: %w", err)
 	}
 
 	cleanup = func(cleanupCtx context.Context) error {
@@ -97,11 +97,11 @@ func (s *SyncStore) CreateScratchPlanningStore(
 		cleanupErr := cleanup(ctx)
 		if cleanupErr != nil {
 			return nil, nil, errors.Join(
-				fmt.Errorf("sync: seeding scratch planning store: %w", err),
+				fmt.Errorf("syncstore: seeding scratch planning store: %w", err),
 				cleanupErr,
 			)
 		}
-		return nil, nil, fmt.Errorf("sync: seeding scratch planning store: %w", err)
+		return nil, nil, fmt.Errorf("syncstore: seeding scratch planning store: %w", err)
 	}
 
 	return scratch, cleanup, nil
@@ -110,15 +110,15 @@ func (s *SyncStore) CreateScratchPlanningStore(
 func (s *SyncStore) readScratchPlanningSeed(ctx context.Context) (seed scratchPlanningSeed, err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return scratchPlanningSeed{}, fmt.Errorf("sync: beginning scratch planning seed read transaction: %w", err)
+		return scratchPlanningSeed{}, fmt.Errorf("syncstore: beginning scratch planning seed read transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback scratch planning seed read transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback scratch planning seed read transaction")
 	}()
 
 	observationState, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
-		return scratchPlanningSeed{}, fmt.Errorf("sync: reading scratch planning observation state: %w", err)
+		return scratchPlanningSeed{}, fmt.Errorf("syncstore: reading scratch planning observation state: %w", err)
 	}
 
 	remoteRows, err := listScratchRemoteStateRows(ctx, tx)
@@ -133,7 +133,7 @@ func (s *SyncStore) readScratchPlanningSeed(ctx context.Context) (seed scratchPl
 
 	baselineEntries, err := loadBaselineEntries(ctx, tx, observationState.ContentDriveID)
 	if err != nil {
-		return scratchPlanningSeed{}, fmt.Errorf("sync: reading scratch planning baseline: %w", err)
+		return scratchPlanningSeed{}, fmt.Errorf("syncstore: reading scratch planning baseline: %w", err)
 	}
 
 	return scratchPlanningSeed{
@@ -147,14 +147,14 @@ func (s *SyncStore) readScratchPlanningSeed(ctx context.Context) (seed scratchPl
 func (s *SyncStore) applyScratchPlanningSeed(ctx context.Context, seed scratchPlanningSeed) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning scratch planning seed transaction: %w", err)
+		return fmt.Errorf("syncstore: beginning scratch planning seed transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback scratch planning seed transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback scratch planning seed transaction")
 	}()
 
 	if err := s.writeObservationStateTx(ctx, tx, seed.observationState); err != nil {
-		return fmt.Errorf("sync: writing scratch planning observation state: %w", err)
+		return fmt.Errorf("syncstore: writing scratch planning observation state: %w", err)
 	}
 
 	if err := insertScratchBaselineEntries(ctx, tx, seed.baselineEntries); err != nil {
@@ -169,12 +169,12 @@ func (s *SyncStore) applyScratchPlanningSeed(ctx context.Context, seed scratchPl
 		if _, err := tx.ExecContext(ctx, sqlInsertScratchKeptLocalFolder,
 			kept.path, kept.device, kept.inode, kept.birthTime,
 		); err != nil {
-			return fmt.Errorf("sync: inserting scratch kept local folder %s: %w", kept.path, err)
+			return fmt.Errorf("syncstore: inserting scratch kept local folder %s: %w", kept.path, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing scratch planning seed transaction: %w", err)
+		return fmt.Errorf("syncstore: committing scratch planning seed transaction: %w", err)
 	}
 
 	return nil
@@ -187,7 +187,7 @@ func insertScratchBaselineEntries(
 ) error {
 	for i := range entries {
 		if err := upsertBaselineRowTx(ctx, tx, entries[i]); err != nil {
-			return fmt.Errorf("sync: inserting scratch baseline row for %s: %w", entries[i].Path, err)
+			return fmt.Errorf("syncstore: inserting scratch baseline row for %s: %w", entries[i].Path, err)
 		}
 	}
 
@@ -197,7 +197,7 @@ func insertScratchBaselineEntries(
 func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]syncdomain.RemoteStateRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlListScratchRemoteState)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying scratch remote_state seed rows: %w", err)
+		return nil, fmt.Errorf("syncstore: querying scratch remote_state seed rows: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -222,7 +222,7 @@ func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]sync
 			&mtime,
 			&etag,
 		); err != nil {
-			return nil, fmt.Errorf("sync: scanning scratch remote_state seed row: %w", err)
+			return nil, fmt.Errorf("syncstore: scanning scratch remote_state seed row: %w", err)
 		}
 
 		row.DriveID = remoteStateDriveID(rawDriveID, driveid.ID{})
@@ -239,7 +239,7 @@ func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]sync
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating scratch remote_state seed rows: %w", err)
+		return nil, fmt.Errorf("syncstore: iterating scratch remote_state seed rows: %w", err)
 	}
 
 	return result, nil
@@ -262,7 +262,7 @@ func insertScratchRemoteStateRows(
 			nullOptionalInt64(row.Mtime),
 			nullString(row.ETag),
 		); err != nil {
-			return fmt.Errorf("sync: inserting scratch remote_state row for %s: %w", row.Path, err)
+			return fmt.Errorf("syncstore: inserting scratch remote_state row for %s: %w", row.Path, err)
 		}
 	}
 
@@ -272,7 +272,7 @@ func insertScratchRemoteStateRows(
 func listScratchKeptLocalFolders(ctx context.Context, runner sqlTxRunner) ([]keptLocalFolderRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlCopyScratchKeptLocalFolders)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying scratch kept local folders: %w", err)
+		return nil, fmt.Errorf("syncstore: querying scratch kept local folders: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -280,12 +280,12 @@ func listScratchKeptLocalFolders(ctx context.Context, runner sqlTxRunner) ([]kep
 	for rows.Next() {
 		var row keptLocalFolderRow
 		if err := rows.Scan(&row.path, &row.device, &row.inode, &row.birthTime); err != nil {
-			return nil, fmt.Errorf("sync: scanning scratch kept local folder: %w", err)
+			return nil, fmt.Errorf("syncstore: scanning scratch kept local folder: %w", err)
 		}
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating scratch kept local folders: %w", err)
+		return nil, fmt.Errorf("syncstore: iterating scratch kept local folders: %w", err)
 	}
 
 	return result, nil

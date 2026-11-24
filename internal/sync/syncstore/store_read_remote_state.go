@@ -51,7 +51,7 @@ func queryRemoteStateRowsWithRunner(
 ) ([]syncdomain.RemoteStateRow, error) {
 	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying remote_state: %w", err)
+		return nil, fmt.Errorf("syncstore: querying remote_state: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -71,7 +71,7 @@ func queryRemoteStateRowsWithRunner(
 			&rawDriveID, &row.ItemID, &row.Path, &row.ItemType,
 			&hash, &size, &mtime, &etag,
 		); err != nil {
-			return nil, fmt.Errorf("sync: scanning remote_state row: %w", err)
+			return nil, fmt.Errorf("syncstore: scanning remote_state row: %w", err)
 		}
 
 		row.DriveID = remoteStateDriveID(rawDriveID, contentDriveID)
@@ -90,7 +90,7 @@ func queryRemoteStateRowsWithRunner(
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating remote_state rows: %w", err)
+		return nil, fmt.Errorf("syncstore: iterating remote_state rows: %w", err)
 	}
 
 	return result, nil
@@ -105,7 +105,7 @@ func (s *SyncStore) getRemoteStateRow(
 ) (*syncdomain.RemoteStateRow, bool, error) {
 	contentDriveID, err := s.contentDriveIDForRead(ctx, driveID)
 	if err != nil {
-		return nil, false, fmt.Errorf("sync: reading content drive for %s: %w", contextLabel, err)
+		return nil, false, fmt.Errorf("syncstore: reading content drive for %s: %w", contextLabel, err)
 	}
 	if matchErr := ensureMatchingContentDriveID(driveID, contentDriveID); matchErr != nil {
 		return nil, false, matchErr
@@ -121,7 +121,7 @@ func (s *SyncStore) getRemoteStateRow(
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, false, nil
 		}
-		return nil, false, fmt.Errorf("sync: %s %s: %w", contextLabel, arg, err)
+		return nil, false, fmt.Errorf("syncstore: %s %s: %w", contextLabel, arg, err)
 	}
 
 	return row, true, nil

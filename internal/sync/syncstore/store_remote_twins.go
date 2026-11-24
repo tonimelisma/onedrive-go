@@ -59,7 +59,7 @@ func remoteStateHolderTx(ctx context.Context, tx sqlTxRunner, p string) (string,
 	case errors.Is(err, sql.ErrNoRows):
 		return "", nil
 	case err != nil:
-		return "", fmt.Errorf("sync: looking up the remote item at %s: %w", p, err)
+		return "", fmt.Errorf("syncstore: looking up the remote item at %s: %w", p, err)
 	default:
 		return itemID, nil
 	}
@@ -109,7 +109,7 @@ func promoteRemoteTwinTx(ctx context.Context, tx sqlTxRunner, freedPath string) 
 		`SELECT item_id, path FROM remote_state WHERE substr(path, 1, length(?)) = ? COLLATE BINARY`,
 		prefix, prefix)
 	if err != nil {
-		return fmt.Errorf("sync: listing remote twins below %s: %w", freedPath, err)
+		return fmt.Errorf("syncstore: listing remote twins below %s: %w", freedPath, err)
 	}
 
 	var candidates []string
@@ -125,7 +125,7 @@ func promoteRemoteTwinTx(ctx context.Context, tx sqlTxRunner, freedPath string) 
 	sort.Strings(candidates)
 	shadow := remoteTwinShadowPath(freedPath, candidates[0])
 	if _, err := tx.ExecContext(ctx, `UPDATE remote_state SET path = ? WHERE item_id = ?`, freedPath, candidates[0]); err != nil {
-		return fmt.Errorf("sync: promoting remote twin %s to %s: %w", candidates[0], freedPath, err)
+		return fmt.Errorf("syncstore: promoting remote twin %s to %s: %w", candidates[0], freedPath, err)
 	}
 
 	return repathSubtreeTx(ctx, tx, "remote_state", shadow, freedPath)
@@ -141,7 +141,7 @@ func keepRemoteTwinsAtHolderPathTx(ctx context.Context, tx sqlTxRunner, oldPath,
 		`UPDATE remote_state SET path = ? || substr(path, length(?) + 1)
 		WHERE substr(path, 1, length(?)) = ? COLLATE BINARY`,
 		to, from, from, from); err != nil {
-		return fmt.Errorf("sync: keeping remote twins at %s: %w", oldPath, err)
+		return fmt.Errorf("syncstore: keeping remote twins at %s: %w", oldPath, err)
 	}
 
 	return nil
@@ -153,7 +153,7 @@ func (s *SyncStore) reconcileRemoteTwinIssuesTx(ctx context.Context, tx sqlTxRun
 	shadowRows, err := queryRemoteStatePairsTx(ctx, tx,
 		`SELECT path, '' FROM remote_state WHERE instr(path, ?) > 0`, "/"+remoteTwinShadowMarker)
 	if err != nil {
-		return fmt.Errorf("sync: listing remote twins: %w", err)
+		return fmt.Errorf("syncstore: listing remote twins: %w", err)
 	}
 
 	desired := make(map[string]struct{})
@@ -166,7 +166,7 @@ func (s *SyncStore) reconcileRemoteTwinIssuesTx(ctx context.Context, tx sqlTxRun
 	issueRows, err := queryRemoteStatePairsTx(ctx, tx,
 		`SELECT path, '' FROM observation_issues WHERE issue_type = ?`, string(syncdomain.IssueRemoteNameTwin))
 	if err != nil {
-		return fmt.Errorf("sync: listing remote twin issues: %w", err)
+		return fmt.Errorf("syncstore: listing remote twin issues: %w", err)
 	}
 	var stale []managedObservationIssueKey
 	for _, row := range issueRows {

@@ -39,10 +39,10 @@ func (s *SyncStore) ReconcileObservationFindingsReportingChange(
 
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return false, fmt.Errorf("sync: begin observation findings reconcile: %w", err)
+		return false, fmt.Errorf("syncstore: begin observation findings reconcile: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback observation findings reconcile")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback observation findings reconcile")
 	}()
 
 	if changed, err = s.reconcileObservationFindingsTx(ctx, tx, batch); err != nil {
@@ -50,7 +50,7 @@ func (s *SyncStore) ReconcileObservationFindingsReportingChange(
 	}
 
 	if err = tx.Commit(); err != nil {
-		return false, fmt.Errorf("sync: commit observation findings reconcile: %w", err)
+		return false, fmt.Errorf("syncstore: commit observation findings reconcile: %w", err)
 	}
 
 	return changed, nil
@@ -100,7 +100,7 @@ func loadObservationReconcileStoreStateTx(
 ) (observationReconcileStoreState, error) {
 	issues, err := queryObservationIssueRowsWithRunner(ctx, tx)
 	if err != nil {
-		return observationReconcileStoreState{}, fmt.Errorf("sync: listing observation issues for observation reconcile: %w", err)
+		return observationReconcileStoreState{}, fmt.Errorf("syncstore: listing observation issues for observation reconcile: %w", err)
 	}
 
 	return observationReconcileStoreState{
@@ -131,13 +131,13 @@ func queryObservationIssueRowsWithRunner(
 func (s *SyncStore) ListObservationIssues(ctx context.Context) ([]syncdomain.ObservationIssueRow, error) {
 	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
-		return nil, fmt.Errorf("sync: reading content drive for observation issues: %w", err)
+		return nil, fmt.Errorf("syncstore: reading content drive for observation issues: %w", err)
 	}
 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+sqlSelectObservationIssueCols+` FROM observation_issues ORDER BY path`)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing observation issues: %w", err)
+		return nil, fmt.Errorf("syncstore: listing observation issues: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -179,18 +179,18 @@ func (s *SyncStore) upsertObservationIssuesTx(
 			issue_type = excluded.issue_type,
 			scope_key = excluded.scope_key`)
 	if err != nil {
-		return fmt.Errorf("sync: prepare observation issue upsert: %w", err)
+		return fmt.Errorf("syncstore: prepare observation issue upsert: %w", err)
 	}
 	defer stmt.Close() //nolint:errcheck // statement handle release; the write itself is checked at Exec
 
 	for i := range issues {
 		issue := &issues[i]
 		if issue.Path == "" {
-			return errors.New("sync: upsert observation issue: missing path")
+			return errors.New("syncstore: upsert observation issue: missing path")
 		}
 		// Never write what scanObservationIssueRow would refuse to read.
 		if !issue.IssueType.IsMember() {
-			return fmt.Errorf("sync: upsert observation issue for %s: unknown issue type %q", issue.Path, issue.IssueType)
+			return fmt.Errorf("syncstore: upsert observation issue for %s: unknown issue type %q", issue.Path, issue.IssueType)
 		}
 
 		if _, execErr := stmt.ExecContext(ctx,
@@ -198,7 +198,7 @@ func (s *SyncStore) upsertObservationIssuesTx(
 			string(issue.IssueType),
 			issue.ScopeKey.String(),
 		); execErr != nil {
-			return fmt.Errorf("sync: upsert observation issue for %s: %w", issue.Path, execErr)
+			return fmt.Errorf("syncstore: upsert observation issue for %s: %w", issue.Path, execErr)
 		}
 	}
 
@@ -217,14 +217,14 @@ func deleteObservationIssuesTx(
 	stmt, err := tx.PrepareContext(ctx,
 		`DELETE FROM observation_issues WHERE path = ? AND issue_type = ?`)
 	if err != nil {
-		return fmt.Errorf("sync: prepare observation issue delete: %w", err)
+		return fmt.Errorf("syncstore: prepare observation issue delete: %w", err)
 	}
 	defer stmt.Close() //nolint:errcheck // statement handle release; the write itself is checked at Exec
 
 	for i := range deletes {
 		deletePlan := deletes[i]
 		if _, execErr := stmt.ExecContext(ctx, deletePlan.path, string(deletePlan.issueType)); execErr != nil {
-			return fmt.Errorf("sync: deleting observation issue %s (%s): %w", deletePlan.path, deletePlan.issueType, execErr)
+			return fmt.Errorf("syncstore: deleting observation issue %s (%s): %w", deletePlan.path, deletePlan.issueType, execErr)
 		}
 	}
 
@@ -237,7 +237,7 @@ func scanObservationIssueRow(
 	contentDriveID driveid.ID,
 ) error {
 	if row == nil {
-		return errors.New("sync: scanning observation issue row: nil destination")
+		return errors.New("syncstore: scanning observation issue row: nil destination")
 	}
 
 	var issueType, scopeKey string
@@ -246,14 +246,14 @@ func scanObservationIssueRow(
 		&issueType,
 		&scopeKey,
 	); err != nil {
-		return fmt.Errorf("sync: scanning observation issue row: %w", err)
+		return fmt.Errorf("syncstore: scanning observation issue row: %w", err)
 	}
 
 	// An unknown issue type fails the read rather than reaching truth
 	// availability, where no verdict for it exists (ParseIssueType).
 	parsed, err := syncdomain.ParseIssueType(issueType)
 	if err != nil {
-		return fmt.Errorf("sync: scanning observation issue row %s: %w", row.Path, err)
+		return fmt.Errorf("syncstore: scanning observation issue row %s: %w", row.Path, err)
 	}
 
 	row.IssueType = parsed
@@ -268,12 +268,12 @@ func scanObservationIssueRows(rows *sql.Rows, contentDriveID driveid.ID) ([]sync
 	for rows.Next() {
 		var row syncdomain.ObservationIssueRow
 		if err := scanObservationIssueRow(rows, &row, contentDriveID); err != nil {
-			return nil, fmt.Errorf("sync: scanning observation issue row: %w", err)
+			return nil, fmt.Errorf("syncstore: scanning observation issue row: %w", err)
 		}
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating observation issue rows: %w", err)
+		return nil, fmt.Errorf("syncstore: iterating observation issue rows: %w", err)
 	}
 
 	return result, nil

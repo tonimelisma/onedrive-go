@@ -87,7 +87,7 @@ func contentDriveIDForDB(ctx context.Context, runner sqlTxRunner) (driveid.ID, e
 		if errors.Is(err, sql.ErrNoRows) {
 			return driveid.ID{}, nil
 		}
-		return driveid.ID{}, fmt.Errorf("sync: reading content drive ID: %w", err)
+		return driveid.ID{}, fmt.Errorf("syncstore: reading content drive ID: %w", err)
 	}
 	if raw == "" {
 		return driveid.ID{}, nil
@@ -104,7 +104,7 @@ func ensureMatchingContentDriveID(expected, actual driveid.ID) error {
 		return nil
 	}
 
-	return fmt.Errorf("sync: the saved sync state belongs to a different OneDrive drive (stored %s, now %s); "+
+	return fmt.Errorf("syncstore: the saved sync state belongs to a different OneDrive drive (stored %s, now %s); "+
 		"reset it with onedrive-go drive reset-sync-state", actual, expected)
 }
 
@@ -125,10 +125,10 @@ func (s *SyncStore) CommitObservationCursor(
 ) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning observation cursor transaction: %w", err)
+		return fmt.Errorf("syncstore: beginning observation cursor transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback observation cursor transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback observation cursor transaction")
 	}()
 
 	state, err := readObservationStateFromTx(ctx, tx)
@@ -145,7 +145,7 @@ func (s *SyncStore) CommitObservationCursor(
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing observation cursor transaction: %w", err)
+		return fmt.Errorf("syncstore: committing observation cursor transaction: %w", err)
 	}
 
 	return nil
@@ -169,9 +169,9 @@ func (s *SyncStore) MarkFullRemoteRefresh(
 	return s.markObservationRefresh(
 		ctx,
 		driveID,
-		"sync: beginning full remote refresh transaction",
-		"sync: rollback full remote refresh transaction",
-		"sync: committing full remote refresh transaction",
+		"syncstore: beginning full remote refresh transaction",
+		"syncstore: rollback full remote refresh transaction",
+		"syncstore: committing full remote refresh transaction",
 		func(state *syncdomain.ObservationState) {
 			applyRemoteRefreshSchedule(state, at, mode)
 		},
@@ -194,9 +194,9 @@ func (s *SyncStore) RecordFullRefreshOrphans(
 	err := s.markObservationRefresh(
 		ctx,
 		driveID,
-		"sync: beginning undecided-orphan refresh transaction",
-		"sync: rollback undecided-orphan refresh transaction",
-		"sync: committing undecided-orphan refresh transaction",
+		"syncstore: beginning undecided-orphan refresh transaction",
+		"syncstore: rollback undecided-orphan refresh transaction",
+		"syncstore: committing undecided-orphan refresh transaction",
 		func(state *syncdomain.ObservationState) {
 			if !undecided {
 				state.UndecidedRefreshStreak = 0
@@ -243,9 +243,9 @@ func (s *SyncStore) ClampFullRemoteRefreshDeadline(
 	err := s.markObservationRefresh(
 		ctx,
 		driveID,
-		"sync: beginning full remote refresh clamp transaction",
-		"sync: rollback full remote refresh clamp transaction",
-		"sync: committing full remote refresh clamp transaction",
+		"syncstore: beginning full remote refresh clamp transaction",
+		"syncstore: rollback full remote refresh clamp transaction",
+		"syncstore: committing full remote refresh clamp transaction",
 		func(state *syncdomain.ObservationState) {
 			if !syncdomain.StoredTimeIsSet(state.NextFullRemoteRefreshAt) || state.NextFullRemoteRefreshAt > deadline {
 				state.NextFullRemoteRefreshAt = deadline
@@ -315,7 +315,7 @@ func readObservationStateFromTx(
 	tx sqlTxRunner,
 ) (*syncdomain.ObservationState, error) {
 	if _, err := tx.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
-		return nil, fmt.Errorf("sync: ensuring observation_state row: %w", err)
+		return nil, fmt.Errorf("syncstore: ensuring observation_state row: %w", err)
 	}
 
 	var (
@@ -346,7 +346,7 @@ func readObservationStateFromTx(
 		&rootRebind,
 		&state.UndecidedRefreshStreak,
 	); err != nil {
-		return nil, fmt.Errorf("sync: reading observation_state: %w", err)
+		return nil, fmt.Errorf("syncstore: reading observation_state: %w", err)
 	}
 	state.LocalTruthComplete = localComplete != 0
 	state.SyncRootIdentity = syncRootIdentityFromColumns(rootBound, rootDevice, rootInode, rootFSID, rootBirthTime, rootToken)
@@ -412,7 +412,7 @@ func writeObservationStateToTx(
 		rootIdentity = &synctree.RootIdentity{}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM observation_state`); err != nil {
-		return fmt.Errorf("sync: clearing observation_state before write: %w", err)
+		return fmt.Errorf("syncstore: clearing observation_state before write: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx,
@@ -435,7 +435,7 @@ func writeObservationStateToTx(
 		boolInt(state.SyncRootRebind),
 		state.UndecidedRefreshStreak,
 	); err != nil {
-		return fmt.Errorf("sync: writing observation_state: %w", err)
+		return fmt.Errorf("syncstore: writing observation_state: %w", err)
 	}
 
 	return nil
@@ -513,10 +513,10 @@ func (s *SyncStore) updateObservationState(
 ) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: begin observation-state update tx: %w", err)
+		return fmt.Errorf("syncstore: begin observation-state update tx: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback observation-state update tx")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback observation-state update tx")
 	}()
 
 	state, err := readObservationStateFromTx(ctx, tx)
@@ -529,7 +529,7 @@ func (s *SyncStore) updateObservationState(
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: commit observation-state update tx: %w", err)
+		return fmt.Errorf("syncstore: commit observation-state update tx: %w", err)
 	}
 
 	return nil
@@ -538,10 +538,10 @@ func (s *SyncStore) updateObservationState(
 func (s *SyncStore) replaceObservationState(ctx context.Context, state *syncdomain.ObservationState) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: begin observation-state replace tx: %w", err)
+		return fmt.Errorf("syncstore: begin observation-state replace tx: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback observation-state replace tx")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback observation-state replace tx")
 	}()
 
 	if writeErr := s.writeObservationStateTx(ctx, tx, state); writeErr != nil {
@@ -549,7 +549,7 @@ func (s *SyncStore) replaceObservationState(ctx context.Context, state *syncdoma
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: commit observation-state replace tx: %w", err)
+		return fmt.Errorf("syncstore: commit observation-state replace tx: %w", err)
 	}
 
 	return nil
@@ -561,7 +561,7 @@ func (s *SyncStore) BaselineEntryCount(ctx context.Context) (int, error) {
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM baseline WHERE item_type <> 'root'`,
 	).Scan(&count); err != nil {
-		return 0, fmt.Errorf("sync: counting baseline rows: %w", err)
+		return 0, fmt.Errorf("syncstore: counting baseline rows: %w", err)
 	}
 	return count, nil
 }

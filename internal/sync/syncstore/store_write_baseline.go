@@ -146,7 +146,7 @@ func (s *SyncStore) Load(ctx context.Context) (syncdomain.BaselineView, error) {
 
 	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
-		return nil, fmt.Errorf("sync: loading content drive for baseline: %w", err)
+		return nil, fmt.Errorf("syncstore: loading content drive for baseline: %w", err)
 	}
 
 	entries, err := loadBaselineEntries(ctx, s.db, contentDriveID)
@@ -177,7 +177,7 @@ func loadBaselineWithRunner(ctx context.Context, runner sqlTxRunner, contentDriv
 func loadBaselineEntries(ctx context.Context, runner sqlTxRunner, contentDriveID driveid.ID) ([]*syncdomain.BaselineEntry, error) {
 	rows, err := runner.QueryContext(ctx, sqlLoadBaseline)
 	if err != nil {
-		return nil, fmt.Errorf("sync: loading baseline: %w", err)
+		return nil, fmt.Errorf("syncstore: loading baseline: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -191,7 +191,7 @@ func loadBaselineEntries(ctx context.Context, runner sqlTxRunner, contentDriveID
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating baseline rows: %w", err)
+		return nil, fmt.Errorf("syncstore: iterating baseline rows: %w", err)
 	}
 
 	return entries, nil
@@ -221,7 +221,7 @@ func scanBaselineRow(rows *sql.Rows, contentDriveID driveid.ID) (*syncdomain.Bas
 		&e.LocalCtime, &localDevice, &localInode, &e.LocalBirthTime, &localHasIdentity, &etag,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("sync: scanning baseline row: %w", err)
+		return nil, fmt.Errorf("syncstore: scanning baseline row: %w", err)
 	}
 
 	e.DriveID = contentDriveID
@@ -335,10 +335,10 @@ func fillMutationContentFromBaseline(mutation *syncdomain.BaselineMutation, base
 
 func PublicationMutationFromAction(action *syncdomain.Action, defaultDriveID driveid.ID) (*syncdomain.BaselineMutation, error) {
 	if action == nil {
-		return nil, errors.New("sync: building publication mutation: nil action")
+		return nil, errors.New("syncstore: building publication mutation: nil action")
 	}
 	if !action.Type.IsMember() || !syncdomain.IsPublicationOnlyActionType(action.Type) {
-		return nil, fmt.Errorf("sync: building publication mutation: %s is not publication-only", action.Type.String())
+		return nil, fmt.Errorf("syncstore: building publication mutation: %s is not publication-only", action.Type.String())
 	}
 
 	mutation := &syncdomain.BaselineMutation{
@@ -395,7 +395,7 @@ func PublicationMutationFromAction(action *syncdomain.Action, defaultDriveID dri
 // nothing can fail: an error always means nothing was committed.
 func (s *SyncStore) CommitMutation(ctx context.Context, outcome *syncdomain.BaselineMutation) (err error) {
 	if outcome == nil {
-		return errors.New("sync: commit mutation requires outcome")
+		return errors.New("syncstore: commit mutation requires outcome")
 	}
 
 	if !outcome.Success {
@@ -405,16 +405,16 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *syncdomain.Base
 	// Ensure baseline is loaded so we can update the in-memory cache.
 	if s.cachedBaseline() == nil {
 		if _, loadErr := s.Load(ctx); loadErr != nil {
-			return fmt.Errorf("sync: loading baseline before commit outcome: %w", loadErr)
+			return fmt.Errorf("syncstore: loading baseline before commit outcome: %w", loadErr)
 		}
 	}
 
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning commit outcome transaction: %w", err)
+		return fmt.Errorf("syncstore: beginning commit outcome transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback outcome transaction for %s", outcome.Path))
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("syncstore: rollback outcome transaction for %s", outcome.Path))
 	}()
 
 	state, err := readObservationStateFromTx(ctx, tx)
@@ -441,7 +441,7 @@ func (s *SyncStore) CommitMutation(ctx context.Context, outcome *syncdomain.Base
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing outcome transaction: %w", err)
+		return fmt.Errorf("syncstore: committing outcome transaction: %w", err)
 	}
 	s.applyBaselineCachePatch(patch)
 
@@ -474,7 +474,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 	cache := s.cachedBaseline()
 	if cache == nil {
 		if _, loadErr := s.Load(ctx); loadErr != nil {
-			return fmt.Errorf("sync: loading baseline before refresh local baseline: %w", loadErr)
+			return fmt.Errorf("syncstore: loading baseline before refresh local baseline: %w", loadErr)
 		}
 		cache = s.cachedBaseline()
 	}
@@ -508,10 +508,10 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning refresh local baseline transaction: %w", err)
+		return fmt.Errorf("syncstore: beginning refresh local baseline transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback refresh local baseline transaction for %s", refresh.Path))
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("syncstore: rollback refresh local baseline transaction for %s", refresh.Path))
 	}()
 
 	state, err := readObservationStateFromTx(ctx, tx)
@@ -526,11 +526,11 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 	}
 
 	if err = upsertBaselineRowTx(ctx, tx, entry); err != nil {
-		return fmt.Errorf("sync: refreshing baseline for %s: %w", refresh.Path, err)
+		return fmt.Errorf("syncstore: refreshing baseline for %s: %w", refresh.Path, err)
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing refresh local baseline transaction: %w", err)
+		return fmt.Errorf("syncstore: committing refresh local baseline transaction: %w", err)
 	}
 
 	s.applyBaselineCachePatch(baselineCachePatch{put: entry})
@@ -546,7 +546,7 @@ func (s *SyncStore) RefreshLocalBaseline(ctx context.Context, refresh *localBase
 // (CanReuseBaselineHash). A path with no row is left alone.
 func (s *SyncStore) ForgetBaselineLocalCtime(ctx context.Context, path string) error {
 	if _, err := s.db.ExecContext(ctx, `UPDATE baseline SET local_ctime = 0 WHERE path = ?`, path); err != nil {
-		return fmt.Errorf("sync: forgetting the change time of %s: %w", path, err)
+		return fmt.Errorf("syncstore: forgetting the change time of %s: %w", path, err)
 	}
 	cache := s.cachedBaseline()
 	if cache == nil {
@@ -590,7 +590,7 @@ func classifyBaselineMutation(action syncdomain.ActionType) (baselineMutationKin
 	default:
 		// The plan and the retry_work rows cannot carry one; refused before
 		// any write of the mutation's transaction.
-		return 0, fmt.Errorf("sync: classifying baseline mutation: %s", syncdomain.OutsideTheEnum(action))
+		return 0, fmt.Errorf("syncstore: classifying baseline mutation: %s", syncdomain.OutsideTheEnum(action))
 	}
 }
 
@@ -610,7 +610,7 @@ func applySingleMutation(ctx context.Context, tx sqlTxRunner, o *syncdomain.Base
 	// rewrote that row's path (D-035): refuse it instead of corrupting the
 	// baseline.
 	if (mutation == baselineMutationUpsert || mutation == baselineMutationMove) && o.ItemID == "" {
-		return fmt.Errorf("sync: committing %s for %s: %w", o.Action.String(), o.Path, errMutationWithoutItemID)
+		return fmt.Errorf("syncstore: committing %s for %s: %w", o.Action.String(), o.Path, errMutationWithoutItemID)
 	}
 
 	switch mutation {
@@ -707,7 +707,7 @@ func (s *SyncStore) cachePatchForMutationTx(
 		// baseline never recorded for this item).
 		return baselineCachePatch{put: &entry}, nil
 	default:
-		return baselineCachePatch{}, fmt.Errorf("sync: patching the baseline cache for %s: mutation kind %d", o.Path, mutation)
+		return baselineCachePatch{}, fmt.Errorf("syncstore: patching the baseline cache for %s: mutation kind %d", o.Path, mutation)
 	}
 }
 
@@ -719,12 +719,12 @@ func (s *SyncStore) reloadPatchTx(ctx context.Context, tx sqlTxRunner) (baseline
 		var err error
 		contentDriveID, err = contentDriveIDForDB(ctx, tx)
 		if err != nil {
-			return baselineCachePatch{}, fmt.Errorf("sync: loading content drive for baseline reload: %w", err)
+			return baselineCachePatch{}, fmt.Errorf("syncstore: loading content drive for baseline reload: %w", err)
 		}
 	}
 	entries, err := loadBaselineEntries(ctx, tx, contentDriveID)
 	if err != nil {
-		return baselineCachePatch{}, fmt.Errorf("sync: reading the baseline to rebuild its cache: %w", err)
+		return baselineCachePatch{}, fmt.Errorf("syncstore: reading the baseline to rebuild its cache: %w", err)
 	}
 	idx := indexBaselineEntries(entries)
 
@@ -769,7 +769,7 @@ func commitUpsert(ctx context.Context, tx sqlTxRunner, o *syncdomain.BaselineMut
 			WHERE parent_id IN (SELECT item_id FROM baseline WHERE path = ? AND item_id <> ?)`,
 			o.ItemID, o.Path, o.ItemID,
 		); err != nil {
-			return fmt.Errorf("sync: rebinding children of %s: %w", o.Path, err)
+			return fmt.Errorf("syncstore: rebinding children of %s: %w", o.Path, err)
 		}
 	}
 
@@ -781,17 +781,17 @@ func commitUpsert(ctx context.Context, tx sqlTxRunner, o *syncdomain.BaselineMut
 		`DELETE FROM baseline WHERE path = ? AND item_id <> ?`,
 		o.Path, o.ItemID,
 	); err != nil {
-		return fmt.Errorf("sync: clearing stale baseline for %s: %w", o.Path, err)
+		return fmt.Errorf("syncstore: clearing stale baseline for %s: %w", o.Path, err)
 	}
 
 	entry := mutationToEntry(o)
 	if err := upsertBaselineRowTx(ctx, tx, &entry); err != nil {
-		return fmt.Errorf("sync: upserting baseline for %s: %w", o.Path, err)
+		return fmt.Errorf("syncstore: upserting baseline for %s: %w", o.Path, err)
 	}
 	// A synced item at the path supersedes a folder kept there after its
 	// online deletion.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM kept_local_folders WHERE path = ?`, o.Path); err != nil {
-		return fmt.Errorf("sync: clearing kept local folder %s: %w", o.Path, err)
+		return fmt.Errorf("syncstore: clearing kept local folder %s: %w", o.Path, err)
 	}
 
 	return nil
@@ -815,7 +815,7 @@ func recordKeptLocalFolderTx(ctx context.Context, tx sqlTxRunner, o *syncdomain.
 			local_birth_time = excluded.local_birth_time`,
 		o.Path, int64(o.LocalDevice), int64(o.LocalInode), o.LocalBirthTime,
 	); err != nil {
-		return fmt.Errorf("sync: recording kept local folder %s: %w", o.Path, err)
+		return fmt.Errorf("syncstore: recording kept local folder %s: %w", o.Path, err)
 	}
 
 	return nil
@@ -825,7 +825,7 @@ func recordKeptLocalFolderTx(ctx context.Context, tx sqlTxRunner, o *syncdomain.
 func commitDelete(ctx context.Context, tx sqlTxRunner, path string) error {
 	_, err := tx.ExecContext(ctx, sqlDeleteBaseline, path)
 	if err != nil {
-		return fmt.Errorf("sync: deleting baseline for %s: %w", path, err)
+		return fmt.Errorf("syncstore: deleting baseline for %s: %w", path, err)
 	}
 
 	return nil
@@ -842,7 +842,7 @@ func commitMove(ctx context.Context, tx sqlTxRunner, o *syncdomain.BaselineMutat
 	var previousPath string
 	err := tx.QueryRowContext(ctx, `SELECT path FROM baseline WHERE item_id = ?`, o.ItemID).Scan(&previousPath)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("sync: reading baseline path of moved item %s: %w", o.ItemID, err)
+		return fmt.Errorf("syncstore: reading baseline path of moved item %s: %w", o.ItemID, err)
 	}
 
 	// Upsert handles both the path update and all other field updates.
@@ -889,7 +889,7 @@ func repathSubtreeTx(ctx context.Context, tx sqlTxRunner, table, oldPath, newPat
 		SET path = ? || substr(path, length(?) + 1)
 		WHERE substr(path, 1, length(?)) = ? COLLATE BINARY`
 	if _, err := tx.ExecContext(ctx, query, newPrefix, oldPrefix, oldPrefix, oldPrefix); err != nil {
-		return fmt.Errorf("sync: moving %s subtree %s -> %s: %w", table, oldPath, newPath, err)
+		return fmt.Errorf("syncstore: moving %s subtree %s -> %s: %w", table, oldPath, newPath, err)
 	}
 
 	return nil
@@ -920,7 +920,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *syncdoma
 			nullString(o.ETag),
 		)
 		if err != nil {
-			return fmt.Errorf("sync: recording remote_state for folder create %s: %w", o.Path, err)
+			return fmt.Errorf("syncstore: recording remote_state for folder create %s: %w", o.Path, err)
 		}
 	case syncdomain.ActionUpload:
 		_, err := tx.ExecContext(ctx,
@@ -940,7 +940,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *syncdoma
 			nullString(o.ETag),
 		)
 		if err != nil {
-			return fmt.Errorf("sync: updating remote_state for upload %s: %w", o.Path, err)
+			return fmt.Errorf("syncstore: updating remote_state for upload %s: %w", o.Path, err)
 		}
 	case syncdomain.ActionConflictCopy:
 		return nil
@@ -949,7 +949,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *syncdoma
 			`DELETE FROM remote_state WHERE item_id = ?`,
 			o.ItemID,
 		); err != nil {
-			return fmt.Errorf("sync: deleting remote_state for remote delete %s: %w", o.Path, err)
+			return fmt.Errorf("syncstore: deleting remote_state for remote delete %s: %w", o.Path, err)
 		}
 	case syncdomain.ActionRemoteMove:
 		if _, err := tx.ExecContext(ctx,
@@ -958,7 +958,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *syncdoma
 			 WHERE item_id = ?`,
 			o.DriveID.String(), o.Path, o.ItemID,
 		); err != nil {
-			return fmt.Errorf("sync: updating remote_state for remote move %s: %w", o.Path, err)
+			return fmt.Errorf("syncstore: updating remote_state for remote move %s: %w", o.Path, err)
 		}
 	case syncdomain.ActionDownload,
 		syncdomain.ActionLocalDelete,
@@ -968,7 +968,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *syncdoma
 		return nil
 	default:
 		// classifyMutation refuses this first, inside the same transaction.
-		return fmt.Errorf("sync: updating remote_state for %s: %s", o.Path, syncdomain.OutsideTheEnum(o.Action))
+		return fmt.Errorf("syncstore: updating remote_state for %s: %s", o.Path, syncdomain.OutsideTheEnum(o.Action))
 	}
 
 	return nil
@@ -976,7 +976,7 @@ func updateRemoteStateOnOutcome(ctx context.Context, tx sqlTxRunner, o *syncdoma
 
 // ErrBaselineCacheDiverged reports a baseline cache that differs from the
 // baseline table.
-var ErrBaselineCacheDiverged = errors.New("sync: the baseline cache differs from the database")
+var ErrBaselineCacheDiverged = errors.New("syncstore: the baseline cache differs from the database")
 
 // maxReportedCacheDivergences bounds how many paths a divergence error names.
 const maxReportedCacheDivergences = 5
@@ -994,11 +994,11 @@ func (s *SyncStore) CheckCacheConsistency(ctx context.Context) error {
 
 	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
 	if err != nil {
-		return fmt.Errorf("sync: loading content drive for consistency check: %w", err)
+		return fmt.Errorf("syncstore: loading content drive for consistency check: %w", err)
 	}
 	entries, err := loadBaselineEntries(ctx, s.db, contentDriveID)
 	if err != nil {
-		return fmt.Errorf("sync: reading the baseline for consistency check: %w", err)
+		return fmt.Errorf("syncstore: reading the baseline for consistency check: %w", err)
 	}
 	stored := make(map[string]*syncdomain.BaselineEntry, len(entries))
 	for _, entry := range entries {

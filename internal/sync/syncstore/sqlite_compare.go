@@ -518,7 +518,7 @@ func queryComparisonRowsForTables(
 func queryComparisonRows(ctx context.Context, runner sqlTxRunner, query string) ([]syncdomain.SQLiteComparisonRow, error) {
 	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
+		return nil, fmt.Errorf("syncstore: querying comparison state: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -531,7 +531,7 @@ func queryComparisonRows(ctx context.Context, runner sqlTxRunner, query string) 
 		results = append(results, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating comparison state rows: %w", err)
+		return nil, fmt.Errorf("syncstore: iterating comparison state rows: %w", err)
 	}
 
 	return results, nil
@@ -571,12 +571,12 @@ func scanComparisonRow(rows *sql.Rows) (syncdomain.SQLiteComparisonRow, error) {
 		&row.MetadataDrift,
 	)
 	if err != nil {
-		return syncdomain.SQLiteComparisonRow{}, fmt.Errorf("sync: scanning comparison state row: %w", err)
+		return syncdomain.SQLiteComparisonRow{}, fmt.Errorf("syncstore: scanning comparison state row: %w", err)
 	}
 	for i, target := range []*syncdomain.SideType{&row.BaselineType, &row.LocalType, &row.RemoteType} {
 		*target, err = syncdomain.ParseSideType(sideTypes[i])
 		if err != nil {
-			return syncdomain.SQLiteComparisonRow{}, fmt.Errorf("sync: reading the side types of %q: %w", row.Path, err)
+			return syncdomain.SQLiteComparisonRow{}, fmt.Errorf("syncstore: reading the side types of %q: %w", row.Path, err)
 		}
 	}
 	row.LocalChanged = localChanged != 0

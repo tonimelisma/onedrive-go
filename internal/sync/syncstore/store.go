@@ -154,7 +154,7 @@ func openSyncStoreWithHooks(
 		fmt.Sprintf("journal_size_limit(%d)", storeJournalSizeLimitBytes),
 	}}))
 	if err != nil {
-		return nil, fmt.Errorf("sync: opening database %s: %w", dbPath, err)
+		return nil, fmt.Errorf("syncstore: opening database %s: %w", dbPath, err)
 	}
 
 	// Sole-writer pattern: only one connection writes at a time.

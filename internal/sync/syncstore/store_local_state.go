@@ -96,10 +96,10 @@ func (s *SyncStore) CommitLocalSnapshot(
 ) (result LocalSnapshotCommitResult, err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return result, fmt.Errorf("sync: beginning local_state transaction: %w", err)
+		return result, fmt.Errorf("syncstore: beginning local_state transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback local_state transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback local_state transaction")
 	}()
 
 	backfilled, err := s.commitLocalSnapshotTx(ctx, tx, commit, &result)
@@ -110,12 +110,12 @@ func (s *SyncStore) CommitLocalSnapshot(
 	if backfilled > 0 {
 		patch, err = s.reloadPatchTx(ctx, tx)
 		if err != nil {
-			return result, fmt.Errorf("sync: reloading baseline cache after identity backfill: %w", err)
+			return result, fmt.Errorf("syncstore: reloading baseline cache after identity backfill: %w", err)
 		}
 	}
 
 	if err = tx.Commit(); err != nil {
-		return result, fmt.Errorf("sync: committing local_state transaction: %w", err)
+		return result, fmt.Errorf("syncstore: committing local_state transaction: %w", err)
 	}
 	s.applyBaselineCachePatch(patch)
 
@@ -193,11 +193,11 @@ func replaceLocalTruthTx(
 func backfillBaselineIdentityTx(ctx context.Context, tx sqlTxRunner) (int64, error) {
 	result, err := tx.ExecContext(ctx, sqlBackfillBaselineIdentity)
 	if err != nil {
-		return 0, fmt.Errorf("sync: backfilling baseline identity: %w", err)
+		return 0, fmt.Errorf("syncstore: backfilling baseline identity: %w", err)
 	}
 	changed, err := result.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("sync: counting backfilled baseline identities: %w", err)
+		return 0, fmt.Errorf("syncstore: counting backfilled baseline identities: %w", err)
 	}
 
 	return changed, nil
@@ -216,7 +216,7 @@ func (s *SyncStore) GetLocalStateByPath(ctx context.Context, path string) (*sync
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, false, nil
 		}
-		return nil, false, fmt.Errorf("sync: reading local_state row for %s: %w", path, err)
+		return nil, false, fmt.Errorf("syncstore: reading local_state row for %s: %w", path, err)
 	}
 
 	return row, true, nil
@@ -228,10 +228,10 @@ func (s *SyncStore) GetLocalStateByPath(ctx context.Context, path string) (*sync
 func (s *SyncStore) UpsertLocalStateRows(ctx context.Context, rows []syncdomain.LocalStateRow) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning local_state upsert transaction: %w", err)
+		return fmt.Errorf("syncstore: beginning local_state upsert transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback local_state upsert transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback local_state upsert transaction")
 	}()
 
 	if err := upsertLocalStateRowsTx(ctx, tx, rows); err != nil {
@@ -239,7 +239,7 @@ func (s *SyncStore) UpsertLocalStateRows(ctx context.Context, rows []syncdomain.
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing local_state upsert transaction: %w", err)
+		return fmt.Errorf("syncstore: committing local_state upsert transaction: %w", err)
 	}
 
 	return nil
@@ -248,10 +248,10 @@ func (s *SyncStore) UpsertLocalStateRows(ctx context.Context, rows []syncdomain.
 func (s *SyncStore) DeleteLocalStatePath(ctx context.Context, path string) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning local_state delete transaction: %w", err)
+		return fmt.Errorf("syncstore: beginning local_state delete transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback local_state delete transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback local_state delete transaction")
 	}()
 
 	if err := deleteLocalStatePathTx(ctx, tx, path); err != nil {
@@ -259,7 +259,7 @@ func (s *SyncStore) DeleteLocalStatePath(ctx context.Context, path string) (err 
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing local_state delete transaction: %w", err)
+		return fmt.Errorf("syncstore: committing local_state delete transaction: %w", err)
 	}
 
 	return nil
@@ -268,10 +268,10 @@ func (s *SyncStore) DeleteLocalStatePath(ctx context.Context, path string) (err 
 func (s *SyncStore) DeleteLocalStatePrefix(ctx context.Context, prefix string) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning local_state prefix delete transaction: %w", err)
+		return fmt.Errorf("syncstore: beginning local_state prefix delete transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback local_state prefix delete transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback local_state prefix delete transaction")
 	}()
 
 	if err := deleteLocalStatePrefixTx(ctx, tx, prefix); err != nil {
@@ -279,7 +279,7 @@ func (s *SyncStore) DeleteLocalStatePrefix(ctx context.Context, prefix string) (
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing local_state prefix delete transaction: %w", err)
+		return fmt.Errorf("syncstore: committing local_state prefix delete transaction: %w", err)
 	}
 
 	return nil
@@ -292,10 +292,10 @@ func (s *SyncStore) ApplyLocalStatePatch(
 ) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning local_state patch transaction: %w", err)
+		return fmt.Errorf("syncstore: beginning local_state patch transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback local_state patch transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback local_state patch transaction")
 	}()
 
 	for _, prefix := range deletedPrefixes {
@@ -308,7 +308,7 @@ func (s *SyncStore) ApplyLocalStatePatch(
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing local_state patch transaction: %w", err)
+		return fmt.Errorf("syncstore: committing local_state patch transaction: %w", err)
 	}
 
 	return nil
@@ -383,7 +383,7 @@ func upsertLocalStateRowTx(ctx context.Context, tx sqlTxRunner, row syncdomain.L
 		row.LocalBirthTime,
 		boolInt(row.LocalHasIdentity),
 	); err != nil {
-		return fmt.Errorf("sync: inserting local_state row for %s: %w", row.Path, err)
+		return fmt.Errorf("syncstore: inserting local_state row for %s: %w", row.Path, err)
 	}
 
 	return nil
@@ -391,7 +391,7 @@ func upsertLocalStateRowTx(ctx context.Context, tx sqlTxRunner, row syncdomain.L
 
 func deleteLocalStatePathTx(ctx context.Context, tx sqlTxRunner, path string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM local_state WHERE path = ?`, path); err != nil {
-		return fmt.Errorf("sync: deleting local_state row for %s: %w", path, err)
+		return fmt.Errorf("syncstore: deleting local_state row for %s: %w", path, err)
 	}
 
 	return nil
@@ -414,7 +414,7 @@ func localStateSubtreeArgs(prefix string) []any {
 // deleteLocalStatePrefixTx removes the row of prefix and every row below it.
 func deleteLocalStatePrefixTx(ctx context.Context, tx sqlTxRunner, prefix string) error {
 	if _, err := tx.ExecContext(ctx, sqlDeleteLocalStateSubtree, localStateSubtreeArgs(prefix)...); err != nil {
-		return fmt.Errorf("sync: deleting local_state prefix for %s: %w", prefix, err)
+		return fmt.Errorf("syncstore: deleting local_state prefix for %s: %w", prefix, err)
 	}
 
 	return nil
@@ -446,7 +446,7 @@ func listLocalStateRows(ctx context.Context, runner sqlTxRunner) ([]syncdomain.L
 func listLocalStateRowsWithQuery(ctx context.Context, runner sqlTxRunner, query string) ([]syncdomain.LocalStateRow, error) {
 	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying local_state: %w", err)
+		return nil, fmt.Errorf("syncstore: querying local_state: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -473,7 +473,7 @@ func listLocalStateRowsWithQuery(ctx context.Context, runner sqlTxRunner, query 
 			&row.LocalBirthTime,
 			&localHasIdentity,
 		); err != nil {
-			return nil, fmt.Errorf("sync: scanning local_state row: %w", err)
+			return nil, fmt.Errorf("syncstore: scanning local_state row: %w", err)
 		}
 		row.Hash = hash.String
 		if size.Valid {
@@ -488,7 +488,7 @@ func listLocalStateRowsWithQuery(ctx context.Context, runner sqlTxRunner, query 
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating local_state rows: %w", err)
+		return nil, fmt.Errorf("syncstore: iterating local_state rows: %w", err)
 	}
 
 	return result, nil
@@ -522,7 +522,7 @@ func scanLocalStateRow(
 		&localHasIdentity,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("sync: scanning local_state row: %w", err)
+		return nil, fmt.Errorf("syncstore: scanning local_state row: %w", err)
 	}
 
 	row.Hash = hash.String
@@ -546,12 +546,12 @@ func scanLocalStateRow(
 func recordMountBoundariesTx(ctx context.Context, tx sqlTxRunner, crossed []string) error {
 	for _, boundary := range crossed {
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO mount_boundaries (path) VALUES (?)`, boundary); err != nil {
-			return fmt.Errorf("sync: recording mount boundary %s: %w", boundary, err)
+			return fmt.Errorf("syncstore: recording mount boundary %s: %w", boundary, err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM mount_boundaries
 		WHERE path NOT IN (SELECT path FROM baseline) AND path NOT IN (SELECT path FROM local_state)`); err != nil {
-		return fmt.Errorf("sync: pruning mount boundaries: %w", err)
+		return fmt.Errorf("syncstore: pruning mount boundaries: %w", err)
 	}
 	return nil
 }
@@ -570,7 +570,7 @@ func listMountBoundariesTx(ctx context.Context, runner sqlTxRunner) ([]string, e
 func queryPathsTx(ctx context.Context, runner sqlTxRunner, query, what string) ([]string, error) {
 	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing %s: %w", what, err)
+		return nil, fmt.Errorf("syncstore: listing %s: %w", what, err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -578,12 +578,12 @@ func queryPathsTx(ctx context.Context, runner sqlTxRunner, query, what string) (
 	for rows.Next() {
 		var path string
 		if err := rows.Scan(&path); err != nil {
-			return nil, fmt.Errorf("sync: reading %s: %w", what, err)
+			return nil, fmt.Errorf("syncstore: reading %s: %w", what, err)
 		}
 		paths = append(paths, path)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: listing %s: %w", what, err)
+		return nil, fmt.Errorf("syncstore: listing %s: %w", what, err)
 	}
 	return paths, nil
 }
@@ -599,7 +599,7 @@ func pruneKeptLocalFoldersTx(ctx context.Context, tx sqlTxRunner) error {
 			WHERE l.path = b.path AND l.item_type = 'folder' AND l.local_has_identity = 1
 				AND `+sqlSameLocalEntryL+`
 		)`); err != nil {
-		return fmt.Errorf("sync: pruning kept local folders: %w", err)
+		return fmt.Errorf("syncstore: pruning kept local folders: %w", err)
 	}
 
 	return nil

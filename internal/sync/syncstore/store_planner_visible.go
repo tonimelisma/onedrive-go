@@ -254,7 +254,7 @@ func replacePlannerVisibleStateTx(
 		sqlDeletePlannerVisibleRemoteState,
 	} {
 		if _, err := tx.ExecContext(ctx, query); err != nil {
-			return plannerVisibleRows{}, fmt.Errorf("sync: preparing planner-visible state: %w", err)
+			return plannerVisibleRows{}, fmt.Errorf("syncstore: preparing planner-visible state: %w", err)
 		}
 	}
 
@@ -271,7 +271,7 @@ func replacePlannerVisibleStateTx(
 		sqlHideLocalMoveLeftovers,
 	} {
 		if _, err := tx.ExecContext(ctx, query); err != nil {
-			return plannerVisibleRows{}, fmt.Errorf("sync: pruning planner-visible state: %w", err)
+			return plannerVisibleRows{}, fmt.Errorf("syncstore: pruning planner-visible state: %w", err)
 		}
 	}
 
@@ -313,7 +313,7 @@ func insertPlannerVisibleLocalRowsTx(ctx context.Context, tx sqlTxRunner, rows [
 		}
 		query := multiRowInsertSQL(sqlInsertPlannerVisibleLocalStatePrefix, plannerVisibleLocalStateColumns, len(chunk))
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("sync: inserting planner-visible local_state rows from %s: %w", chunk[0].Path, err)
+			return fmt.Errorf("syncstore: inserting planner-visible local_state rows from %s: %w", chunk[0].Path, err)
 		}
 	}
 
@@ -339,7 +339,7 @@ func insertPlannerVisibleRemoteRowsTx(ctx context.Context, tx sqlTxRunner, rows 
 		}
 		query := multiRowInsertSQL(sqlInsertPlannerVisibleRemoteStatePrefix, plannerVisibleRemoteStateColumns, len(chunk))
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf("sync: inserting planner-visible remote_state rows from %s: %w", chunk[0].Path, err)
+			return fmt.Errorf("syncstore: inserting planner-visible remote_state rows from %s: %w", chunk[0].Path, err)
 		}
 	}
 

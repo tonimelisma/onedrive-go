@@ -25,7 +25,7 @@ func (s *SyncStore) recordDeleteLedgerTx(ctx context.Context, tx sqlTxRunner, o 
 	}
 	if !o.Action.IsMember() {
 		// classifyMutation refuses this first, inside the same transaction.
-		return fmt.Errorf("sync: recording %s in the delete ledger: %s", o.Path, syncdomain.OutsideTheEnum(o.Action))
+		return fmt.Errorf("syncstore: recording %s in the delete ledger: %s", o.Path, syncdomain.OutsideTheEnum(o.Action))
 	}
 	side, isDelete := syncdomain.DeleteSafetySideOf(o.Action)
 	if !isDelete {
@@ -36,14 +36,14 @@ func (s *SyncStore) recordDeleteLedgerTx(ctx context.Context, tx sqlTxRunner, o 
 		`INSERT OR REPLACE INTO delete_ledger (side, path, item_id, committed_at) VALUES (?, ?, ?, ?)`,
 		string(side), o.Path, o.ItemID, syncdomain.StoredTimeNano(now),
 	); err != nil {
-		return fmt.Errorf("sync: recording delete of %s in the delete ledger: %w", o.Path, err)
+		return fmt.Errorf("syncstore: recording delete of %s in the delete ledger: %w", o.Path, err)
 	}
 	// Rows older than the window no longer count; pruning here, on a write
 	// the store makes anyway, keeps the planner's read read-only (a dry run
 	// plans too).
 	if _, err := tx.ExecContext(ctx, `DELETE FROM delete_ledger WHERE committed_at < ?`,
 		syncdomain.StoredTimeNano(now.Add(-syncdomain.DeleteSafetyWindow))); err != nil {
-		return fmt.Errorf("sync: pruning the delete ledger: %w", err)
+		return fmt.Errorf("syncstore: pruning the delete ledger: %w", err)
 	}
 
 	return nil
@@ -56,7 +56,7 @@ func (s *SyncStore) RecentUnconfirmedDeletes(ctx context.Context, since time.Tim
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT side, COUNT(*) FROM delete_ledger WHERE committed_at >= ? GROUP BY side`, syncdomain.StoredTimeNano(since))
 	if err != nil {
-		return nil, fmt.Errorf("sync: counting recent deletes: %w", err)
+		return nil, fmt.Errorf("syncstore: counting recent deletes: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -67,12 +67,12 @@ func (s *SyncStore) RecentUnconfirmedDeletes(ctx context.Context, since time.Tim
 			count int
 		)
 		if err := rows.Scan(&side, &count); err != nil {
-			return nil, fmt.Errorf("sync: scanning recent deletes: %w", err)
+			return nil, fmt.Errorf("syncstore: scanning recent deletes: %w", err)
 		}
 		counts[syncdomain.DeleteSafetySide(side)] = count
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating recent deletes: %w", err)
+		return nil, fmt.Errorf("syncstore: iterating recent deletes: %w", err)
 	}
 
 	return counts, nil
@@ -83,7 +83,7 @@ func (s *SyncStore) RecentUnconfirmedDeletes(ctx context.Context, since time.Tim
 func (s *SyncStore) ClearDeleteLedger(ctx context.Context, sides []syncdomain.DeleteSafetySide) error {
 	for _, side := range sides {
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM delete_ledger WHERE side = ?`, string(side)); err != nil {
-			return fmt.Errorf("sync: clearing the %s delete ledger: %w", side, err)
+			return fmt.Errorf("syncstore: clearing the %s delete ledger: %w", side, err)
 		}
 	}
 

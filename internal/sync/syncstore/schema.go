@@ -286,7 +286,7 @@ type storeCompatibilityMetadata struct {
 // errIncompatibleSchema marks a state DB that cannot be trusted under the
 // current canonical schema. The state is rebuildable, so incompatible stores
 // fail loudly instead of being guessed at or partially imported.
-var errIncompatibleSchema = errors.New("sync: incompatible sync store schema")
+var errIncompatibleSchema = errors.New("syncstore: incompatible sync store schema")
 
 func canonicalSyncStoreColumns() map[string][]string {
 	return map[string][]string{
@@ -356,12 +356,12 @@ func canonicalSyncStoreColumns() map[string][]string {
 func applySchema(ctx context.Context, db *sql.DB) error {
 	userTables, err := listUserTables(ctx, db)
 	if err != nil {
-		return fmt.Errorf("sync: inspect schema tables: %w", err)
+		return fmt.Errorf("syncstore: inspect schema tables: %w", err)
 	}
 
 	if len(userTables) == 0 {
 		if err := createCanonicalSchema(ctx, db); err != nil {
-			return fmt.Errorf("sync: create canonical schema: %w", err)
+			return fmt.Errorf("syncstore: create canonical schema: %w", err)
 		}
 		return nil
 	}
@@ -371,7 +371,7 @@ func applySchema(ctx context.Context, db *sql.DB) error {
 	}
 
 	if _, err := db.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
-		return fmt.Errorf("sync: ensuring observation_state row: %w", err)
+		return fmt.Errorf("syncstore: ensuring observation_state row: %w", err)
 	}
 
 	return nil
@@ -425,7 +425,7 @@ func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []str
 	for _, tableName := range expectedTables {
 		actualColumns, err := listTableColumns(ctx, db, tableName)
 		if err != nil {
-			return fmt.Errorf("sync: inspect schema columns for %s: %w", tableName, err)
+			return fmt.Errorf("syncstore: inspect schema columns for %s: %w", tableName, err)
 		}
 
 		expectedColumns := append([]string(nil), expectedColumnsByTable[tableName]...)
@@ -486,7 +486,7 @@ func readStoreCompatibilityMetadata(ctx context.Context, db *sql.DB) (storeCompa
 		if errors.Is(err, sql.ErrNoRows) {
 			return storeCompatibilityMetadata{}, fmt.Errorf("%w: sync store generation marker is missing", errIncompatibleSchema)
 		}
-		return storeCompatibilityMetadata{}, fmt.Errorf("sync: inspect store compatibility metadata: %w", err)
+		return storeCompatibilityMetadata{}, fmt.Errorf("syncstore: inspect store compatibility metadata: %w", err)
 	}
 
 	return metadata, nil

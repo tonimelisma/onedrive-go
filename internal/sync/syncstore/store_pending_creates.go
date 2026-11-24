@@ -148,7 +148,7 @@ import (
 // it is about to upload into.
 func (s *SyncStore) RecordPendingCreateIntent(ctx context.Context, pending *syncdomain.PendingCreate) error {
 	if pending == nil || pending.Path == "" {
-		return errors.New("sync: recording a pending create intent: missing path")
+		return errors.New("syncstore: recording a pending create intent: missing path")
 	}
 
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO pending_creates
@@ -161,7 +161,7 @@ func (s *SyncStore) RecordPendingCreateIntent(ctx context.Context, pending *sync
 		pending.Path, pending.DriveID.String(), pending.ParentID,
 		pending.LocalSize, pending.LocalHash, syncdomain.StoredTimeNano(s.nowFunc()),
 	); err != nil {
-		return fmt.Errorf("sync: recording pending create intent at %s: %w", pending.Path, err)
+		return fmt.Errorf("syncstore: recording pending create intent at %s: %w", pending.Path, err)
 	}
 
 	return nil
@@ -170,7 +170,7 @@ func (s *SyncStore) RecordPendingCreateIntent(ctx context.Context, pending *sync
 // RecordPendingCreate durably records a create whose empty item exists.
 func (s *SyncStore) RecordPendingCreate(ctx context.Context, pending *syncdomain.PendingCreate) error {
 	if pending == nil || pending.ItemID == "" || pending.Path == "" {
-		return errors.New("sync: recording a pending create: missing item ID or path")
+		return errors.New("syncstore: recording a pending create: missing item ID or path")
 	}
 
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO pending_creates
@@ -183,7 +183,7 @@ func (s *SyncStore) RecordPendingCreate(ctx context.Context, pending *syncdomain
 		pending.Path, pending.ItemID, pending.DriveID.String(), pending.ParentID,
 		pending.CreatedETag, pending.LocalSize, pending.LocalHash, syncdomain.StoredTimeNano(s.nowFunc()),
 	); err != nil {
-		return fmt.Errorf("sync: recording pending create of %s (item %s): %w", pending.Path, pending.ItemID, err)
+		return fmt.Errorf("syncstore: recording pending create of %s (item %s): %w", pending.Path, pending.ItemID, err)
 	}
 
 	return nil
@@ -197,7 +197,7 @@ func (s *SyncStore) RecordPendingCreate(ctx context.Context, pending *syncdomain
 // an item is kept.
 func (s *SyncStore) ClearPendingCreateIntent(ctx context.Context, path string) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id = ''`, path); err != nil {
-		return fmt.Errorf("sync: clearing pending create intent at %s: %w", path, err)
+		return fmt.Errorf("syncstore: clearing pending create intent at %s: %w", path, err)
 	}
 
 	return nil
@@ -214,7 +214,7 @@ func (s *SyncStore) ForgetRemovedPlaceholder(ctx context.Context, path, itemID s
 		`DELETE FROM pending_creates WHERE (item_id = ? AND item_id <> '') OR (path = ? AND item_id = '')`,
 		itemID, path,
 	); err != nil {
-		return fmt.Errorf("sync: forgetting the removed placeholder %s at %s: %w", itemID, path, err)
+		return fmt.Errorf("syncstore: forgetting the removed placeholder %s at %s: %w", itemID, path, err)
 	}
 
 	return nil
@@ -286,10 +286,10 @@ func (s *SyncStore) PrunePendingCreates(
 ) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning the prune of pending creates: %w", err)
+		return fmt.Errorf("syncstore: beginning the prune of pending creates: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback the prune of pending creates")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback the prune of pending creates")
 	}()
 
 	intents, err := listCreateIntentsTx(ctx, tx, "")
@@ -307,7 +307,7 @@ func (s *SyncStore) PrunePendingCreates(
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing the prune of pending creates: %w", err)
+		return fmt.Errorf("syncstore: committing the prune of pending creates: %w", err)
 	}
 
 	return nil
@@ -326,10 +326,10 @@ func (s *SyncStore) DropGoneCreateIntentsAt(
 ) (kept []string, err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return nil, fmt.Errorf("sync: beginning the prune of create intents after a poll: %w", err)
+		return nil, fmt.Errorf("syncstore: beginning the prune of create intents after a poll: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback the prune of create intents after a poll")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback the prune of create intents after a poll")
 	}()
 
 	var intents []syncdomain.PendingCreate
@@ -346,7 +346,7 @@ func (s *SyncStore) DropGoneCreateIntentsAt(
 	}
 
 	if err = tx.Commit(); err != nil {
-		return nil, fmt.Errorf("sync: committing the prune of create intents after a poll: %w", err)
+		return nil, fmt.Errorf("syncstore: committing the prune of create intents after a poll: %w", err)
 	}
 	for i := range intents {
 		if !dropped[intents[i].Path] {
@@ -386,7 +386,7 @@ func (s *SyncStore) dropAbandonedCreateIntentsTx(
 			continue
 		}
 		if _, err = tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id = ''`, intent.Path); err != nil {
-			return nil, fmt.Errorf("sync: dropping the abandoned create intent at %s: %w", intent.Path, err)
+			return nil, fmt.Errorf("syncstore: dropping the abandoned create intent at %s: %w", intent.Path, err)
 		}
 		dropped[intent.Path] = true
 		s.logger.Debug("dropped a create intent no create will claim",
@@ -418,7 +418,7 @@ func createIntentFileGoneTx(
 	}
 	issues, err := queryObservationIssueRowsWithRunner(ctx, tx)
 	if err != nil {
-		return nil, fmt.Errorf("sync: reading observation issues for the create intents: %w", err)
+		return nil, fmt.Errorf("syncstore: reading observation issues for the create intents: %w", err)
 	}
 	availability := syncdomain.NewTruthAvailabilityIndex(issues)
 
@@ -447,7 +447,7 @@ func (s *SyncStore) dropRecordsOfSettledEmptyPlaceholdersTx(ctx context.Context,
 		WHERE b.item_type = 'file' AND b.local_size = 0 AND b.remote_size = 0
 			AND l.item_type = 'file' AND l.size = 0)`)
 	if err != nil {
-		return fmt.Errorf("sync: dropping the records of settled empty placeholders: %w", err)
+		return fmt.Errorf("syncstore: dropping the records of settled empty placeholders: %w", err)
 	}
 	if dropped, countErr := result.RowsAffected(); countErr == nil && dropped > 0 {
 		s.logger.Debug("dropped the records of adopted placeholders whose local file is empty too",
@@ -475,7 +475,7 @@ func (s *SyncStore) dropRecordsAtUnscannedPathsTx(ctx context.Context, tx sqlTxR
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id <> ''`, path); err != nil {
-			return fmt.Errorf("sync: dropping the record at %s, which the scan does not visit: %w", path, err)
+			return fmt.Errorf("syncstore: dropping the record at %s, which the scan does not visit: %w", path, err)
 		}
 		s.logger.Debug("dropped the record of a created item at a path the scan does not visit", slog.String("path", path))
 	}
@@ -516,7 +516,7 @@ func readBaselineBeforeOutcomeTx(ctx context.Context, tx sqlTxRunner, outcome *s
 	case errors.Is(scanErr, sql.ErrNoRows):
 		return before, nil
 	case scanErr != nil:
-		return baselineBeforeOutcome{}, fmt.Errorf("sync: reading the baseline path of moved item %s: %w", outcome.ItemID, scanErr)
+		return baselineBeforeOutcome{}, fmt.Errorf("syncstore: reading the baseline path of moved item %s: %w", outcome.ItemID, scanErr)
 	default:
 		return before, nil
 	}
@@ -554,7 +554,7 @@ func settlePendingCreatesTx(ctx context.Context, tx sqlTxRunner, outcome *syncdo
 			`DELETE FROM pending_creates WHERE item_id = ? AND NOT EXISTS (SELECT 1 FROM baseline WHERE item_id = ?)`,
 			before.occupant, before.occupant,
 		); goneErr != nil {
-			return fmt.Errorf("sync: dropping the pending create of %s, which left the baseline: %w", before.occupant, goneErr)
+			return fmt.Errorf("syncstore: dropping the pending create of %s, which left the baseline: %w", before.occupant, goneErr)
 		}
 	}
 	switch {
@@ -562,7 +562,7 @@ func settlePendingCreatesTx(ctx context.Context, tx sqlTxRunner, outcome *syncdo
 		outcome.RemoteSizeKnown && outcome.RemoteSize == 0:
 		if _, emptyErr := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? OR item_id = ?`,
 			outcome.Path, outcome.ItemID); emptyErr != nil {
-			return fmt.Errorf("sync: dropping the pending create settled by the empty outcome at %s: %w", outcome.Path, emptyErr)
+			return fmt.Errorf("syncstore: dropping the pending create settled by the empty outcome at %s: %w", outcome.Path, emptyErr)
 		}
 	case kind == baselineMutationMove:
 		if moveErr := movePendingCreatesTx(ctx, tx, outcome, before.previousPath); moveErr != nil {
@@ -596,13 +596,13 @@ func movePendingCreatesTx(ctx context.Context, tx sqlTxRunner, outcome *syncdoma
 			AND EXISTS (SELECT 1 FROM pending_creates taken
 				WHERE taken.path = ? || substr(pending_creates.path, length(?) + 1))`,
 		oldPrefix, oldPrefix, newPrefix, oldPrefix); err != nil {
-		return fmt.Errorf("sync: dropping the pending creates below %s whose new path holds one: %w", previousPath, err)
+		return fmt.Errorf("syncstore: dropping the pending creates below %s whose new path holds one: %w", previousPath, err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE OR IGNORE pending_creates
 		SET path = ? || substr(path, length(?) + 1)
 		WHERE substr(path, 1, length(?)) = ? COLLATE BINARY`,
 		newPrefix, oldPrefix, oldPrefix, oldPrefix); err != nil {
-		return fmt.Errorf("sync: moving the pending creates below %s to %s: %w", previousPath, outcome.Path, err)
+		return fmt.Errorf("syncstore: moving the pending creates below %s to %s: %w", previousPath, outcome.Path, err)
 	}
 
 	return nil
@@ -614,11 +614,11 @@ func movePendingCreatesTx(ctx context.Context, tx sqlTxRunner, outcome *syncdoma
 func movePendingCreateOfItemTx(ctx context.Context, tx sqlTxRunner, itemID, path string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE OR IGNORE pending_creates SET path = ? WHERE item_id = ?`,
 		path, itemID); err != nil {
-		return fmt.Errorf("sync: moving the record of placeholder %s to %s: %w", itemID, path, err)
+		return fmt.Errorf("syncstore: moving the record of placeholder %s to %s: %w", itemID, path, err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE item_id = ? AND path <> ?`,
 		itemID, path); err != nil {
-		return fmt.Errorf("sync: dropping the record of placeholder %s left behind on its way to %s: %w", itemID, path, err)
+		return fmt.Errorf("syncstore: dropping the record of placeholder %s left behind on its way to %s: %w", itemID, path, err)
 	}
 
 	return nil
@@ -631,7 +631,7 @@ func baselineOccupantAtTx(ctx context.Context, tx sqlTxRunner, path string) (str
 	case errors.Is(err, sql.ErrNoRows):
 		return "", nil
 	case err != nil:
-		return "", fmt.Errorf("sync: reading the baseline at %s: %w", path, err)
+		return "", fmt.Errorf("syncstore: reading the baseline at %s: %w", path, err)
 	default:
 		return itemID, nil
 	}
@@ -643,7 +643,7 @@ func listCreateIntentsTx(ctx context.Context, tx sqlTxRunner, path string) ([]sy
 	rows, err := tx.QueryContext(ctx, `SELECT path, intended_at FROM pending_creates
 		WHERE item_id = '' AND (? = '' OR path = ?) ORDER BY path`, path, path)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing create intents: %w", err)
+		return nil, fmt.Errorf("syncstore: listing create intents: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -651,12 +651,12 @@ func listCreateIntentsTx(ctx context.Context, tx sqlTxRunner, path string) ([]sy
 	for rows.Next() {
 		var intent syncdomain.PendingCreate
 		if err := rows.Scan(&intent.Path, &intent.IntendedAt); err != nil {
-			return nil, fmt.Errorf("sync: reading a create intent: %w", err)
+			return nil, fmt.Errorf("syncstore: reading a create intent: %w", err)
 		}
 		intents = append(intents, intent)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: listing create intents: %w", err)
+		return nil, fmt.Errorf("syncstore: listing create intents: %w", err)
 	}
 
 	return intents, nil
@@ -666,7 +666,7 @@ func listCreateIntentsTx(ctx context.Context, tx sqlTxRunner, path string) ([]sy
 func localStateIsEmptyAtTx(ctx context.Context, tx sqlTxRunner, path string) (bool, error) {
 	var entries int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM local_state WHERE path = ?`, path).Scan(&entries); err != nil {
-		return false, fmt.Errorf("sync: reading local_state at %s: %w", path, err)
+		return false, fmt.Errorf("syncstore: reading local_state at %s: %w", path, err)
 	}
 
 	return entries == 0, nil
@@ -683,7 +683,7 @@ const sqlSelectPendingCreate = `SELECT item_id, drive_id, path, parent_id, creat
 
 func deletePendingCreateTx(ctx context.Context, tx sqlTxRunner, itemID string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE item_id = ?`, itemID); err != nil {
-		return fmt.Errorf("sync: clearing pending create of item %s: %w", itemID, err)
+		return fmt.Errorf("syncstore: clearing pending create of item %s: %w", itemID, err)
 	}
 
 	return nil
@@ -700,7 +700,7 @@ func scanPendingCreate(row *sql.Row) (syncdomain.PendingCreate, bool, error) {
 	case errors.Is(err, sql.ErrNoRows):
 		return syncdomain.PendingCreate{}, false, nil
 	case err != nil:
-		return syncdomain.PendingCreate{}, false, fmt.Errorf("sync: reading pending create: %w", err)
+		return syncdomain.PendingCreate{}, false, fmt.Errorf("syncstore: reading pending create: %w", err)
 	}
 	pending.DriveID = driveid.New(driveID)
 
@@ -735,13 +735,13 @@ func freeBaselinePathForPlaceholderTx(ctx context.Context, tx sqlTxRunner, path 
 	case errors.Is(err, sql.ErrNoRows):
 		return true, nil
 	case err != nil:
-		return false, fmt.Errorf("sync: checking baseline at %s: %w", path, err)
+		return false, fmt.Errorf("syncstore: checking baseline at %s: %w", path, err)
 	case stillThere > 0:
 		return false, nil
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM baseline WHERE item_id = ?`, occupantID); err != nil {
-		return false, fmt.Errorf("sync: dropping the baseline of %s, which OneDrive no longer has at %s: %w", occupantID, path, err)
+		return false, fmt.Errorf("syncstore: dropping the baseline of %s, which OneDrive no longer has at %s: %w", occupantID, path, err)
 	}
 	if err := deletePendingCreateTx(ctx, tx, occupantID); err != nil {
 		return false, err
@@ -800,7 +800,7 @@ func classifyObservedPlaceholderTx(
 	case errors.Is(scanErr, sql.ErrNoRows):
 		return &pending, placeholderAdopt, nil
 	case scanErr != nil:
-		return nil, placeholderNotPending, fmt.Errorf("sync: reading baseline of pending create %s: %w", item.ItemID, scanErr)
+		return nil, placeholderNotPending, fmt.Errorf("syncstore: reading baseline of pending create %s: %w", item.ItemID, scanErr)
 	case remoteSize.Valid && remoteSize.Int64 > 0:
 		return &pending, placeholderStale, nil
 	default:
@@ -854,7 +854,7 @@ func followAdoptedPlaceholderTx(
 
 	entry.ETag, entry.RemoteMtime = item.ETag, item.Mtime
 	if upsertErr := upsertBaselineRowTx(ctx, tx, entry); upsertErr != nil {
-		return fmt.Errorf("sync: following placeholder %s at %s: %w", item.ItemID, item.Path, upsertErr)
+		return fmt.Errorf("syncstore: following placeholder %s at %s: %w", item.ItemID, item.Path, upsertErr)
 	}
 	*adopted = append(*adopted, entry)
 
@@ -868,7 +868,7 @@ func baselineEntryByItemIDTx(
 ) (entry *syncdomain.BaselineEntry, found bool, err error) {
 	rows, err := tx.QueryContext(ctx, sqlLoadBaseline+` WHERE item_id = ?`, itemID)
 	if err != nil {
-		return nil, false, fmt.Errorf("sync: reading baseline of %s: %w", itemID, err)
+		return nil, false, fmt.Errorf("syncstore: reading baseline of %s: %w", itemID, err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -879,7 +879,7 @@ func baselineEntryByItemIDTx(
 		}
 	}
 	if iterErr := rows.Err(); iterErr != nil {
-		return nil, false, fmt.Errorf("sync: reading baseline of %s: %w", itemID, iterErr)
+		return nil, false, fmt.Errorf("syncstore: reading baseline of %s: %w", itemID, iterErr)
 	}
 
 	return entry, entry != nil, nil
@@ -908,7 +908,7 @@ func adoptPlaceholderTx(
 		RemoteMtime: item.Mtime, ETag: item.ETag,
 	}
 	if err := upsertBaselineRowTx(ctx, tx, entry); err != nil {
-		return fmt.Errorf("sync: adopting placeholder %s at %s: %w", item.ItemID, item.Path, err)
+		return fmt.Errorf("syncstore: adopting placeholder %s at %s: %w", item.ItemID, item.Path, err)
 	}
 	*adopted = append(*adopted, entry)
 
@@ -954,7 +954,7 @@ func claimIntendedPlaceholderTx(
 	}
 	if !claimable {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM pending_creates WHERE path = ? AND item_id = ''`, item.Path); err != nil {
-			return syncdomain.PendingCreate{}, false, fmt.Errorf("sync: dropping pending create intent at %s: %w", item.Path, err)
+			return syncdomain.PendingCreate{}, false, fmt.Errorf("syncstore: dropping pending create intent at %s: %w", item.Path, err)
 		}
 		return syncdomain.PendingCreate{}, false, nil
 	}
@@ -962,7 +962,7 @@ func claimIntendedPlaceholderTx(
 		`UPDATE pending_creates SET item_id = ?, created_etag = ? WHERE path = ? AND item_id = ''`,
 		item.ItemID, item.ETag, item.Path); err != nil {
 		return syncdomain.PendingCreate{}, false, fmt.Errorf(
-			"sync: claiming placeholder %s for the intent at %s: %w", item.ItemID, item.Path, err)
+			"syncstore: claiming placeholder %s for the intent at %s: %w", item.ItemID, item.Path, err)
 	}
 	pending.ItemID = item.ItemID
 	pending.CreatedETag = item.ETag
@@ -989,7 +989,7 @@ func observationLeavesIntent(item *syncdomain.ObservedItem, pending *syncdomain.
 func baselineHoldsItemTx(ctx context.Context, tx sqlTxRunner, itemID string) (bool, error) {
 	var rows int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM baseline WHERE item_id = ?`, itemID).Scan(&rows); err != nil {
-		return false, fmt.Errorf("sync: reading the baseline of %s: %w", itemID, err)
+		return false, fmt.Errorf("syncstore: reading the baseline of %s: %w", itemID, err)
 	}
 
 	return rows > 0, nil
