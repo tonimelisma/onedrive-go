@@ -6,23 +6,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
-// HasWindowForTest reports whether scope detection holds a window for key.
-func (ss *ScopeState) HasWindowForTest(key syncdomain.ScopeKey) bool {
-	_, ok := ss.windows[key]
-	return ok
-}
-
-// WindowPathCountForTest is how many distinct paths the window for key holds
-// at now; open is false when there is no window.
-func (ss *ScopeState) WindowPathCountForTest(key syncdomain.ScopeKey, now time.Time) (count int, open bool) {
-	window, ok := ss.windows[key]
-	if !ok {
-		return 0, false
-	}
-
-	return window.uniqueCount(now), true
-}
-
 // HasWindowForTest reports whether the scheduler's scope detection holds a
 // window for key.
 func (s *Scheduler) HasWindowForTest(key syncdomain.ScopeKey) bool {

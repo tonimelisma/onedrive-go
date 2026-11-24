@@ -602,10 +602,8 @@ func initializeCLIContext(
 	}
 	cc.isWatchCommand = isSyncWatchCommand(cmd)
 
+	// cobra's Execute gives every command a context, so none is nil here.
 	ctx := cmd.Context()
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	// Every command gets the configured log file before it does any work,
 	// including the commands that skip the strict config load (auth, drive,

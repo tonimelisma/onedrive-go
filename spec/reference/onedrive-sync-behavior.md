@@ -30,10 +30,9 @@ Folding goes beyond ASCII. A live probe on a OneDrive Personal account on
 returned **409**. A collision key must therefore use full Unicode case folding
 (where `ß` folds to `ss`), applied to the NFC form of the name, not
 `strings.ToLower` or `strings.EqualFold`, which treat `straße` and `STRASSE` as
-different. At the time of writing the local collision detection in
-`internal/sync/internal/syncobserve/observer_local_collisions.go` and `internal/sync/internal/syncobserve/scanner.go`
-still uses `strings.ToLower`, so these pairs are not yet caught locally; the
-fix is tracked as naming hardening work.
+different. Local collision detection (`internal/sync/internal/syncobserve/scanner.go`)
+keys names through `internal/namekey`, which applies that folding, so these
+pairs are caught locally (`namekey_test.go`, "sharp s full folding").
 
 ## Naming Restrictions
 
