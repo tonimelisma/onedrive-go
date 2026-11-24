@@ -99,10 +99,12 @@ func moveCompositionInputs(
 // had, so it reconciled the path as that item replaced and the file as new
 // content there, while OneDrive's own move of the file elsewhere was a new
 // file too: the file was downloaded at OneDrive's path and uploaded at this
-// computer's. The file's filesystem identity and its synced content prove
-// it is the item, so its moves compose. Only a file whose identity both
-// sides know and whose hash is the synced one: an edited file, or a new one
-// on a reused inode, stays new content.
+// computer's. The file's filesystem identity and its synced content, or a
+// birth time both sides know (synctree.IdentityProvesSameEntry, R-2.17.1),
+// prove it is the item, so its moves compose. Only a file whose identity
+// both sides know and whose hash is the synced one or whose birth time
+// proves it: an edited file without that proof, or a new one on a reused
+// inode, stays new content.
 func movedOntoAnotherItemsPath(
 	cmp *DecidedComparison, entry *syncdomain.BaselineEntry,
 	localRows []syncdomain.LocalStateRow, cmpByPath map[string]*DecidedComparison,
@@ -130,10 +132,11 @@ func movedOntoAnotherItemsPath(
 		if !ok || !synctree.SameIdentity(have, want) {
 			continue
 		}
-		if row.Hash == "" || row.Hash != entry.LocalHash {
-			// A reused inode, or the file edited too: not proven the item,
-			// so it stays new content and nothing of OneDrive's is
-			// overwritten by it.
+		if (row.Hash == "" || row.Hash != entry.LocalHash) && !synctree.IdentityProvesSameEntry(have, want) {
+			// A reused inode, or the file edited too where no birth time
+			// both sides know proves the entry: not proven the item, so it
+			// stays new content and nothing of OneDrive's is overwritten
+			// by it.
 			return "", false
 		}
 		return row.Path, takesAnotherItemsPath(cmpByPath[row.Path], entry, keptOnOneDrive)

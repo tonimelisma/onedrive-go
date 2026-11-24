@@ -201,3 +201,33 @@ func TestIdentityShim_ReportsTheRuledIdentityEverywhere(t *testing.T) {
 	require.True(t, ok)
 	assert.NotEqual(t, uint64(reportedInode), onDiskIdentity.Inode)
 }
+
+// Validates: R-2.17.1
+//
+// The shim without birth times stands for a filesystem that records none:
+// every entry without a rule keeps its real device and inode and reports no
+// birth time, and a ruled entry reports its rule.
+func TestIdentityShimWithoutBirthTimes_EveryUnruledEntryReportsNone(t *testing.T) {
+	t.Parallel()
+
+	const reportedBirth = int64(1_700_000_000_000_000_001)
+	shim := NewIdentityShimWithoutBirthTimes(IdentityRule{Path: "ruled.txt", BirthTime: reportedBirth})
+	tree, dir := shimmedTree(t, shim.Wrap)
+	writeTreeFile(t, tree, "plain.txt", "plain")
+	writeTreeFile(t, tree, "ruled.txt", "ruled")
+
+	plain, err := tree.Lstat("plain.txt")
+	require.NoError(t, err)
+	identity, ok := synctree.IdentityFromFileInfo(plain)
+	require.True(t, ok)
+	assert.Zero(t, identity.BirthTime, "no birth time is recorded")
+	onDisk, err := os.Lstat(filepath.Join(dir, "plain.txt"))
+	require.NoError(t, err)
+	assert.True(t, synctree.SameFile(plain, onDisk), "device and inode are the real ones")
+
+	ruled, err := tree.Lstat("ruled.txt")
+	require.NoError(t, err)
+	identity, ok = synctree.IdentityFromFileInfo(ruled)
+	require.True(t, ok)
+	assert.Equal(t, reportedBirth, identity.BirthTime)
+}

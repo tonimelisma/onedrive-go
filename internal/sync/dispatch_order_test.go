@@ -319,6 +319,8 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_DeletedFolderAndNewFolderWithReusedInodeAreNotAMove,
 		TestRunOnce_DeletedFileAndNewFileWithReusedInodeAreNotAMove,
 		TestRunOnce_RenameWithMatchingBirthTimeIsStillAMove,
+		TestRunOnce_MovedAndEditedFileKeepsItsItemOnlyWhenBirthTimeProvesIt,
+		TestRunOnce_MovedAndEditedFileWithBirthTimeAndARemoteEditKeepsBoth,
 		TestRunOnce_ThreeQuotaRefusalsActivateTheScopeAndBlockTheRows,
 		TestRunOnce_WaitsOutAShortPauseBeforeTheNextPass,
 		TestRunOnce_ReplansASupersededMoveInTheSameRun,

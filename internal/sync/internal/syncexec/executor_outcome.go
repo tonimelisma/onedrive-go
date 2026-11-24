@@ -192,6 +192,15 @@ func (e *Executor) moveOutcome(action *syncdomain.Action) syncdomain.ActionOutco
 		o.LocalBirthTime = local.LocalBirthTime
 		o.LocalHasIdentity = local.LocalHasIdentity
 		o.LocalIdentityObserved = true
+		if action.Type == syncdomain.ActionRemoteMove && local.Hash != "" &&
+			syncdomain.LocalFileDiffersFromBaseline(local, baseline) {
+			// A file moved and edited here, paired because its birth time
+			// proves it is the item (R-2.17.1): the move publishes the path
+			// and the identity, while the edit stays pending until its
+			// upload records it. Recording it here marked the edit synced,
+			// and a remote edit then came down over it.
+			keepBaselineLocalContent(&o, baseline)
+		}
 		fillRemoteOutcomeFromBaseline(&o, baseline, action.View.Remote != nil)
 	} else {
 		fillOutcomeFromBaseline(&o, baseline, action.View.Remote != nil)
@@ -280,4 +289,14 @@ func fillRemoteOutcomeFromBaseline(o *syncdomain.ActionOutcome, baseline *syncdo
 	if o.ETag == "" {
 		o.ETag = baseline.ETag
 	}
+}
+
+// keepBaselineLocalContent puts the baseline's local content facts back into
+// a move outcome whose destination holds an edit not yet synced.
+func keepBaselineLocalContent(o *syncdomain.ActionOutcome, baseline *syncdomain.BaselineEntry) {
+	o.LocalHash = baseline.LocalHash
+	o.LocalSize = baseline.LocalSize
+	o.LocalSizeKnown = baseline.LocalSizeKnown
+	o.LocalMtime = baseline.LocalMtime
+	o.LocalCtime = baseline.LocalCtime
 }

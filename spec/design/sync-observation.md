@@ -653,7 +653,10 @@ inode; ext4, xfs, btrfs, f2fs and tmpfs on current kernels report it. macOS
 and the BSDs read `st_birthtimespec` from the stat itself. Watch mode stats by
 absolute path (`statObservedPath`, the listing of a new directory) and attaches
 the birth time there with `synctree.AttachBirthTime`, so a watch event records
-the identity a full scan would.
+the identity a full scan would. A birth time both the baseline and the new
+path know is what lets a file renamed and edited pair as a move
+(`synctree.IdentityProvesSameEntry`, sync-planning.md); a missing one leaves
+the content proof to decide.
 
 Built-in local observation policy remains:
 

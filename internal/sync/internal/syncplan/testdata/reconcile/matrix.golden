@@ -100,3 +100,11 @@ local deleted          | remote moved doc3       -> cleanup doc; download doc3
 local deleted          | remote edited           -> download doc
 local deleted          | remote moved+edit doc3  -> cleanup doc; download doc3
 local deleted          | remote deleted          -> cleanup doc
+
+# moves, birth time known on both sides: baseline file A at doc; where each side holds it now
+local moved+edit doc2  | remote unchanged        -> remote_move doc2 <- doc; upload doc2
+local moved+edit doc2  | remote moved doc2       -> baseline_update doc2 <- doc
+local moved+edit doc2  | remote moved doc3       -> local_move doc3 <- doc2
+local moved+edit doc2  | remote edited           -> remote_move doc2 <- doc
+local moved+edit doc2  | remote moved+edit doc3  -> local_move doc3 <- doc2
+local moved+edit doc2  | remote deleted          -> cleanup doc; upload doc2

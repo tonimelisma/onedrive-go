@@ -32,6 +32,9 @@ type IdentityRule struct {
 type IdentityShim struct {
 	mu    sync.Mutex // guards rules
 	rules map[string]IdentityRule
+	// withoutBirthTimes makes every path without a rule report no birth
+	// time, as a filesystem that records none (ext2/3, FAT, NFS) does.
+	withoutBirthTimes bool
 }
 
 // NewIdentityShim returns a shim applying rules.
@@ -40,6 +43,16 @@ func NewIdentityShim(rules ...IdentityRule) *IdentityShim {
 	for _, rule := range rules {
 		shim.rules[rule.Path] = rule
 	}
+
+	return shim
+}
+
+// NewIdentityShimWithoutBirthTimes returns a shim applying rules on a
+// filesystem that records no birth times: every other path reports its real
+// device and inode and no birth time, so identity is (device, inode) there.
+func NewIdentityShimWithoutBirthTimes(rules ...IdentityRule) *IdentityShim {
+	shim := NewIdentityShim(rules...)
+	shim.withoutBirthTimes = true
 
 	return shim
 }
@@ -59,7 +72,11 @@ func (s *IdentityShim) Wrap(h synctree.Handle) synctree.Handle {
 func (s *IdentityShim) rule(name string) (IdentityRule, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rule, ok := s.rules[path.Clean(filepath.ToSlash(name))]
+	clean := path.Clean(filepath.ToSlash(name))
+	rule, ok := s.rules[clean]
+	if !ok && s.withoutBirthTimes {
+		return IdentityRule{Path: clean}, true
+	}
 
 	return rule, ok
 }
