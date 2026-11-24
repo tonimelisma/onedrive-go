@@ -1,6 +1,8 @@
 package syncexec
 
 import (
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/text/unicode/norm"
 
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
@@ -133,4 +136,69 @@ func TestExecutor_CreateLocalFolder_FileAtTheNameIsRefused(t *testing.T) {
 	require.ErrorIs(t, o.Error, syncdomain.ErrActionPreconditionChanged)
 	requireExecFileContent(t, syncRoot, "x2", "keep")
 	assert.Equal(t, []string{"x2"}, syncfixture.LocalNames(t, syncRoot))
+}
+
+// On a volume that stores names byte for byte, the NFD spelling of a
+// folder's name appeared after the plan saw the name free. mkdir of the
+// stored NFC name would succeed beside it and make two folders of one
+// OneDrive name; the create is a stale precondition instead, and the path is
+// planned again from what is there.
+//
+// Validates: R-2.12.3, R-2.12.10, R-2.13.2
+func TestExecutor_CreateLocalFolder_ANormalizationTwinOnAByteExactVolumeIsRefused(t *testing.T) {
+	t.Parallel()
+	syncfixture.SkipUnlessByteExactNames(t)
+
+	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
+	e := NewExecution(cfg, syncfixture.EmptyBaseline())
+	nfd := norm.NFD.String("Café")
+	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, nfd), 0o700))
+
+	o := e.ExecuteFolderCreate(t.Context(), localFolderCreate(norm.NFC.String("Café")))
+
+	syncfixture.RequireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, syncdomain.ErrActionPreconditionChanged)
+	require.ErrorIs(t, o.Error, synctree.ErrTargetExists)
+	assert.Equal(t, []string{nfd}, syncfixture.LocalNames(t, syncRoot))
+}
+
+// The same for a new file's download: the NFD spelling of its name appeared
+// beside it on a byte-exact volume. Writing the stored name would make a
+// second file of one OneDrive name; the download is a stale precondition,
+// nothing is fetched, and the user's file is kept as it is.
+//
+// Validates: R-2.12.3, R-2.13.2
+func TestExecutor_DownloadNewFile_ANormalizationTwinOnAByteExactVolumeIsRefused(t *testing.T) {
+	t.Parallel()
+	syncfixture.SkipUnlessByteExactNames(t)
+
+	fetched := false
+	dl := &syncfixture.ExecutorMockDownloader{
+		DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+			fetched = true
+			n, err := w.Write([]byte("remote"))
+			return int64(n), err
+		},
+	}
+	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, dl, &syncfixture.ExecutorMockUploader{})
+	e := NewExecution(cfg, syncfixture.EmptyBaseline())
+	existing, download := norm.NFD.String("Café.txt"), norm.NFC.String("Café.txt")
+	syncfixture.WriteExecTestFile(t, syncRoot, existing, "keep")
+
+	o := e.ExecuteDownload(t.Context(), &syncdomain.Action{
+		Type:    syncdomain.ActionDownload,
+		Path:    download,
+		ItemID:  "item1",
+		DriveID: driveid.New(synctest.TestDriveID),
+		View: &syncdomain.PathView{
+			Path:   download,
+			Remote: &syncdomain.RemoteState{ItemID: "item1", ItemType: syncdomain.ItemTypeFile, ETag: "etag1"},
+		},
+	})
+
+	syncfixture.RequireOutcomeFailure(t, &o)
+	require.ErrorIs(t, o.Error, syncdomain.ErrActionPreconditionChanged)
+	assert.False(t, fetched, "nothing is fetched for a name another file holds")
+	requireExecFileContent(t, syncRoot, existing, "keep")
+	assert.Equal(t, []string{existing}, syncfixture.LocalNames(t, syncRoot))
 }

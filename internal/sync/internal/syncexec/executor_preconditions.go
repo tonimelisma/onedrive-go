@@ -491,6 +491,9 @@ func (e *Executor) validateDownloadTargetPrecondition(ctx context.Context, actio
 			if dbErr := e.refuseLiveDatabaseTarget(target); dbErr != nil {
 				return dbErr
 			}
+			if twinErr := e.refuseDownloadTargetTwin(action, target); twinErr != nil {
+				return twinErr
+			}
 			if action.View == nil || action.View.Local == nil || actionClearsLocalBeforeDownload(action) {
 				return nil
 			}
@@ -513,6 +516,27 @@ func (e *Executor) validateDownloadTargetPrecondition(ctx context.Context, actio
 	}
 
 	return e.validateExistingDownloadTarget(ctx, action, target, info, planned)
+}
+
+// refuseDownloadTargetTwin refuses a download whose target, missing as
+// spelled, has a normalization twin beside it: the same name in another
+// Unicode form (synctree.Root.NormalizationTwin). Only a volume that stores
+// names byte for byte lets the target be missing then; one that folds finds
+// the twin under the target's spelling, and the existing-target checks judge
+// it. Written, the download would make a second file of one OneDrive name, a
+// local collision (R-2.12.3); refused, the path is planned again from what is
+// there, where the observer reads the twin under its stored NFC path. A case
+// variant is left to the scanner's collision detection.
+func (e *Executor) refuseDownloadTargetTwin(action *syncdomain.Action, target string) error {
+	twin, found, err := e.syncTree.NormalizationTwin(target)
+	if err != nil {
+		return fmt.Errorf("checking download target %s: %w", action.Path, normalizeSyncTreePathError(err))
+	}
+	if found {
+		return stalePreconditionError("download target %s is held by %s, the same name in another Unicode form", action.Path, twin)
+	}
+
+	return nil
 }
 
 func actionClearsLocalBeforeDownload(action *syncdomain.Action) bool {

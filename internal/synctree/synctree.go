@@ -816,9 +816,16 @@ func (r *Root) hashRegularFile(rel string) ([sha256.Size]byte, error) {
 // variant, two entries of one stored form, a file, a symbolic link) fails
 // the create with ErrTargetExists and is left as it is (R-2.12.10).
 //
-// On a volume that stores names byte for byte, an NFD-named folder does not
-// make mkdir of the NFC name fail: the folder is then created beside it, a
-// local collision observation reports (R-2.12.3), never an adoption.
+// On a volume that stores names byte for byte, mkdir of a name succeeds
+// beside its NFD (or NFC) spelling, which OneDrive takes for the same name: a
+// local collision (R-2.12.3). So when the name as spelled is missing, its
+// other normalization forms are lstat'd beside it, and an entry under one
+// fails the create with ErrTargetExists, as mkdir's EEXIST does on a volume
+// that folds (refuseNameTwin): constant work per create, no listing. A volume
+// that folds finds such an entry under the asked spelling, so mkdir and the
+// adoption rules above still decide there. A case variant on a byte-exact
+// volume is made beside, two local entries the scanner reports as a
+// collision.
 //
 // Every folder below the sync root is a folder in the user's tree, so the
 // mode is not the caller's to choose: each new folder asks for
@@ -850,6 +857,10 @@ func (r *Root) MkdirExact(rel string) (string, error) {
 		}
 	}
 
+	if err := refuseNameTwin(root, clean); err != nil {
+		return "", err
+	}
+
 	mkdirErr := root.Mkdir(clean, localpath.UserTreeDirPerm)
 	if mkdirErr == nil {
 		return clean, nil
@@ -859,6 +870,71 @@ func (r *Root) MkdirExact(rel string) (string, error) {
 	}
 
 	return adoptExistingFolder(root, clean)
+}
+
+// refuseNameTwin is ErrTargetExists when clean, missing as spelled, has a
+// normalization twin (normalizationTwin). Present as spelled, or found under
+// the asked spelling by a volume that folds, the name is mkdir's to refuse
+// and the adoption rules' to judge.
+func refuseNameTwin(root rootHandle, clean string) error {
+	if _, err := root.Lstat(clean); !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	twin, found, err := normalizationTwin(root, clean)
+	if err != nil {
+		return err
+	}
+	if found {
+		return fmt.Errorf("creating directory %s: %s is the same name in another Unicode form: %w", clean, twin, ErrTargetExists)
+	}
+
+	return nil
+}
+
+// NormalizationTwin is the name on disk of an entry beside rel that is rel's
+// final name in another Unicode normalization form (its NFC or NFD
+// spelling): on a volume that stores names byte for byte, an entry OneDrive
+// takes for rel, beside which a create of rel would make a second entry of
+// one OneDrive name (R-2.12.3, R-2.13.2). It lstats at most two names and
+// lists nothing, so a create or download of each of N new names costs N
+// constant checks. A case variant is not looked for: on such a volume a case
+// pair is two local entries, which the scanner's collision detection
+// reports. The entry spelled exactly as rel is no twin.
+func (r *Root) NormalizationTwin(rel string) (string, bool, error) {
+	clean, err := cleanRelative(rel)
+	if err != nil {
+		return "", false, err
+	}
+	if clean == "." {
+		return "", false, nil
+	}
+
+	root, err := r.openRootNoFollow()
+	if err != nil {
+		return "", false, err
+	}
+	defer root.Close() //nolint:errcheck // read-only use of the handle: a close failure loses nothing
+
+	return normalizationTwin(root, clean)
+}
+
+func normalizationTwin(root rootHandle, clean string) (string, bool, error) {
+	parent := filepath.Dir(clean)
+	for _, form := range namekey.OtherNormalForms(filepath.Base(clean)) {
+		candidate := form
+		if parent != "." {
+			candidate = filepath.Join(parent, form)
+		}
+		_, err := root.Lstat(candidate)
+		if err == nil {
+			return candidate, true, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", false, fmt.Errorf("checking %s for the name %s: %w", candidate, clean, err)
+		}
+	}
+
+	return "", false, nil
 }
 
 // adoptExistingFolder is MkdirExact's answer when mkdir found the name

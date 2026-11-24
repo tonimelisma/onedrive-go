@@ -3,6 +3,7 @@ package synctree_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,6 +24,16 @@ func caseInsensitiveTree(t *testing.T) (*synctree.Root, string) {
 	require.NoError(t, err)
 
 	return tree.Interpose(synctest.CaseInsensitive), dir
+}
+
+// skipUnlessByteExactVolume skips on macOS, whose volumes find an entry by
+// another case or Unicode spelling of its name.
+func skipUnlessByteExactVolume(t *testing.T) {
+	t.Helper()
+
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS volumes fold case and Unicode form")
+	}
 }
 
 func namesIn(t *testing.T, dir string) []string {
@@ -116,6 +127,63 @@ func TestRoot_MkdirExact_AdoptsTheNFDSpellingOfTheStoredName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, nfd, onDisk)
 	assert.Equal(t, []string{nfd}, namesIn(t, dir))
+}
+
+// On a volume that stores names byte for byte, mkdir of the stored NFC name
+// succeeds beside its NFD spelling, which OneDrive takes for the same name.
+// Made, the two folders would be one OneDrive name, a local collision
+// (R-2.12.3); the create refuses as a name taken instead, and nothing is
+// made beside the entry.
+//
+// Validates: R-2.12.3, R-2.12.10, R-2.13.2
+func TestRoot_MkdirExact_RefusesANormalizationTwinOnAByteExactVolume(t *testing.T) {
+	t.Parallel()
+	skipUnlessByteExactVolume(t)
+
+	dir := t.TempDir()
+	tree, err := synctree.Open(dir)
+	require.NoError(t, err)
+	nfd := norm.NFD.String("Café")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs", nfd), 0o700))
+
+	_, err = tree.MkdirExact(filepath.Join("docs", norm.NFC.String("Café")))
+
+	require.ErrorIs(t, err, synctree.ErrTargetExists)
+	assert.Contains(t, err.Error(), nfd, "the refusal names the entry that holds the name")
+	assert.Equal(t, []string{nfd}, namesIn(t, filepath.Join(dir, "docs")))
+	assert.Empty(t, namesIn(t, filepath.Join(dir, "docs", nfd)))
+
+	twin, found, err := tree.NormalizationTwin(filepath.Join("docs", norm.NFC.String("Café")))
+	require.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, filepath.Join("docs", nfd), twin)
+}
+
+// A name no entry holds in either Unicode form is made as asked on a
+// byte-exact volume, beside entries of other names. A case variant is one of
+// them: the create checks normalization forms only, and the two local
+// entries of one OneDrive name are the scanner's collision to report
+// (TestFullScan_CaseCollision_InSkippedNotEvents).
+//
+// Validates: R-2.12.3, R-2.12.10
+func TestRoot_MkdirExact_MakesANameNoNormalizationTwinHolds(t *testing.T) {
+	t.Parallel()
+	skipUnlessByteExactVolume(t)
+
+	dir := t.TempDir()
+	tree, err := synctree.Open(dir)
+	require.NoError(t, err)
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "x1"), 0o700))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "x2"), 0o700))
+
+	onDisk, err := tree.MkdirExact("X2")
+
+	require.NoError(t, err)
+	assert.Equal(t, "X2", onDisk)
+	assert.ElementsMatch(t, []string{"x1", "x2", "X2"}, namesIn(t, dir))
+	_, found, err := tree.NormalizationTwin("X3")
+	require.NoError(t, err)
+	assert.False(t, found)
 }
 
 // A file, or a symbolic link, at the name is not a folder the create can

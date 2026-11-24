@@ -162,6 +162,21 @@ func Stored(name string) string {
 	return norm.NFC.String(name)
 }
 
+// OtherNormalForms returns the NFC and NFD spellings of name that differ
+// from name itself, at most two and none for a name with nothing to compose
+// or decompose: the spellings under which a volume that stores names byte
+// for byte can hold an entry of name's stored form (R-2.13.2).
+func OtherNormalForms(name string) []string {
+	var forms []string
+	for _, form := range []string{norm.NFC.String(name), norm.NFD.String(name)} {
+		if form != name && !slices.Contains(forms, form) {
+			forms = append(forms, form)
+		}
+	}
+
+	return forms
+}
+
 // StoredPath returns the stored form of a slash-separated path: NFC over the
 // whole string. It equals the join of the stored forms of its segments
 // (TestStoredPath_EqualsPerSegment): "/" is a starter that composes with

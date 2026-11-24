@@ -757,9 +757,31 @@ user's folder and its content downloaded into it. The planner holds a create
 whose case variant it sees waiting (R-2.12.1), but it cannot see a folder
 made between the plan and the dispatch in watch mode, or an entry its
 filters hide, so the create itself has to refuse. On a volume that stores
-names byte for byte the NFC create beside an NFD folder succeeds and makes a
-second folder, a local collision the next observation reports (R-2.12.3),
-never an adoption. The shortcut alias folder is made by the same call
+names byte for byte, mkdir of the stored NFC name succeeds beside the
+name's NFD spelling, which OneDrive takes for the same name, and the two
+would be one OneDrive name, a local collision (R-2.12.3). So when the name as
+spelled is missing, `MkdirExact` lstats the name's other normalization forms
+beside it (`namekey.OtherNormalForms`: its NFC and NFD spellings, at most
+two; `synctree.Root.NormalizationTwin`), and an entry under one fails the
+create with `ErrTargetExists` as mkdir's EEXIST does on a volume that folds:
+the same stale precondition, the path planned again from what is there,
+where the observer reads the twin under its stored NFC path
+(`TestRoot_MkdirExact_RefusesANormalizationTwinOnAByteExactVolume`,
+`TestExecutor_CreateLocalFolder_ANormalizationTwinOnAByteExactVolumeIsRefused`).
+Until 2026-11-24 it made the second folder. The check is constant work per
+create and lists nothing, so a first sync that creates N names in one folder
+does N checks, not N listings of a growing folder. Case pairs are not
+looked for: on a byte-exact volume a case variant is made beside, two local
+entries the scanner's collision detection reports
+(`TestRoot_MkdirExact_MakesANameNoNormalizationTwinHolds`,
+`TestFullScan_CaseCollision_InSkippedNotEvents`). A volume that folds finds
+the twin under the asked spelling, so mkdir and the adoption rules above
+still decide there. A new file's download is held to the same rule: a
+target missing as spelled with a normalization twin beside it is a stale
+precondition (`refuseDownloadTargetTwin`), checked before the transfer and
+again before the rename, and nothing is fetched or written
+(`TestExecutor_DownloadNewFile_ANormalizationTwinOnAByteExactVolumeIsRefused`). The
+shortcut alias folder is made by the same call
 (`sync-engine.md`, shortcut alias folders).
 
 Successful outcomes still preserve remote ancestry for later baseline writes,
