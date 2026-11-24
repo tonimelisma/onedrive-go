@@ -3275,16 +3275,13 @@ func dropCreatesOntoComposedItems(
 			kept = append(kept, *action)
 			continue
 		}
-		if holder, held := heldBy[side][action.Path]; held && holder != action.ItemID {
-			dropped = append(dropped, *action)
-			continue
-		}
-		if side == moveCoordLocal {
-			if holder, held := heldLocally[namekey.OfPath(action.Path)]; held && holder.key != action.ItemID {
-				logCreateOntoAHeldName(logger, action, holder.path)
+		if exact, onto := createsOntoAHeldPath(logger, action, heldBy[side], side, heldLocally); onto {
+			if exact {
+				dropped = append(dropped, *action)
+			} else {
 				ontoHeldNames = append(ontoHeldNames, *action)
-				continue
 			}
+			continue
 		}
 		if folder, below := belowAnotherItemsFolder(action, side, heldBy[side], nodeByKey); below && side == moveCoordRemote {
 			logCreateBelowAnotherItemsFolder(logger, action, folder)
@@ -4070,16 +4067,39 @@ func foldedHeldPaths(held map[string]string) map[namekey.PathKey]heldName {
 	return folded
 }
 
-// logCreateOntoAHeldName logs, at Debug, a create here held because an item
-// that stays put here holds its name under OneDrive's name comparison.
-func logCreateOntoAHeldName(logger *slog.Logger, action *syncdomain.Action, holderPath string) {
-	if logger == nil {
-		return
+// createsOntoAHeldPath reports a create on side onto a path another composed
+// item still holds there (held, pathsHeldByUnmovedItems), and whether the two
+// are spelled alike (exact). On this computer a name the item holds under
+// OneDrive's name comparison counts too (createsOntoAHeldName).
+func createsOntoAHeldPath(
+	logger *slog.Logger, action *syncdomain.Action, held map[string]string, side moveCoord, heldLocally map[namekey.PathKey]heldName,
+) (exact, onto bool) {
+	if holder, isHeld := held[action.Path]; isHeld && holder != action.ItemID {
+		return true, true
 	}
-	logger.Debug("create waits for an item here to leave its name",
-		slog.String("action", action.Type.String()),
-		slog.String("path", action.Path),
-		slog.String("held_by", holderPath))
+	if side != moveCoordLocal {
+		return false, false
+	}
+
+	return false, createsOntoAHeldName(logger, action, heldLocally)
+}
+
+// createsOntoAHeldName reports a create here at a name another item that
+// stays put here holds under OneDrive's name comparison (foldedHeldPaths),
+// logging it at Debug.
+func createsOntoAHeldName(logger *slog.Logger, action *syncdomain.Action, heldLocally map[namekey.PathKey]heldName) bool {
+	holder, held := heldLocally[namekey.OfPath(action.Path)]
+	if !held || holder.key == action.ItemID {
+		return false
+	}
+	if logger != nil {
+		logger.Debug("create waits for an item here to leave its name",
+			slog.String("action", action.Type.String()),
+			slog.String("path", action.Path),
+			slog.String("held_by", holder.path))
+	}
+
+	return true
 }
 
 // pathsVacatedByPlan reports, per side, the paths an action of the plan frees.
