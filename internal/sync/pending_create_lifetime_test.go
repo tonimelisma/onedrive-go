@@ -886,10 +886,10 @@ func failTestCreate(t *testing.T, rt *watchRuntime, bl syncdomain.BaselineView, 
 
 	clock.Advance(time.Second)
 	endedAt := clock.Now()
-	require.NoError(t, rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, &syncdomain.ActionCompletion{
+	require.NoError(t, rt.handleWatchActionCompletion(t.Context(), &watchPipeline{bl: bl}, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path: create.Action.Path, DriveID: rt.cfg.driveID, ActionType: syncdomain.ActionUpload, ActionID: create.ID,
 		Err: scenarioCreateAnswerLost(filepath.Base(create.Action.Path)), ErrMsg: "create answer lost",
-	}))
+	})))
 
 	return endedAt
 }

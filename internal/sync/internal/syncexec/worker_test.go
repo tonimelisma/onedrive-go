@@ -816,7 +816,7 @@ func TestExtractHTTPStatus_GraphError(t *testing.T) {
 	t.Parallel()
 
 	ge := &graph.GraphError{StatusCode: 404, Message: "not found"}
-	assert.Equal(t, 404, syncdomain.ExtractHTTPStatus(ge))
+	assert.Equal(t, 404, ExtractHTTPStatus(ge))
 }
 
 func TestExtractHTTPStatus_WrappedGraphError(t *testing.T) {
@@ -824,19 +824,19 @@ func TestExtractHTTPStatus_WrappedGraphError(t *testing.T) {
 
 	ge := &graph.GraphError{StatusCode: 429, Message: "throttled"}
 	wrapped := fmt.Errorf("download failed: %w", ge)
-	assert.Equal(t, 429, syncdomain.ExtractHTTPStatus(wrapped))
+	assert.Equal(t, 429, ExtractHTTPStatus(wrapped))
 }
 
 func TestExtractHTTPStatus_NonGraphError(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, 0, syncdomain.ExtractHTTPStatus(errors.New("network timeout")))
+	assert.Equal(t, 0, ExtractHTTPStatus(errors.New("network timeout")))
 }
 
 func TestExtractHTTPStatus_Nil(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, 0, syncdomain.ExtractHTTPStatus(nil))
+	assert.Equal(t, 0, ExtractHTTPStatus(nil))
 }
 
 // ---------------------------------------------------------------------------

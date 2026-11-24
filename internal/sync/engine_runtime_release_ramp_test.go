@@ -13,6 +13,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -183,6 +184,7 @@ func TestEngineFlow_ThrottledMemberDuringProbation_ReblocksRetiresTheOutboxAndRe
 	throttled.RetryAfter = 30 * time.Second
 	throttled.Err = graph.ErrThrottled
 	throttled.ErrMsg = "rate limited"
+	syncexec.CompletionForTest(throttled)
 	ready, err := rt.applyRuntimeCompletionStage(ctx, throttled, syncdomain.NewBaselineSnapshot(nil))
 	require.NoError(t, err)
 	assert.Empty(t, ready)
@@ -324,7 +326,7 @@ func TestOneShotRunner_ScopeActivationRetiresPendingOutbox(t *testing.T) {
 	runner.sched.Queued(other)
 	runner.outbox = []*syncdomain.TrackedAction{pending, other}
 
-	err := runner.handleOneShotCompletion(ctx, nil, nil, nil, &syncdomain.ActionCompletion{
+	err := runner.handleOneShotCompletion(ctx, nil, nil, nil, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:   1,
 		Path:       "failing.txt",
 		ActionType: syncdomain.ActionUpload,
@@ -333,7 +335,7 @@ func TestOneShotRunner_ScopeActivationRetiresPendingOutbox(t *testing.T) {
 		RetryAfter: 10 * time.Second,
 		Err:        graph.ErrThrottled,
 		ErrMsg:     "rate limited",
-	})
+	}))
 	require.NoError(t, err)
 
 	assert.Equal(t, []*syncdomain.TrackedAction{other}, runner.outbox)

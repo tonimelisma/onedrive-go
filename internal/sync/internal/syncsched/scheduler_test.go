@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
@@ -47,9 +48,9 @@ func TestScheduler_InstallReplacesEveryPerPlanStructure(t *testing.T) {
 	s.Running(running)
 	s.Hold(held, HeldScope, syncdomain.SKService(), time.Time{})
 	s.PutScope(&syncdomain.ActiveScope{Key: syncdomain.SKService(), NextTrialAt: now})
-	s.ObserveFailure(&syncdomain.ActionCompletion{
+	s.ObserveFailure(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path: "a.txt", ActionType: syncdomain.ActionUpload, HTTPStatus: 500, Err: assert.AnError,
-	})
+	}))
 	require.True(t, s.HasWindowForTest(syncdomain.SKService()))
 	require.Equal(t, 1, s.RunningCount())
 	require.Equal(t, 1, s.HeldCount())

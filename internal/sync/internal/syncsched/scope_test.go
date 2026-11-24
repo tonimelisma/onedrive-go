@@ -9,6 +9,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -20,11 +21,11 @@ func TestScope_429FallbackInterval(t *testing.T) {
 	ss := NewScopeState(clock, discardLogger())
 
 	// 429 without Retry-After should use the defaultInitialTrialInterval fallback.
-	r := syncdomain.ActionCompletion{
+	r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:       "/file-a.txt",
 		HTTPStatus: 429,
 		DriveID:    driveid.New("0000000000000001"),
-	}
+	})
 	result := ss.UpdateScope(&r)
 
 	require.True(t, result.Block)
@@ -67,12 +68,12 @@ func TestScope_ImmediateRetryAfterBlocks(t *testing.T) {
 			clock, _ := controllableClock()
 			ss := NewScopeState(clock, discardLogger())
 
-			result := ss.UpdateScope(&syncdomain.ActionCompletion{
+			result := ss.UpdateScope(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				Path:       tt.path,
 				HTTPStatus: tt.status,
 				RetryAfter: tt.retryAfter,
 				DriveID:    driveid.New("0000000000000001"),
-			})
+			}))
 
 			require.True(t, result.Block, "Retry-After should force an immediate block scope")
 			assert.Equal(t, tt.wantScope, result.ScopeKey)
@@ -91,10 +92,10 @@ func TestScope_503WithoutRetryAfter(t *testing.T) {
 
 	// A 503 without Retry-After should feed the service sliding window,
 	// not trigger an immediate block (it falls into the >= 500 case).
-	r := syncdomain.ActionCompletion{
+	r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:       "/doc.docx",
 		HTTPStatus: 503,
-	}
+	})
 	result := ss.UpdateScope(&r)
 
 	assert.False(t, result.Block, "503 without Retry-After must NOT immediately block; it feeds the sliding window")
@@ -110,10 +111,10 @@ func TestScope_507OwnDrive(t *testing.T) {
 	// Three unique paths within the quota window should trigger quota:own.
 	paths := []string{"/a.txt", "/b.txt", "/c.txt"}
 	for i, p := range paths {
-		r := syncdomain.ActionCompletion{
+		r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:       p,
 			HTTPStatus: 507,
-		}
+		})
 		result := ss.UpdateScope(&r)
 		if i < len(paths)-1 {
 			assert.False(t, result.Block, "path %d (%s) should not trigger block yet", i, p)
@@ -137,10 +138,10 @@ func TestScope_5xxSlidingWindow(t *testing.T) {
 	// Five unique paths with 5xx within 30s must trigger a service block.
 	paths := []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt", "/e.txt"}
 	for i, p := range paths {
-		r := syncdomain.ActionCompletion{
+		r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:       p,
 			HTTPStatus: 500,
-		}
+		})
 		result := ss.UpdateScope(&r)
 		if i < len(paths)-1 {
 			assert.False(t, result.Block, "path %d should not trigger block yet", i)
@@ -165,7 +166,7 @@ func TestScope_5xxWindowExpiry(t *testing.T) {
 	// failure after expiry must NOT trigger a block because the earlier
 	// entries have aged out.
 	for _, p := range []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt"} {
-		r := syncdomain.ActionCompletion{Path: p, HTTPStatus: 500}
+		r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{Path: p, HTTPStatus: 500})
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
@@ -174,7 +175,7 @@ func TestScope_5xxWindowExpiry(t *testing.T) {
 	// Advance past the 30s window so the first entries expire.
 	advance(30 * time.Second)
 
-	r := syncdomain.ActionCompletion{Path: "/e.txt", HTTPStatus: 500}
+	r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{Path: "/e.txt", HTTPStatus: 500})
 	result := ss.UpdateScope(&r)
 	assert.False(t, result.Block, "entries from before the window should have expired")
 }
@@ -188,7 +189,7 @@ func TestScope_SuccessResetsWindow(t *testing.T) {
 
 	// Accumulate two 507 failures on own drive.
 	for _, p := range []string{"/a.txt", "/b.txt"} {
-		r := syncdomain.ActionCompletion{Path: p, HTTPStatus: 507}
+		r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{Path: p, HTTPStatus: 507})
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
@@ -201,14 +202,14 @@ func TestScope_SuccessResetsWindow(t *testing.T) {
 	// The next failure (3rd unique path overall but 1st after reset)
 	// must NOT trigger.
 	for i, p := range []string{"/c.txt", "/d.txt"} {
-		r := syncdomain.ActionCompletion{Path: p, HTTPStatus: 507}
+		r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{Path: p, HTTPStatus: 507})
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block, "after reset, path %d should not trigger", i)
 		advance(1 * time.Second)
 	}
 
 	// Third unique path after reset should trigger.
-	r := syncdomain.ActionCompletion{Path: "/e.txt", HTTPStatus: 507}
+	r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{Path: "/e.txt", HTTPStatus: 507})
 	result := ss.UpdateScope(&r)
 	require.True(t, result.Block, "third unique path after reset should trigger quota:own")
 	assert.Equal(t, syncdomain.SKQuotaOwn(), result.ScopeKey)
@@ -226,10 +227,10 @@ func TestScope_SameFileDoesNotEscalate(t *testing.T) {
 
 	// Feed 10 failures on the same path — should never trigger.
 	for i := range 10 {
-		r := syncdomain.ActionCompletion{
+		r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:       "/same-file.txt",
 			HTTPStatus: 507,
-		}
+		})
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block, "repeated failures on the same path must not trigger block scope (iteration %d)", i)
 		advance(500 * time.Millisecond)
@@ -259,7 +260,7 @@ func TestScope_NonScopeStatusReturnsEmpty(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := syncdomain.ActionCompletion{Path: "/file.txt", HTTPStatus: tc.status}
+			r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{Path: "/file.txt", HTTPStatus: tc.status})
 			result := ss.UpdateScope(&r)
 			assert.False(t, result.Block, "status %d should not trigger a block scope", tc.status)
 			assert.Empty(t, result.ScopeKey)
@@ -279,7 +280,7 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 
 	// Four 5xx failures — one short of triggering.
 	for _, p := range []string{"/a.txt", "/b.txt", "/c.txt", "/d.txt"} {
-		r := syncdomain.ActionCompletion{Path: p, HTTPStatus: 500}
+		r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{Path: p, HTTPStatus: 500})
 		result := ss.UpdateScope(&r)
 		assert.False(t, result.Block)
 		advance(1 * time.Second)
@@ -290,7 +291,7 @@ func TestScope_SuccessResetsServiceWindow(t *testing.T) {
 
 	// Now we need five fresh unique paths to trigger again.
 	// The next failure (5th overall but 1st after reset) must not trigger.
-	r := syncdomain.ActionCompletion{Path: "/e.txt", HTTPStatus: 500}
+	r := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{Path: "/e.txt", HTTPStatus: 500})
 	result := ss.UpdateScope(&r)
 	assert.False(t, result.Block, "first failure after service window reset should not trigger")
 }
@@ -501,25 +502,25 @@ func TestScope_FiveRefusalsSetNoServiceScope(t *testing.T) {
 	ss := NewScopeState(clock, discardLogger())
 
 	for _, p := range []string{"/a", "/b", "/c", "/d", "/e", "/f"} {
-		result := ss.UpdateScope(&syncdomain.ActionCompletion{
+		result := ss.UpdateScope(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:       p,
 			HTTPStatus: 501,
 			Err: &graph.GraphError{
 				StatusCode: 501, Code: "notImplemented", Err: graph.ErrServerError,
 				Message: "Creating a folder in this shared folder is not supported.",
 			},
-		})
+		}))
 		assert.False(t, result.Block, "a 501 refusal must never block every drive")
 		advance(time.Second)
 	}
 
 	// A notSupported code under another 5xx is a refusal too.
 	for _, p := range []string{"/g", "/h", "/i", "/j", "/k"} {
-		result := ss.UpdateScope(&syncdomain.ActionCompletion{
+		result := ss.UpdateScope(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:       p,
 			HTTPStatus: 500,
 			Err:        &graph.GraphError{StatusCode: 500, Code: "notSupported", Err: graph.ErrServerError},
-		})
+		}))
 		assert.False(t, result.Block)
 	}
 }
@@ -549,7 +550,7 @@ func TestScope_QuotaRecognizedOutsideStatus507(t *testing.T) {
 			ss := NewScopeState(clock, discardLogger())
 			var last syncdomain.ScopeUpdateResult
 			for _, p := range []string{"/a", "/b", "/c"} {
-				last = ss.UpdateScope(&syncdomain.ActionCompletion{Path: p, HTTPStatus: tt.err.StatusCode, Err: tt.err})
+				last = ss.UpdateScope(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Path: p, HTTPStatus: tt.err.StatusCode, Err: tt.err}))
 				advance(time.Second)
 			}
 

@@ -18,6 +18,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -75,15 +76,15 @@ func TestClassifyResult_EveryUnreachedRequestIsOutageEvidenceLikeA504(t *testing
 	t.Parallel()
 
 	answered := &graph.GraphError{StatusCode: http.StatusGatewayTimeout, Err: graph.ErrServerError}
-	gatewayTimeout := classifyResult(&syncdomain.ActionCompletion{HTTPStatus: http.StatusGatewayTimeout, Err: answered})
+	gatewayTimeout := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusGatewayTimeout, Err: answered}))
 	require.Equal(t, syncdomain.SKService(), gatewayTimeout.ScopeEvidence)
 
 	for _, request := range unreachedRequests() {
 		t.Run(request.name, func(t *testing.T) {
 			t.Parallel()
 
-			require.True(t, syncdomain.IsServiceUnreached(request.err))
-			got := classifyResult(&syncdomain.ActionCompletion{Err: request.err, ActionType: syncdomain.ActionFolderCreate, Path: "docs"})
+			require.True(t, syncexec.IsServiceUnreached(request.err))
+			got := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: request.err, ActionType: syncdomain.ActionFolderCreate, Path: "docs"}))
 
 			assert.Equal(t, resultRequeue, got.Class, "%v", request.err)
 			assert.Equal(t, syncdomain.PersistRetryWork, got.Persistence)
@@ -94,7 +95,7 @@ func TestClassifyResult_EveryUnreachedRequestIsOutageEvidenceLikeA504(t *testing
 			assert.Equal(t, gatewayTimeout.TrialHint, got.TrialHint)
 			assert.Equal(t, syncsched.ServiceWindowThreshold, completionsToBlockTheService(t, request.err), "the window a 504 crosses")
 
-			stopped := classifyResult(&syncdomain.ActionCompletion{Err: request.err, RunEnded: true})
+			stopped := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: request.err, RunEnded: true}))
 			assert.Equal(t, resultRequeue, stopped.Class)
 			assert.Equal(t, syncdomain.ScopeKey{}, stopped.ScopeEvidence, "a stop is never the service's silence")
 			assert.False(t, stopped.RunScopeDetection)

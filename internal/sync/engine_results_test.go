@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -30,11 +31,11 @@ func TestEngineFlow_LogFailureSummary_AggregatesRetryWorkBelowWarn(t *testing.T)
 		flow.recordError(&syncdomain.ResultDecision{
 			Persistence:   syncdomain.PersistRetryWork,
 			ConditionType: syncdomain.IssueServiceOutage,
-		}, &syncdomain.ActionCompletion{
+		}, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:   fmt.Sprintf("retry-%02d.txt", i),
 			Err:    errors.New("boom"),
 			ErrMsg: "boom",
-		})
+		}))
 	}
 
 	succeeded, failed, errs := flow.resultStats()

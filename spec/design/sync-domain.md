@@ -1,6 +1,6 @@
 # Sync Domain
 
-GOVERNS: internal/sync/syncdomain/actions.go, internal/sync/syncdomain/condition_keys.go, internal/sync/syncdomain/content_filter.go, internal/sync/syncdomain/core_types.go, internal/sync/syncdomain/domain_baseline_view.go, internal/sync/syncdomain/domain_decision_state.go, internal/sync/syncdomain/crash_points.go, internal/sync/syncdomain/domain_clock.go, internal/sync/syncdomain/domain_debug_events.go, internal/sync/syncdomain/domain_delete_safety.go, internal/sync/syncdomain/domain_graph_error.go, internal/sync/syncdomain/domain_observation_mode.go, internal/sync/syncdomain/domain_path_kind.go, internal/sync/syncdomain/domain_runtime_decision.go, internal/sync/syncdomain/domain_worker.go, internal/sync/syncdomain/enums.go, internal/sync/syncdomain/errors.go, internal/sync/syncdomain/issue_types.go, internal/sync/syncdomain/permission_capability.go, internal/sync/syncdomain/retry_work_key.go, internal/sync/syncdomain/scope_block.go, internal/sync/syncdomain/scope_key.go, internal/sync/syncdomain/scope_semantics.go, internal/sync/syncdomain/tracked_action.go, internal/sync/syncdomain/types.go, internal/sync/syncdomain/worker_result.go, internal/sync/syncdomain/domain_baseline_mutation.go, internal/sync/syncdomain/domain_conflict_stem.go, internal/sync/syncdomain/domain_file_change_time.go, internal/sync/syncdomain/domain_item_type.go, internal/sync/syncdomain/domain_local_hash_cache.go, internal/sync/syncdomain/domain_observation_findings.go, internal/sync/syncdomain/domain_observation_state.go, internal/sync/syncdomain/domain_pending_create.go, internal/sync/syncdomain/domain_poll_interval.go, internal/sync/syncdomain/domain_remote_item.go, internal/sync/syncdomain/domain_sqlite_rows.go, internal/sync/syncdomain/domain_stored_time.go, internal/sync/syncdomain/domain_sync_root_identity.go, internal/sync/syncdomain/domain_row_types.go, internal/sync/syncdomain/domain_truth_status.go, internal/sync/syncdomain/domain_local_rules.go, internal/sync/syncdomain/doc.go
+GOVERNS: internal/sync/syncdomain/actions.go, internal/sync/syncdomain/condition_keys.go, internal/sync/syncdomain/content_filter.go, internal/sync/syncdomain/core_types.go, internal/sync/syncdomain/domain_baseline_view.go, internal/sync/syncdomain/domain_decision_state.go, internal/sync/syncdomain/crash_points.go, internal/sync/syncdomain/domain_clock.go, internal/sync/syncdomain/domain_debug_events.go, internal/sync/syncdomain/domain_delete_safety.go, internal/sync/syncdomain/domain_server_answer.go, internal/sync/syncdomain/domain_observation_mode.go, internal/sync/syncdomain/domain_path_kind.go, internal/sync/syncdomain/domain_runtime_decision.go, internal/sync/syncdomain/domain_worker.go, internal/sync/syncdomain/enums.go, internal/sync/syncdomain/errors.go, internal/sync/syncdomain/issue_types.go, internal/sync/syncdomain/permission_capability.go, internal/sync/syncdomain/retry_work_key.go, internal/sync/syncdomain/scope_block.go, internal/sync/syncdomain/scope_key.go, internal/sync/syncdomain/scope_semantics.go, internal/sync/syncdomain/tracked_action.go, internal/sync/syncdomain/types.go, internal/sync/syncdomain/worker_result.go, internal/sync/syncdomain/domain_baseline_mutation.go, internal/sync/syncdomain/domain_conflict_stem.go, internal/sync/syncdomain/domain_file_change_time.go, internal/sync/syncdomain/domain_item_type.go, internal/sync/syncdomain/domain_local_hash_cache.go, internal/sync/syncdomain/domain_observation_findings.go, internal/sync/syncdomain/domain_observation_state.go, internal/sync/syncdomain/domain_pending_create.go, internal/sync/syncdomain/domain_poll_interval.go, internal/sync/syncdomain/domain_remote_item.go, internal/sync/syncdomain/domain_sqlite_rows.go, internal/sync/syncdomain/domain_stored_time.go, internal/sync/syncdomain/domain_sync_root_identity.go, internal/sync/syncdomain/domain_row_types.go, internal/sync/syncdomain/domain_truth_status.go, internal/sync/syncdomain/domain_local_rules.go, internal/sync/syncdomain/doc.go
 
 Implements: R-2.1 [verified], R-2.7 [verified]
 
@@ -49,12 +49,20 @@ enum and its completeness test; the two retry-work key derivations
 (`RetryWorkKeyForAction`, `RetryWorkKeyForCompletion`) must agree, so they
 share one helper here; values the tests of several families build
 (`MutationFromActionOutcome`) or the e2e suite reads (`ConflictStemExt`) stay
-where every one can import them; and the meaning of a Graph failure
-(`ServerAnswer`, `IsRequestTimeout`, `IsServiceUnreached`) is read by the
-engine, the scheduler and the completion record. A completion's
-`ServerAnswer()` is derived from its status and error on each call rather
-than stored, so a completion a test builds from a status cannot disagree with
-it.
+where every one can import them; and the names of what a Graph failure means
+(`ServerAnswer`) are read by the engine, the scheduler and the completion
+record. Reading that meaning off an error is not the vocabulary's: the
+executor, the package that talks to Graph, reads it once when it builds a
+completion (`syncexec.CompletionFromTrackedAction`, the one production
+constructor) and records it as `ActionCompletion.ServerAnswer`, beside the
+status and Retry-After it read from the same error; no one changes a
+completion's error after that. Tests build their completions through
+`syncexec.CompletionForTest`, which reads the answer the same way. This
+package imports neither `internal/graph` nor any other transport for it: the
+410's resync flavor is read by the remote observer
+(`syncobserve.ResyncKindOfGone`) and handed to `NewDeltaExpiredError`.
+`internal/retry` stays imported for one reason, the jitter source of
+`RealClock`.
 
 ## Why This Is A Family And Not A Bag Of Types
 

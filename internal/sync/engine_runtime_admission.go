@@ -61,7 +61,7 @@ func (flow *engineFlow) filterFreshAdmissionDecisions(
 		}
 
 		completionErr := fmt.Errorf("%w: %s", syncdomain.ErrActionPreconditionChanged, freshness.Reason)
-		completion := syncdomain.ActionCompletionFromTrackedAction(ta, nil, completionErr)
+		completion := syncexec.CompletionFromTrackedAction(ta, nil, completionErr)
 		flow.deps.perf.RecordSuperseded(perf.SupersededSourceEngineAdmission, 1)
 		if err := flow.applySupersededCompletion(ctx, ta, &completion, "admission stale action"); err != nil {
 			return filtered, admissionDispatchActions(filtered), err

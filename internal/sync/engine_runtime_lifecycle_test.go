@@ -14,6 +14,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -204,12 +205,12 @@ func persistBlockedRetryViaHeldScope(scopeKey syncdomain.ScopeKey) func(*testing
 			DriveID: driveid.New("drive1"),
 		}, 1, nil)
 		require.NotNil(t, current)
-		require.NoError(t, flow.holdActionUnderScope(t.Context(), current, &syncdomain.ActionCompletion{
+		require.NoError(t, flow.holdActionUnderScope(t.Context(), current, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:       "Shared/Docs/file.txt",
 			OldPath:    "Shared/Docs/old.txt",
 			ActionType: syncdomain.ActionUpload,
 			HTTPStatus: 403,
-		}, scopeKey))
+		}), scopeKey))
 	}
 }
 
@@ -217,12 +218,12 @@ func persistBlockedRetryViaTrialRehome(scopeKey syncdomain.ScopeKey) func(*testi
 	return func(t *testing.T, eng *testEngine, flow *engineFlow, rt *watchRuntime) {
 		t.Helper()
 		seedBlockScopeRowForTest(t, eng, scopeKey)
-		require.NoError(t, flow.rehomeBlockedRetryWork(t.Context(), &syncdomain.ActionCompletion{
+		require.NoError(t, flow.rehomeBlockedRetryWork(t.Context(), syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:       "Shared/Docs/file.txt",
 			OldPath:    "Shared/Docs/old.txt",
 			ActionType: syncdomain.ActionUpload,
 			HTTPStatus: 403,
-		}, scopeKey))
+		}), scopeKey))
 	}
 }
 
@@ -292,13 +293,13 @@ func TestEngineFlow_ApplyTrialReclassification_LocalFilePermissionReusesPermissi
 		AttemptCount: 1,
 	}))
 
-	row, persisted, err := flow.applyTrialReclassification(t.Context(), &syncdomain.ResultDecision{}, &syncdomain.ActionCompletion{
+	row, persisted, err := flow.applyTrialReclassification(t.Context(), &syncdomain.ResultDecision{}, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:          "accessible/file.txt",
 		ActionType:    syncdomain.ActionDownload,
 		Err:           os.ErrPermission,
 		ErrMsg:        "permission denied",
 		TrialScopeKey: scopeKey,
-	}, nil)
+	}), nil)
 	require.NoError(t, err)
 	require.True(t, persisted, "the evidence reclassified the trial")
 	require.NotNil(t, row, "the reclassification returns the row the store wrote")

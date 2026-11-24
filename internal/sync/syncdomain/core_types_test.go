@@ -95,7 +95,6 @@ func TestActionTypeDecisions_PanicOnATypeOutsideTheEnum(t *testing.T) {
 		"DeleteSafetySideOf":           func() { DeleteSafetySideOf(unlisted) },
 		"localWriteScopeBlocksAction":  func() { localWriteScopeBlocksAction(unlisted) },
 		"RemoteWriteScopeBlocksAction": func() { RemoteWriteScopeBlocksAction(unlisted) },
-		"outcomeDisplaySize":           func() { outcomeDisplaySize(&ActionOutcome{Action: unlisted}) },
 	}
 	for name, decide := range decisions {
 		assert.PanicsWithValue(t, OutsideTheEnum(unlisted), decide, name)

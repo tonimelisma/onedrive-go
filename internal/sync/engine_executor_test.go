@@ -51,7 +51,7 @@ func TestExecutor_Download_HashMismatch_FailsWithoutWritingTarget(t *testing.T) 
 	syncfixture.RequireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, driveops.ErrDownloadIntegrity)
 	assert.Equal(t, 3, callCount, "1 initial + 2 retries")
-	assert.Equal(t, syncdomain.IssueDownloadIntegrity, issueTypeForResult(&syncdomain.ActionCompletion{Err: o.Error}))
+	assert.Equal(t, syncdomain.IssueDownloadIntegrity, issueTypeForResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: o.Error})))
 
 	assert.NoFileExists(t, filepath.Join(syncRoot, "hash-reject.txt"), "the error page is never renamed into place")
 }
@@ -84,5 +84,5 @@ func TestExecuteUpload_ResponseSizeMismatch_DoesNotCommitBaseline(t *testing.T) 
 	// as one converged baseline row, never differing from either half again.
 	syncfixture.RequireOutcomeFailure(t, &o)
 	require.ErrorIs(t, o.Error, driveops.ErrUploadVerificationFailed)
-	assert.Equal(t, syncdomain.IssueUploadVerification, issueTypeForResult(&syncdomain.ActionCompletion{Err: o.Error}))
+	assert.Equal(t, syncdomain.IssueUploadVerification, issueTypeForResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: o.Error})))
 }

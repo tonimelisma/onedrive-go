@@ -159,7 +159,7 @@ func TestExecuteRemoteDelete_FolderOverListingCapIsDurableIssueNotStale(t *testi
 	syncfixture.RequireOutcomeFailure(t, &outcome)
 	require.ErrorIs(t, outcome.Error, syncexec.ErrRemoteFolderTooLargeToVerify)
 	require.NotErrorIs(t, outcome.Error, syncdomain.ErrActionPreconditionChanged, "a stale verdict would relist the folder every pass")
-	issue, ok := issueTypeForFilesystemResult(&syncdomain.ActionCompletion{Err: outcome.Error})
+	issue, ok := issueTypeForFilesystemResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: outcome.Error}))
 	require.True(t, ok, "the failure maps to a durable issue")
 	assert.Equal(t, syncdomain.IssueRemoteFolderUnverifiable, issue)
 	assert.Empty(t, deleted)

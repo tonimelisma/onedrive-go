@@ -146,7 +146,7 @@ func TestUploadTransferError_InvalidatedSessionIsAStalePlan(t *testing.T) {
 	// Another writer changed the item mid-upload: re-observe and replan,
 	// never upload over the change.
 	require.ErrorIs(t, err, syncdomain.ErrActionPreconditionChanged)
-	assert.Equal(t, resultSuperseded, classifyResult(&syncdomain.ActionCompletion{Err: err}).Class)
+	assert.Equal(t, resultSuperseded, classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: err})).Class)
 }
 
 // Validates: R-6.7.34
@@ -188,7 +188,7 @@ func TestClassifyResult_StalledTransferIsRetryableNotShutdown(t *testing.T) {
 	// even if a caller wrapped it with a cancellation, it is retry work.
 	stalled := fmt.Errorf("downloading a.bin: %w: %w", graph.ErrTransferStalled, context.Canceled)
 
-	decision := classifyResult(&syncdomain.ActionCompletion{Err: stalled})
+	decision := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: stalled}))
 
 	// A shutdown classification dropped the action and its dependents
 	// without recording anything to retry.

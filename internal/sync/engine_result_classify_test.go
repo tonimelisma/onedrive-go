@@ -33,48 +33,48 @@ func TestIssueTypeForHTTPResult_RepresentativeMappings(t *testing.T) {
 		ok     bool
 	}{
 		{name: "nil", result: nil, want: "", ok: false},
-		{name: "unauthorized", result: &syncdomain.ActionCompletion{HTTPStatus: http.StatusUnauthorized}, want: syncdomain.IssueUnauthorized, ok: true},
+		{name: "unauthorized", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusUnauthorized}), want: syncdomain.IssueUnauthorized, ok: true},
 		{
 			name: "path too long for OneDrive",
-			result: &syncdomain.ActionCompletion{HTTPStatus: http.StatusBadRequest, Err: &graph.GraphError{
+			result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusBadRequest, Err: &graph.GraphError{
 				StatusCode: http.StatusBadRequest,
 				Message:    "The specified file or folder name is too long. The URL path for all files and folders must be 400 characters or less.",
 				Err:        graph.ErrBadRequest,
-			}},
+			}}),
 			want: syncdomain.IssuePathTooLong,
 			ok:   true,
 		},
-		{name: "other bad request", result: &syncdomain.ActionCompletion{HTTPStatus: http.StatusBadRequest, Err: graph.ErrBadRequest}, want: "", ok: false},
-		{name: "rate limited", result: &syncdomain.ActionCompletion{HTTPStatus: http.StatusTooManyRequests}, want: syncdomain.IssueRateLimited, ok: true},
-		{name: "quota exceeded", result: &syncdomain.ActionCompletion{HTTPStatus: http.StatusInsufficientStorage}, want: syncdomain.IssueQuotaExceeded, ok: true},
+		{name: "other bad request", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusBadRequest, Err: graph.ErrBadRequest}), want: "", ok: false},
+		{name: "rate limited", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusTooManyRequests}), want: syncdomain.IssueRateLimited, ok: true},
+		{name: "quota exceeded", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusInsufficientStorage}), want: syncdomain.IssueQuotaExceeded, ok: true},
 		{
 			name: "forbidden remote read",
-			result: &syncdomain.ActionCompletion{
+			result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				HTTPStatus: http.StatusForbidden,
 				ActionType: syncdomain.ActionDownload,
 				Path:       "blocked.txt",
 				DriveID:    driveID,
-			},
+			}),
 			want: syncdomain.IssueRemoteReadDenied,
 			ok:   true,
 		},
 		{
 			name: "forbidden remote write",
-			result: &syncdomain.ActionCompletion{
+			result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				HTTPStatus: http.StatusForbidden,
 				ActionType: syncdomain.ActionUpload,
 				Path:       "blocked.txt",
 				DriveID:    driveID,
-			},
+			}),
 			want: syncdomain.IssueRemoteWriteDenied,
 			ok:   true,
 		},
-		{name: "service outage", result: &syncdomain.ActionCompletion{HTTPStatus: http.StatusBadGateway}, want: syncdomain.IssueServiceOutage, ok: true},
-		{name: "request timeout", result: &syncdomain.ActionCompletion{HTTPStatus: http.StatusRequestTimeout}, want: syncdomain.IssueRequestTimeout, ok: true},
-		{name: "precondition failed", result: &syncdomain.ActionCompletion{HTTPStatus: http.StatusPreconditionFailed}, want: syncdomain.IssueTransientConflict, ok: true},
-		{name: "not found", result: &syncdomain.ActionCompletion{HTTPStatus: http.StatusNotFound}, want: syncdomain.IssueTransientNotFound, ok: true},
-		{name: "locked", result: &syncdomain.ActionCompletion{HTTPStatus: http.StatusLocked}, want: syncdomain.IssueResourceLocked, ok: true},
-		{name: "unmapped", result: &syncdomain.ActionCompletion{HTTPStatus: http.StatusTeapot}, want: "", ok: false},
+		{name: "service outage", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusBadGateway}), want: syncdomain.IssueServiceOutage, ok: true},
+		{name: "request timeout", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusRequestTimeout}), want: syncdomain.IssueRequestTimeout, ok: true},
+		{name: "precondition failed", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusPreconditionFailed}), want: syncdomain.IssueTransientConflict, ok: true},
+		{name: "not found", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusNotFound}), want: syncdomain.IssueTransientNotFound, ok: true},
+		{name: "locked", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusLocked}), want: syncdomain.IssueResourceLocked, ok: true},
+		{name: "unmapped", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusTeapot}), want: "", ok: false},
 	}
 
 	for _, tc := range testCases {
@@ -100,46 +100,46 @@ func TestIssueTypeForFilesystemResult_RepresentativeMappings(t *testing.T) {
 		ok     bool
 	}{
 		{name: "nil", result: nil, want: "", ok: false},
-		{name: "disk full", result: &syncdomain.ActionCompletion{Err: driveops.ErrDiskFull}, want: syncdomain.IssueDiskFull, ok: true},
-		{name: "file too large for space", result: &syncdomain.ActionCompletion{Err: driveops.ErrFileTooLargeForSpace}, want: syncdomain.IssueFileTooLargeForSpace, ok: true},
-		{name: "onedrive limit", result: &syncdomain.ActionCompletion{Err: driveops.ErrFileExceedsOneDriveLimit}, want: syncdomain.IssueFileTooLarge, ok: true},
+		{name: "disk full", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: driveops.ErrDiskFull}), want: syncdomain.IssueDiskFull, ok: true},
+		{name: "file too large for space", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: driveops.ErrFileTooLargeForSpace}), want: syncdomain.IssueFileTooLargeForSpace, ok: true},
+		{name: "onedrive limit", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: driveops.ErrFileExceedsOneDriveLimit}), want: syncdomain.IssueFileTooLarge, ok: true},
 		{
 			name:   "upload stored differently",
-			result: &syncdomain.ActionCompletion{Err: fmt.Errorf("uploading a.txt: %w", driveops.ErrUploadVerificationFailed)},
+			result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: fmt.Errorf("uploading a.txt: %w", driveops.ErrUploadVerificationFailed)}),
 			want:   syncdomain.IssueUploadVerification,
 			ok:     true,
 		},
 		{
 			name: "local read denied",
-			result: &syncdomain.ActionCompletion{
+			result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				Err:        os.ErrPermission,
 				ActionType: syncdomain.ActionUpload,
 				Path:       "blocked.txt",
 				DriveID:    driveID,
-			},
+			}),
 			want: syncdomain.IssueLocalReadDenied,
 			ok:   true,
 		},
 		{
 			name: "local write denied",
-			result: &syncdomain.ActionCompletion{
+			result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				Err:        os.ErrPermission,
 				ActionType: syncdomain.ActionDownload,
 				Path:       "blocked.txt",
 				DriveID:    driveID,
-			},
+			}),
 			want: syncdomain.IssueLocalWriteDenied,
 			ok:   true,
 		},
 		{
 			name: "name too long for local filesystem",
-			result: &syncdomain.ActionCompletion{
+			result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				Err: &os.PathError{Op: "open", Path: "very-long-name.partial", Err: syscall.ENAMETOOLONG},
-			},
+			}),
 			want: syncdomain.IssueLocalNameTooLong,
 			ok:   true,
 		},
-		{name: "unmapped", result: &syncdomain.ActionCompletion{Err: errors.New("no mapping")}, want: "", ok: false},
+		{name: "unmapped", result: syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: errors.New("no mapping")}), want: "", ok: false},
 	}
 
 	for _, tc := range testCases {
@@ -196,7 +196,7 @@ func TestClassifyResult_SuccessAndShutdown(t *testing.T) {
 		},
 		{
 			name: "shutdown",
-			in:   &syncdomain.ActionCompletion{Err: context.Canceled, RunEnded: true},
+			in:   syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: context.Canceled, RunEnded: true}),
 			want: syncdomain.ResultDecision{
 				Class:        resultShutdown,
 				ConditionKey: "",
@@ -206,7 +206,7 @@ func TestClassifyResult_SuccessAndShutdown(t *testing.T) {
 		{
 			// Validates: R-6.8.29
 			name: "a cancel while the run goes on is retried",
-			in:   &syncdomain.ActionCompletion{Err: context.Canceled},
+			in:   syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: context.Canceled}),
 			want: syncdomain.ResultDecision{
 				Class:        resultRequeue,
 				ConditionKey: syncdomain.ConditionUnexpectedCondition,
@@ -217,7 +217,7 @@ func TestClassifyResult_SuccessAndShutdown(t *testing.T) {
 		{
 			// Validates: R-6.8.29
 			name: "a separate failure after the run ended keeps its class",
-			in:   &syncdomain.ActionCompletion{Err: errors.New("disk I/O error"), RunEnded: true},
+			in:   syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: errors.New("disk I/O error"), RunEnded: true}),
 			want: syncdomain.ResultDecision{
 				Class:        resultSkip,
 				ConditionKey: syncdomain.ConditionUnexpectedCondition,
@@ -241,7 +241,7 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 	}{
 		{
 			name: "unauthorized",
-			in:   &syncdomain.ActionCompletion{HTTPStatus: http.StatusUnauthorized},
+			in:   syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusUnauthorized}),
 			want: syncdomain.ResultDecision{
 				Class:         resultFatal,
 				ConditionKey:  syncdomain.ConditionAuthenticationRequired,
@@ -252,12 +252,12 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 		},
 		{
 			name: "forbidden download",
-			in: &syncdomain.ActionCompletion{
+			in: syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				HTTPStatus: http.StatusForbidden,
 				ActionType: syncdomain.ActionDownload,
 				Path:       "blocked.txt",
 				DriveID:    driveID,
-			},
+			}),
 			want: syncdomain.ResultDecision{
 				Class:         resultSkip,
 				ConditionKey:  syncdomain.ConditionRemoteReadDenied,
@@ -268,12 +268,12 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 		},
 		{
 			name: "target throttle",
-			in: &syncdomain.ActionCompletion{
+			in: syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				HTTPStatus: http.StatusTooManyRequests,
 				ActionType: syncdomain.ActionUpload,
 				Path:       "retry.txt",
 				DriveID:    driveID,
-			},
+			}),
 			want: syncdomain.ResultDecision{
 				Class:             resultBlockScope,
 				ConditionKey:      syncdomain.ConditionRateLimited,
@@ -287,12 +287,12 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 		},
 		{
 			name: "quota exceeded",
-			in: &syncdomain.ActionCompletion{
+			in: syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				HTTPStatus: http.StatusInsufficientStorage,
 				ActionType: syncdomain.ActionUpload,
 				Path:       "quota.txt",
 				DriveID:    driveID,
-			},
+			}),
 			want: syncdomain.ResultDecision{
 				Class:             resultBlockScope,
 				ConditionKey:      syncdomain.ConditionQuotaExceeded,
@@ -306,12 +306,12 @@ func TestClassifyResult_HTTPPersistenceAndScopeRouting(t *testing.T) {
 		},
 		{
 			name: "service outage",
-			in: &syncdomain.ActionCompletion{
+			in: syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				HTTPStatus: http.StatusBadGateway,
 				ActionType: syncdomain.ActionUpload,
 				Path:       "service.txt",
 				DriveID:    driveID,
-			},
+			}),
 			want: syncdomain.ResultDecision{
 				Class:             resultRequeue,
 				ConditionKey:      syncdomain.ConditionServiceOutage,
@@ -338,7 +338,7 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 	}{
 		{
 			name: "precondition changed",
-			in:   &syncdomain.ActionCompletion{Err: syncdomain.ErrActionPreconditionChanged},
+			in:   syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: syncdomain.ErrActionPreconditionChanged}),
 			want: syncdomain.ResultDecision{
 				Class:        resultSuperseded,
 				ConditionKey: "",
@@ -348,7 +348,7 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 		},
 		{
 			name: "disk full",
-			in:   &syncdomain.ActionCompletion{Err: driveops.ErrDiskFull},
+			in:   syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: driveops.ErrDiskFull}),
 			want: syncdomain.ResultDecision{
 				Class:         resultBlockScope,
 				ConditionKey:  syncdomain.ConditionDiskFull,
@@ -361,12 +361,12 @@ func TestClassifyResult_LocalPersistenceAndScopeRouting(t *testing.T) {
 		},
 		{
 			name: "permission denied upload",
-			in: &syncdomain.ActionCompletion{
+			in: syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				Err:        os.ErrPermission,
 				ActionType: syncdomain.ActionUpload,
 				Path:       "local.txt",
 				DriveID:    driveID,
-			},
+			}),
 			want: syncdomain.ResultDecision{
 				Class:         resultSkip,
 				ConditionKey:  syncdomain.ConditionLocalReadDenied,
@@ -405,13 +405,13 @@ func TestClassifyResult_StalePreconditionIsSupersededWhateverStatusItCarries(t *
 		{
 			name: "409 resourceModified on a create",
 			err: syncexec.UploadTransferError(&graph.GraphError{
-				StatusCode: http.StatusConflict, Code: syncdomain.GraphCodeResourceModified, Err: graph.ErrConflict,
+				StatusCode: http.StatusConflict, Code: syncexec.GraphCodeResourceModified, Err: graph.ErrConflict,
 			}),
 		},
 		{
 			name: "412 on a conditional overwrite",
 			err: syncexec.UploadTransferError(&graph.GraphError{
-				StatusCode: http.StatusPreconditionFailed, Code: syncdomain.GraphCodeResourceModified, Err: graph.ErrPreconditionFailed,
+				StatusCode: http.StatusPreconditionFailed, Code: syncexec.GraphCodeResourceModified, Err: graph.ErrPreconditionFailed,
 			}),
 		},
 		{name: "401", err: staleAround(&graph.GraphError{StatusCode: http.StatusUnauthorized, Err: graph.ErrUnauthorized})},
@@ -428,13 +428,13 @@ func TestClassifyResult_StalePreconditionIsSupersededWhateverStatusItCarries(t *
 			t.Parallel()
 
 			require.ErrorIs(t, tc.err, syncdomain.ErrActionPreconditionChanged)
-			r := &syncdomain.ActionCompletion{
+			r := syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				Path:       "stale.txt",
 				ActionType: syncdomain.ActionUpload,
 				DriveID:    driveid.New("drive-classify-stale"),
 				Err:        tc.err,
-				HTTPStatus: syncdomain.ExtractHTTPStatus(tc.err),
-			}
+				HTTPStatus: syncexec.ExtractHTTPStatus(tc.err),
+			})
 			require.NotZero(t, r.HTTPStatus, "the Graph status travels with the stale error")
 
 			assert.Equal(t, syncdomain.ResultDecision{
@@ -473,10 +473,10 @@ func TestRuntimeConditionKey_TransientConditionsHaveNoFamily(t *testing.T) {
 	}
 
 	// The classifier gives a 408 such a condition, so its decision carries no key.
-	timedOut := classifyResult(&syncdomain.ActionCompletion{
+	timedOut := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		HTTPStatus: http.StatusRequestTimeout,
 		Err:        errors.New("the request timed out"),
-	})
+	}))
 	assert.Equal(t, resultRequeue, timedOut.Class)
 	assert.Equal(t, syncdomain.IssueRequestTimeout, timedOut.ConditionType)
 	assert.Empty(t, timedOut.ConditionKey)
@@ -532,14 +532,14 @@ func TestPermissionCapabilityFallbacks(t *testing.T) {
 		Path:              "download.txt",
 		DriveID:           driveID,
 	}))
-	assert.Equal(t, syncdomain.SKThrottleDrive(driveID), deriveScopeKey(&syncdomain.ActionCompletion{
+	assert.Equal(t, syncdomain.SKThrottleDrive(driveID), deriveScopeKey(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		HTTPStatus: http.StatusTooManyRequests,
 		DriveID:    driveID,
-	}))
-	assert.Equal(t, syncdomain.SKService(), deriveScopeKey(&syncdomain.ActionCompletion{
+	})))
+	assert.Equal(t, syncdomain.SKService(), deriveScopeKey(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		HTTPStatus: http.StatusServiceUnavailable,
-	}))
-	assert.Equal(t, syncdomain.ScopeKey{}, deriveScopeKey(&syncdomain.ActionCompletion{HTTPStatus: http.StatusForbidden}))
+	})))
+	assert.Equal(t, syncdomain.ScopeKey{}, deriveScopeKey(syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusForbidden})))
 	assert.Equal(t, "drive:"+driveID.String(), (&syncdomain.ActionCompletion{DriveID: driveID}).ThrottleTargetKey())
 	assert.Empty(t, (&syncdomain.ActionCompletion{}).ThrottleTargetKey())
 }
@@ -579,7 +579,7 @@ func TestClassifyResult_LocalErrnoTable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := classifyResult(&syncdomain.ActionCompletion{Err: tc.err, ActionType: syncdomain.ActionDownload, Path: "docs/report.pdf"})
+			got := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: tc.err, ActionType: syncdomain.ActionDownload, Path: "docs/report.pdf"}))
 			assert.Equal(t, tc.class, got.Class)
 			assert.Equal(t, tc.scopeKey, got.ScopeKey)
 			assert.Equal(t, tc.issueType, got.ConditionType)
@@ -601,14 +601,14 @@ func TestClassifyResult_AStallOfTheLocalSideIsRetriedAsBusyAndIsNoServiceEvidenc
 
 	localStall := fmt.Errorf("upload report.pdf: %w: %w: no data moved for 2m0s (context canceled)",
 		graph.ErrTransferStalled, graph.ErrLocalSideStalled)
-	local := classifyResult(&syncdomain.ActionCompletion{Err: localStall, ActionType: syncdomain.ActionUpload, Path: "docs/report.pdf"})
+	local := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: localStall, ActionType: syncdomain.ActionUpload, Path: "docs/report.pdf"}))
 	assert.Equal(t, resultRequeue, local.Class)
 	assert.Equal(t, syncdomain.IssueLocalBusy, local.ConditionType)
 	assert.True(t, local.ScopeEvidence.IsZero(), "a hung local disk is no evidence of a service outage")
 	assert.True(t, local.ScopeKey.IsZero())
 
 	networkStall := fmt.Errorf("upload report.pdf: %w: no data moved for 2m0s (context canceled)", graph.ErrTransferStalled)
-	network := classifyResult(&syncdomain.ActionCompletion{Err: networkStall, ActionType: syncdomain.ActionUpload, Path: "docs/report.pdf"})
+	network := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: networkStall, ActionType: syncdomain.ActionUpload, Path: "docs/report.pdf"}))
 	assert.Equal(t, syncdomain.IssueRequestTimeout, network.ConditionType)
 	assert.False(t, network.ScopeEvidence.IsZero(), "a silent service is evidence for the service scope")
 }
@@ -639,12 +639,12 @@ func TestClassifyResult_ALocalCallLeftBehindIsItsOwnRetriedCondition(t *testing.
 func TestShouldHandleLocalPermission_IncludesReadOnlyFilesystem(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, shouldHandleLocalPermission(&syncdomain.ActionCompletion{
+	assert.True(t, shouldHandleLocalPermission(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Err: &os.PathError{Op: "open", Path: "/sync/a", Err: syscall.EROFS},
-	}))
-	assert.False(t, shouldHandleLocalPermission(&syncdomain.ActionCompletion{
+	})))
+	assert.False(t, shouldHandleLocalPermission(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Err: &os.PathError{Op: "open", Path: "/sync/a", Err: syscall.EBUSY},
-	}))
+	})))
 }
 
 // Validates: R-2.10.64, R-2.10.65, R-2.10.66, R-2.10.67
@@ -704,7 +704,7 @@ func TestClassifyResult_ServerAnswerTable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := classifyResult(&syncdomain.ActionCompletion{HTTPStatus: tc.status, Err: tc.err, ActionType: syncdomain.ActionUpload, Path: "a.txt"})
+			got := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: tc.status, Err: tc.err, ActionType: syncdomain.ActionUpload, Path: "a.txt"}))
 			assert.Equal(t, tc.class, got.Class)
 			assert.Equal(t, tc.scopeKey, got.ScopeKey)
 			assert.Equal(t, tc.evidence, got.ScopeEvidence)
@@ -717,30 +717,30 @@ func TestClassifyResult_ServerAnswerTable(t *testing.T) {
 func TestClassifyResult_Only401ErrUnauthorizedIsFatal(t *testing.T) {
 	t.Parallel()
 
-	rps := classifyResult(&syncdomain.ActionCompletion{
+	rps := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		HTTPStatus: http.StatusUnauthorized,
 		Err: &graph.GraphError{
 			StatusCode: http.StatusUnauthorized, Message: "Unable to initialize RPS", Err: graph.ErrAuthTransient,
 		},
 		ActionType: syncdomain.ActionUpload, Path: "a.txt",
-	})
+	}))
 	assert.Equal(t, resultRequeue, rps.Class, "a server-side auth fault must not end the watch session")
 	assert.Equal(t, syncdomain.SKService(), rps.ScopeEvidence)
 	assert.Equal(t, syncdomain.IssueServiceOutage, rps.ConditionType)
 
-	preAuth := classifyResult(&syncdomain.ActionCompletion{
+	preAuth := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		HTTPStatus: http.StatusUnauthorized,
 		Err:        &graph.GraphError{StatusCode: http.StatusUnauthorized, Err: graph.ErrPreAuthURLRejected},
 		ActionType: syncdomain.ActionDownload, Path: "a.txt",
-	})
+	}))
 	assert.Equal(t, resultRequeue, preAuth.Class, "an expired transfer URL is one file's problem")
 	assert.True(t, preAuth.ScopeEvidence.IsZero())
 	assert.Equal(t, syncdomain.IssueTransferURLRejected, preAuth.ConditionType)
 
-	signIn := classifyResult(&syncdomain.ActionCompletion{
+	signIn := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		HTTPStatus: http.StatusUnauthorized,
 		Err:        &graph.GraphError{StatusCode: http.StatusUnauthorized, Err: graph.ErrUnauthorized},
-	})
+	}))
 	assert.Equal(t, resultFatal, signIn.Class)
 	assert.Equal(t, syncdomain.IssueUnauthorized, signIn.ConditionType)
 }
@@ -750,11 +750,11 @@ func TestClassifyResult_MalwareIsPerFileNotReadDenied(t *testing.T) {
 	t.Parallel()
 
 	for name, completion := range map[string]*syncdomain.ActionCompletion{
-		"facet refusal before any request": {Err: graph.ErrMalwareDetected},
-		"content host 403": {
+		"facet refusal before any request": syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: graph.ErrMalwareDetected}),
+		"content host 403": syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			HTTPStatus: http.StatusForbidden,
 			Err:        &graph.GraphError{StatusCode: http.StatusForbidden, Code: "malwareDetected", Err: graph.ErrMalwareDetected},
-		},
+		}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

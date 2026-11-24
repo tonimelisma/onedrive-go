@@ -71,7 +71,7 @@ func NewScopeState(nowFunc func() time.Time, logger *slog.Logger) *ScopeState {
 //     server answer is the outage's) → sliding window service (5 unique
 //     paths / 30s); 501/505 refusals are excluded
 func (ss *ScopeState) UpdateScope(r *syncdomain.ActionCompletion) syncdomain.ScopeUpdateResult {
-	answer := r.ServerAnswer()
+	answer := r.ServerAnswer
 	switch {
 	case answer == syncdomain.ServerAnswerThrottled:
 		// Immediate block — server signal, single response triggers (R-2.10.26).

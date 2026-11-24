@@ -64,7 +64,7 @@ func inferFailureCapabilityFromError(
 		return localCapability
 	case errors.Is(err, graph.ErrForbidden):
 		return remoteCapability
-	case syncdomain.ExtractHTTPStatus(err) == http.StatusForbidden:
+	case ExtractHTTPStatus(err) == http.StatusForbidden:
 		return remoteCapability
 	default:
 		return syncdomain.PermissionCapabilityUnknown

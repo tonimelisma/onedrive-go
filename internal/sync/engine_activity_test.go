@@ -9,6 +9,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
@@ -26,8 +27,8 @@ func TestEmitActivity_ClassifiesOutcomesForDisplay(t *testing.T) {
 		eng.emitActivity(r, &syncdomain.ResultDecision{Class: class}, true)
 	}
 	emit(&syncdomain.ActionCompletion{Path: "a.txt", ActionType: syncdomain.ActionDownload, Size: 5, SizeKnown: true}, errclass.ClassSuccess)
-	emit(&syncdomain.ActionCompletion{Path: "b.txt", ActionType: syncdomain.ActionUpload, Err: failure}, errclass.ClassRetryableTransient)
-	emit(&syncdomain.ActionCompletion{Path: "c.txt", ActionType: syncdomain.ActionRemoteDelete, Err: failure}, errclass.ClassActionable)
+	emit(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Path: "b.txt", ActionType: syncdomain.ActionUpload, Err: failure}), errclass.ClassRetryableTransient)
+	emit(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Path: "c.txt", ActionType: syncdomain.ActionRemoteDelete, Err: failure}), errclass.ClassActionable)
 	emit(&syncdomain.ActionCompletion{Path: "d.txt", ActionType: syncdomain.ActionUpload}, errclass.ClassShutdown)
 	emit(&syncdomain.ActionCompletion{Path: "e.txt", ActionType: syncdomain.ActionUpload}, errclass.ClassSuperseded)
 	emit(&syncdomain.ActionCompletion{Path: "f.txt", ActionType: syncdomain.ActionBaselineUpdate}, errclass.ClassSuccess)
@@ -119,7 +120,7 @@ func TestActivity_AFolderDeleteIsMarkedAsAFolder(t *testing.T) {
 		{Type: syncdomain.ActionRemoteDelete, Path: "gone", View: folderView},
 	}
 
-	completion := syncdomain.ActionCompletionFromTrackedAction(&syncdomain.TrackedAction{Action: actions[0]}, nil, nil)
+	completion := syncexec.CompletionFromTrackedAction(&syncdomain.TrackedAction{Action: actions[0]}, nil, nil)
 	assert.Equal(t, syncdomain.ItemTypeFolder, completion.ItemType)
 	eng.emitActivity(&completion, &syncdomain.ResultDecision{Class: errclass.ClassSuccess}, false)
 	eng.emitPlannedActivity(&syncdomain.ActionPlan{Actions: actions})

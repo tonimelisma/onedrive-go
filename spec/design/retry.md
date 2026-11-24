@@ -200,8 +200,8 @@ OneDrive, or got no answer": a `*net.DNSError`, a `*net.OpError` holding
 chain that holds an `*fs.PathError` is never one: an upload's body is the
 local file, and its failed read can surface as the request's error. It lives
 here because the transport is the boundary that knows net/http's error types,
-and sync's vocabulary (`syncdomain.IsServiceUnreached`) adds graph's own
-sentinels on top; `internal/retry` cannot import that vocabulary. The
+and sync's executor (`syncexec.IsServiceUnreached`) adds graph's own
+sentinels on top; `internal/retry` cannot import the sync tree. The
 transport itself does not branch on it: it retries every transport failure of
 a replayable request, these and the rest (a TLS failure, a connection that
 dropped mid-exchange), and announces each sustained run as "can't reach

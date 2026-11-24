@@ -16,6 +16,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
@@ -112,12 +113,12 @@ func TestEngineFlow_ProcessNormalDecision_RetryableTransientScopeEvidenceStaysUn
 		RunScopeDetection: true,
 		TrialHint:         syncdomain.TrialHintExtendOnMatchingScope,
 		ConditionType:     syncdomain.IssueServiceOutage,
-	}, nil, &syncdomain.ActionCompletion{
+	}, nil, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:       "retry.txt",
 		ActionType: syncdomain.ActionUpload,
 		HTTPStatus: http.StatusBadGateway,
 		ErrMsg:     "temporary outage",
-	}, nil)
+	}), nil)
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
@@ -144,13 +145,13 @@ func TestEngineFlow_ProcessNormalDecision_ServiceRetryAfterBlocksTheTriggeringWo
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
 
-	completion := &syncdomain.ActionCompletion{
+	completion := syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:       "outage.txt",
 		ActionType: syncdomain.ActionUpload,
 		HTTPStatus: http.StatusServiceUnavailable,
 		RetryAfter: 30 * time.Second,
 		ErrMsg:     "service unavailable",
-	}
+	})
 	decision := classifyResult(completion)
 	require.Equal(t, errclass.ClassRetryableTransient, decision.Class)
 
@@ -212,12 +213,12 @@ func TestEngineFlow_ProcessNormalDecision_ServiceWindowBlocksTheCrossingWork(t *
 	flow := testEngineFlow(t, eng)
 
 	for i := range syncsched.ServiceWindowThreshold {
-		completion := &syncdomain.ActionCompletion{
+		completion := syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:       fmt.Sprintf("outage-%d.txt", i),
 			ActionType: syncdomain.ActionUpload,
 			HTTPStatus: http.StatusBadGateway,
 			ErrMsg:     "bad gateway",
-		}
+		})
 		decision := classifyResult(completion)
 		_, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, completion, nil)
 		require.NoError(t, err)
@@ -316,14 +317,14 @@ func TestEngineFlow_ProcessNormalDecision_SupersededRetiresSubtreeWithoutRetryOr
 	}, 2, []int64{1})
 	assert.Nil(t, dependent)
 
-	decision := classifyResult(&syncdomain.ActionCompletion{Err: syncdomain.ErrActionPreconditionChanged})
-	ready, err := flow.applyNormalCompletionDecision(t.Context(), &decision, current, &syncdomain.ActionCompletion{
+	decision := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: syncdomain.ErrActionPreconditionChanged}))
+	ready, err := flow.applyNormalCompletionDecision(t.Context(), &decision, current, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:   current.ID,
 		Path:       "stale.txt",
 		ActionType: syncdomain.ActionUpload,
 		Err:        syncdomain.ErrActionPreconditionChanged,
 		ErrMsg:     "source changed",
-	}, nil)
+	}), nil)
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
@@ -358,21 +359,21 @@ func TestEngineFlow_ProcessNormalDecision_StaleCompletionIsNeverProbedForPermiss
 	}{
 		{
 			name: "local permission denial",
-			completion: syncdomain.ActionCompletion{
+			completion: *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				Path:       "accessible/file.txt",
 				ActionType: syncdomain.ActionDownload,
 				Err:        fmt.Errorf("%w: %w", syncdomain.ErrActionPreconditionChanged, os.ErrPermission),
-			},
+			}),
 		},
 		{
 			name: "remote 403",
-			completion: syncdomain.ActionCompletion{
+			completion: *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				Path:       "Shared/file.txt",
 				ActionType: syncdomain.ActionUpload,
 				HTTPStatus: http.StatusForbidden,
 				Err: fmt.Errorf("%w: %w", syncdomain.ErrActionPreconditionChanged,
 					&graph.GraphError{StatusCode: http.StatusForbidden, Err: graph.ErrForbidden}),
-			},
+			}),
 		},
 	}
 
@@ -441,13 +442,13 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionPersistsDelaye
 
 			require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
 
-			r := &syncdomain.ActionCompletion{
+			r := syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 				Path:              "accessible/file.txt",
 				ActionType:        tc.actionType,
 				FailureCapability: tc.failureCapability,
 				Err:               os.ErrPermission,
 				ErrMsg:            "permission denied",
-			}
+			})
 			decision := classifyResult(r)
 
 			ready, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, r, nil)
@@ -478,12 +479,12 @@ func TestEngineFlow_ProcessNormalDecision_FileLevelLocalPermissionArmsRetryTimer
 
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
 
-	r := &syncdomain.ActionCompletion{
+	r := syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:       "accessible/file.txt",
 		ActionType: syncdomain.ActionDownload,
 		Err:        os.ErrPermission,
 		ErrMsg:     "permission denied",
-	}
+	})
 	decision := classifyResult(r)
 
 	current := rt.sched.AddForTest(&syncdomain.Action{
@@ -523,12 +524,12 @@ func TestEngineFlow_ProcessNormalDecision_RemoteBoundaryPermissionDoesNotArmRetr
 	rt := testWatchRuntime(t, eng)
 	flow := testEngineFlow(t, eng)
 
-	r := &syncdomain.ActionCompletion{
+	r := syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:       "Shared/file.txt",
 		ActionType: syncdomain.ActionUpload,
 		HTTPStatus: http.StatusForbidden,
 		ErrMsg:     "folder is read-only",
-	}
+	})
 
 	ready, err := flow.applyNormalCompletionDecision(t.Context(), &syncdomain.ResultDecision{
 		Class:         errclass.ClassActionable,
@@ -570,12 +571,12 @@ func TestEngineFlow_ProcessNormalDecision_KnownRemoteBoundaryNoOpDoesNotPersistO
 		NextTrialAt:   eng.nowFunc(),
 	}))
 
-	r := &syncdomain.ActionCompletion{
+	r := syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:       "Shared/file.txt",
 		ActionType: syncdomain.ActionUpload,
 		HTTPStatus: http.StatusForbidden,
 		ErrMsg:     "still read-only",
-	}
+	})
 
 	ready, err := flow.applyNormalCompletionDecision(t.Context(), &syncdomain.ResultDecision{
 		Class:         errclass.ClassActionable,
@@ -678,7 +679,7 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionEvidenceFallsBackToR
 		ConditionType: syncdomain.IssueRemoteWriteDenied,
 		Persistence:   syncdomain.PersistRetryWork,
 		TrialHint:     syncdomain.TrialHintReclassify,
-	}, current, &syncdomain.ActionCompletion{
+	}, current, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "file.txt",
 		ActionType:    syncdomain.ActionUpload,
@@ -686,7 +687,7 @@ func TestEngineFlow_ProcessTrialDecision_UnmatchedPermissionEvidenceFallsBackToR
 		ErrMsg:        "permission evidence inconclusive",
 		IsTrial:       true,
 		TrialScopeKey: scopeKey,
-	}, bl)
+	}), bl)
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
@@ -742,7 +743,7 @@ func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedSco
 		Persistence:       syncdomain.PersistRetryWork,
 		RunScopeDetection: true,
 		TrialHint:         syncdomain.TrialHintExtendOnMatchingScope,
-	}, current, &syncdomain.ActionCompletion{
+	}, current, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "file.txt",
 		ActionType:    syncdomain.ActionUpload,
@@ -752,7 +753,7 @@ func TestEngineFlow_ProcessTrialDecision_FallbackActivatesReclassifiedBlockedSco
 		ErrMsg:        "throttled",
 		IsTrial:       true,
 		TrialScopeKey: trialScopeKey,
-	}, nil)
+	}), nil)
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
@@ -794,7 +795,7 @@ func TestEngineFlow_ProcessTrialDecision_ServiceRetryAfterMovesTheTrialsOnlyWork
 	current := rt.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionDownload, Path: "file.txt", DriveID: eng.driveID}, 1, nil)
 	require.NotNil(t, current)
 
-	completion := &syncdomain.ActionCompletion{
+	completion := syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "file.txt",
 		ActionType:    syncdomain.ActionDownload,
@@ -804,7 +805,7 @@ func TestEngineFlow_ProcessTrialDecision_ServiceRetryAfterMovesTheTrialsOnlyWork
 		ErrMsg:        "service unavailable",
 		IsTrial:       true,
 		TrialScopeKey: trialScopeKey,
-	}
+	})
 	decision := classifyResult(completion)
 	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &decision, current, completion, nil)
 
@@ -862,7 +863,7 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 		Persistence:       syncdomain.PersistRetryWork,
 		RunScopeDetection: true,
 		TrialHint:         syncdomain.TrialHintExtendOnMatchingScope,
-	}, current, &syncdomain.ActionCompletion{
+	}, current, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "file.txt",
 		ActionType:    syncdomain.ActionUpload,
@@ -872,7 +873,7 @@ func TestEngineFlow_ProcessTrialDecision_FallbackKeepsOriginalScopeWithRemaining
 		ErrMsg:        "throttled",
 		IsTrial:       true,
 		TrialScopeKey: trialScopeKey,
-	}, nil)
+	}), nil)
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
@@ -933,8 +934,8 @@ func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEm
 	require.NotNil(t, current)
 	rt.sched.Running(current)
 
-	decision := classifyResult(&syncdomain.ActionCompletion{Err: syncdomain.ErrActionPreconditionChanged})
-	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &decision, current, &syncdomain.ActionCompletion{
+	decision := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: syncdomain.ErrActionPreconditionChanged}))
+	ready, err := flow.applyTrialCompletionDecision(t.Context(), trialScopeKey, &decision, current, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "trial-stale.txt",
 		ActionType:    syncdomain.ActionUpload,
@@ -942,7 +943,7 @@ func TestEngineFlow_ProcessTrialDecision_SupersededClearsExactRetryAndDiscardsEm
 		ErrMsg:        "source changed",
 		IsTrial:       true,
 		TrialScopeKey: trialScopeKey,
-	}, nil)
+	}), nil)
 
 	require.NoError(t, err)
 	assert.Empty(t, ready)
@@ -1100,13 +1101,13 @@ func TestEngineFlow_ProcessActionCompletion_RetryPersistenceFailureTerminatesAnd
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	ready, err := flow.applyRuntimeCompletionStage(t.Context(), &syncdomain.ActionCompletion{
+	ready, err := flow.applyRuntimeCompletionStage(t.Context(), syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:   1,
 		Path:       "retry.txt",
 		ActionType: syncdomain.ActionUpload,
 		HTTPStatus: http.StatusBadGateway,
 		ErrMsg:     "temporary outage",
-	}, nil)
+	}), nil)
 
 	require.ErrorContains(t, err, "record retry_work")
 	assert.Empty(t, ready)
@@ -1132,13 +1133,13 @@ func TestEngineFlow_ProcessActionCompletion_BoundaryReadFailureFailsTheCompletio
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	ready, err := flow.applyRuntimeCompletionStage(t.Context(), &syncdomain.ActionCompletion{
+	ready, err := flow.applyRuntimeCompletionStage(t.Context(), syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:   1,
 		Path:       "Shared/file.txt",
 		ActionType: syncdomain.ActionUpload,
 		HTTPStatus: http.StatusForbidden,
 		ErrMsg:     "folder is read-only",
-	}, syncdomain.NewBaselineSnapshot(nil))
+	}), syncdomain.NewBaselineSnapshot(nil))
 
 	require.ErrorContains(t, err, "list remote block scopes")
 	assert.NotContains(t, err.Error(), "record retry_work", "the failure is the boundary read, not a later write")
@@ -1165,7 +1166,7 @@ func TestEngineFlow_ProcessTrialDecision_BoundaryReadFailureFailsTheCompletion(t
 
 	require.NoError(t, eng.baseline.Close(t.Context()))
 
-	ready, err := flow.applyRuntimeCompletionStage(t.Context(), &syncdomain.ActionCompletion{
+	ready, err := flow.applyRuntimeCompletionStage(t.Context(), syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:      1,
 		Path:          "Shared/file.txt",
 		ActionType:    syncdomain.ActionUpload,
@@ -1173,7 +1174,7 @@ func TestEngineFlow_ProcessTrialDecision_BoundaryReadFailureFailsTheCompletion(t
 		ErrMsg:        "folder is read-only",
 		IsTrial:       true,
 		TrialScopeKey: scopeKey,
-	}, syncdomain.NewBaselineSnapshot(nil))
+	}), syncdomain.NewBaselineSnapshot(nil))
 
 	require.ErrorContains(t, err, "list remote block scopes")
 	assert.NotContains(t, err.Error(), "record retry_work", "the failure is the boundary read, not a later write")
@@ -1199,7 +1200,7 @@ func TestEngineFlow_Quota403OnSharedMountIsQuotaNotPermission(t *testing.T) {
 	flow := testEngineFlow(t, eng)
 
 	for _, path := range []string{"Shared/a.txt", "Shared/b.txt", "Shared/c.txt"} {
-		r := &syncdomain.ActionCompletion{
+		r := syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:       path,
 			ActionType: syncdomain.ActionUpload,
 			DriveID:    driveid.New(syncfixture.EngineTestDriveID),
@@ -1208,7 +1209,7 @@ func TestEngineFlow_Quota403OnSharedMountIsQuotaNotPermission(t *testing.T) {
 				StatusCode: http.StatusForbidden, Code: "accessDenied", InnerCodes: []string{"quotaLimitReached"},
 				Err: graph.ErrForbidden,
 			},
-		}
+		})
 		decision := classifyResult(r)
 		_, err := flow.applyNormalCompletionDecision(t.Context(), &decision, nil, r, syncdomain.NewBaselineSnapshot(nil))
 		require.NoError(t, err)

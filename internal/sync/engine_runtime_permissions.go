@@ -18,7 +18,7 @@ import (
 // quotaLimitReached) goes to the quota scope and blocked content (403
 // malwareDetected) stays a per-file issue instead of a probed write boundary.
 func shouldHandleRemote403Permission(r *syncdomain.ActionCompletion) bool {
-	return r != nil && r.ServerAnswer() == syncdomain.ServerAnswerForbidden && syncdomain.RemoteWriteScopeBlocksAction(r.ActionType)
+	return r != nil && r.ServerAnswer == syncdomain.ServerAnswerForbidden && syncdomain.RemoteWriteScopeBlocksAction(r.ActionType)
 }
 
 // shouldHandleLocalPermission selects completions the local probe owns:

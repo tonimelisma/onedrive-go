@@ -826,7 +826,7 @@ lock another process holds can still return `EAGAIN`). Both clear on their own
 like `ESTALE` from the same mount, so they are retried with the retry work's
 backoff rather than at once. A network timeout never reaches this table: the
 sync classifier reads a request timeout first, and a chain that holds an
-`*fs.PathError` is never one (`syncdomain.IsRequestTimeout`), so a timed-out
+`*fs.PathError` is never one (`syncexec.IsRequestTimeout`), so a timed-out
 local read is per-file retry work and never outage evidence
 (`TestClassifyResult_LocalErrnoTable`).
 

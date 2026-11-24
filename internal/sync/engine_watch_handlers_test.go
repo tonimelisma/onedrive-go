@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
@@ -205,13 +206,13 @@ func TestRunPublicationDrainStage_PublicationSuccessDoesNotResetScopeFailureWind
 
 	rt.initializeRuntimeState(&runtimePlan{})
 	rt.sched.ResetWindows()
-	rt.sched.ObserveFailure(&syncdomain.ActionCompletion{
+	rt.sched.ObserveFailure(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:       "service.txt",
 		ActionType: syncdomain.ActionUpload,
 		DriveID:    driveID,
 		HTTPStatus: 503,
 		ErrMsg:     "service unavailable",
-	})
+	}))
 	require.True(t, rt.sched.HasWindowForTest(syncdomain.SKService()))
 
 	publication := rt.sched.AddForTest(&syncdomain.Action{

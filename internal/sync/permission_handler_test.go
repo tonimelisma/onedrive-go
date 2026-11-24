@@ -14,6 +14,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -210,11 +211,11 @@ func TestPermHandler_HandleLocalPermission_ReadOnlyMountIsOneBoundary(t *testing
 		return absDir == mount || strings.HasPrefix(absDir, mount+string(filepath.Separator))
 	})
 
-	evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
+	evidence := ph.handleLocalPermission(t.Context(), syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:       "media/photos/2026/a.jpg",
 		ActionType: syncdomain.ActionDownload,
 		Err:        &os.PathError{Op: "open", Path: "a.jpg", Err: syscall.EROFS},
-	})
+	}))
 
 	assert.Equal(t, permissionEvidenceBoundaryDenied, evidence.Kind)
 	assert.Equal(t, "media", evidence.BoundaryPath)
@@ -230,11 +231,11 @@ func TestPermHandler_HandleLocalPermission_ReadOnlySyncRootBlocksWholeTree(t *te
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "docs"), 0o750))
 	ph := newTestPermHandlerIn(t, nil, syncRoot, func(string) bool { return true })
 
-	evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
+	evidence := ph.handleLocalPermission(t.Context(), syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:       "docs/a.txt",
 		ActionType: syncdomain.ActionDownload,
 		Err:        &os.PathError{Op: "open", Path: "a.txt", Err: syscall.EROFS},
-	})
+	}))
 
 	assert.Equal(t, permissionEvidenceBoundaryDenied, evidence.Kind)
 	assert.Empty(t, evidence.BoundaryPath, "the walk stops at the sync root")
@@ -297,11 +298,11 @@ func TestPermHandler_HandleLocalPermission_ReadOnlyWithWritableParentStaysPerFil
 
 	ph := newTestPermHandlerIn(t, nil, newTestPermSyncRoot(t), func(string) bool { return false })
 
-	evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
+	evidence := ph.handleLocalPermission(t.Context(), syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:       "bound.txt",
 		ActionType: syncdomain.ActionDownload,
 		Err:        &os.PathError{Op: "open", Path: "bound.txt", Err: syscall.EROFS},
-	})
+	}))
 
 	assert.Equal(t, permissionEvidenceFileDenied, evidence.Kind)
 	assert.Equal(t, syncdomain.IssueLocalReadOnly, evidence.IssueType)
