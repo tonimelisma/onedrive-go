@@ -1,11 +1,13 @@
-package syncdomain
+package syncplan
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // decisionFlagCount is the number of boolean fields of DecisionState.
@@ -17,14 +19,14 @@ const decisionStateCount = sideTypeCount * sideTypeCount * sideTypeCount << deci
 
 // decisionStateAt decodes state number i: the flags from the low bits, then
 // the three side types.
-func decisionStateAt(i int) DecisionState {
+func decisionStateAt(i int) syncdomain.DecisionState {
 	flag := func(bit int) bool { return i>>bit&1 == 1 }
 	sides := i >> decisionFlagCount
 
-	return DecisionState{
-		Baseline:                       SideType(sides % sideTypeCount),
-		Local:                          SideType(sides / sideTypeCount % sideTypeCount),
-		Remote:                         SideType(sides / (sideTypeCount * sideTypeCount)),
+	return syncdomain.DecisionState{
+		Baseline:                       syncdomain.SideType(sides % sideTypeCount),
+		Local:                          syncdomain.SideType(sides / sideTypeCount % sideTypeCount),
+		Remote:                         syncdomain.SideType(sides / (sideTypeCount * sideTypeCount)),
 		LocalMoveSource:                flag(0),
 		LocalMoveDest:                  flag(1),
 		RemoteMoveSource:               flag(2),
@@ -47,15 +49,15 @@ func decisionStateAt(i int) DecisionState {
 
 // isRootCreate reports a path only one side holds, as a drive root: no
 // observer records such an entry, and the decision refuses to transfer one.
-func isRootCreate(s DecisionState) bool {
+func isRootCreate(s syncdomain.DecisionState) bool {
 	if s.Baseline.Present() {
 		return false
 	}
 	switch {
 	case s.Local.Present() && !s.Remote.Present():
-		return s.Local == SideRoot
+		return s.Local == syncdomain.SideRoot
 	case s.Remote.Present() && !s.Local.Present():
-		return s.Remote == SideRoot
+		return s.Remote == syncdomain.SideRoot
 	default:
 		return false
 	}
@@ -98,7 +100,7 @@ func TestDecide_EveryValidStateHasTheTableProperties(t *testing.T) {
 
 // tablePropertyBroken names the table property decision d of valid state s
 // breaks, or returns "".
-func tablePropertyBroken(s DecisionState, d Decision) string {
+func tablePropertyBroken(s syncdomain.DecisionState, d Decision) string {
 	noSide := !s.Baseline.Present() && !s.Local.Present() && !s.Remote.Present()
 	unclassified := d.Comparison == ComparisonUnclassified || d.Reconciliation == ReconcileUnclassified
 	switch {
@@ -106,9 +108,9 @@ func tablePropertyBroken(s DecisionState, d Decision) string {
 		return "a path no side holds is classified"
 	case unclassified && !noSide && !isRootCreate(s):
 		return "a path a side holds is unclassified"
-	case d.Reconciliation == ReconcileUpload && s.Local == SideFolder:
+	case d.Reconciliation == ReconcileUpload && s.Local == syncdomain.SideFolder:
 		return "upload of a local folder"
-	case d.Reconciliation == ReconcileDownload && s.Remote == SideFolder:
+	case d.Reconciliation == ReconcileDownload && s.Remote == syncdomain.SideFolder:
 		return "download onto a remote folder"
 	default:
 		return ""
@@ -124,40 +126,66 @@ func tablePropertyBroken(s DecisionState, d Decision) string {
 func TestDecide_ARootOnlyOneSideHoldsIsUnclassified(t *testing.T) {
 	t.Parallel()
 
-	local := Decide(DecisionState{Local: SideRoot})
+	local := Decide(syncdomain.DecisionState{Local: syncdomain.SideRoot})
 	assert.Equal(t, Decision{Comparison: ComparisonLocalOnlyCreate, Reconciliation: ReconcileUnclassified}, local)
-	remote := Decide(DecisionState{Remote: SideRoot})
+	remote := Decide(syncdomain.DecisionState{Remote: syncdomain.SideRoot})
 	assert.Equal(t, Decision{Comparison: ComparisonRemoteOnlyCreate, Reconciliation: ReconcileUnclassified}, remote)
 	assert.Equal(t, Decision{Comparison: ComparisonLocalOnlyCreate, Reconciliation: ReconcileUpload},
-		Decide(DecisionState{Local: SideFile}))
+		Decide(syncdomain.DecisionState{Local: syncdomain.SideFile}))
 	assert.Equal(t, Decision{Comparison: ComparisonRemoteOnlyCreate, Reconciliation: ReconcileFolderCreateLocal},
-		Decide(DecisionState{Remote: SideFolder, CurrentEqual: false}))
+		Decide(syncdomain.DecisionState{Remote: syncdomain.SideFolder, CurrentEqual: false}))
 }
 
 // Validates: R-6.2.16
-//
-// Valid names the rule a state breaks.
-func TestDecisionState_ValidNamesTheBrokenRule(t *testing.T) {
+func TestPlannerKinds_EveryMemberHasItsOwnName(t *testing.T) {
 	t.Parallel()
 
-	require.NoError(t, DecisionState{Baseline: SideFile, Local: SideFile, Remote: SideFile}.Valid())
-	err := DecisionState{Baseline: SideFolder, Local: SideFolder, Remote: SideFolder, LocalChanged: true, CurrentEqual: true}.Valid()
-	require.ErrorIs(t, err, errInvalidDecisionState)
-	require.ErrorContains(t, err, "has no local change")
-	err = DecisionState{Local: SideFile, LocalChanged: true}.Valid()
-	require.ErrorContains(t, err, "local_changed needs baseline and local")
+	comparisons := allComparisonKinds()
+	assert.Equal(t, ComparisonUnclassified, comparisons[0], "the zero value is the unclassified member")
+	assert.Len(t, slices.Compact(slices.Sorted(slices.Values(kindNames(comparisons)))), len(comparisons))
+	for _, kind := range comparisons {
+		assert.NotContains(t, kind.String(), "ComparisonKind(", "every member has a name")
+	}
+
+	reconciliations := allReconciliationKinds()
+	assert.Equal(t, ReconcileUnclassified, reconciliations[0], "the zero value is the unclassified member")
+	assert.Len(t, slices.Compact(slices.Sorted(slices.Values(kindNames(reconciliations)))), len(reconciliations))
+	for _, kind := range reconciliations {
+		assert.NotContains(t, kind.String(), "ReconciliationKind(", "every member has a name")
+	}
+
+	// A value outside either enum prints under the exported type's name.
+	assert.Equal(t, "ComparisonKind(200)", ComparisonKind(200).String())
+	assert.Equal(t, "ReconciliationKind(200)", ReconciliationKind(200).String())
 }
 
-// A valid state's check allocates nothing: the planner asserts it per row
-// under the engine's invariant checks, and the exhaustive table test calls it
-// for every state. Not parallel: AllocsPerRun counts every goroutine's
-// allocations.
-func TestDecisionState_ValidAllocatesNothing(t *testing.T) {
-	state := DecisionState{Baseline: SideFile, Local: SideFile, Remote: SideFile}
-	allocs := testing.AllocsPerRun(100, func() {
-		if err := state.Valid(); err != nil {
-			panic(err)
-		}
-	})
-	assert.Zero(t, allocs)
+// allComparisonKinds lists every member in declaration order, the
+// unclassified one first.
+func allComparisonKinds() []ComparisonKind {
+	kinds := make([]ComparisonKind, 0, int(ComparisonDiverged)+1)
+	for k := ComparisonUnclassified; k <= ComparisonDiverged; k++ {
+		kinds = append(kinds, k)
+	}
+
+	return kinds
+}
+
+// allReconciliationKinds lists every member in declaration order, the
+// unclassified one first.
+func allReconciliationKinds() []ReconciliationKind {
+	kinds := make([]ReconciliationKind, 0, int(ReconcileReplaceLocal)+1)
+	for k := ReconcileUnclassified; k <= ReconcileReplaceLocal; k++ {
+		kinds = append(kinds, k)
+	}
+
+	return kinds
+}
+
+func kindNames[K interface{ String() string }](kinds []K) []string {
+	names := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		names = append(names, kind.String())
+	}
+
+	return names
 }

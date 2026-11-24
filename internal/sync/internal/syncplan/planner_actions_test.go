@@ -67,7 +67,7 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 	planner := NewPlanner(syncfixture.TestLogger(t))
 	plan, err := planner.PlanSnapshot(
 		syncstoretest.ReadPlanningSnapshot(t, store),
-		syncdomain.Decide,
+		Decide,
 		PlannerMountContext{DriveID: driveID},
 		syncdomain.SyncBidirectional,
 	)
@@ -404,7 +404,7 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 	planner := NewPlanner(syncfixture.TestLogger(t))
 	plan, err := planner.PlanSnapshot(
 		syncstoretest.ReadPlanningSnapshot(t, store),
-		syncdomain.Decide,
+		Decide,
 		PlannerMountContext{DriveID: driveID},
 		syncdomain.SyncBidirectional,
 	)
@@ -708,11 +708,11 @@ func TestPlannerPlanCurrentState_UsesRemoteRowDriveOwnershipForDownloadActions(t
 		[]DecidedComparison{{ComparisonRow: syncdomain.ComparisonRow{
 			Path:       "Shared/report.txt",
 			RemoteType: syncdomain.SideFile,
-		}, ComparisonKind: syncdomain.ComparisonRemoteOnlyCreate}},
-		[]syncdomain.SQLiteReconciliationRow{{
+		}, ComparisonKind: ComparisonRemoteOnlyCreate}},
+		[]ReconciliationRow{{
 			Path:               "Shared/report.txt",
-			ComparisonKind:     syncdomain.ComparisonRemoteOnlyCreate,
-			ReconciliationKind: syncdomain.ReconcileDownload,
+			ComparisonKind:     ComparisonRemoteOnlyCreate,
+			ReconciliationKind: ReconcileDownload,
 		}},
 		nil,
 		[]syncdomain.RemoteStateRow{{
@@ -768,7 +768,7 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteWinnerDownloadWithoutConf
 	planner := NewPlanner(syncfixture.TestLogger(t))
 	plan, err := planner.PlanSnapshot(
 		syncstoretest.ReadPlanningSnapshot(t, store),
-		syncdomain.Decide,
+		Decide,
 		PlannerMountContext{DriveID: driveID},
 		syncdomain.SyncUploadOnly,
 	)
@@ -798,7 +798,7 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 
 	plan, err := NewPlanner(logger).PlanSnapshot(
 		syncstoretest.ReadPlanningSnapshot(t, store),
-		syncdomain.Decide,
+		Decide,
 		PlannerMountContext{DriveID: driveid.New(syncfixture.EngineTestDriveID)},
 		mode,
 	)
@@ -810,7 +810,7 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 func planCurrentStateForInputs(
 	t *testing.T,
 	comparisons []DecidedComparison,
-	reconciliations []syncdomain.SQLiteReconciliationRow,
+	reconciliations []ReconciliationRow,
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
 	observationIssues []syncdomain.ObservationIssueRow,
@@ -1003,11 +1003,11 @@ func planForUnavailableLocalMoveSource(t *testing.T) *syncdomain.ActionPlan {
 			RemoteType:    syncdomain.SideFile,
 			LocalChanged:  true,
 			RemoteChanged: false,
-		}, ComparisonKind: syncdomain.ComparisonLocalMoveSource}},
-		[]syncdomain.SQLiteReconciliationRow{{
+		}, ComparisonKind: ComparisonLocalMoveSource}},
+		[]ReconciliationRow{{
 			Path:               "docs/source.txt",
-			ComparisonKind:     syncdomain.ComparisonLocalMoveSource,
-			ReconciliationKind: syncdomain.ReconcileLocalMove,
+			ComparisonKind:     ComparisonLocalMoveSource,
+			ReconciliationKind: ReconcileLocalMove,
 			LocalMoveTarget:    "docs/dest.txt",
 		}},
 		[]syncdomain.LocalStateRow{{
@@ -1045,11 +1045,11 @@ func planForUnavailableRemoteMoveDestination(t *testing.T) *syncdomain.ActionPla
 			RemoteType:    syncdomain.SideFile,
 			LocalChanged:  false,
 			RemoteChanged: true,
-		}, ComparisonKind: syncdomain.ComparisonRemoteMoveDest}},
-		[]syncdomain.SQLiteReconciliationRow{{
+		}, ComparisonKind: ComparisonRemoteMoveDest}},
+		[]ReconciliationRow{{
 			Path:               "Shared/dest.txt",
-			ComparisonKind:     syncdomain.ComparisonRemoteMoveDest,
-			ReconciliationKind: syncdomain.ReconcileRemoteMove,
+			ComparisonKind:     ComparisonRemoteMoveDest,
+			ReconciliationKind: ReconcileRemoteMove,
 			RemoteMoveSource:   "Shared/source.txt",
 		}},
 		[]syncdomain.LocalStateRow{{

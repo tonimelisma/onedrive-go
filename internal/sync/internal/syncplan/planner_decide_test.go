@@ -22,21 +22,21 @@ func TestDecideComparisons_GoDecidesEveryRowOfOneRead(t *testing.T) {
 		{Path: "other.txt", LocalType: syncdomain.SideFile, LocalChanged: true},
 	}
 
-	comparisons, reconciliations := DecideComparisons(read, syncdomain.Decide)
+	comparisons, reconciliations := DecideComparisons(read, Decide)
 	require.Len(t, comparisons, 2)
 	require.Len(t, reconciliations, 2)
 	for i := range comparisons {
 		assert.Equal(t, read[i].Path, comparisons[i].Path)
 		assert.Equal(t, comparisons[i].Path, reconciliations[i].Path)
 		assert.Equal(t, syncdomain.ItemTypeFile, reconciliations[i].ItemType)
-		assert.Equal(t, syncdomain.ComparisonLocalOnlyCreate, comparisons[i].ComparisonKind)
-		assert.Equal(t, syncdomain.ComparisonLocalOnlyCreate, reconciliations[i].ComparisonKind)
-		assert.Equal(t, syncdomain.ReconcileUpload, reconciliations[i].ReconciliationKind)
+		assert.Equal(t, ComparisonLocalOnlyCreate, comparisons[i].ComparisonKind)
+		assert.Equal(t, ComparisonLocalOnlyCreate, reconciliations[i].ComparisonKind)
+		assert.Equal(t, ReconcileUpload, reconciliations[i].ReconciliationKind)
 		assert.Nil(t, reconciliations[i].DecisionInputs)
 	}
 
-	refuseNew := func(_ syncdomain.DecisionState) syncdomain.Decision {
-		return syncdomain.Decision{Comparison: syncdomain.ComparisonLocalOnlyCreate, Reconciliation: syncdomain.ReconcileUnclassified}
+	refuseNew := func(_ syncdomain.DecisionState) Decision {
+		return Decision{Comparison: ComparisonLocalOnlyCreate, Reconciliation: ReconcileUnclassified}
 	}
 	_, reconciliations = DecideComparisons(read, refuseNew)
 	require.NotEmpty(t, reconciliations[0].DecisionInputs)

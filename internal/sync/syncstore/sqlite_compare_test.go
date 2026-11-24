@@ -19,12 +19,12 @@ import (
 func decidedComparisonRows(
 	ctx context.Context,
 	store *SyncStore,
-) ([]syncplan.DecidedComparison, []syncdomain.SQLiteReconciliationRow, error) {
+) ([]syncplan.DecidedComparison, []syncplan.ReconciliationRow, error) {
 	comparisons, err := queryComparisonRowsForTables(ctx, store.db, "local_state", "remote_state")
 	if err != nil {
 		return nil, nil, err
 	}
-	decided, reconciliations := syncplan.DecideComparisons(comparisons, syncdomain.Decide)
+	decided, reconciliations := syncplan.DecideComparisons(comparisons, syncplan.Decide)
 
 	return decided, reconciliations, nil
 }
@@ -34,7 +34,7 @@ func queryComparisonState(ctx context.Context, store *SyncStore) ([]syncplan.Dec
 	return comparisons, err
 }
 
-func queryReconciliationState(ctx context.Context, store *SyncStore) ([]syncdomain.SQLiteReconciliationRow, error) {
+func queryReconciliationState(ctx context.Context, store *SyncStore) ([]syncplan.ReconciliationRow, error) {
 	_, reconciliations, err := decidedComparisonRows(ctx, store)
 	return reconciliations, err
 }
@@ -725,7 +725,7 @@ func TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpda
 	comparisonRows, err := queryComparisonState(ctx, store)
 	require.NoError(t, err)
 	require.Len(t, comparisonRows, 1)
-	assert.Equal(t, syncdomain.ComparisonEqualAgain, comparisonRows[0].ComparisonKind)
+	assert.Equal(t, syncplan.ComparisonEqualAgain, comparisonRows[0].ComparisonKind)
 	assert.True(t, comparisonRows[0].LocalChanged)
 	assert.False(t, comparisonRows[0].RemoteChanged)
 	assert.True(t, comparisonRows[0].CurrentEqual)
@@ -819,7 +819,7 @@ func TestQueryComparisonState_SideTypesCarryPresenceAndItemType(t *testing.T) {
 }
 
 // reconciliationKindsByPath names each row's reconciliation kind by its path.
-func reconciliationKindsByPath(rows []syncdomain.SQLiteReconciliationRow) map[string]string {
+func reconciliationKindsByPath(rows []syncplan.ReconciliationRow) map[string]string {
 	out := make(map[string]string, len(rows))
 	for i := range rows {
 		out[rows[i].Path] = rows[i].ReconciliationKind.String()

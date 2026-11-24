@@ -79,7 +79,7 @@ func moveCompositionInputs(
 		if moveNodeTouchesUnavailableTruth(&node, views) {
 			frozen[node.key] = true
 		}
-		if cmp.ComparisonKind == syncdomain.ComparisonLocalMoveSource && cmp.LocalType.Present() && cmp.LocalMoveTarget != "" {
+		if cmp.ComparisonKind == ComparisonLocalMoveSource && cmp.LocalType.Present() && cmp.LocalMoveTarget != "" {
 			recreated[node.key] = cmp.Path
 		}
 		nodes = append(nodes, node)
@@ -161,7 +161,7 @@ func takesAnotherItemsPath(at *DecidedComparison, entry *syncdomain.BaselineEntr
 // uploaded beside OneDrive's z while p waited for good to come back to its
 // path.
 func pathOfAnItemMovedAwayHere(at *DecidedComparison) bool {
-	return at.ComparisonKind == syncdomain.ComparisonLocalMoveSource && at.LocalItemReplaced &&
+	return at.ComparisonKind == ComparisonLocalMoveSource && at.LocalItemReplaced &&
 		at.RemoteItemID == at.BaselineItemID
 }
 
@@ -249,7 +249,7 @@ func folderMovedOntoAPathItsItemLeft(
 // computer moved below p, into the folder that took its path.
 func displacedIntoIt(at *DecidedComparison, entry *syncdomain.BaselineEntry, p string) bool {
 	return at != nil && at.BaselineType == syncdomain.SideFolder && at.BaselineItemID != entry.ItemID && at.LocalItemReplaced &&
-		at.ComparisonKind == syncdomain.ComparisonLocalMoveSource && strings.HasPrefix(at.LocalMoveTarget, p+"/")
+		at.ComparisonKind == ComparisonLocalMoveSource && strings.HasPrefix(at.LocalMoveTarget, p+"/")
 }
 
 // losesAnEntryHere reports whether a synced entry below folder (the moved
@@ -262,7 +262,7 @@ func displacedIntoIt(at *DecidedComparison, entry *syncdomain.BaselineEntry, p s
 func losesAnEntryHere(folder string, cmpByPath map[string]*DecidedComparison) bool {
 	for p, row := range cmpByPath {
 		if strings.HasPrefix(p, folder+"/") && row.BaselineType.Present() && !row.LocalType.Present() &&
-			row.ComparisonKind != syncdomain.ComparisonLocalMoveSource {
+			row.ComparisonKind != ComparisonLocalMoveSource {
 			return true
 		}
 	}
@@ -360,7 +360,7 @@ func composedDisplacement(
 }
 
 func composedLocalPosition(cmp *DecidedComparison, view *syncdomain.PathView) string {
-	if cmp.ComparisonKind == syncdomain.ComparisonLocalMoveSource && cmp.LocalMoveTarget != "" {
+	if cmp.ComparisonKind == ComparisonLocalMoveSource && cmp.LocalMoveTarget != "" {
 		return cmp.LocalMoveTarget
 	}
 	if view.Local != nil && localEntryIsBaselineItem(view.Local, view.Baseline) {
@@ -406,7 +406,7 @@ func composedRemotePosition(
 		return ""
 	}
 	switch {
-	case at.ComparisonKind == syncdomain.ComparisonRemoteMoveShadowed:
+	case at.ComparisonKind == ComparisonRemoteMoveShadowed:
 		return row.Path
 	// The move OneDrive made is shadowed by this item's local move, and a
 	// new local file took its destination here (z moved into p here and to
@@ -439,7 +439,7 @@ func composedRemotePosition(
 // or the local position was found there by the item's identity
 // (editedWhereOneDriveMovedIt).
 func heldHereWhereOneDriveHasIt(at *DecidedComparison, entry *syncdomain.BaselineEntry) bool {
-	return at.ComparisonKind == syncdomain.ComparisonLocalMoveDest ||
+	return at.ComparisonKind == ComparisonLocalMoveDest ||
 		(at.RemoteItemID == entry.ItemID && !at.BaselineType.Present())
 }
 
@@ -460,7 +460,7 @@ func sitsAtAnotherSyncedItemsPath(at *DecidedComparison, entry *syncdomain.Basel
 		return false
 	}
 
-	return at.ComparisonKind == syncdomain.ComparisonRemoteMoveSource ||
+	return at.ComparisonKind == ComparisonRemoteMoveSource ||
 		(at.BaselineType.Present() && !at.LocalType.Present())
 }
 
@@ -510,7 +510,7 @@ func unpairedRemoteMoveOf(
 		return true
 	}
 
-	return at.ComparisonKind == syncdomain.ComparisonRemoteOnlyCreate && !cmp.LocalType.Present() && !cmp.RemoteType.Present()
+	return at.ComparisonKind == ComparisonRemoteOnlyCreate && !cmp.LocalType.Present() && !cmp.RemoteType.Present()
 }
 
 // remoteToLocalFolderPrefixes maps each composed folder's remote path to where

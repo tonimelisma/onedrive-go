@@ -3,6 +3,8 @@ package sync
 import (
 	"testing"
 
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -117,7 +119,7 @@ func TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate(
 
 	rows := reconciliationRowsForStore(t, mgr)
 	require.Len(t, rows, 1)
-	assert.Equal(t, syncdomain.ReconcileBaselineUpdate, rows[0].ReconciliationKind)
+	assert.Equal(t, syncplan.ReconcileBaselineUpdate, rows[0].ReconciliationKind)
 }
 
 // Validates: R-2.10.49

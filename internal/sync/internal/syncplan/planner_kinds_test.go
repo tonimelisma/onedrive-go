@@ -19,15 +19,15 @@ import (
 func TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable(t *testing.T) {
 	t.Parallel()
 
-	plan := func(kind syncdomain.ReconciliationKind) (*syncdomain.ActionPlan, error) {
+	plan := func(kind ReconciliationKind) (*syncdomain.ActionPlan, error) {
 		return NewPlanner(syncfixture.TestLogger(t)).PlanCurrentState(
 			[]DecidedComparison{
-				{ComparisonRow: syncdomain.ComparisonRow{Path: "docs/a.txt", LocalType: syncdomain.SideFile}, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate},
-				{ComparisonRow: syncdomain.ComparisonRow{Path: "docs/b.txt", LocalType: syncdomain.SideFile}, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate},
+				{ComparisonRow: syncdomain.ComparisonRow{Path: "docs/a.txt", LocalType: syncdomain.SideFile}, ComparisonKind: ComparisonLocalOnlyCreate},
+				{ComparisonRow: syncdomain.ComparisonRow{Path: "docs/b.txt", LocalType: syncdomain.SideFile}, ComparisonKind: ComparisonLocalOnlyCreate},
 			},
-			[]syncdomain.SQLiteReconciliationRow{
-				{Path: "docs/a.txt", ItemType: syncdomain.ItemTypeFile, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate, ReconciliationKind: kind},
-				{Path: "docs/b.txt", ItemType: syncdomain.ItemTypeFile, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate, ReconciliationKind: kind},
+			[]ReconciliationRow{
+				{Path: "docs/a.txt", ItemType: syncdomain.ItemTypeFile, ComparisonKind: ComparisonLocalOnlyCreate, ReconciliationKind: kind},
+				{Path: "docs/b.txt", ItemType: syncdomain.ItemTypeFile, ComparisonKind: ComparisonLocalOnlyCreate, ReconciliationKind: kind},
 			},
 			[]syncdomain.LocalStateRow{
 				{Path: "docs/a.txt", ItemType: syncdomain.ItemTypeFile, Hash: "local-a"},
@@ -44,16 +44,16 @@ func TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable(t *tes
 		)
 	}
 
-	suppressed, err := plan(syncdomain.ReconcileUpload)
+	suppressed, err := plan(ReconcileUpload)
 	require.NoError(t, err)
 	assert.Empty(t, suppressed.Actions, "the control: unavailable truth suppresses the classified rows")
 
-	_, err = plan(syncdomain.ReconcileUnclassified)
+	_, err = plan(ReconcileUnclassified)
 	require.ErrorIs(t, err, ErrUnclassifiedPlan)
 	var unclassified *unclassifiedPlanError
 	require.ErrorAs(t, err, &unclassified)
 	assert.Equal(t, "docs/a.txt", unclassified.Path)
-	assert.Equal(t, syncdomain.ComparisonLocalOnlyCreate, unclassified.Comparison)
+	assert.Equal(t, ComparisonLocalOnlyCreate, unclassified.Comparison)
 	assert.Equal(t, 1, unclassified.Others)
 	assert.EqualError(t, err, `sync: planner state is outside the decision table: "docs/a.txt" `+
 		`(comparison local_only_create, reconciliation unclassified) and 1 more path`)
@@ -90,12 +90,12 @@ func TestPlanCurrentState_FolderTransferFailsThePlan(t *testing.T) {
 	t.Parallel()
 
 	_, err := NewPlanner(syncfixture.TestLogger(t)).PlanCurrentState(
-		[]DecidedComparison{{ComparisonRow: syncdomain.ComparisonRow{Path: "local-dir", LocalType: syncdomain.SideFolder}, ComparisonKind: syncdomain.ComparisonLocalOnlyCreate}},
-		[]syncdomain.SQLiteReconciliationRow{{
+		[]DecidedComparison{{ComparisonRow: syncdomain.ComparisonRow{Path: "local-dir", LocalType: syncdomain.SideFolder}, ComparisonKind: ComparisonLocalOnlyCreate}},
+		[]ReconciliationRow{{
 			Path:               "local-dir",
 			ItemType:           syncdomain.ItemTypeFolder,
-			ComparisonKind:     syncdomain.ComparisonLocalOnlyCreate,
-			ReconciliationKind: syncdomain.ReconcileUpload,
+			ComparisonKind:     ComparisonLocalOnlyCreate,
+			ReconciliationKind: ReconcileUpload,
 		}},
 		[]syncdomain.LocalStateRow{{Path: "local-dir", ItemType: syncdomain.ItemTypeFolder}},
 		nil,

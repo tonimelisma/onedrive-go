@@ -489,14 +489,14 @@ func (flow *engineFlow) readPlanningSnapshot(
 	return snapshot, nil
 }
 
-// decider is the decision table this run plans with: syncdomain.Decide,
+// decider is the decision table this run plans with: syncplan.Decide,
 // unless a test replaced it (engineHooks.decideOverride).
 func (flow *engineFlow) decider() syncplan.Decider {
 	if flow.hooks.decideOverride != nil {
 		return flow.hooks.decideOverride
 	}
 
-	return syncdomain.Decide
+	return syncplan.Decide
 }
 
 // mustAssertDecisionStatesValid holds, under the engine's invariant checks,

@@ -215,7 +215,7 @@ observation_issues / retry_work / block_scopes / observation_state ────�
 3. **SQLite owns structural diff; Go decides.** `comparison_flags` computes
    the latest snapshot-vs-baseline facts from SQLite (move pairing, the
    ancestor-move sets, content changes), the Go decision table
-   (`syncdomain.Decide`) turns them into a decision per path, and Go owns
+   (`syncplan.Decide`) turns them into a decision per path, and Go owns
    actionable-set construction, durable retry/blocker reconciliation, dependency ordering, and
    final admission on the ready frontier.
 4. **Watch-primary.** `sync --watch` is the primary runtime mode. All components serve both one-shot and watch modes.

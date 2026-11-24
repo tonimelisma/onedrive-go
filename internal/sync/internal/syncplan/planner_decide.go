@@ -4,17 +4,17 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
-// Decider is the decision table: syncdomain.Decide, or a test's stand-in
+// Decider is the decision table: Decide, or a test's stand-in
 // that removes one rule to prove a pass fails closed on the row it
 // classified (R-6.2.16).
-type Decider func(syncdomain.DecisionState) syncdomain.Decision
+type Decider func(syncdomain.DecisionState) Decision
 
 // DecidedComparison is a comparison row of one planning read with the
 // comparison kind the decision table gave it (DecideComparisons). The kind is
 // the planner's: the store's row cannot carry one.
 type DecidedComparison struct {
 	syncdomain.ComparisonRow
-	ComparisonKind syncdomain.ComparisonKind
+	ComparisonKind ComparisonKind
 }
 
 // DecideComparisons decides every comparison row of one planning read with
@@ -26,13 +26,13 @@ type DecidedComparison struct {
 func DecideComparisons(
 	comparisons []syncdomain.ComparisonRow,
 	decide Decider,
-) ([]DecidedComparison, []syncdomain.SQLiteReconciliationRow) {
+) ([]DecidedComparison, []ReconciliationRow) {
 	decided := make([]DecidedComparison, len(comparisons))
-	reconciliations := make([]syncdomain.SQLiteReconciliationRow, len(comparisons))
+	reconciliations := make([]ReconciliationRow, len(comparisons))
 	for i := range comparisons {
 		decision := decide(comparisons[i].DecisionState())
 		decided[i] = DecidedComparison{ComparisonRow: comparisons[i], ComparisonKind: decision.Comparison}
-		reconciliations[i] = syncdomain.ReconciliationRowOf(&comparisons[i], decision)
+		reconciliations[i] = reconciliationRowOf(&comparisons[i], decision)
 	}
 
 	return decided, reconciliations

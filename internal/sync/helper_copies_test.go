@@ -178,7 +178,7 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 
 	plan, err := syncplan.NewPlanner(logger).PlanSnapshot(
 		syncstoretest.ReadPlanningSnapshot(t, store),
-		syncdomain.Decide,
+		syncplan.Decide,
 		syncplan.PlannerMountContext{DriveID: driveid.New(syncfixture.EngineTestDriveID)},
 		mode,
 	)
@@ -189,10 +189,10 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 
 // reconciliationRowsForStore decides what store holds as a pass's planner
 // does: the reconciliation rows of the planning read's comparison rows.
-func reconciliationRowsForStore(t *testing.T, store *syncstore.SyncStore) []syncdomain.SQLiteReconciliationRow {
+func reconciliationRowsForStore(t *testing.T, store *syncstore.SyncStore) []syncplan.ReconciliationRow {
 	t.Helper()
 
-	_, reconciliations := syncplan.DecideComparisons(syncstoretest.ReadPlanningSnapshot(t, store).Comparisons, syncdomain.Decide)
+	_, reconciliations := syncplan.DecideComparisons(syncstoretest.ReadPlanningSnapshot(t, store).Comparisons, syncplan.Decide)
 
 	return reconciliations
 }
@@ -239,7 +239,7 @@ func newWorkerTestSetupWith(t *testing.T, configure func(*syncexec.ExecutorInput
 }
 
 // reconciliationKindsByPath names each row's reconciliation kind by its path.
-func reconciliationKindsByPath(rows []syncdomain.SQLiteReconciliationRow) map[string]string {
+func reconciliationKindsByPath(rows []syncplan.ReconciliationRow) map[string]string {
 	out := make(map[string]string, len(rows))
 	for i := range rows {
 		out[rows[i].Path] = rows[i].ReconciliationKind.String()

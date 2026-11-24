@@ -265,7 +265,7 @@ followed_local_ancestor_remote_paths AS MATERIALIZED (
 `
 	// sqlComparisonStateCTEs is the one definition of the comparison facts:
 	// the decision table's inputs for every path (syncdomain.DecisionState).
-	// The table itself is Go (syncdomain.Decide); SQL keeps what is set-valued
+	// The table itself is Go (syncplan.Decide); SQL keeps what is set-valued
 	// (the path universe, move pairing, the ancestor-move sets and the
 	// descendant probes) and the per-path flags.
 	sqlComparisonStateCTEs = sqlLocalAndRemoteMoveCTEs + `
