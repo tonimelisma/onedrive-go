@@ -24,13 +24,6 @@ const reconcileIdentityGolden = "testdata/reconcile/matrix.identity.golden"
 //
 //nolint:gochecknoglobals // the reviewed table the golden test checks against.
 var identityMatrixDifferences = map[string]string{
-	"local unchanged        | remote moved+edit doc3  ": "a move and an edit are two attributes of one node, so the " +
-		"plan moves the file and downloads the edit in one pass; the current planner moves it and leaves the edit " +
-		"to the next pass",
-	"local moved doc2       | remote edited           ": "the same composition the other way round: the local move " +
-		"goes up and OneDrive's edit comes down at the moved path in one pass",
-	"local moved doc2       | remote moved+edit doc3  ": "OneDrive's position wins, as in the current planner, and " +
-		"its edit comes down at that position in the same pass",
 	"local moved+edit doc2  | remote unchanged        ": "the local identity joins the moved and edited file to its " +
 		"item, so OneDrive's item is moved and its content replaced; the current planner cannot corroborate an " +
 		"edited file's identity by content and deletes the item and uploads a new one, losing its history",

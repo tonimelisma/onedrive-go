@@ -2846,7 +2846,7 @@ func buildComposedMoveActions(
 		}
 		remote := viewAt(node.paths[moveCoordRemote]).Remote
 		if move.side == moveCoordLocal {
-			actions = append(actions, composedLocalMoveActions(move, &entry, remote, viewAt)...)
+			actions = append(actions, composedLocalMoveActions(move, node, &entry, remote, viewAt)...)
 			continue
 		}
 		actions = append(actions, composedRemoteMoveActions(move, &entry, remote, viewAt)...)
@@ -2919,9 +2919,11 @@ func composedMergeActions(
 
 // composedLocalMoveActions builds a remote-origin local move, preceded by the
 // conflict copy of an edited file it displaces (buildDependencies orders the
-// move after the copy at its destination).
+// move after the copy at its destination), and followed by the download of
+// OneDrive's edit of the item when the two compose (composedRemoteEditDownload).
 func composedLocalMoveActions(
-	move *composedMove, entry *syncdomain.BaselineEntry, remote *syncdomain.RemoteState, viewAt func(string) *syncdomain.PathView,
+	move *composedMove, node *moveNode, entry *syncdomain.BaselineEntry, remote *syncdomain.RemoteState,
+	viewAt func(string) *syncdomain.PathView,
 ) []syncdomain.Action {
 	view := &syncdomain.PathView{
 		Path:        move.newPath,
@@ -2958,9 +2960,47 @@ func composedLocalMoveActions(
 		emptied.DeletesUnsyncedEntry = true
 		return []syncdomain.Action{emptied, action}
 	case moveDisplaceNever:
+		if download, ok := composedRemoteEditDownload(move, node, entry, remote, viewAt); ok {
+			return []syncdomain.Action{action, download}
+		}
 	}
 
 	return []syncdomain.Action{action}
+}
+
+// composedRemoteEditDownload is the download of the edit OneDrive made to an
+// item it also moved, composed with the local move that follows it here: the
+// move puts the copy here at OneDrive's place, and the download, which waits
+// for it (work at a move's destination does), replaces it there with the
+// edit. It is planned only when the copy here is proven to hold the synced
+// content (its hash is the baseline's), so the download may replace nothing
+// else, and only for a move from the item's own place in the local snapshot
+// to the place OneDrive holds it, nothing displaced there: local_state does
+// not follow the plan's moves, so freshness reads the copy at the move's
+// source (MovedLocalPath). A copy edited here is moved alone, and the next
+// pass meets the two edits as a content conflict at the moved path.
+func composedRemoteEditDownload(
+	move *composedMove, node *moveNode, entry *syncdomain.BaselineEntry, remote *syncdomain.RemoteState,
+	viewAt func(string) *syncdomain.PathView,
+) (syncdomain.Action, bool) {
+	if node == nil || move.remotePath != "" || node.paths[moveCoordLocal] != move.oldPath {
+		return syncdomain.Action{}, false
+	}
+	local := viewAt(move.oldPath).Local
+	if local == nil || local.ItemType != syncdomain.ItemTypeFile || local.Hash == "" ||
+		local.Hash != entry.LocalHash || !syncdomain.RemoteContentDiffersFromBaseline(remote, entry) {
+		return syncdomain.Action{}, false
+	}
+	download := makeAction(syncdomain.ActionDownload, &syncdomain.PathView{
+		Path:        move.newPath,
+		Local:       local,
+		Remote:      remote,
+		Baseline:    entry,
+		TruthStatus: viewAt(move.newPath).TruthStatus,
+	})
+	download.MovedLocalPath = move.oldPath
+
+	return download, true
 }
 
 // composedRemoteMoveActions builds a local-origin remote move. A move whose
@@ -2986,16 +3026,29 @@ func composedRemoteMoveActions(
 		action.MovedLocalPath = move.localPath
 	}
 	actions := []syncdomain.Action{action}
+	if move.localPath != move.newPath {
+		return actions
+	}
 
-	if move.localPath == move.newPath && syncdomain.LocalFileDiffersFromBaseline(movedLocal, entry) {
-		uploadView := &syncdomain.PathView{
-			Path:        move.newPath,
-			Local:       movedLocal,
-			Remote:      remote,
-			Baseline:    entry,
-			TruthStatus: viewAt(move.newPath).TruthStatus,
-		}
-		actions = append(actions, makeAction(syncdomain.ActionUpload, uploadView))
+	transferView := &syncdomain.PathView{
+		Path:        move.newPath,
+		Local:       movedLocal,
+		Remote:      remote,
+		Baseline:    entry,
+		TruthStatus: viewAt(move.newPath).TruthStatus,
+	}
+	localEdited := syncdomain.LocalFileDiffersFromBaseline(movedLocal, entry)
+	switch {
+	case localEdited:
+		actions = append(actions, makeAction(syncdomain.ActionUpload, transferView))
+	case syncdomain.RemoteContentDiffersFromBaseline(remote, entry):
+		// OneDrive edited the item this computer renamed, and the copy
+		// here still holds the synced content: the move and the edit
+		// compose, and the edit comes down at the new name after the move
+		// (the download replaces only the verified synced content). With
+		// both sides edited the next pass meets them as a content conflict
+		// at the moved path.
+		actions = append(actions, makeAction(syncdomain.ActionDownload, transferView))
 	}
 
 	return actions

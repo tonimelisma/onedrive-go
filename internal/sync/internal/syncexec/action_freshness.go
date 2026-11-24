@@ -122,8 +122,7 @@ func loadLocalActionFreshnessInputs(
 	}
 
 	if actionUsesLocalFreshness(action) {
-		viewPath := syncdomain.ActionViewPath(action)
-		row, found, err := store.GetLocalStateByPath(ctx, viewPath)
+		row, found, err := store.GetLocalStateByPath(ctx, localFreshnessPath(action))
 		if err != nil {
 			return fmt.Errorf("sync: reading local truth for action freshness: %w", err)
 		}
@@ -236,7 +235,7 @@ func evaluateLocalActionFreshness(action *syncdomain.Action, inputs actionFreshn
 	}
 
 	planned := action.View.Local
-	viewPath := syncdomain.ActionViewPath(action)
+	viewPath := localFreshnessPath(action)
 	if planned == nil {
 		if inputs.LocalAtViewFound {
 			return staleLocalAction("%s has current local truth but was absent when planned", viewPath)
@@ -386,6 +385,26 @@ func actionHasPlannerView(action *syncdomain.Action) bool {
 	return action != nil && action.View != nil && syncdomain.ActionViewPath(action) != ""
 }
 
+// localFreshnessPath is where freshness reads an action's planned local truth
+// in local_state: its view's path, except for a download composed with the
+// local move that carries the copy here to its path (MovedLocalPath).
+// local_state is observation-owned and does not follow the plan's own moves,
+// so the copy is still recorded at the move's source.
+func localFreshnessPath(action *syncdomain.Action) string {
+	if movedIntoPlaceDownload(action) {
+		return action.MovedLocalPath
+	}
+
+	return syncdomain.ActionViewPath(action)
+}
+
+// movedIntoPlaceDownload reports a download of OneDrive's edit onto the copy
+// a local move of the same plan puts at its path (the planner's
+// composedRemoteEditDownload).
+func movedIntoPlaceDownload(action *syncdomain.Action) bool {
+	return action != nil && action.Type == syncdomain.ActionDownload && action.MovedLocalPath != ""
+}
+
 // localMovePeerPath is where freshness reads a move's other endpoint in
 // local_state: the snapshot path of a remote move's item, which differs from
 // the destination when an earlier move of the plan places its parent.
@@ -480,14 +499,14 @@ func remoteRowMatchesPlanned(row *syncdomain.RemoteStateRow, planned *syncdomain
 }
 
 func remoteRowMatchesPlannedForAction(action *syncdomain.Action, row *syncdomain.RemoteStateRow, planned *syncdomain.RemoteState) bool {
-	if plannedPostRemoteMoveContentUpload(action) {
-		return remoteRowMatchesPostRemoteMoveUpload(row, planned)
+	if plannedPostRemoteMoveContentTransfer(action) {
+		return remoteRowMatchesPostRemoteMoveTransfer(row, planned)
 	}
 
 	return remoteRowMatchesPlanned(row, planned)
 }
 
-func remoteRowMatchesPostRemoteMoveUpload(row *syncdomain.RemoteStateRow, planned *syncdomain.RemoteState) bool {
+func remoteRowMatchesPostRemoteMoveTransfer(row *syncdomain.RemoteStateRow, planned *syncdomain.RemoteState) bool {
 	if row == nil || planned == nil {
 		return row == nil && planned == nil
 	}
@@ -498,16 +517,22 @@ func remoteRowMatchesPostRemoteMoveUpload(row *syncdomain.RemoteStateRow, planne
 	return remoteContentMatchesPlanned(row, planned)
 }
 
-func plannedPostRemoteMoveContentUpload(action *syncdomain.Action) bool {
-	if !actionUploadHasMovedBaseline(action) {
+func plannedPostRemoteMoveContentTransfer(action *syncdomain.Action) bool {
+	if !contentTransferHasMovedBaseline(action) {
 		return false
 	}
 
 	return plannedPostMoveRemoteMatchesBaseline(action.View.Remote, action.View.Baseline)
 }
 
-func actionUploadHasMovedBaseline(action *syncdomain.Action) bool {
-	if action == nil || action.Type != syncdomain.ActionUpload || action.View == nil {
+// contentTransferHasMovedBaseline reports an upload or download planned at
+// the path a remote move of the same plan gives the item (its baseline is
+// still at the source): the transfer runs after the move, whose new eTag is
+// no change of the content the transfer was planned against. Content drift
+// still makes it stale (remoteRowMatchesPostRemoteMoveTransfer).
+func contentTransferHasMovedBaseline(action *syncdomain.Action) bool {
+	if action == nil || action.View == nil ||
+		(action.Type != syncdomain.ActionUpload && action.Type != syncdomain.ActionDownload) {
 		return false
 	}
 	if action.View.Baseline == nil || action.View.Remote == nil {

@@ -170,7 +170,7 @@ func (e *Executor) remoteItemIsAt(item *graph.Item, relPath string) (at, known b
 func remoteRowMatchesLivePreconditionForAction(
 	action *syncdomain.Action, row *syncdomain.RemoteStateRow, planned *syncdomain.RemoteState,
 ) bool {
-	if plannedPostRemoteMoveContentUpload(action) {
+	if plannedPostRemoteMoveContentTransfer(action) {
 		return remoteRowMatchesPostRemoteMoveLivePrecondition(row, planned)
 	}
 
@@ -590,7 +590,11 @@ func validateExistingTargetMetadata(action *syncdomain.Action, info os.FileInfo,
 	if planned.Mtime != 0 && info.ModTime().UnixNano() != planned.Mtime {
 		return stalePreconditionError("%s %s changed mtime", noun, action.Path)
 	}
-	if plannedCtimeChanged(planned, info) {
+	// The rename that put a moved-into-place download's target there moved
+	// its inode change time; what the download may replace is then proven by
+	// the planned hash alone (expectedDownloadTargetHash), never by metadata.
+	movedHere := movedIntoPlaceDownload(action) && planned.Hash != ""
+	if !movedHere && plannedCtimeChanged(planned, info) {
 		return stalePreconditionError("%s %s changed since it was observed", noun, action.Path)
 	}
 

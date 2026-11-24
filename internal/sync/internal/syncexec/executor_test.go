@@ -1133,6 +1133,78 @@ func TestExecutor_Download_TargetAppearsBeforeRenameReturnsStalePrecondition(t *
 	assert.FileExists(t, filepath.Join(syncRoot, ".onedrive-go.appeared.txt.partial"))
 }
 
+// Validates: R-2.8.10, R-2.17.3
+//
+// A download composed with the local move that puts the copy here at its
+// path finds the copy with the inode change time the rename gave it: the
+// planned hash alone decides what it may replace. The synced copy is
+// replaced; a copy that holds anything else is left in place.
+func TestExecutor_Download_MovedIntoPlaceTargetIsProvenByItsHash(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		contentHere string
+		wantReplace bool
+	}{
+		{name: "the synced copy", contentHere: "synced content", wantReplace: true},
+		{name: "another file", contentHere: "edited content", wantReplace: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			driveID := driveid.New(synctest.TestDriveID)
+			items := &syncfixture.ExecutorMockItemClient{
+				GetItemFn: func(_ context.Context, _ driveid.ID, _ string) (*graph.Item, error) {
+					return &graph.Item{ID: "item1", DriveID: driveID}, nil
+				},
+			}
+			dl := &syncfixture.ExecutorMockDownloader{
+				DownloadFn: func(_ context.Context, _ driveid.ID, _ string, w io.Writer) (int64, error) {
+					n, err := w.Write([]byte("remote edit"))
+					return int64(n), err
+				},
+			}
+			cfg, syncRoot := newTestExecutorConfig(t, items, dl, &syncfixture.ExecutorMockUploader{})
+			target := filepath.Join(syncRoot, "moved.txt")
+			require.NoError(t, os.WriteFile(target, []byte(tc.contentHere), 0o600))
+			info, err := os.Stat(target)
+			require.NoError(t, err)
+			e := NewExecution(cfg, syncfixture.EmptyBaseline())
+
+			o := e.ExecuteDownload(t.Context(), &syncdomain.Action{
+				Type:           syncdomain.ActionDownload,
+				Path:           "moved.txt",
+				MovedLocalPath: "old.txt",
+				ItemID:         "item1",
+				DriveID:        driveID,
+				View: &syncdomain.PathView{
+					Path:   "moved.txt",
+					Remote: &syncdomain.RemoteState{DriveID: driveID, ItemID: "item1", ItemType: syncdomain.ItemTypeFile},
+					Local: &syncdomain.LocalState{
+						ItemType:   syncdomain.ItemTypeFile,
+						Hash:       syncfixture.HashContentQuickXor(t, "synced content"),
+						Size:       info.Size(),
+						Mtime:      info.ModTime().UnixNano(),
+						LocalCtime: 1, // observed before the rename moved it
+					},
+				},
+			})
+
+			data, err := localpath.ReadFile(target)
+			require.NoError(t, err)
+			if tc.wantReplace {
+				syncfixture.RequireOutcomeSuccess(t, &o)
+				assert.Equal(t, "remote edit", string(data))
+				return
+			}
+			syncfixture.RequireOutcomeFailure(t, &o)
+			require.ErrorIs(t, o.Error, syncdomain.ErrActionPreconditionChanged)
+			assert.Equal(t, tc.contentHere, string(data))
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Download hash mismatch tests (B-132)
 // ---------------------------------------------------------------------------

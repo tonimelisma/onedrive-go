@@ -2,6 +2,7 @@ package syncplan
 
 import (
 	"log/slog"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -241,6 +242,36 @@ func TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads
 	assert.Equal(t, syncdomain.ActionUpload, plan.Actions[1].Type)
 	assert.Equal(t, "new.txt", plan.Actions[1].Path)
 	assert.Equal(t, []int{0}, plan.Deps[1])
+}
+
+// Validates: R-2.17.3
+//
+// A rename here and OneDrive's edit of the same file compose in one plan:
+// the remote move, then the download of the edit at the new name, which
+// waits for the move and may replace only the synced content found there.
+func TestPlannerPlanCurrentState_LocalMoveComposesWithTheRemoteEdit(t *testing.T) {
+	t.Parallel()
+
+	s := newPMState(t)
+	s.addSynced(matrixPath, false, matrixA.content())
+	moveTo("doc2", matrixA)(s, true)
+	moveTo(matrixPath, matrixC)(s, false)
+
+	plan := s.plan()
+	require.Len(t, plan.Actions, 2)
+	moveIndex := slices.IndexFunc(plan.Actions, func(a syncdomain.Action) bool { return a.Type == syncdomain.ActionRemoteMove })
+	downloadIndex := slices.IndexFunc(plan.Actions, func(a syncdomain.Action) bool { return a.Type == syncdomain.ActionDownload })
+	require.NotEqual(t, -1, moveIndex)
+	require.NotEqual(t, -1, downloadIndex)
+	move, download := plan.Actions[moveIndex], plan.Actions[downloadIndex]
+	assert.Equal(t, "doc2", move.Path)
+	assert.Equal(t, "doc2", download.Path)
+	assert.Equal(t, move.ItemID, download.ItemID, "the edit comes down onto the same item")
+	assert.False(t, download.RequireMissingLocalTarget)
+	require.NotNil(t, download.View.Local, "the download replaces only the verified local copy")
+	require.NotNil(t, download.View.Baseline)
+	assert.Equal(t, matrixPath, download.View.Baseline.Path)
+	assert.Contains(t, plan.Deps[downloadIndex], moveIndex, "the download runs after the move")
 }
 
 // Validates: R-2.17.3
