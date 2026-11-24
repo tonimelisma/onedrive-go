@@ -2,7 +2,7 @@
 
 GOVERNS: internal/cli/status.go, internal/cli/status_snapshot.go, internal/sync/syncstore/store_remote_twins.go, internal/sync/syncstore/store_local_move_intents.go, internal/sync/syncstore/store_pending_creates.go, internal/sync/syncstore/store_held_deletes.go, internal/sync/syncstore/store_delete_ledger.go, internal/sync/syncstore/store_local_hash_cache.go, internal/sync/syncstore/block_scope_rows.go, internal/sync/syncstore/blocked_retry_projection.go, internal/sync/syncstore/condition_projection.go, internal/sync/syncstore/observation_reconcile_policy.go, internal/sync/syncstore/schema.go, internal/sync/syncstore/scope_lifecycle_policy.go, internal/sync/syncstore/sqlite_compare.go, internal/sync/syncstore/store.go, internal/sync/syncstore/store_compatibility.go, internal/sync/syncstore/store_inspect.go, internal/sync/syncstore/store_local_state.go, internal/sync/syncstore/store_observation_issues.go, internal/sync/syncstore/store_observation_state.go, internal/sync/syncstore/store_planner_visible.go, internal/sync/syncstore/store_read_remote_state.go, internal/sync/syncstore/store_reset.go, internal/sync/syncstore/store_retry_work.go, internal/sync/syncstore/store_scope_admin.go, internal/sync/syncstore/store_scratch.go, internal/sync/syncstore/store_sql_encoding.go, internal/sync/syncstore/store_write_baseline.go, internal/sync/syncstore/store_read_baseline.go, internal/sync/syncstore/store_publication_mutation.go, internal/sync/syncstore/store_write_remote_state.go, internal/sync/syncstore/baseline_cache.go, internal/sync/syncstore/store_write_block_scopes.go, internal/sync/syncstore/store_write_observation.go, internal/sync/syncstore/tx.go, internal/syncverify/report.go, internal/syncverify/verify.go, internal/sync/syncstore/store_sync_root.go, internal/sync/syncstore/store_test_seams.go, internal/sync/syncstore/doc.go
 
-Implements: R-6.2.18 [verified], R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.10.50 [verified], R-2.10.49 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
+Implements: R-6.2.18 [verified], R-2.5 [designed], R-2.5.7 [verified], R-2.5.8 [verified], R-2.5.9 [verified], R-2.7 [verified], R-2.8.8 [verified], R-2.8.17 [verified], R-2.12.7 [verified], R-2.10.33 [designed], R-2.10.48 [verified], R-2.10.50 [verified], R-2.10.49 [verified], R-2.15.1 [designed], R-6.5.1 [verified], R-6.5.2 [verified]
 
 ## Verification Counts Only What It Compared
 
@@ -164,6 +164,7 @@ and every other significant type in the tree already matched its own name
 | A folder re-created online (new item ID, same path) rebinds the baseline and its children's parent, and uploads land in the live folder; a full rescan where every item has a new ID plans no transfers (R-2.10.49). | `TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate`, `TestCommitMutation_FolderReboundAtSamePathRebindsItsChildren`, `TestCommitMutation_FolderRebindUpdatesCachedChildren`, `TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem`, `TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers` |
 | One observation window converges to the same remote_state whatever its order: swaps, renames onto a freed name, create-before-move-away, delete and re-create across pages, a folder moved out of a deleted folder, and a full rescan's late orphan delete raise no remote name twin (R-2.12.7). | `TestCommitObservation_PathSwapInOneWindow`, `TestCommitObservation_CreateAtPathBeforeOccupantRenamedAway`, `TestCommitObservation_DeleteAndRecreateSamePathAcrossPages`, `TestCommitObservation_FolderMovedOutOfADeletedFolderKeepsItsSubtree`, `TestCommitObservation_RepeatedItemInOneWindowUsesItsLastObservation`, `TestCommitObservation_SubtreeRepathOntoAHeldPathKeepsBothApart`, `TestCommitObservation_WindowResultIsOrderIndependent`, `TestCommitObservation_UnplacedChildOfAParkedFolderFollowsTheFolder`, `TestRequireNoParkedRemoteRows_FailsTheWindow`, `TestRunOnce_FullRescanWithItemReplacedAtSamePath` |
 | Engine startup refuses a state DB that fails `PRAGMA quick_check` with the `corrupt` reason and reset guidance, instead of planning from a damaged `remote_state`; a check that fails for any other reason is an ordinary failure (R-2.5.8). | `TestNewEngine_RequiresResetForCorruptStateDB`, `TestIntegrityCheckFailure_OnlyDamageIsCorrupt`, `TestCheckStoreIntegrity_CanceledCheckIsNotDamage` |
+| Engine startup rebuilds a store an older version wrote (its generation marker is below the current one) under the store lock, deleting nothing on either side afterwards; refuses one a newer version wrote, unmodified, with the `newer_version` reason; keeps refusing one with no readable marker or another shape at the current generation; and reports a rebuild whose delete fails as an ordinary failure that keeps the older store (R-2.5.9). | `TestRunOnce_StoreFromAnOlderGenerationIsRebuiltAndDeletesNothing`, `TestNewEngine_StoreFromANewerGenerationIsRefusedUntouched`, `TestNewEngine_RequiresResetForUnsupportedStoreGeneration`, `TestApplySchema_NewerGenerationIsNamedNewer`, `TestApplySchema_CurrentGenerationWithAnotherShapeIsNotAGenerationMismatch`, `TestApplySchema_RefusesAGeneration28Store`, `TestOpenEngineSyncStore_RebuildThatCannotDeleteKeepsTheOlderStore`, `TestFormatStartupResultMessage_StandaloneNewerStoreSaysToRunTheNewerVersion` |
 | A successful upload, download, folder create or move without a remote item ID is refused, because `item_id` is the baseline's primary key (R-2.5.7). | `TestCommitMutation_EmptyItemIDFails` |
 | A content change a verified local delete proved clears that baseline row's stored change time and nothing else, in the database and in the cache, so the next scan reads the file instead of trusting the row (`ForgetBaselineLocalCtime`, R-2.2.4, R-6.2.4). | `TestSyncStore_ForgetBaselineLocalCtime_ClearsOnlyTheChangeTime` |
 | A folder move re-paths its subtree's baseline rows in the move transaction and in the cache. | `TestCommitMutation_FolderMoveRepathsSubtree`, `TestRunOnce_LocalFolderMoveSurvivesFolderETagChurn` |
@@ -1023,8 +1024,25 @@ that case belongs to the comparison-facts work, not this rule.
 
 Two store-owned helpers isolate DB lifecycle policy:
 
-- `store_compatibility.go` opens an existing DB non-mutating, classifies
-  unreadable or unsupported stores, and returns typed incompatible-store errors.
+- `store_compatibility.go` opens an existing DB, classifies unreadable or
+  unsupported stores, and returns typed incompatible-store errors. The one
+  store it changes is one an older version wrote: `schema.go` reads the
+  generation marker before it compares the shape (`refuseOtherStoreGeneration`,
+  a `storeGenerationError` that knows which side of the current generation it
+  is on), and an older one is rebuilt in place, its family deleted the
+  database last and a canonical store bootstrapped, while the engine holds the
+  store lock (R-2.5.9). The state is a cache of local and remote truth and a
+  store without a baseline plans no delete (`sync-planning.md`, "No
+  baseline"), so this is the reset `drive reset-sync-state` does, run when no
+  version could still use the old store. A newer store is refused unmodified
+  with the `newer_version` reason: rebuilding it would throw away the newer
+  version's state each time an older binary started, which is what two
+  installs of different versions taking turns at one binary path do. A store
+  without a readable marker, or with another shape at the current generation
+  (a build that changed the schema without a new generation), names no
+  version, so it stays refused for an explicit reset. A rebuild whose delete
+  fails returns that failure as an ordinary startup error and keeps the older
+  store for the next start; a reset would fail the same way.
   After a successful open it runs `PRAGMA quick_check`; a finding other than
   `ok`, or `SQLITE_CORRUPT` while the schema is read, is the `corrupt` reason
   with the same reset guidance (R-2.5.8). A damaged `remote_state` b-tree can

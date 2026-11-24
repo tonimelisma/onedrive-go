@@ -48,6 +48,30 @@ func TestFormatStartupResultMessage_StandaloneIncompatibleStoreUsesDriveCommands
 	assert.Contains(t, message, "onedrive-go drive reset-sync-state --drive 'personal:user@example.com'")
 }
 
+// A store a newer onedrive-go wrote is not fixed by a reset: the guidance
+// names the newer version first, and the reset only as the way to give up
+// that version's state.
+//
+// Validates: R-2.5.9
+func TestFormatStartupResultMessage_StandaloneNewerStoreSaysToRunTheNewerVersion(t *testing.T) {
+	t.Parallel()
+
+	cid := driveid.MustCanonicalID("personal:user@example.com")
+	message := formatStartupResultMessage(&multisync.MountStartupResult{
+		Identity: testStandaloneMountIdentity(cid),
+		Status:   multisync.MountStartupIncompatibleStore,
+		Err: &syncstore.StateStoreIncompatibleError{
+			Reason: syncstore.StateStoreIncompatibleReasonNewerVersion,
+		},
+	})
+
+	assert.Contains(t, message, "written by a newer version of onedrive-go")
+	assert.Contains(t, message, "run the newer onedrive-go")
+	assert.Contains(t, message, "onedrive-go pause --drive 'personal:user@example.com'")
+	assert.Contains(t, message, "onedrive-go drive reset-sync-state --drive 'personal:user@example.com'")
+	assert.NotContains(t, message, "fix the DB")
+}
+
 func TestFormatStartupResultMessage_ChildIncompatibleStoreUsesMountStatePath(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
