@@ -22,7 +22,7 @@ func lintScopeFullFiles() []string {
 // change against origin/main touches, and the packages that import them
 // directly, so the local pre-PR gate does not lint the whole tree for a
 // change to a few packages. CI's verify lint job and the full profiles
-// (verify default and verify public, which nightly CI runs) still lint the
+// (verify public, which nightly CI runs) still lint the
 // whole tree. A change to go.mod, go.sum or .golangci.yml lints the whole
 // tree here too, and a change with no Go package in it lints nothing. Every
 // lint pass lints the same packages.

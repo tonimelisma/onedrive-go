@@ -224,6 +224,28 @@ func TestRunVerifyPRRunsLintThenQuick(t *testing.T) {
 	assert.NotContains(t, stdout.String(), "==> coverage")
 }
 
+// Validates: R-6.10.1, R-6.10.22
+//
+// A plain verify names no profile and runs the local pre-PR gate, as the DoD
+// pre-pr stage does: the full tier is named (`verify public`), never implied,
+// because it takes more than an hour on a small host.
+func TestRunVerifyWithNoProfileRunsThePRProfile(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := t.TempDir()
+	runner := changedPackagesRunner(t, repoRoot, "internal/a/a.go\n")
+
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:         repoRoot,
+		ShortUnitTimeout: testShortUnitTimeout,
+		Stdout:           &bytes.Buffer{},
+		Stderr:           &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, append(lintPassSequence(), quickCommandSequence()...), recordedCommandSequence(runner))
+}
+
 // changedPackagesRunner is a fake runner whose git reports changed as the
 // files changed against origin/main, on a tree of three packages: a, b
 // importing a, and c importing neither.

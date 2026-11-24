@@ -3,7 +3,8 @@ package devtool
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -64,7 +65,7 @@ func TestRunCleanupAuditClassifiesRepoState(t *testing.T) {
 	}
 
 	stdout := &bytes.Buffer{}
-	err := RunCleanupAudit(context.Background(), runner, CleanupAuditOptions{
+	err := runCleanupAudit(context.Background(), runner, cleanupAuditOptions{
 		RepoRoot: repoRoot,
 		Stdout:   stdout,
 		Stderr:   &bytes.Buffer{},
@@ -87,39 +88,78 @@ func TestRunCleanupAuditClassifiesRepoState(t *testing.T) {
 }
 
 // Validates: R-6.10.11
-func TestRunCleanupAuditJSONOutput(t *testing.T) {
+//
+// The audit's classification against a real repository: a merged and an
+// unmerged branch, pushed, and a dirty attached worktree.
+func TestRunCleanupAuditClassifiesARealRepository(t *testing.T) {
 	t.Parallel()
 
-	repoRoot := testCleanupRepoRoot
-	runner := &fakeRunner{
-		outputs: map[string][]byte{
-			"git worktree list --porcelain":                                    []byte("worktree " + testCleanupRepoRoot + "\nHEAD 1111111\nbranch refs/heads/main\n"),
-			"git status --porcelain":                                           []byte(""),
-			"git for-each-ref --format=%(refname:short)|%(refname) refs/heads": []byte("main|refs/heads/main\n"),
-			"git for-each-ref --format=%(refname:short)|%(refname) refs/remotes/origin": []byte(
-				"origin/main|refs/remotes/origin/main\n",
-			),
-			"git rev-list --count refs/heads/main --not refs/remotes/origin/main":          []byte("0\n"),
-			"git rev-list --count refs/remotes/origin/main --not refs/remotes/origin/main": []byte("0\n"),
-		},
-	}
+	remoteRoot := filepath.Join(t.TempDir(), "origin.git")
+	cleanupTestGit(t, "", "init", "--bare", remoteRoot)
 
-	stdout := &bytes.Buffer{}
-	err := RunCleanupAudit(context.Background(), runner, CleanupAuditOptions{
-		RepoRoot: repoRoot,
-		JSON:     true,
-		Stdout:   stdout,
-	})
+	repoRoot := filepath.Join(t.TempDir(), "repo")
+	cleanupTestGit(t, "", "clone", remoteRoot, repoRoot)
+	cleanupTestGit(t, repoRoot, "checkout", "-b", "main")
+	cleanupTestGit(t, repoRoot, "config", "user.name", "Test User")
+	cleanupTestGit(t, repoRoot, "config", "user.email", "test@example.com")
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("main\n"), 0o600))
+	cleanupTestGit(t, repoRoot, "add", "README.md")
+	cleanupTestGit(t, repoRoot, "commit", "-m", "initial")
+	cleanupTestGit(t, repoRoot, "push", "-u", "origin", "main")
+
+	cleanupTestGit(t, repoRoot, "checkout", "-b", "refactor/merged")
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "merged.txt"), []byte("merged\n"), 0o600))
+	cleanupTestGit(t, repoRoot, "add", "merged.txt")
+	cleanupTestGit(t, repoRoot, "commit", "-m", "merged branch")
+	cleanupTestGit(t, repoRoot, "checkout", "main")
+	cleanupTestGit(t, repoRoot, "merge", "--ff-only", "refactor/merged")
+	cleanupTestGit(t, repoRoot, "push", "origin", "main")
+	cleanupTestGit(t, repoRoot, "push", "-u", "origin", "refactor/merged")
+
+	cleanupTestGit(t, repoRoot, "checkout", "-b", "refactor/topic")
+	require.NoError(t, os.WriteFile(filepath.Join(repoRoot, "topic.txt"), []byte("topic\n"), 0o600))
+	cleanupTestGit(t, repoRoot, "add", "topic.txt")
+	cleanupTestGit(t, repoRoot, "commit", "-m", "topic branch")
+	cleanupTestGit(t, repoRoot, "push", "-u", "origin", "refactor/topic")
+	cleanupTestGit(t, repoRoot, "checkout", "main")
+
+	worktreePath := filepath.Join(t.TempDir(), "wt")
+	cleanupTestGit(t, repoRoot, "worktree", "add", "-b", "refactor/attached", worktreePath, "main")
+	require.NoError(t, os.WriteFile(filepath.Join(worktreePath, "dirty.txt"), []byte("dirty\n"), 0o600))
+	canonicalRepoRoot, err := filepath.EvalSymlinks(repoRoot)
+	require.NoError(t, err)
+	canonicalWorktreePath, err := filepath.EvalSymlinks(worktreePath)
 	require.NoError(t, err)
 
-	var report CleanupAuditReport
-	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report))
-	require.Len(t, report.Worktrees, 1)
-	assert.Equal(t, CleanupKeepMain, report.Worktrees[0].Classification)
-	require.Len(t, report.LocalBranches, 1)
-	assert.Equal(t, CleanupKeepMain, report.LocalBranches[0].Classification)
-	require.Len(t, report.RemoteBranches, 1)
-	assert.Equal(t, CleanupKeepMain, report.RemoteBranches[0].Classification)
+	var out, errOut bytes.Buffer
+	require.NoError(t, runCleanupAudit(t.Context(), ExecRunner{}, cleanupAuditOptions{
+		RepoRoot: repoRoot,
+		Stdout:   &out,
+		Stderr:   &errOut,
+	}), errOut.String())
+	stdout := out.String()
+	assert.Contains(t, stdout, "cleanup audit: worktrees")
+	assert.Contains(t, stdout, "keep_main: "+canonicalRepoRoot+" (branch: main; root main worktree)")
+	assert.Contains(t, stdout, "keep_dirty: "+canonicalWorktreePath+" (branch: refactor/attached; attached worktree has local modifications)")
+	assert.Contains(t, stdout, "keep_dirty: refactor/attached (attached worktree has local modifications)")
+	assert.Contains(t, stdout, "safe_remove: refactor/merged (branch tip is reachable from main)")
+	assert.Contains(t, stdout, "keep_unmerged: refactor/topic (branch has commits not reachable from main)")
+	assert.Contains(t, stdout, "safe_remove: origin/refactor/merged (remote branch tip is reachable from main)")
+	assert.Contains(t, stdout, "keep_unmerged: origin/refactor/topic (remote branch has commits not reachable from main)")
+}
+
+// cleanupTestGit runs git in cwd for a test's throwaway repository.
+func cleanupTestGit(t *testing.T, cwd string, args ...string) {
+	t.Helper()
+
+	//nolint:gosec // test drives git against temporary repositories with explicit args.
+	cmd := exec.CommandContext(t.Context(), "git", args...)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
+
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
 }
 
 func stringsJoinLines(lines ...string) string {
