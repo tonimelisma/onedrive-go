@@ -50,14 +50,36 @@ architecture it owns:
 It does not own planning policy, execution policy, or a competing history/status
 model.
 
+The store owns the planning read. `SyncStore.ReadPlanningSnapshot(ctx,
+defaultDriveID, filter)` (`store_planner_visible.go`) is the one read a plan
+is built from, in a one-shot pass, a dry run's scratch store and every watch
+replan alike: in one measured transaction (`beginPerfTx`, one perf
+transaction per read) it lists `local_state`, reads `observation_state` for
+the content drive (`defaultDriveID` while none is recorded), lists
+`remote_state`, applies the drive's `ContentFilterConfig`, materializes the
+planner-visible TEMP tables, runs the comparison query over them, lists the
+observation issues the filter keeps and loads the baseline snapshot, then
+rolls back, since it wrote only the TEMP tables. It returns the raw facts as a
+`syncdomain.PlanningSnapshot` (sync-domain.md): the comparison rows carry the
+decision table's inputs and no decided kind, because deciding is the
+planner's (sync-planning.md, `syncplan.DecideComparisons`). The engine holds
+no SQL text, table name or transaction of the read: the helpers the read
+chains (`listLocalStateRows`, `readObservationStateFromTx`,
+`queryRemoteStateRowsWithRunner`, `replacePlannerVisibleStateTx`,
+`queryComparisonRowsForTables`, `queryObservationIssueRowsWithRunner`,
+`loadBaselineWithRunner`) and the `sqlTxRunner` they run on are unexported
+(`TestReadPlanningSnapshot_ReturnsThePlannerVisibleCurrentTruth`,
+`TestReadPlanningSnapshot_ReadsEveryFactInOneTransaction`).
+
 `store_planner_visible.go` (previously `planner_visibility.go`) is store-owned
 for the same reason every other table writer is: it issues the `INSERT` and
 `DELETE` statements that materialize the transaction-local
 `planner_visible_local_state` and `planner_visible_remote_state` tables, and it
 is the only file outside this family that consumed the store's SQL encoding
 helpers (`boolInt`, `nullString`, `nullKnownInt64`, `nullOptionalInt64`,
-`SqlTxRunner`). Deciding *what* is visible remains planning policy through the
-compiled `contentFilter`; writing the rows is store work. The two tables
+`sqlTxRunner`). Which paths are visible is the drive's compiled
+`ContentFilterConfig`, which the read is handed; applying it and writing the
+rows is store work. The two tables
 refuse an `item_type` outside `file`, `folder` and `root`, as `local_state`
 and `remote_state` do, so the comparison query can read a side's presence
 from its type (sync-planning.md, Comparison Facts). The rows go in as
@@ -137,6 +159,7 @@ and every other significant type in the tree already matched its own name
 | Dry-run current-plan scratch stores are temporary SQLite stores seeded from committed truth, read from the database in one transaction and never from the baseline cache, and removed after preview planning. | `TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp`, `TestCreateScratchPlanningStore_CopiesTheDatabaseNotAStaleCache` |
 | Read-only status and derived-truth queries continue to depend on store-owned raw-authority helpers rather than ad hoc writable opens; shortcut status leaves the store through sync-owned status views instead of raw shortcut-root rows. | `TestReadDriveStatusSnapshot`, `TestReadPathTruthStatus_DerivesUnavailableTruthFromDurableAuthorities`, `TestQuerySyncState_UsesReadOnlyStatusSnapshotHelper`, `TestStatusCommand_UnreadableStateStoreIsReportedAsUnavailable`, `TestBuildChildStatusDrive_RendersLifecycleState` |
 | The baseline cache stays the one object callers hold across full rebuilds, and planning uses the baseline of its own comparison snapshot. | `TestCommitMutation_FolderMoveKeepsHeldBaselineViewCurrent`, `TestPlanning_UsesBaselineFromTheComparisonSnapshot` |
+| The store owns the planning read: `ReadPlanningSnapshot` returns the planner-visible rows (filter applied, descendants of a folder a side lost pruned), their undecided comparison rows, the filtered observation issues and the baseline, read in one measured transaction that rolls its TEMP tables back; the engine holds no SQL or table name of it. | `TestReadPlanningSnapshot_ReturnsThePlannerVisibleCurrentTruth`, `TestReadPlanningSnapshot_ReadsEveryFactInOneTransaction`, `TestPlanning_UsesBaselineFromTheComparisonSnapshot` |
 | A folder re-created online (new item ID, same path) rebinds the baseline and its children's parent, and uploads land in the live folder; a full rescan where every item has a new ID plans no transfers (R-2.10.49). | `TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate`, `TestCommitMutation_FolderReboundAtSamePathRebindsItsChildren`, `TestCommitMutation_FolderRebindUpdatesCachedChildren`, `TestRunOnce_FolderRecreatedOnlineRebindsAndUploadsIntoTheNewItem`, `TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers` |
 | One observation window converges to the same remote_state whatever its order: swaps, renames onto a freed name, create-before-move-away, delete and re-create across pages, a folder moved out of a deleted folder, and a full rescan's late orphan delete raise no remote name twin (R-2.12.7). | `TestCommitObservation_PathSwapInOneWindow`, `TestCommitObservation_CreateAtPathBeforeOccupantRenamedAway`, `TestCommitObservation_DeleteAndRecreateSamePathAcrossPages`, `TestCommitObservation_FolderMovedOutOfADeletedFolderKeepsItsSubtree`, `TestCommitObservation_RepeatedItemInOneWindowUsesItsLastObservation`, `TestCommitObservation_SubtreeRepathOntoAHeldPathKeepsBothApart`, `TestCommitObservation_WindowResultIsOrderIndependent`, `TestCommitObservation_UnplacedChildOfAParkedFolderFollowsTheFolder`, `TestRequireNoParkedRemoteRows_FailsTheWindow`, `TestRunOnce_FullRescanWithItemReplacedAtSamePath` |
 | Engine startup refuses a state DB that fails `PRAGMA quick_check` with the `corrupt` reason and reset guidance, instead of planning from a damaged `remote_state`; a check that fails for any other reason is an ordinary failure (R-2.5.8). | `TestNewEngine_RequiresResetForCorruptStateDB`, `TestIntegrityCheckFailure_OnlyDamageIsCorrupt`, `TestCheckStoreIntegrity_CanceledCheckIsNotDamage` |
@@ -400,7 +423,7 @@ place. Swapping in a new object once orphaned watch's pointer, so later commits
 never reached it and planning failed with "missing baseline entry for
 comparison path", restarting the drive runner. Planning additionally reads its
 baseline in the same read transaction as the comparison rows
-(`currentInputs.baseline`), so a commit landing between the cache and the
+(`PlanningSnapshot.Baseline`, `ReadPlanningSnapshot`), so a commit landing between the cache and the
 snapshot cannot make the two disagree.
 
 Every baseline row is written through one helper, `upsertBaselineRowTx`, whose
@@ -1067,7 +1090,7 @@ can change an entry another holder reads, and a commit never rewrites a value a
 reader already has. A reload swaps the indexes in place, because watch holds
 its startup view for the whole run
 (`TestCommitMutation_FolderMoveKeepsHeldBaselineViewCurrent`).
-`LoadBaselineWithRunner` returns an immutable `syncdomain.BaselineSnapshot` of
+`loadBaselineWithRunner` returns an immutable `syncdomain.BaselineSnapshot` of
 the rows a transaction sees.
 
 Nothing that can fail follows `COMMIT`. Each writing transaction decides
@@ -1085,7 +1108,7 @@ runs it after every scenario, model round and crash recovery
 (`TestCheckCacheConsistency_ReportsAMismatchInAnyColumn`).
 
 Planning reads its baseline as a snapshot taken in the plan's own read
-transaction (`currentInputs.baseline`); `PlanCurrentState` and the delete
+transaction (`PlanningSnapshot.Baseline`); `PlanCurrentState` and the delete
 safety hold take `*syncdomain.BaselineSnapshot`, a type the cache is not, so
 the cache cannot be handed to the planner
 (`TestPlanning_UsesBaselineFromTheComparisonSnapshot`).

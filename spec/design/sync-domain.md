@@ -140,6 +140,18 @@ convert to and from the stored string at their own boundary and refuse a
 value that is not a member (sync-store.md); elsewhere a value becomes a plain
 string only as a log attribute or in CLI output.
 
+`PlanningSnapshot` (`domain_sqlite_rows.go`) is the value the store's planning
+read hands the planner (sync-store.md, `ReadPlanningSnapshot`): the content
+drive, the planner-visible local and remote rows, their comparison rows, the
+filtered observation issues and the `BaselineSnapshot`, all from one store
+transaction. It lives here because the planner may not import the store
+(depguard): the two meet on a domain value. Its comparison rows are raw, with
+no comparison kind; the planner decides them (sync-planning.md,
+`DecideComparisons`), and the mapping from a decision to a row's
+reconciliation row is the comparison row's own
+(`SQLiteComparisonRow.ReconciliationRow`), so the planner and the store's
+tests that decide rows to check the comparison SQL build the same row.
+
 ## Ownership Contract
 
 - Owns: the sync domain vocabulary and the invariants those values enforce.
