@@ -38,7 +38,7 @@ func TestOpenEngineSyncStore_RebuildThatCannotDeleteKeepsTheOlderStore(t *testin
 	require.Error(t, err)
 	require.Nil(t, store)
 	require.ErrorIs(t, err, diskErr)
-	assert.ErrorContains(t, err, "rebuild sync store from an older version")
+	require.ErrorContains(t, err, "rebuild sync store from an older version")
 	assert.False(t, IsStateStoreIncompatible(err), "a failed delete is not a store a reset would fix")
 	assert.FileExists(t, dbPath, "a failed rebuild keeps the older store")
 
