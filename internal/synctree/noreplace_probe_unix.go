@@ -5,6 +5,7 @@ package synctree
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -16,6 +17,10 @@ import (
 // ignores the name (IsProbeArtifactName): the probe removes its files before
 // it returns, so only a run that died inside it leaves one, an empty file.
 const probeArtifactSuffix = ".probe"
+
+// probeListBatch is how many entries of the sync folder one read of its
+// listing takes, so a folder of any size is read in bounded pieces.
+const probeListBatch = 256
 
 // probeFilePerm is the mode of the empty probe file.
 const probeFilePerm = 0o600
@@ -71,6 +76,10 @@ func (r *Root) ProbeNoReplaceSupport() (support NoReplaceSupport, err error) {
 	}
 	defer closeDirectory(dir)
 
+	if sweepErr := r.removeLeftoverProbeFiles(dir); sweepErr != nil {
+		return NoReplaceSupport{}, sweepErr
+	}
+
 	createErr := createProbeFile(dir, names[0])
 	defer func() {
 		if removeErr := r.removeProbeFiles(dir, names[:]); err == nil {
@@ -98,6 +107,30 @@ func createProbeFile(dir *os.File, name string) error {
 	}
 
 	return nil
+}
+
+// removeLeftoverProbeFiles removes the files an earlier probe left in the
+// sync folder when its run died inside it: every entry of the folder named
+// as a probe's file (IsProbeArtifactName). Only a probe makes such a name, so
+// nothing else is removed; a name that is not a file is left alone.
+func (r *Root) removeLeftoverProbeFiles(dir *os.File) error {
+	var leftovers []string
+	for {
+		entries, err := dir.ReadDir(probeListBatch)
+		for _, entry := range entries {
+			if entry.Type().IsRegular() && IsProbeArtifactName(entry.Name()) {
+				leftovers = append(leftovers, entry.Name())
+			}
+		}
+		if errors.Is(err, io.EOF) || (err == nil && len(entries) == 0) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("listing sync folder %s for leftover rename probes: %w", r.dir, err)
+		}
+	}
+
+	return r.removeProbeFiles(dir, leftovers)
 }
 
 // removeProbeFiles removes every name the probe may have made; a name it

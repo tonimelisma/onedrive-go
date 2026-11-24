@@ -1,6 +1,8 @@
 package synctree_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -60,4 +62,24 @@ func TestIsProbeArtifactName(t *testing.T) {
 	assert.True(t, synctree.IsProbeArtifactName(".onedrive-go.0123456789abcdef.probe"))
 	assert.False(t, synctree.IsProbeArtifactName("notes.probe"))
 	assert.False(t, synctree.IsProbeArtifactName(".onedrive-go.0123456789abcdef.detach"))
+}
+
+// A run that died inside the probe left its empty file; the next probe
+// removes every such leftover before it makes its own, and nothing else.
+//
+// Validates: R-6.4.8
+func TestRoot_ProbeNoReplaceSupport_RemovesWhatAnEarlierProbeLeft(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	leftover := ".onedrive-go.0123abcd.probe"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, leftover), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "keep.probe"), []byte("mine"), 0o600))
+	tree, err := synctree.Open(dir)
+	require.NoError(t, err)
+
+	_, err = tree.ProbeNoReplaceSupport()
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"keep.probe"}, namesIn(t, dir))
 }

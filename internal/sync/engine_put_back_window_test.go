@@ -63,3 +63,27 @@ func TestEngine_NoPutBackWarningWhereTheFilesystemHasHardLinks(t *testing.T) {
 
 	assert.Empty(t, putBackWindowWarnings(capture))
 }
+
+// A shortcut child's engine syncs a folder inside its parent's sync folder,
+// whose engine already probed that filesystem, so it neither probes again nor
+// repeats the warning: one probe, and one warning, per sync root.
+//
+// Validates: R-6.4.8
+func TestEngine_AShortcutChildLeavesThePutBackProbeToItsParent(t *testing.T) {
+	t.Parallel()
+
+	capture, logger := synctest.NewLogCapture()
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), &syncfixture.EngineMockClient{}, t.TempDir(), func(inputs *engineInputs) {
+		inputs.Logger = logger
+		inputs.hooks.adaptSyncTree = (*synctree.Root).WithoutNoReplaceFlagOrHardLinks
+		tree, err := synctree.Open(inputs.SyncRoot)
+		require.NoError(t, err)
+		identity, err := tree.IdentityNoFollow(".")
+		require.NoError(t, err)
+		inputs.ExpectedSyncRootIdentity = &identity
+	})
+	require.NotNil(t, eng)
+
+	assert.Empty(t, putBackWindowWarnings(capture), "the parent's engine warns for the filesystem")
+	assert.Empty(t, syncfixture.LocalNames(t, syncRoot))
+}
