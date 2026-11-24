@@ -127,6 +127,23 @@ linters:
         # (TestGolangciConfig_DepguardFilePatternsMatchAbsolutePaths), and so
         # does one naming a folder that holds no package
         # (TestGolangciConfig_DepguardPackagePatternsNameExistingPackages).
+        # The test-support packages build fixtures and fakes for tests; product
+        # code that imported one would carry test machinery into the binary.
+        # They may import each other.
+        test-support-only-in-tests:
+          files:
+            - "**/*.go"
+            - "!$test"
+            - "!**/internal/sync/internal/syncfixture/**"
+            - "!**/internal/sync/internal/syncstoretest/**"
+            - "!**/internal/synctest/**"
+          deny:
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture$
+              desc: syncfixture is test support; only tests import it
+            - pkg: github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest$
+              desc: syncstoretest is test support; only tests import it
+            - pkg: github.com/tonimelisma/onedrive-go/internal/synctest$
+              desc: synctest is test support; only tests import it
         graph-no-config:
           files:
             - "**/internal/graph/*.go"
@@ -410,6 +427,14 @@ linters:
         # A method matches as <package>.<receiver type>.<method>, so this
         # holds for a *testing.T in a struct field or passed as testing.TB,
         # whatever the variable is called. Nothing is exempt from it.
+        # A seam a package opens for tests in another package (a *_test_seams.go
+        # file) is named ...ForTest. Go cannot hide it from product code, so
+        # this rule does: a ForTest identifier of this module is used only by
+        # tests, the test-support packages and the seam files themselves (the
+        # exclusion rule below).
+        - pattern: ForTest$
+          pkg: ^github\.com/tonimelisma/onedrive-go/
+          msg: a ForTest seam is for tests only
         - pattern: ^testing\.(T|B|F|TB)\.(Fatal|Fatalf|Error|Errorf)$
           pkg: ^testing$
           msg: use testify assert or require instead of direct testing failures
@@ -631,6 +656,10 @@ linters:
         text: 'sig: func (\(\*)?github\.com/tonimelisma/onedrive-go/internal/sync(/[a-z/]+)?\.[A-Za-z_]'
       # The filesystem boundary packages make the raw os.* calls; every other
       # forbidigo rule holds in them.
+      - path: (_test\.go|_test_seams\.go|^internal/sync/internal/(syncfixture|syncstoretest)/|^internal/synctest/)
+        linters:
+          - forbidigo
+        text: a ForTest seam is for tests only
       - path: internal/(fsroot|synctree|localpath)/
         linters:
           - forbidigo
