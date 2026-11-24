@@ -378,6 +378,13 @@ func (s *pmState) createFolder(a *syncdomain.Action) {
 	local, localOK := s.local[a.Path]
 	if a.CreateSide == syncdomain.CreateRemote {
 		require.True(s.t, localOK && local.folder, "remote folder create %s: no local folder", a.Path)
+		if atPath, taken := s.remote[a.Path]; taken && !atPath.folder {
+			// The executor creates by parent and name and adopts only a
+			// folder there (adoptExistingRemoteFolder); a file at the
+			// name refuses the create.
+			s.logf("    409: %s is a file on OneDrive", a.Path)
+			return
+		}
 		if !remoteOK {
 			if _, taken := s.remote[a.Path]; taken {
 				s.logf("    409: %s is taken on OneDrive", a.Path)

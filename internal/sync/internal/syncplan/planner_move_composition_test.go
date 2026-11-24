@@ -2926,3 +2926,57 @@ func TestComposeMoves_AFolderLandingOnANewFolderHereMergesWithItOnlyWhenItsCopyI
 	c = composeMoves(synced, newX(synced), nil)
 	assert.Empty(t, c.merges, "the folder at x here is the synced y")
 }
+
+// Validates: R-2.17.4, R-2.17.10
+//
+// The user renamed folder d to x and replaced x/a.txt, a file, with a folder
+// holding inside.txt, while OneDrive edited d/a.txt. SQLite reconciles the
+// two coordinates apart: OneDrive's edit at d/a.txt (a download, rebased to
+// x/a.txt and held, since the new folder holds that path here) and the new
+// folder at x/a.txt (a remote folder create and an upload below it). The
+// remote move of d to x carries OneDrive's edited file to x/a.txt, so the
+// folder create ran onto that file: OneDrive refuses it, and the planner
+// model, which let it through, recorded the file's item as the new folder,
+// uploaded inside.txt into the file and lost the remote edit (planner model
+// seeds 502 and 793). The create, and what it holds, wait for the next pass,
+// which reconciles the path as one: a keep-both conflict.
+func TestDropCreatesOntoComposedItems_RemoteCreateOntoAnItemAFolderMoveCarriesWaits(t *testing.T) {
+	t.Parallel()
+
+	s := newPMState(t)
+	s.addSynced("d", true, "")
+	s.addSynced("d/a.txt", false, "synced a")
+	moveTree(s.local, "d", "x")
+	s.deleteTree(s.local, "x/a.txt")
+	s.local["x/a.txt"] = pmItem{folder: true, inode: uint64(s.next())}
+	s.local["x/a.txt/inside.txt"] = pmItem{content: "local inside", inode: uint64(s.next())}
+	edited := s.remote["d/a.txt"]
+	edited.content = "remote edit"
+	edited.etag = s.next()
+	s.remote["d/a.txt"] = edited
+
+	first := s.plan()
+	lines := make([]string, 0, len(first.Actions))
+	for i := range first.Actions {
+		lines = append(lines, actionLine(&first.Actions[i]))
+	}
+	assert.Contains(t, lines, "remote_move x <- d")
+	assert.NotContains(t, lines, "folder_create x/a.txt (remote)", "OneDrive's file lands at x/a.txt with the move")
+	assert.NotContains(t, lines, "upload x/a.txt/inside.txt", "its folder waits")
+
+	quiet := false
+	for round := 0; round < plannerModelMaxRounds && !quiet; round++ {
+		plan := s.plan()
+		quiet = len(plan.Actions) == 0 && len(plan.HeldDeletes) == 0
+		s.apply(plan)
+	}
+	require.True(t, quiet, "the plan goes quiet; %v", s.log)
+	local, remote := pmView(s.local), pmView(s.remote)
+	assert.Equal(t, remote, local)
+	contents := map[string]bool{}
+	for _, content := range local {
+		contents[content] = true
+	}
+	assert.True(t, contents["remote edit"], "OneDrive's edit survives: %v", local)
+	assert.True(t, contents["local inside"], "the new folder's content survives: %v", local)
+}

@@ -1636,6 +1636,14 @@ set where the planner leaves ready work:
 - `Dropped`: actions removed until the next pass: creates onto a path a
   composed item still holds or at or below the path of a new folder a
   deferred item moves into at its own path (`dropCreatesOntoComposedItems`),
+  a new item's create on OneDrive at a path onto which a folder move of the
+  plan carries another OneDrive item (`carriedOntoByRemoteMove`: a folder
+  renamed here with a file inside it replaced by a folder, while OneDrive
+  edited or made anew that file, reconciles the new folder here and OneDrive's
+  file at its old path apart; the rename lands the file at the new folder's
+  path, where OneDrive refuses the folder create, and the next pass meets the
+  two at one path as a keep-both conflict, R-2.17.10,
+  `TestDropCreatesOntoComposedItems_RemoteCreateOntoAnItemAFolderMoveCarriesWaits`),
   creates here at a name an item that stays put here holds under OneDrive's
   name comparison rather than as spelled (`foldedHeldPaths`: on a
   case-insensitive volume, macOS's default, a folder OneDrive made as X2
