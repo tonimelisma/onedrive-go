@@ -16,6 +16,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -345,7 +346,7 @@ func TestRunOnce_LargeFileWhoseSessionRequestFailedFinishesIntoItsPlaceholder(t 
 func expireRetryWork(t *testing.T, eng *testEngine) {
 	t.Helper()
 
-	_, err := eng.baseline.RawDBForTest().ExecContext(t.Context(), `UPDATE retry_work SET next_retry_at = 1`)
+	_, err := syncstoretest.RawDB(t, eng.baseline).ExecContext(t.Context(), `UPDATE retry_work SET next_retry_at = 1`)
 	require.NoError(t, err)
 }
 

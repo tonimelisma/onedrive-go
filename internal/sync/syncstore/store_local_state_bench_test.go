@@ -75,7 +75,7 @@ func BenchmarkDeleteLocalStateSubtree(b *testing.B) {
 			b.Run(fmt.Sprintf("rows=%d/%s/%s", rows, form.name, shape.name), func(b *testing.B) {
 				ctx := b.Context()
 				for b.Loop() {
-					tx, err := beginPerfTx(ctx, store.RawDBForTest())
+					tx, err := beginPerfTx(ctx, store.db)
 					require.NoError(b, err)
 					for _, path := range shape.paths {
 						require.NoError(b, form.delete(ctx, tx, path))

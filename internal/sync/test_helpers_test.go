@@ -70,7 +70,8 @@ func TestNewTestStore_TemplateMatchesFreshStore(t *testing.T) {
 	t.Parallel()
 
 	freshPath := filepath.Join(t.TempDir(), "fresh.db")
-	fresh, err := syncstore.NewSyncStore(t.Context(), freshPath, syncfixture.NewTestLogger(t))
+	fresh, err := syncstore.OpenSyncStoreForTest(t.Context(), freshPath, syncfixture.NewTestLogger(t), true, nil,
+		syncstoretest.WithRawDB(t, syncstore.Hooks{}))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, fresh.Close(context.Background()))
@@ -78,8 +79,8 @@ func TestNewTestStore_TemplateMatchesFreshStore(t *testing.T) {
 
 	templateBacked := syncstoretest.NewTestStore(t)
 
-	assert.Equal(t, schemaFingerprint(t, fresh.RawDBForTest()), schemaFingerprint(t, templateBacked.RawDBForTest()))
-	assert.Equal(t, journalMode(t, fresh.RawDBForTest()), journalMode(t, templateBacked.RawDBForTest()))
+	assert.Equal(t, schemaFingerprint(t, syncstoretest.RawDB(t, fresh)), schemaFingerprint(t, syncstoretest.RawDB(t, templateBacked)))
+	assert.Equal(t, journalMode(t, syncstoretest.RawDB(t, fresh)), journalMode(t, syncstoretest.RawDB(t, templateBacked)))
 }
 
 type signalingWatcher struct {

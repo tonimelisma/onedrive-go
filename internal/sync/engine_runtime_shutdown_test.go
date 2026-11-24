@@ -18,6 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
@@ -148,7 +149,7 @@ func runWatchDrain(ctx context.Context, rt *watchRuntime, p *watchPipeline) erro
 func holdStoreConnection(t *testing.T, store *syncstore.SyncStore) func() {
 	t.Helper()
 
-	conn, err := store.RawDBForTest().Conn(t.Context())
+	conn, err := syncstoretest.RawDB(t, store).Conn(t.Context())
 	require.NoError(t, err)
 	released := false
 	release := func() {

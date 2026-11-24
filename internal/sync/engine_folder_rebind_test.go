@@ -85,7 +85,7 @@ func TestCommitMutation_FolderReboundAtSamePathRebindsItsChildren(t *testing.T) 
 	mgr := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
-	_, err := mgr.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, mgr).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, parent_id, item_type) VALUES
 			('photos-1', 'Photos', 'root', 'folder'),
 			('pic-1', 'Photos/a.jpg', 'photos-1', 'file')`)
@@ -97,7 +97,7 @@ func TestCommitMutation_FolderReboundAtSamePathRebindsItsChildren(t *testing.T) 
 	}))
 
 	var parentID string
-	require.NoError(t, mgr.RawDBForTest().QueryRowContext(ctx,
+	require.NoError(t, syncstoretest.RawDB(t, mgr).QueryRowContext(ctx,
 		`SELECT parent_id FROM baseline WHERE item_id = 'pic-1'`).Scan(&parentID))
 	assert.Equal(t, "photos-2", parentID)
 }
@@ -109,7 +109,7 @@ func TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate(
 	mgr := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
-	_, err := mgr.RawDBForTest().ExecContext(ctx,
+	_, err := syncstoretest.RawDB(t, mgr).ExecContext(ctx,
 		`INSERT INTO baseline (item_id, path, parent_id, item_type) VALUES ('id1', 'X', 'root', 'folder')`)
 	require.NoError(t, err)
 	require.NoError(t, mgr.ReplaceLocalState(ctx, []syncdomain.LocalStateRow{{Path: "X", ItemType: syncdomain.ItemTypeFolder}}))
@@ -129,7 +129,7 @@ func TestCommitMutation_FolderRebindUpdatesCachedChildren(t *testing.T) {
 	mgr := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
-	_, err := mgr.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, mgr).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, parent_id, item_type) VALUES
 			('photos-1', 'Photos', 'root', 'folder'),
 			('pic-1', 'Photos/a.jpg', 'photos-1', 'file')`)

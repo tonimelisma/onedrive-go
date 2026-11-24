@@ -16,6 +16,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -183,7 +184,7 @@ func syncedCrossedDisksNowUnmounted(
 
 	var held []diskFile
 	for _, disk := range disks {
-		_, err := eng.baseline.RawDBForTest().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES (?)`, disk)
+		_, err := syncstoretest.RawDB(t, eng.baseline).ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES (?)`, disk)
 		require.NoError(t, err)
 		for i := range files {
 			relPath := disk + "/" + fmt.Sprintf("f%d.txt", i)
@@ -216,7 +217,7 @@ func remountDisk(t *testing.T, eng *testEngine, syncRoot, disk string, held []di
 		require.NoError(t, os.WriteFile(absPath, f.content, 0o600))
 		require.NoError(t, os.Chtimes(absPath, f.mtime, f.mtime))
 	}
-	_, err := eng.baseline.RawDBForTest().ExecContext(t.Context(), `DELETE FROM mount_boundaries WHERE path = ?`, disk)
+	_, err := syncstoretest.RawDB(t, eng.baseline).ExecContext(t.Context(), `DELETE FROM mount_boundaries WHERE path = ?`, disk)
 	require.NoError(t, err)
 }
 
@@ -445,7 +446,7 @@ func TestClearSyncRootIdentity_KeepsRecordedMountPoints(t *testing.T) {
 	t.Parallel()
 
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	_, err := eng.baseline.RawDBForTest().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES ('nas')`)
+	_, err := syncstoretest.RawDB(t, eng.baseline).ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES ('nas')`)
 	require.NoError(t, err)
 
 	require.NoError(t, eng.baseline.ClearSyncRootIdentity(t.Context()))
@@ -597,7 +598,7 @@ func TestRunOnce_AVanishedCrossedMountIsMissingNotABoundary(t *testing.T) {
 	})
 	runScenarioPass(t, eng)
 
-	_, err := eng.baseline.RawDBForTest().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES ('nas')`)
+	_, err := syncstoretest.RawDB(t, eng.baseline).ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES ('nas')`)
 	require.NoError(t, err)
 	stored := localObservationFindingsBatchFromSkippedItems(eng.driveID, []syncdomain.SkippedItem{syncobserve.MountBoundarySkippedItem("nas")})
 	require.NoError(t, eng.baseline.ReconcileObservationFindings(t.Context(), &stored))

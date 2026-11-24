@@ -123,15 +123,16 @@ func TestRunOnce_FullRescanWithItemReplacedAtSamePath(t *testing.T) {
 
 	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 	remote.addFile(t, "item-old", "root", "doc.txt", "old version")
-	eng, syncRoot := newTestEngine(t, remote.client(t))
+	// The engine logs at Warn into logs: a replacement must not be reported
+	// as a name twin.
+	logs := &syncfixture.SyncLockedBuffer{}
+	eng, syncRoot := newTestEngineWithLogger(t, remote.client(t), slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	require.Equal(t, 1, runScenarioPass(t, eng).Downloads)
 
 	// Replaced on OneDrive by a new item at the same name, and the old one's
 	// delete never reaches delta.
 	remote.removeUnreported("item-old")
 	remote.addFile(t, "item-new", "root", "doc.txt", "new version")
-	logs := &syncfixture.SyncLockedBuffer{}
-	eng.baseline.SetLoggerForTest(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	report, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{FullReconcile: true})
 	require.NoError(t, err)

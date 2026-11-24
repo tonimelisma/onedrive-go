@@ -39,7 +39,7 @@ func TestCommitObservation_NewItemCreatesMirrorRowAndToken(t *testing.T) {
 	assert.Equal(t, "hash1", row.Hash)
 	assert.Equal(t, int64(100), row.Size)
 	assert.Equal(t, "etag1", row.ETag)
-	assert.Equal(t, "delta-token-1", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
+	assert.Equal(t, "delta-token-1", syncfixture.ReadObservationCursor(t, syncstoretest.RawDB(t, mgr), syncfixture.TestDriveID))
 }
 
 // Validates: R-2.2
@@ -67,7 +67,7 @@ func TestCommitObservation_DeleteRemovesMirrorRow(t *testing.T) {
 	}}, "delta-token-2", driveID))
 
 	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "item1"))
-	assert.Equal(t, "delta-token-2", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
+	assert.Equal(t, "delta-token-2", syncfixture.ReadObservationCursor(t, syncstoretest.RawDB(t, mgr), syncfixture.TestDriveID))
 }
 
 // Validates: R-2.2
@@ -138,7 +138,7 @@ func TestCommitObservation_UnchangedItemDoesNotRewriteStateOrCursor(t *testing.T
 	row := syncstoretest.ReadRemoteStateRow(t, mgr, "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, "same.txt", row.Path)
-	assert.Equal(t, "delta-token-1", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
+	assert.Equal(t, "delta-token-1", syncfixture.ReadObservationCursor(t, syncstoretest.RawDB(t, mgr), syncfixture.TestDriveID))
 }
 
 // Validates: R-2.2
@@ -158,7 +158,7 @@ func TestCommitObservation_DeleteMissingItemOnlyAdvancesCursor(t *testing.T) {
 	}}, "delta-token-delete", driveID))
 
 	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "missing-item"))
-	assert.Equal(t, "delta-token-delete", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
+	assert.Equal(t, "delta-token-delete", syncfixture.ReadObservationCursor(t, syncstoretest.RawDB(t, mgr), syncfixture.TestDriveID))
 }
 
 // Validates: R-2.11
@@ -178,7 +178,7 @@ func TestCommitObservation_PersistsJunkRowsAsRawRemoteTruth(t *testing.T) {
 	}}, "delta-token-junk", driveID))
 
 	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "item-junk"))
-	assert.Equal(t, "delta-token-junk", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
+	assert.Equal(t, "delta-token-junk", syncfixture.ReadObservationCursor(t, syncstoretest.RawDB(t, mgr), syncfixture.TestDriveID))
 }
 
 // Regression: delta reports a renamed folder as one item. Its children kept
@@ -275,7 +275,7 @@ func TestCommitObservation_ARemoteRowThatCannotBeReadFailsTheWindow(t *testing.T
 				DriveID: driveID, ItemID: "item1", Path: "hello.txt", ItemType: syncdomain.ItemTypeFile, Hash: "hash1", Size: 5,
 			}}, "delta-token-1", driveID))
 			// A size the column can no longer be read back as.
-			_, err := mgr.RawDBForTest().ExecContext(ctx, `UPDATE remote_state SET size = 'five' WHERE item_id = 'item1'`)
+			_, err := syncstoretest.RawDB(t, mgr).ExecContext(ctx, `UPDATE remote_state SET size = 'five' WHERE item_id = 'item1'`)
 			require.NoError(t, err)
 
 			err = mgr.CommitObservation(ctx, []syncdomain.ObservedItem{{
@@ -283,7 +283,7 @@ func TestCommitObservation_ARemoteRowThatCannotBeReadFailsTheWindow(t *testing.T
 				Hash: "hash2", Size: 6, IsDeleted: tc.deleted,
 			}}, "delta-token-2", driveID)
 			require.ErrorContains(t, err, "reading remote_state of item1")
-			assert.Equal(t, "delta-token-1", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID), "the window is not committed")
+			assert.Equal(t, "delta-token-1", syncfixture.ReadObservationCursor(t, syncstoretest.RawDB(t, mgr), syncfixture.TestDriveID), "the window is not committed")
 		})
 	}
 }
@@ -310,7 +310,7 @@ func TestForgetRemoteItem_RemovesTheSubtreeAndFailsOnAnUnreadableItemType(t *tes
 	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "dir"))
 	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "kid"), "the subtree goes with the folder")
 
-	db := mgr.RawDBForTest()
+	db := syncstoretest.RawDB(t, mgr)
 	for _, statement := range []string{
 		`PRAGMA ignore_check_constraints = ON`,
 		`UPDATE remote_state SET item_type = 'bundle' WHERE item_id = 'odd'`,

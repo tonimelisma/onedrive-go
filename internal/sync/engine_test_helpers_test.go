@@ -20,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -551,7 +552,7 @@ func newTestEngineInputs(t *testing.T, mock *syncfixture.EngineMockClient, tmpDi
 	}
 	// A test's store skips the waits for the disk unless the test proves
 	// durability on the production setting (keepRealFsync).
-	inputs.hooks.store.SkipFsync = !usesRealFsync(t)
+	inputs.hooks.store = syncstoretest.WithRawDB(t, syncstore.Hooks{SkipFsync: !usesRealFsync(t)})
 	return inputs
 }
 

@@ -43,9 +43,12 @@ var (
 )
 
 // TestStoreHooks are the hooks of a test's store: it skips the waits for
-// the disk, which a store thrown away with its temp directory does not need.
-func TestStoreHooks() syncstore.Hooks {
-	return syncstore.Hooks{SkipFsync: true}
+// the disk, which a store thrown away with its temp directory does not need,
+// and keeps its database for RawDB.
+func TestStoreHooks(tb testing.TB) syncstore.Hooks {
+	tb.Helper()
+
+	return WithRawDB(tb, syncstore.Hooks{SkipFsync: true})
 }
 
 // NewTestStore opens a store of the canonical schema in a temp directory, on
@@ -65,7 +68,7 @@ func NewTestStoreOn(tb testing.TB, now func() time.Time) *syncstore.SyncStore {
 	ctx := synctest.TestContext(tb)
 	require.NoError(tb, os.WriteFile(dbPath, LoadTestStoreTemplate(tb), 0o600), "WriteFile(%q)", dbPath)
 
-	mgr, err := syncstore.OpenSyncStoreForTest(ctx, dbPath, synctest.TestLogger(tb), false, now, TestStoreHooks())
+	mgr, err := syncstore.OpenSyncStoreForTest(ctx, dbPath, synctest.TestLogger(tb), false, now, TestStoreHooks(tb))
 	require.NoError(tb, err, "NewSyncStore(%q)", dbPath)
 
 	tb.Cleanup(func() {
@@ -84,7 +87,7 @@ func NewTestManager(t *testing.T) *syncstore.SyncStore {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	require.NoError(t, os.WriteFile(dbPath, LoadTestStoreTemplate(t), 0o600), "WriteFile(%q)", dbPath)
 
-	mgr, err := syncstore.OpenSyncStoreForTest(ctx, dbPath, synctest.TestLogger(t), false, nil, TestStoreHooks())
+	mgr, err := syncstore.OpenSyncStoreForTest(ctx, dbPath, synctest.TestLogger(t), false, nil, TestStoreHooks(t))
 	require.NoError(t, err, "NewSyncStore(%q)", dbPath)
 
 	t.Cleanup(func() {

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -156,7 +157,7 @@ func assertStoreIntegrity(t *testing.T, eng *testEngine) bool {
 	t.Helper()
 
 	ctx := t.Context()
-	db := eng.baseline.RawDBForTest()
+	db := syncstoretest.RawDB(t, eng.baseline)
 
 	var integrity string
 	require.NoError(t, db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&integrity))
@@ -314,7 +315,7 @@ func readTreeContents(t *testing.T, root string, withFolders bool) map[string]st
 func syncStateRows(t *testing.T, eng *testEngine, query string) string {
 	t.Helper()
 
-	rows, err := eng.baseline.RawDBForTest().QueryContext(t.Context(), query)
+	rows, err := syncstoretest.RawDB(t, eng.baseline).QueryContext(t.Context(), query)
 	require.NoError(t, err)
 	defer rows.Close()
 	var out strings.Builder

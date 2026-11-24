@@ -1884,7 +1884,7 @@ func TestWatch_ZeroEvents_NoTokenAdvanceAfterWake(t *testing.T) {
 	}, syncfixture.EventWait, 10*time.Millisecond)
 	syncfixture.StopWatch(t, cancel, done)
 
-	assert.Empty(t, syncfixture.ReadObservationCursor(t, store.RawDBForTest(), driveID.String()), "zero-event wake polls must not commit observations")
+	assert.Empty(t, syncfixture.ReadObservationCursor(t, syncstoretest.RawDB(t, store), driveID.String()), "zero-event wake polls must not commit observations")
 	assert.Equal(t, "old-token", obs.CurrentDeltaToken(), "zero-event wake polls must not advance the token")
 }
 
@@ -2564,7 +2564,7 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	syncfixture.ReceiveWithin(t, committed, "the watch's first batch to be committed")
 	syncfixture.StopWatch(t, cancel, done)
 
-	assert.Equal(t, "token-1", syncfixture.ReadObservationCursor(t, store.RawDBForTest(), driveID.String()))
+	assert.Equal(t, "token-1", syncfixture.ReadObservationCursor(t, syncstoretest.RawDB(t, store), driveID.String()))
 	row := syncstoretest.ReadRemoteStateRow(t, store, "f1")
 	require.NotNil(t, row, "remote observation should persist mirrored state")
 	assert.Equal(t, driveID, row.DriveID)
@@ -2795,7 +2795,7 @@ func TestWatch_OnlyUnrecoverableDeletes_AdvancesToken(t *testing.T) {
 
 	assert.Equal(t, "token-after-deletes", obs.CurrentDeltaToken(),
 		"a window that returned items must advance the token even when none converted to events")
-	assert.Equal(t, "token-after-deletes", syncfixture.ReadObservationCursor(t, store.RawDBForTest(), driveID.String()),
+	assert.Equal(t, "token-after-deletes", syncfixture.ReadObservationCursor(t, syncstoretest.RawDB(t, store), driveID.String()),
 		"the advanced token must be committed so a restart does not replay the window")
 }
 
@@ -3037,7 +3037,7 @@ func runSingleWatchPoll(t *testing.T, obs *RemoteObserver, driveID driveid.ID) (
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, obs.CurrentDeltaToken(), syncfixture.ReadObservationCursor(t, store.RawDBForTest(), driveID.String()),
+	assert.Equal(t, obs.CurrentDeltaToken(), syncfixture.ReadObservationCursor(t, syncstoretest.RawDB(t, store), driveID.String()),
 		"the in-memory cursor must match the committed one")
 
 	return obs.CurrentDeltaToken(), emitted

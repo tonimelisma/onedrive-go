@@ -979,7 +979,7 @@ func (r *exRun) freeRemoteName(dir string) string {
 func (w *exWorld) planPass() *syncdomain.ActionPlan {
 	w.writeStore()
 	ctx := w.t.Context()
-	db := w.store.RawDBForTest()
+	db := syncstoretest.RawDB(w.t, w.store)
 	_, err := db.ExecContext(ctx, "DELETE FROM observation_issues")
 	require.NoError(w.t, err)
 	for _, p := range w.localCaseCollisions() {
@@ -1520,7 +1520,7 @@ func exQuietStore(t *testing.T) *syncstore.SyncStore {
 
 	dbPath := filepath.Join(t.TempDir(), "exhaustive.db")
 	require.NoError(t, os.WriteFile(dbPath, syncstoretest.LoadTestStoreTemplate(t), 0o600))
-	store, err := syncstore.OpenSyncStoreForTest(t.Context(), dbPath, slog.New(slog.DiscardHandler), false, nil, syncstore.Hooks{Driver: exDriverName, SkipFsync: true})
+	store, err := syncstore.OpenSyncStoreForTest(t.Context(), dbPath, slog.New(slog.DiscardHandler), false, nil, syncstoretest.WithRawDB(t, syncstore.Hooks{Driver: exDriverName, SkipFsync: true}))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, store.Close(context.Background()))
@@ -1529,7 +1529,7 @@ func exQuietStore(t *testing.T) *syncstore.SyncStore {
 	// rolls it back. Made once on the store's one connection, they stay, and
 	// so do the statements that read them.
 	for _, ddl := range []string{syncstore.SQLCreatePlannerVisibleLocalStateForTest(), syncstore.SQLCreatePlannerVisibleRemoteStateForTest()} {
-		_, err := store.RawDBForTest().ExecContext(t.Context(), ddl)
+		_, err := syncstoretest.RawDB(t, store).ExecContext(t.Context(), ddl)
 		require.NoError(t, err)
 	}
 

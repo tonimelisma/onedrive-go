@@ -410,7 +410,7 @@ func TestScanRetryWorkRow_ConditionTypeMustBeEmptyOrAMember(t *testing.T) {
 	}
 	assert.Equal(t, map[string]syncdomain.IssueType{"refused.txt": syncdomain.IssuePathTooLong, "transient.txt": ""}, byPath)
 
-	_, err = store.RawDBForTest().ExecContext(ctx,
+	_, err = store.db.ExecContext(ctx,
 		`UPDATE retry_work SET condition_type = ? WHERE path = ?`, "path_too_long_v2", "refused.txt")
 	require.NoError(t, err)
 

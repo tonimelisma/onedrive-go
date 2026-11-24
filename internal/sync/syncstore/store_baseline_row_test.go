@@ -40,7 +40,7 @@ func TestUpsertBaselineRowTx_RoundTripsEveryColumn(t *testing.T) {
 		LocalHasIdentity: true,
 		ETag:             "etag-1",
 	}
-	require.NoError(t, UpsertBaselineRowTxForTest(ctx, store.RawDBForTest(), written))
+	require.NoError(t, UpsertBaselineRowTxForTest(ctx, store.db, written))
 
 	baseline, err := store.Load(ctx)
 	require.NoError(t, err)
@@ -54,7 +54,7 @@ func TestUpsertBaselineRowTx_RoundTripsEveryColumn(t *testing.T) {
 	rewritten.LocalHash = "local-hash-2"
 	rewritten.LocalBirthTime = 28
 	rewritten.ETag = "etag-2"
-	require.NoError(t, UpsertBaselineRowTxForTest(ctx, store.RawDBForTest(), &rewritten))
+	require.NoError(t, UpsertBaselineRowTxForTest(ctx, store.db, &rewritten))
 
 	require.NoError(t, store.ReloadBaselineCacheForTest(ctx))
 	baseline, err = store.Load(ctx)
@@ -73,7 +73,7 @@ func TestSQLUpsertBaseline_WritesEveryBaselineColumn(t *testing.T) {
 	ctx := synctest.TestContext(t)
 	store := newTestStore(t)
 
-	rows, err := store.RawDBForTest().QueryContext(ctx, `SELECT name FROM pragma_table_info('baseline')`)
+	rows, err := store.db.QueryContext(ctx, `SELECT name FROM pragma_table_info('baseline')`)
 	require.NoError(t, err)
 	defer func() { assert.NoError(t, rows.Close()) }()
 

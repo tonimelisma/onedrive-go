@@ -19,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -77,7 +78,7 @@ func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
 	refreshTestFlowInputs(eng)
 	ctx := t.Context()
 
-	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, eng.baseline).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type)
 		VALUES ('item-hidden', 'hidden/file.txt', 'file')`)
 	require.NoError(t, err)
@@ -611,7 +612,7 @@ func TestObserveLocal_MeasuresTheRacilyCleanWindowOnTheRunsClock(t *testing.T) {
 	ctime, ok := synctree.ChangeTimeFromFileInfo(info)
 	require.True(t, ok)
 	recorded := syncfixture.TestQuickXor("the content the baseline records\n")
-	_, err = eng.baseline.RawDBForTest().ExecContext(t.Context(),
+	_, err = syncstoretest.RawDB(t, eng.baseline).ExecContext(t.Context(),
 		`UPDATE baseline SET local_hash = ?, local_mtime = ?, local_ctime = ? WHERE path = ?`,
 		recorded, info.ModTime().UnixNano(), ctime, releaseFileTop)
 	require.NoError(t, err)

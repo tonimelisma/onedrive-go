@@ -171,7 +171,7 @@ func TestRunOnce_ALastStoreReadThatFailsReturnsTheReportAndTheError(t *testing.T
 	eng, syncRoot := newTestEngine(t, remote.client(t))
 	eng.hooks.oneShotPassLimit = 1
 	syncfixture.WriteLocalFile(t, syncRoot, "a.txt", "content")
-	db := syncstoretest.RequireStoreTestRawDB(t, eng.baseline)
+	db := syncstoretest.RawDB(t, eng.baseline)
 	var damageErr error
 	eng.SetActivityHook(func(Activity) {
 		// An issue type no member has: the snapshot read refuses the row.

@@ -24,7 +24,7 @@ func TestForgetMountBoundary_ForgetsOneRecordAndNothingElse(t *testing.T) {
 	store, err := NewSyncStore(ctx, dbPath, logger)
 	require.NoError(t, err)
 	for _, mount := range []string{"nas", "photos"} {
-		_, insertErr := store.RawDBForTest().ExecContext(ctx, `INSERT INTO mount_boundaries (path) VALUES (?)`, mount)
+		_, insertErr := store.db.ExecContext(ctx, `INSERT INTO mount_boundaries (path) VALUES (?)`, mount)
 		require.NoError(t, insertErr)
 	}
 	require.NoError(t, store.Close(ctx))

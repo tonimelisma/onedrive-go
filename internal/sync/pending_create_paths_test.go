@@ -269,7 +269,7 @@ func newStoreWithDocsFolderMovedToPapers(t *testing.T, intentPath string) *syncs
 
 	driveID := driveid.New(syncfixture.TestDriveID)
 	store := syncstoretest.NewTestStore(t)
-	_, err := store.RawDBForTest().ExecContext(t.Context(), `INSERT INTO baseline (item_id, path, parent_id, item_type, etag)
+	_, err := syncstoretest.RawDB(t, store).ExecContext(t.Context(), `INSERT INTO baseline (item_id, path, parent_id, item_type, etag)
 		VALUES ('folder-docs', 'docs', 'root', 'folder', '"f,1"')`)
 	require.NoError(t, err)
 	require.NoError(t, store.RecordPendingCreate(t.Context(), &syncdomain.PendingCreate{

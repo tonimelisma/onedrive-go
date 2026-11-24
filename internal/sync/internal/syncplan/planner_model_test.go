@@ -164,7 +164,7 @@ func (s *pmState) writeStore() {
 	}
 	store := s.store
 	for _, table := range []string{"baseline", "remote_state", "local_state"} {
-		_, err := store.RawDBForTest().ExecContext(ctx, "DELETE FROM "+table)
+		_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, "DELETE FROM "+table)
 		require.NoError(t, err)
 	}
 	store.DropBaselineCacheForTest()
@@ -188,7 +188,7 @@ func (s *pmState) writeStore() {
 				parentID = synced.id
 			}
 		}
-		require.NoError(t, syncstore.UpsertBaselineRowTxForTest(ctx, store.RawDBForTest(), &syncdomain.BaselineEntry{
+		require.NoError(t, syncstore.UpsertBaselineRowTxForTest(ctx, syncstoretest.RawDB(t, store), &syncdomain.BaselineEntry{
 			Path: p, ItemID: row.id, ParentID: parentID, ItemType: pmType(row.folder),
 			LocalHash: s.hash(row.folder, row.localContent), RemoteHash: s.hash(row.folder, row.remoteContent),
 			LocalSize: int64(len(row.localContent)), LocalSizeKnown: true,

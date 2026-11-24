@@ -108,7 +108,7 @@ func TestReplaceLocalState_BackfillsBaselineIdentityForUnchangedItems(t *testing
 	ctx := t.Context()
 
 	// Rows written before baselines recorded identity.
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := store.db.ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, local_size, local_mtime) VALUES
 			('item-folder', 'folder', 'folder', NULL, NULL, NULL),
 			('item-same', 'folder/same.txt', 'file', 'hash-a', 12, 34),
@@ -159,7 +159,7 @@ func TestReplaceLocalState_BackfillsBaselineIdentityForUnchangedItems(t *testing
 		assert.False(t, has, "%s must not adopt an identity its content was not proven against", path)
 	}
 
-	fresh, err := loadBaselineWithRunner(ctx, store.RawDBForTest(), driveid.ID{})
+	fresh, err := loadBaselineWithRunner(ctx, store.db, driveid.ID{})
 	require.NoError(t, err)
 	folder, ok := fresh.GetByPath("folder")
 	require.True(t, ok)
@@ -415,7 +415,7 @@ func TestDeleteLocalStatePrefix_SeeksThePrimaryKey(t *testing.T) {
 	t.Parallel()
 
 	store := newTestStore(t)
-	plan := queryPlanText(t, store.RawDBForTest(), sqlDeleteLocalStateSubtree, localStateSubtreeArgs("docs")...)
+	plan := queryPlanText(t, store.db, sqlDeleteLocalStateSubtree, localStateSubtreeArgs("docs")...)
 
 	assert.Regexp(t, `SEARCH local_state USING COVERING INDEX sqlite_autoindex_local_state_\d+ \(path=\?\)`, plan,
 		"the delete must find the path itself by the primary key; query plan:\n%s", plan)

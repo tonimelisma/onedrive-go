@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -38,11 +39,8 @@ func newForgetMountFixture(t *testing.T, mounts ...string) *forgetMountFixture {
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
 	store, err := syncstore.NewSyncStore(t.Context(), statePath, testDriveLogger(t))
 	require.NoError(t, err)
-	for _, mount := range mounts {
-		_, err := store.RawDBForTest().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES (?)`, mount)
-		require.NoError(t, err)
-	}
 	require.NoError(t, store.Close(t.Context()))
+	seedMountBoundaries(t, statePath, mounts...)
 
 	var out bytes.Buffer
 	return &forgetMountFixture{
@@ -197,4 +195,20 @@ func TestNewDriveCmd_HasForgetMount(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "forget-mount", forget.Name())
 	require.NotNil(t, forget.Flags().Lookup("yes"))
+}
+
+// seedMountBoundaries records paths as crossed mount boundaries in the closed
+// state database at statePath, through a connection of the test's own: the
+// store hands its database to no importer, and a scan that crosses a mount
+// is more than this fixture needs.
+func seedMountBoundaries(t *testing.T, statePath string, paths ...string) {
+	t.Helper()
+
+	db, err := sql.Open(syncstore.SqliteDriverName, syncstore.SqliteFileURI(statePath, nil))
+	require.NoError(t, err)
+	defer func() { assert.NoError(t, db.Close()) }()
+	for _, path := range paths {
+		_, err := db.ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES (?)`, path)
+		require.NoError(t, err)
+	}
 }

@@ -65,7 +65,7 @@ func seedComparisonBench(b *testing.B, store *SyncStore, items int, shape compar
 	b.Helper()
 
 	ctx := context.Background()
-	tx, err := store.RawDBForTest().BeginTx(ctx, nil)
+	tx, err := store.db.BeginTx(ctx, nil)
 	require.NoError(b, err)
 
 	insertBaseline, err := tx.PrepareContext(ctx, sqlUpsertBaseline)

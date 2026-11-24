@@ -26,6 +26,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
@@ -497,7 +498,7 @@ func wedgedCommitCompletion(t *testing.T) syncdomain.ActionCompletion {
 		in.Hooks.OutcomeCommitTimeout = workerTestCommitBound
 		in.Items = &syncfixture.WorkerMockItemClient{
 			CreateFolderFn: func(ctx context.Context, _ driveid.ID, _, name string) (*graph.Item, error) {
-				conn, err := store.RawDBForTest().Conn(ctx)
+				conn, err := syncstoretest.RawDB(t, store).Conn(ctx)
 				if err != nil {
 					return nil, fmt.Errorf("take the store's connection: %w", err)
 				}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 )
 
 // renumberedDeviceOffset fabricates a device number no test host uses.
@@ -35,9 +36,9 @@ func TestRunOnce_RenumberedDeviceTransfersNothing(t *testing.T) {
 
 	ctx := t.Context()
 	var observedDevice int64
-	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(ctx,
+	require.NoError(t, syncstoretest.RawDB(t, eng.baseline).QueryRowContext(ctx,
 		`SELECT local_device FROM baseline WHERE path = 'b.txt'`).Scan(&observedDevice))
-	_, err := eng.baseline.RawDBForTest().ExecContext(ctx,
+	_, err := syncstoretest.RawDB(t, eng.baseline).ExecContext(ctx,
 		`UPDATE baseline SET local_device = ? WHERE local_has_identity = 1`, observedDevice+renumberedDeviceOffset)
 	require.NoError(t, err)
 	require.NoError(t, eng.baseline.ReloadBaselineCacheForTest(ctx))
@@ -48,7 +49,7 @@ func TestRunOnce_RenumberedDeviceTransfersNothing(t *testing.T) {
 	assert.Zero(t, remote.uploads)
 
 	var stale int
-	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(ctx,
+	require.NoError(t, syncstoretest.RawDB(t, eng.baseline).QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM baseline WHERE local_has_identity = 1 AND local_device <> ?`, observedDevice).Scan(&stale))
 	assert.Zero(t, stale, "the baseline must learn the observed identity")
 	requireScenarioQuietPlan(t, eng)

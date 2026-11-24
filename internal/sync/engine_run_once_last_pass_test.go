@@ -334,7 +334,7 @@ func TestRunOnce_AFailedCleanupCountsOnlyWhenTheLastPassFailedIt(t *testing.T) {
 			installManualClockForTestEngine(eng, clock)
 			runScenarioPass(t, eng)
 
-			db := syncstoretest.RequireStoreTestRawDB(t, eng.baseline)
+			db := syncstoretest.RawDB(t, eng.baseline)
 			_, err := db.ExecContext(t.Context(), refuseGoneCleanupSQL)
 			require.NoError(t, err)
 			if tc.redo {

@@ -38,11 +38,11 @@ func TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters(t *testing.T) {
 	store, err := NewSyncStore(ctx, dbPath, logger)
 	require.NoError(t, err)
 	var journalMode string
-	require.NoError(t, store.RawDBForTest().QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode))
+	require.NoError(t, store.db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode))
 	assert.Equal(t, "wal", journalMode, "every pragma the URI carries is applied")
 	var busyTimeout, journalSizeLimit int64
-	require.NoError(t, store.RawDBForTest().QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeout))
-	require.NoError(t, store.RawDBForTest().QueryRowContext(ctx, "PRAGMA journal_size_limit").Scan(&journalSizeLimit))
+	require.NoError(t, store.db.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeout))
+	require.NoError(t, store.db.QueryRowContext(ctx, "PRAGMA journal_size_limit").Scan(&journalSizeLimit))
 	assert.Equal(t, storeBusyTimeout.Milliseconds(), busyTimeout)
 	assert.Equal(t, int64(storeJournalSizeLimitBytes), journalSizeLimit)
 	require.NoError(t, store.UpsertBlockScope(ctx, block))

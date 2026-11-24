@@ -1140,7 +1140,16 @@ which is every production store, keeps `synchronous(FULL)`
 (`TestHooks_ZeroValueIsProduction`, `TestEngineHooks_ZeroValueIsProduction`),
 and the delete-boundary crash test runs on it
 (`TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry`,
-`TestTestEngines_SkipFsyncUnlessTheTestKeepsIt`). The inspector's read-only URI (`mode=ro`, `query_only`, `inspectorBusyTimeout`,
+`TestTestEngines_SkipFsyncUnlessTheTestKeepsIt`). The store hands its
+`*sql.DB` to no importer: a test that seeds or reads tables below the typed
+API gets the database through `Hooks.OnOpen`, which the store calls once as
+it opens (`TestHooks_OnOpenIsToldTheStoreAndItsDatabase`), and which
+`syncstoretest.WithRawDB` (every store `syncstoretest` and the engine test
+helpers open) sets to keep it for `syncstoretest.RawDB(tb, store)` until the
+test ends. Production never sets a `Hooks` field (R-6.10.29), so no product
+code can reach the handle; a package outside the sync tree, which cannot
+import `syncstoretest` (the CLI's tests), opens a connection of its own on
+the closed store's file. The store's own tests use its unexported `db`. The inspector's read-only URI (`mode=ro`, `query_only`, `inspectorBusyTimeout`,
 1 s) is built the same way
 (`TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters`,
 `TestSQLiteFileURI_EscapesTheDatabasePath`). Tests in other packages open a

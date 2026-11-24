@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -26,6 +25,11 @@ type Hooks struct {
 	// through; empty is the SQLite driver. Tests name a fault-injecting
 	// wrapper of it.
 	Driver string
+	// OnOpen is told each store as it opens, with its database: the one way a
+	// test reaches the tables below the typed API to seed or read them. The
+	// store hands its database to no importer; syncstoretest keeps what this
+	// tells it for the test that opened the store (syncstoretest.RawDB).
+	OnOpen func(store *SyncStore, db *sql.DB)
 	// BetweenSnapshotReads runs between the two halves of a status snapshot
 	// read (readDriveStatusCounts, readDriveStatusConditions): a test writes
 	// the store there to prove the snapshot is one moment.
@@ -59,22 +63,6 @@ func (h Hooks) synchronousPragma() string {
 	return "synchronous(FULL)"
 }
 
-// RawDBForTest is the store's database, for tests that read or seed tables
-// directly.
-func (s *SyncStore) RawDBForTest() *sql.DB {
-	return s.rawDB()
-}
-
-// NowForTest is the store's clock reading.
-func (s *SyncStore) NowForTest() time.Time {
-	return s.nowFunc()
-}
-
-// SetLoggerForTest replaces the store's logger.
-func (s *SyncStore) SetLoggerForTest(logger *slog.Logger) {
-	s.logger = logger
-}
-
 // ReloadBaselineCacheForTest reloads the cached baseline from the database.
 func (s *SyncStore) ReloadBaselineCacheForTest(ctx context.Context) error {
 	patch, err := s.reloadPatchTx(ctx, s.db)
@@ -84,17 +72,6 @@ func (s *SyncStore) ReloadBaselineCacheForTest(ctx context.Context) error {
 	s.applyBaselineCachePatch(patch)
 
 	return nil
-}
-
-// BaselineSnapshotForTest reads the baseline table as a snapshot, the form
-// planning takes it in.
-func (s *SyncStore) BaselineSnapshotForTest(ctx context.Context) (*syncdomain.BaselineSnapshot, error) {
-	contentDriveID, err := s.contentDriveIDForRead(ctx, driveid.ID{})
-	if err != nil {
-		return nil, err
-	}
-
-	return loadBaselineWithRunner(ctx, s.db, contentDriveID)
 }
 
 // UpdateObservationStateForTest applies update to the stored observation
@@ -123,12 +100,6 @@ func OpenSyncStoreForTest(
 // UpsertBaselineRowTxForTest writes one baseline row in tx.
 func UpsertBaselineRowTxForTest(ctx context.Context, tx sqlTxRunner, entry *syncdomain.BaselineEntry) error {
 	return upsertBaselineRowTx(ctx, tx, entry)
-}
-
-// ReplaceLocalStateTxForTest replaces the local_state rows in tx
-// (replaceLocalStateTx).
-func ReplaceLocalStateTxForTest(ctx context.Context, tx sqlTxRunner, rows []syncdomain.LocalStateRow) (bool, error) {
-	return replaceLocalStateTx(ctx, tx, rows)
 }
 
 // CanonicalSchemaSQLForTest is the schema a new store is created with.

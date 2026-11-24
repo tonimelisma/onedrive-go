@@ -19,6 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -281,7 +282,7 @@ func crashRecoveryScenario(t *testing.T) (*moveScenarioRemote, *syncHarness) {
 	runScenarioPass(t, h.eng)
 	// The synced state reaches the main database file; the round's commits
 	// stay in the WAL, which the lost-WAL variant then loses.
-	_, err := h.eng.baseline.RawDBForTest().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, err := syncstoretest.RawDB(t, h.eng.baseline).ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 	require.NoError(t, err)
 
 	require.NoError(t, os.Rename(filepath.Join(h.syncRoot, "docs", "a.txt"), filepath.Join(h.syncRoot, "docs", "a2.txt")))

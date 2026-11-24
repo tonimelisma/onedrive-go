@@ -185,6 +185,9 @@ func openSyncStoreWithHooks(
 		nowFunc: now,
 		hooks:   hooks,
 	}
+	if hooks.OnOpen != nil {
+		hooks.OnOpen(store, db)
+	}
 
 	return store, nil
 }
@@ -238,12 +241,6 @@ func (s *SyncStore) Checkpoint(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// rawDB exposes the underlying SQLite handle for same-package tests and store
-// internals that need assertions below the typed API surface.
-func (s *SyncStore) rawDB() *sql.DB {
-	return s.db
 }
 
 // cachedBaseline returns the in-memory baseline cache populated by the most

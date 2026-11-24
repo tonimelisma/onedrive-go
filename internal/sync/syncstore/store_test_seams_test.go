@@ -14,6 +14,6 @@ func setStoreTestNow(store *SyncStore, now time.Time) {
 func requireStoreTestExec(t *testing.T, store *SyncStore, query string, args ...any) {
 	t.Helper()
 
-	_, err := store.RawDBForTest().ExecContext(t.Context(), query, args...)
+	_, err := store.db.ExecContext(t.Context(), query, args...)
 	require.NoError(t, err)
 }

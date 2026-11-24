@@ -24,7 +24,7 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES
 			('item-upload', 'upload.txt', 'file', 'old', 'old', 1, 1, 1, 1, 'etag-old'),
@@ -92,7 +92,7 @@ func TestPlannerPlanCurrentState_LocalFolderMoveByIdentityPlansSingleRemoteMove(
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -123,7 +123,7 @@ func TestPlannerPlanCurrentState_LocalFolderMoveByIdentityPlansSingleRemoteMove(
 		},
 	}))
 
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-folder', 'Projects', 'folder', '', NULL, NULL),
@@ -144,7 +144,7 @@ func TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate(t *t
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -164,7 +164,7 @@ func TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate(t *t
 		LocalHasIdentity: true,
 	}}))
 
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-file', 'old.txt', 'file', 'old-hash', 10, 1)`)
 	require.NoError(t, err)
@@ -189,7 +189,7 @@ func TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -209,7 +209,7 @@ func TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads
 	}
 	require.NoError(t, store.ReplaceLocalState(ctx, []syncdomain.LocalStateRow{destination}))
 
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-file', 'old.txt', 'file', 'old-hash', 10, 1)`)
 	require.NoError(t, err)
@@ -265,7 +265,7 @@ func TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline(t *testing.T) {
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -285,7 +285,7 @@ func TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline(t *testing.T) {
 		LocalHasIdentity: true,
 	}}))
 
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime, etag)
 		VALUES ('item-file', 'sub/renamed-remotely.txt', 'file', 'h', 2, 3, 'etag-new')`)
 	require.NoError(t, err)
@@ -312,7 +312,7 @@ func TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildM
 	// recorded) cannot pair, so the folder move decomposes. The source folder
 	// must be deleted on OneDrive, never re-created locally, and only after
 	// the child it contains has been moved out of it.
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime,
@@ -343,7 +343,7 @@ func TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildM
 		},
 	}))
 
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-deep', 'deep', 'folder', '', NULL, NULL),
@@ -377,7 +377,7 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-conflict', 'conflict.txt', 'file', 'old-hash', 'old-hash', 1, 1, 1, 1, 'etag-old')`)
 	require.NoError(t, err)
@@ -470,7 +470,7 @@ func TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID(t *testing
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('deleted-item', 'edit-delete.txt', 'file', 'old-hash', 'old-hash', 1, 1, 1, 1, 'etag-old')`)
 	require.NoError(t, err)
@@ -741,7 +741,7 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteWinnerDownloadWithoutConf
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-conflict', 'conflict.txt', 'file', 'old-hash', 'old-hash', 1, 1, 1, 1, 'etag-old')`)
 	require.NoError(t, err)
@@ -837,7 +837,7 @@ func planCurrentStateForInputs(
 func seedFolderCascadeBaseline(t *testing.T, store *syncstore.SyncStore) {
 	t.Helper()
 
-	_, err := store.RawDBForTest().ExecContext(t.Context(), `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(t.Context(), `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime, etag
@@ -883,7 +883,7 @@ func planForUnavailableLocalReadBoundaryDescendant(t *testing.T) *syncdomain.Act
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-private', 'Private/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
 	require.NoError(t, err)
@@ -914,7 +914,7 @@ func planForUnavailableRemoteReadBoundaryDescendant(t *testing.T) *syncdomain.Ac
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-shared', 'Shared/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-shared')`)
 	require.NoError(t, err)
@@ -941,7 +941,7 @@ func planForUnavailableLocalReadBoundaryCleanupCandidate(t *testing.T) *syncdoma
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-private-dir', 'Private/sub', 'folder', '', '', 0, 0, 1, 1, ''),
 		       ('item-private-file', 'Private/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
@@ -963,7 +963,7 @@ func planForUnavailableRemoteReadBoundaryCleanupCandidate(t *testing.T) *syncdom
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-shared-dir', 'Shared/sub', 'folder', '', '', 0, 0, 1, 1, ''),
 		       ('item-shared-file', 'Shared/sub/file.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-shared')`)
@@ -1098,7 +1098,7 @@ func TestPlannerPlanCurrentState_LocalReadDeniedDoesNotDeleteRemoteData(t *testi
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-danger', 'danger.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-danger')`)
 	require.NoError(t, err)
@@ -1131,7 +1131,7 @@ func TestPlannerPlanCurrentState_RemoteReadBoundaryDoesNotDeleteLocalData(t *tes
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-shared', 'Shared/a.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-shared')`)
 	require.NoError(t, err)
@@ -1163,7 +1163,7 @@ func TestPlannerPlanCurrentState_LocalReadBoundaryBlocksRemoteDeletesForDescenda
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES ('item-private', 'Private/a.txt', 'file', 'hash', 'hash', 10, 10, 1, 1, 'etag-private')`)
 	require.NoError(t, err)
@@ -1196,7 +1196,7 @@ func TestPlannerPlanCurrentState_RemoteReadBoundaryBlocksLocalDeletesForDescenda
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		VALUES
 			('item-team-a', 'Team/a.txt', 'file', 'hash-a', 'hash-a', 10, 10, 1, 1, 'etag-team-a'),
@@ -1424,7 +1424,7 @@ func TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes(t 
 
 	// rm -rf many/ while watch mode runs: every baseline row under many is
 	// gone locally and still present remotely.
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime
@@ -1437,7 +1437,7 @@ func TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes(t 
 			('item-f002', 'many/sub/f002.txt', 'file', 'h2', 'h2', 1, 1, 1, 1)`)
 	require.NoError(t, err)
 
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-many', 'many', 'folder', '', NULL, NULL),
@@ -1472,7 +1472,7 @@ func TestPlannerPlanCurrentState_LocalFolderDeleteKeepsFolderForNewRemoteChild(t
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (
 			item_id, path, item_type, local_hash, remote_hash,
 			local_size, remote_size, local_mtime, remote_mtime
@@ -1482,7 +1482,7 @@ func TestPlannerPlanCurrentState_LocalFolderDeleteKeepsFolderForNewRemoteChild(t
 			('item-f000', 'many/f000.txt', 'file', 'h0', 'h0', 1, 1, 1, 1)`)
 	require.NoError(t, err)
 
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-many', 'many', 'folder', '', NULL, NULL),
@@ -1523,7 +1523,7 @@ func TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem(t *
 	ctx := t.Context()
 
 	// rm lowercase.txt; mkdir lowercase.txt; echo > lowercase.txt/inside.txt
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES ('item-lower', 'lowercase.txt', 'file', 'h', 'h', 1, 1, 1, 1)`)
 	require.NoError(t, err)
@@ -1531,7 +1531,7 @@ func TestPlannerPlanCurrentState_LocalFileReplacedByFolderReplacesRemoteItem(t *
 		{Path: "lowercase.txt", ItemType: syncdomain.ItemTypeFolder},
 		{Path: "lowercase.txt/inside.txt", ItemType: syncdomain.ItemTypeFile, Hash: "inside", Size: 1, Mtime: 2},
 	}))
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-lower', 'lowercase.txt', 'file', 'h', 1, 1)`)
 	require.NoError(t, err)
@@ -1560,7 +1560,7 @@ func TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem(t *
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES
 			('item-dir', 'thing', 'folder', NULL, NULL, NULL, NULL, NULL, NULL),
@@ -1569,7 +1569,7 @@ func TestPlannerPlanCurrentState_LocalFolderReplacedByFileReplacesRemoteItem(t *
 	require.NoError(t, store.ReplaceLocalState(ctx, []syncdomain.LocalStateRow{
 		{Path: "thing", ItemType: syncdomain.ItemTypeFile, Hash: "now-a-file", Size: 3, Mtime: 4},
 	}))
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-dir', 'thing', 'folder', NULL, NULL, NULL),
@@ -1599,14 +1599,14 @@ func TestPlannerPlanCurrentState_RemoteFileReplacedByFolderReplacesLocalItem(t *
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES ('item-old-file', 'shape', 'file', 'h', 'h', 1, 1, 1, 1)`)
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceLocalState(ctx, []syncdomain.LocalStateRow{
 		{Path: "shape", ItemType: syncdomain.ItemTypeFile, Hash: "h", Size: 1, Mtime: 1},
 	}))
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-new-folder', 'shape', 'folder', NULL, NULL, NULL),
@@ -1636,14 +1636,14 @@ func TestPlannerPlanCurrentState_RemoteFolderReplacedByFileReplacesLocalItem(t *
 	store := syncstoretest.NewTestStore(t)
 	ctx := t.Context()
 
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES ('item-old-dir', 'shape', 'folder', NULL, NULL, NULL, NULL, NULL, NULL)`)
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceLocalState(ctx, []syncdomain.LocalStateRow{
 		{Path: "shape", ItemType: syncdomain.ItemTypeFolder},
 	}))
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-new-file', 'shape', 'file', 'f', 1, 1)`)
 	require.NoError(t, err)
@@ -1669,14 +1669,14 @@ func TestPlannerPlanCurrentState_CaseOnlyRenameWithEditUploadsAfterOldNameIsDele
 	ctx := t.Context()
 
 	// mv edit.txt EDIT.txt; then rewrite it, so no move can be proven.
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime)
 		VALUES ('item-edit', 'edit.txt', 'file', 'old', 'old', 3, 3, 1, 1)`)
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceLocalState(ctx, []syncdomain.LocalStateRow{
 		{Path: "EDIT.txt", ItemType: syncdomain.ItemTypeFile, Hash: "new", Size: 30, Mtime: 2},
 	}))
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, store).ExecContext(ctx, `
 		INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES ('item-edit', 'edit.txt', 'file', 'old', 3, 1)`)
 	require.NoError(t, err)

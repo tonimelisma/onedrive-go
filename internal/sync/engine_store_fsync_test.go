@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 )
 
 // SQLite's PRAGMA synchronous values.
@@ -50,7 +51,7 @@ func storeSynchronous(t *testing.T, eng *Engine) int {
 	t.Helper()
 
 	var synchronous int
-	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(t.Context(), "PRAGMA synchronous").Scan(&synchronous))
+	require.NoError(t, syncstoretest.RawDB(t, eng.baseline).QueryRowContext(t.Context(), "PRAGMA synchronous").Scan(&synchronous))
 
 	return synchronous
 }

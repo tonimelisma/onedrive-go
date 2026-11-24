@@ -266,9 +266,8 @@ func invokeDriveForgetMountJSON(t *testing.T, leaf *cobra.Command) (string, erro
 	require.NoError(t, os.MkdirAll(filepath.Dir(statePath), 0o700))
 	store, err := syncstore.NewSyncStore(t.Context(), statePath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	_, err = store.RawDBForTest().ExecContext(t.Context(), `INSERT INTO mount_boundaries (path) VALUES (?)`, "nas")
-	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
+	seedMountBoundaries(t, statePath, "nas")
 
 	cc := newCommandContext(&bytes.Buffer{}, cfgPath)
 	cc.Flags.Drive = []string{cid.String()}

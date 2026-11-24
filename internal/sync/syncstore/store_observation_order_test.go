@@ -25,7 +25,7 @@ func orderTestStore(t *testing.T) (*SyncStore, *syncfixture.SyncLockedBuffer) {
 
 	mgr := newTestStore(t)
 	logs := &syncfixture.SyncLockedBuffer{}
-	mgr.SetLoggerForTest(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	mgr.logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	return mgr, logs
 }
@@ -290,7 +290,7 @@ func TestCommitObservation_UnplacedChildOfAParkedFolderFollowsTheFolder(t *testi
 	}, "t1", driveID))
 	// c is our own upload: the baseline holds its content, and the pending
 	// create remembers the empty placeholder's eTag.
-	_, err := mgr.RawDBForTest().ExecContext(t.Context(), `
+	_, err := mgr.db.ExecContext(t.Context(), `
 		INSERT INTO baseline (item_id, path, parent_id, item_type, remote_size) VALUES ('c', 'P/c.txt', 'p', 'file', 5);
 		INSERT INTO pending_creates (item_id, drive_id, path, parent_id, created_etag) VALUES ('c', '', 'P/c.txt', 'p', 'placeholder-etag')`)
 	require.NoError(t, err)
@@ -310,9 +310,9 @@ func TestRequireNoParkedRemoteRows_FailsTheWindow(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestStore(t)
-	_, err := mgr.RawDBForTest().ExecContext(t.Context(),
+	_, err := mgr.db.ExecContext(t.Context(),
 		`INSERT INTO remote_state (drive_id, item_id, path, item_type) VALUES ('', 'x', ':park:x', 'file')`)
 	require.NoError(t, err)
 
-	require.Error(t, requireNoParkedRemoteRowsTx(t.Context(), mgr.RawDBForTest()))
+	require.Error(t, requireNoParkedRemoteRowsTx(t.Context(), mgr.db))
 }

@@ -46,6 +46,9 @@ func secondEngineInputs(t *testing.T, syncRoot string, logger *slog.Logger) *eng
 		RecursiveLister: mock,
 		PermChecker:     mock,
 		Logger:          logger,
+		// The store's database is kept for syncstoretest.RawDB; nothing
+		// else of production changes.
+		hooks: engineHooks{store: syncstoretest.WithRawDB(t, syncstore.Hooks{})},
 	}
 }
 
@@ -316,7 +319,7 @@ func TestEngineLocks_ReleasedInReverseOnlyAfterTheStoreCloses(t *testing.T) {
 	inputs.hooks.lockFlock = func(fd int, how int) error {
 		if how == syscall.LOCK_UN {
 			unlocked = append(unlocked, lockFileName(t, fd, names))
-			storeOpenAtUnlock = append(storeOpenAtUnlock, engine.baseline.RawDBForTest().PingContext(context.Background()))
+			storeOpenAtUnlock = append(storeOpenAtUnlock, syncstoretest.RawDB(t, engine.baseline).PingContext(context.Background()))
 		}
 		return syscall.Flock(fd, how)
 	}

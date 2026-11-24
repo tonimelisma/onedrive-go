@@ -155,7 +155,7 @@ func StateDBFamilyExists(dbPath string) (bool, error) {
 // quick_check skips the index-to-table cross-check of integrity_check, which
 // keeps it linear in the DB size and cheap enough for every startup.
 func checkStoreIntegrity(ctx context.Context, store *SyncStore) error {
-	rows, err := store.rawDB().QueryContext(ctx, `PRAGMA quick_check`)
+	rows, err := store.db.QueryContext(ctx, `PRAGMA quick_check`)
 	if err != nil {
 		return fmt.Errorf("run sync store quick_check: %w", err)
 	}

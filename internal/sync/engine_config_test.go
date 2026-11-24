@@ -334,7 +334,15 @@ func TestEngine_StoreAndExecutorTellTheEngineClocksTime(t *testing.T) {
 	clock := syncfixture.NewManualClock(time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC))
 	installManualClockForTestEngine(eng, clock)
 
-	assert.Equal(t, clock.Now(), eng.baseline.NowForTest(), "store")
+	// The store dates what it records by the engine clock: a create intent
+	// recorded now carries the manual clock's time.
+	require.NoError(t, eng.baseline.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{
+		DriveID: driveid.New(syncfixture.EngineTestDriveID), Path: "clock.txt", ParentID: "root",
+	}))
+	intent, found, err := eng.baseline.PendingCreateAt(t.Context(), "clock.txt")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, syncdomain.StoredTimeNano(clock.Now()), intent.IntendedAt, "store")
 	assert.Equal(t, clock.Now(), eng.execCfg.NowForTest(), "executor")
 }
 

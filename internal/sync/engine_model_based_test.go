@@ -22,6 +22,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -393,7 +394,7 @@ func (r *modelRun) armCrash(rng *rand.Rand) *crashCapture {
 		remote:  r.remote,
 	}
 	if capture.lostWAL {
-		_, err := r.eng.baseline.RawDBForTest().ExecContext(r.t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+		_, err := syncstoretest.RawDB(r.t, r.eng.baseline).ExecContext(r.t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 		require.NoError(r.t, err)
 	}
 	r.eng.armCrash(capture.hook)

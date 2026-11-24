@@ -54,7 +54,7 @@ func BenchmarkReplacePlannerVisibleState(b *testing.B) {
 
 			b.ResetTimer()
 			for b.Loop() {
-				tx, err := beginPerfTx(ctx, store.RawDBForTest())
+				tx, err := beginPerfTx(ctx, store.db)
 				require.NoError(b, err)
 				visible, err := replacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows, contentDriveID)
 				require.NoError(b, err)
@@ -92,7 +92,7 @@ func seedPlannerVisibleBench(b *testing.B, store *SyncStore, shape plannerVisibl
 	b.Helper()
 
 	ctx := context.Background()
-	tx, err := store.RawDBForTest().BeginTx(ctx, nil)
+	tx, err := store.db.BeginTx(ctx, nil)
 	require.NoError(b, err)
 	insertBaseline, err := tx.PrepareContext(ctx, sqlUpsertBaseline)
 	require.NoError(b, err)

@@ -56,7 +56,7 @@ func TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemOneDriveDeleted
 	require.NoError(t, mgr.CommitObservation(t.Context(), []syncdomain.ObservedItem{{
 		DriveID: driveID, ItemID: "folder", ParentID: "root", Path: "doc", ItemType: syncdomain.ItemTypeFolder, ETag: `"f,1"`,
 	}}, "t1", driveID))
-	_, err := mgr.RawDBForTest().ExecContext(t.Context(), `INSERT INTO baseline
+	_, err := mgr.db.ExecContext(t.Context(), `INSERT INTO baseline
 		(item_id, path, parent_id, item_type, etag) VALUES ('folder', 'doc', 'root', 'folder', '"f,1"')`)
 	require.NoError(t, err)
 	require.NoError(t, mgr.RecordPendingCreate(t.Context(), &syncdomain.PendingCreate{
@@ -96,7 +96,7 @@ func TestCommitObservation_PlaceholderReplacesTheBaselineOfAnItemMovedAway(t *te
 		DriveID: driveID, ItemID: "moved", ParentID: "root", Path: "doc.txt", ItemType: syncdomain.ItemTypeFile,
 		Hash: "h", Size: 3, ETag: `"m,1"`,
 	}}, "t1", driveID))
-	_, err := mgr.RawDBForTest().ExecContext(t.Context(), `INSERT INTO baseline
+	_, err := mgr.db.ExecContext(t.Context(), `INSERT INTO baseline
 		(item_id, path, parent_id, item_type, local_hash, remote_hash, local_size, remote_size, etag)
 		VALUES ('moved', 'doc.txt', 'root', 'file', 'h', 'h', 3, 3, '"m,1"')`)
 	require.NoError(t, err)
@@ -135,7 +135,7 @@ func TestCommitObservation_PlaceholderDoesNotDisplaceALiveBaselineItem(t *testin
 		DriveID: driveID, ItemID: "live", ParentID: "root", Path: "doc", ItemType: syncdomain.ItemTypeFile,
 		Hash: "h", Size: 3, ETag: `"l,1"`,
 	}}, "t1", driveID))
-	_, err := mgr.RawDBForTest().ExecContext(t.Context(), `INSERT INTO baseline
+	_, err := mgr.db.ExecContext(t.Context(), `INSERT INTO baseline
 		(item_id, path, parent_id, item_type, local_hash, remote_hash, local_size, remote_size, etag)
 		VALUES ('live', 'doc', 'root', 'file', 'h', 'h', 3, 3, '"l,1"')`)
 	require.NoError(t, err)
@@ -165,7 +165,7 @@ func TestCommitObservation_PlaceholderStateSeenAfterTheCommitIsNotARemoteChange(
 		ItemID: "item", DriveID: driveID, Path: "doc.txt", CreatedETag: `"p,1"`,
 	}))
 	// The upload committed: baseline and remote_state hold the content.
-	_, err := mgr.RawDBForTest().ExecContext(t.Context(), `INSERT INTO baseline
+	_, err := mgr.db.ExecContext(t.Context(), `INSERT INTO baseline
 		(item_id, path, item_type, local_hash, remote_hash, local_size, remote_size, etag)
 		VALUES ('item', 'doc.txt', 'file', 'h', 'h', 7, 7, '"p,2"')`)
 	require.NoError(t, err)
@@ -181,7 +181,7 @@ func TestCommitObservation_PlaceholderStateSeenAfterTheCommitIsNotARemoteChange(
 		DriveID: driveID, ItemID: "item", Path: "doc.txt", ItemType: syncdomain.ItemTypeFile, Hash: syncfixture.EmptyQuickXor, Size: 0, ETag: `"p,1"`,
 	}}, "t2", driveID))
 
-	row := readRemoteStateRow(t, mgr.RawDBForTest(), "item")
+	row := readRemoteStateRow(t, mgr.db, "item")
 	require.NotNil(t, row)
 	assert.Equal(t, int64(7), row.Size, "the stale empty state must not overwrite the committed content")
 	assert.Equal(t, `"p,2"`, row.ETag)
@@ -362,7 +362,7 @@ func TestCommitObservation_IntentDoesNotClaimAFileTheBaselineHolds(t *testing.T)
 	mgr := newTestStore(t)
 	driveID := driveid.New(syncfixture.TestDriveID)
 	require.NoError(t, mgr.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{DriveID: driveID, Path: "empty.txt", ParentID: "root"}))
-	_, err := mgr.RawDBForTest().ExecContext(t.Context(), `INSERT INTO baseline
+	_, err := mgr.db.ExecContext(t.Context(), `INSERT INTO baseline
 		(item_id, path, parent_id, item_type, local_hash, remote_hash, local_size, remote_size, etag)
 		VALUES ('created', 'empty.txt', 'root', 'file', ?, ?, 0, 0, '"c,1"')`, syncfixture.EmptyQuickXor, syncfixture.EmptyQuickXor)
 	require.NoError(t, err)
@@ -572,7 +572,7 @@ func TestCommitObservation_AdoptedHashlessPlaceholderWithMovedETagIsNotAConflict
 		Size: 0, ETag: `"p,1"`, Mtime: createdAt.UnixNano(),
 	}
 	require.NoError(t, mgr.CommitObservation(t.Context(), []syncdomain.ObservedItem{placeholder}, "t1", driveID))
-	_, err := mgr.RawDBForTest().ExecContext(t.Context(), `INSERT INTO local_state (path, item_type, hash, size, mtime)
+	_, err := mgr.db.ExecContext(t.Context(), `INSERT INTO local_state (path, item_type, hash, size, mtime)
 		VALUES ('doc.txt', 'file', 'local-hash', 7, 7)`)
 	require.NoError(t, err)
 	// Cached now, so the check at the end reads the in-memory copy.

@@ -25,7 +25,7 @@ func TestPlanning_UsesBaselineFromTheComparisonSnapshot(t *testing.T) {
 	// run's cached view and its planning transaction).
 	cached, err := eng.baseline.Load(ctx)
 	require.NoError(t, err)
-	_, err = eng.baseline.RawDBForTest().ExecContext(ctx, `
+	_, err = syncstoretest.RawDB(t, eng.baseline).ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type) VALUES ('item-fm2', 'fm2', 'folder')`)
 	require.NoError(t, err)
 	_, found := cached.GetByPath("fm2")
