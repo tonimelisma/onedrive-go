@@ -641,7 +641,7 @@ func carriesContentOf(create, deleted *syncdomain.Action) bool {
 
 // addMoveDeps orders moves (D-054). Move composition emits a move only when
 // these rules give it a consistent place in the plan
-// (planner_move_composition.go), and every rule is expressed in the paths the
+// (planner_move_emit.go), and every rule is expressed in the paths the
 // actions carry:
 //   - work at or under a move's destination runs after the move: the target
 //     parent must exist, and a move composed into a folder an earlier move

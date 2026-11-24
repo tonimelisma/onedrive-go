@@ -91,7 +91,7 @@ type Action struct {
 	MovedLocal *LocalState
 	// MovedLocalPath is where MovedLocal sits in the local snapshot when that
 	// is not Path: a move composed under a parent that an earlier move of the
-	// same plan puts in place (planner_move_composition.go). local_state is
+	// same plan puts in place (planner_move_emit.go). local_state is
 	// observation-owned and does not follow the plan's own moves, so
 	// freshness reads the moved item there. On a download it is the source
 	// of the local move of the same plan that puts the copy the download
