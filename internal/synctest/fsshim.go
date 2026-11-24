@@ -36,7 +36,7 @@ const (
 	FSOpWrite FSOp = "write"
 	// FSOpStat is Stat and Lstat.
 	FSOpStat FSOp = "stat"
-	// FSOpMkdir is Mkdir and MkdirAll.
+	// FSOpMkdir is Mkdir.
 	FSOpMkdir FSOp = "mkdir"
 	// FSOpRemove is Remove and RemoveAll.
 	FSOpRemove FSOp = "remove"
@@ -168,14 +168,6 @@ func (h *errnoHandle) Mkdir(name string, perm os.FileMode) error {
 	}
 
 	return h.Handle.Mkdir(name, perm) //nolint:wrapcheck // the shim stands in for the filesystem
-}
-
-func (h *errnoHandle) MkdirAll(name string, perm os.FileMode) error {
-	if err := h.shim.fail(FSOpMkdir, "mkdir", name); err != nil {
-		return err
-	}
-
-	return h.Handle.MkdirAll(name, perm) //nolint:wrapcheck // the shim stands in for the filesystem
 }
 
 func (h *errnoHandle) Remove(name string) error {
@@ -313,10 +305,6 @@ func (h *caseInsensitiveHandle) Lstat(name string) (os.FileInfo, error) {
 
 func (h *caseInsensitiveHandle) Mkdir(name string, perm os.FileMode) error {
 	return h.Handle.Mkdir(h.resolve(name), perm) //nolint:wrapcheck // the shim stands in for the filesystem
-}
-
-func (h *caseInsensitiveHandle) MkdirAll(name string, perm os.FileMode) error {
-	return h.Handle.MkdirAll(h.resolve(name), perm) //nolint:wrapcheck // the shim stands in for the filesystem
 }
 
 func (h *caseInsensitiveHandle) Remove(name string) error {

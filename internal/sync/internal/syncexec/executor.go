@@ -315,7 +315,12 @@ func (e *Executor) ExecuteFolderCreate(ctx context.Context, action *syncdomain.A
 
 // createLocalFolder creates a directory on the local filesystem, and any
 // missing parent; the sync tree gives each the user-tree folder mode
-// (R-5.10.2).
+// (R-5.10.2). It adopts no entry it did not create (synctree.MkdirExact,
+// R-2.12.10): an entry another spelling of the name already holds on a
+// volume that folds case, or a file at the name, appeared after the plan
+// observed the path free (a user's folder made between plan and dispatch in
+// watch mode, an entry the plan never saw), so the create is a stale
+// precondition and the path is planned again from what is there.
 func (e *Executor) createLocalFolder(action *syncdomain.Action) syncdomain.ActionOutcome {
 	// The stored name inside its parents' spellings on disk (R-2.13.2):
 	// creating the stored spelling of an NFD-named parent would make a
@@ -331,7 +336,18 @@ func (e *Executor) createLocalFolder(action *syncdomain.Action) syncdomain.Actio
 		)
 	}
 
-	if err := e.syncTree.MkdirAll(folder); err != nil {
+	folder, err := e.syncTree.MkdirExact(folder)
+	if errors.Is(err, synctree.ErrTargetExists) {
+		return e.failedOutcomeWithFailure(
+			action,
+			syncdomain.ActionFolderCreate,
+			fmt.Errorf("%w: local folder %s is held by an entry the plan did not see: %w",
+				syncdomain.ErrActionPreconditionChanged, action.Path, err),
+			action.Path,
+			syncdomain.PermissionCapabilityLocalWrite,
+		)
+	}
+	if err != nil {
 		return e.failedOutcomeWithFailure(
 			action,
 			syncdomain.ActionFolderCreate,

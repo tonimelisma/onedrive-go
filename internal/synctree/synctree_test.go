@@ -108,7 +108,7 @@ func TestRoot_FileLifecycleOperations(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, dir, root.Path())
 
-	require.NoError(t, root.MkdirAll("nested"))
+	require.NoError(t, root.MkdirAllNoFollow("nested"))
 
 	file, err := root.OpenFile(filepath.Join("nested", "file.txt"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	require.NoError(t, err)
@@ -406,11 +406,6 @@ func (h openRejectingRootHandle) Lstat(name string) (os.FileInfo, error) {
 	return h.root.Lstat(name)
 }
 
-func (h openRejectingRootHandle) MkdirAll(name string, perm os.FileMode) error {
-	//nolint:wrapcheck // test helper delegates all non-Open behavior.
-	return h.root.MkdirAll(name, perm)
-}
-
 func (h openRejectingRootHandle) Remove(name string) error {
 	//nolint:wrapcheck // test helper delegates all non-Open behavior.
 	return h.root.Remove(name)
@@ -475,7 +470,7 @@ func TestRoot_RemoveAllAndChtimes(t *testing.T) {
 	root, err := Open(dir)
 	require.NoError(t, err)
 
-	require.NoError(t, root.MkdirAll(filepath.Join("nested", "child")))
+	require.NoError(t, root.MkdirAllNoFollow(filepath.Join("nested", "child")))
 
 	file, err := root.OpenFile(filepath.Join("nested", "child", "file.txt"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	require.NoError(t, err)
@@ -647,24 +642,34 @@ func TestRoot_Rename_FailureInjection(t *testing.T) {
 	assert.Contains(t, err.Error(), "renaming")
 }
 
-// MkdirAll goes through its seam like every other rooted mutation, and asks
-// it for the user-tree folder mode: a caller has no mode to pass.
+// modeRecordingHandle fails every mkdir with ENOSPC and records the mode it
+// was asked for.
+type modeRecordingHandle struct {
+	Handle
+	requested *os.FileMode
+}
+
+func (h modeRecordingHandle) Mkdir(name string, perm os.FileMode) error {
+	*h.requested = perm
+	return &os.PathError{Op: "mkdirat", Path: name, Err: syscall.ENOSPC}
+}
+
+// MkdirExact makes its folder through the handle like every other rooted
+// mutation, and asks it for the user-tree folder mode: a caller has no mode
+// to pass. A failure that is not a name taken keeps its errno.
 //
 // Validates: R-2.10, R-5.10.2
-func TestRoot_MkdirAll_FailureInjection(t *testing.T) {
+func TestRoot_MkdirExact_FailureInjection(t *testing.T) {
 	t.Parallel()
 
-	root, err := Open(t.TempDir())
+	base, err := Open(t.TempDir())
 	require.NoError(t, err)
-
 	var requested os.FileMode
-	root.ops.mkdirAll = func(_ rootHandle, name string, perm os.FileMode) error {
-		requested = perm
-		return &os.PathError{Op: "mkdirat", Path: name, Err: syscall.ENOSPC}
-	}
+	root := base.Interpose(func(h Handle) Handle { return modeRecordingHandle{Handle: h, requested: &requested} })
 
-	err = root.MkdirAll("new-folder")
+	_, err = root.MkdirExact("new-folder")
 	require.ErrorIs(t, err, syscall.ENOSPC)
+	require.NotErrorIs(t, err, ErrTargetExists)
 	assert.Contains(t, err.Error(), "creating directory new-folder")
 	assert.Equal(t, localpath.UserTreeDirPerm, requested)
 }
@@ -715,14 +720,6 @@ func (h *fakeRootHandle) Lstat(name string) (os.FileInfo, error) {
 }
 
 func (h *fakeRootHandle) Mkdir(name string, perm os.FileMode) error {
-	if h.mkdirErr != nil {
-		return h.mkdirErr
-	}
-
-	return errUnexpectedFakeRootCall
-}
-
-func (h *fakeRootHandle) MkdirAll(name string, perm os.FileMode) error {
 	if h.mkdirErr != nil {
 		return h.mkdirErr
 	}
@@ -839,7 +836,7 @@ func (h failingCreateHandle) OpenFile(name string, flag int, perm os.FileMode) (
 	return h.Handle.OpenFile(name, flag, perm) //nolint:wrapcheck // stands in for the filesystem
 }
 
-func (h failingCreateHandle) MkdirAll(name string, _ os.FileMode) error {
+func (h failingCreateHandle) Mkdir(name string, _ os.FileMode) error {
 	return &os.PathError{Op: "mkdirat", Path: name, Err: h.errno}
 }
 
@@ -867,7 +864,7 @@ func TestRoot_CreateFailureKeepsItsErrno(t *testing.T) {
 			require.ErrorIs(t, err, errno)
 			require.NotErrorIs(t, err, os.ErrNotExist)
 
-			err = root.MkdirAll("new-folder")
+			_, err = root.MkdirExact("new-folder")
 			require.ErrorIs(t, err, errno)
 			require.NotErrorIs(t, err, os.ErrNotExist)
 		})

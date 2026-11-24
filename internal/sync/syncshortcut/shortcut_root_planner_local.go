@@ -243,7 +243,8 @@ func planShortcutRootPathError(record *ShortcutRootRecord, err error) ShortcutRo
 		return ShortcutRootRecord{}
 	}
 	if errors.Is(err, synctree.ErrUnsafePath) ||
-		errors.Is(err, syscall.ENOTDIR) {
+		errors.Is(err, syscall.ENOTDIR) ||
+		errors.Is(err, synctree.ErrTargetExists) {
 		return planShortcutRootBlocked(record, err.Error())
 	}
 	if errors.Is(err, os.ErrNotExist) {
