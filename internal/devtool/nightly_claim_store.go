@@ -292,8 +292,8 @@ func listClaimsShowing(ctx context.Context, gh ghClient, repoRoot string, issue 
 		if slices.Contains(duplicates, issue) {
 			return claims, true, nil
 		}
-		for _, entry := range claims {
-			if entry.Issue == issue {
+		for name := range claims {
+			if claims[name].Issue == issue {
 				return claims, true, nil
 			}
 		}
