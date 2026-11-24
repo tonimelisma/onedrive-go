@@ -25,7 +25,10 @@ func PlannerModelSeeds(t *testing.T) []uint64 {
 }
 
 const (
-	plannerModelDefaultSeeds = 8
+	// plannerModelDefaultSeeds is what a plain full-tier run plans: a seed
+	// costs about 0.07 s without the race detector (November 2026), so fifty
+	// cost a few seconds; the test is exhaustive and never runs under -short.
+	plannerModelDefaultSeeds = 50
 	PlannerModelSeedEnv      = "ONEDRIVE_GO_PLANNER_SEED"
 	plannerModelSeedsEnv     = "ONEDRIVE_GO_PLANNER_SEEDS"
 	plannerModelSeedStartEnv = "ONEDRIVE_GO_PLANNER_SEED_START"

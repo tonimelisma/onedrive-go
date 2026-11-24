@@ -65,21 +65,26 @@ func TestSeedRun_AppliesOneRuleToEveryFamily(t *testing.T) {
 
 // Validates: R-6.10.25
 //
-// The helper changed no family's plain run: with none of their variables set,
-// each runs exactly the seeds it ran before, with and without the race
-// detector. The chaos run's plain seeds add its race seed, which a plain run
-// now affords since it runs in virtual time.
-func TestSeededFamilies_DefaultRunsAreUnchanged(t *testing.T) {
+// With none of their variables set, each family runs its own default seeds,
+// with and without the race detector. The chaos run's plain seeds add its
+// race seed, which a plain run affords since it runs in virtual time; the
+// planner model's plain run takes its first fifty seeds, about 0.07 s each.
+func TestSeededFamilies_DefaultRunsAreTheFamiliesOwnDefaults(t *testing.T) {
 	for _, vars := range []syncfixture.SeedVars{modelSeedVars(), syncfixture.PlannerSeedVars(), chaosSeedVars()} {
 		t.Setenv(vars.Single, "")
 		t.Setenv(vars.Count, "")
 		t.Setenv(vars.Start, "")
 	}
 
+	const plannerDefaultSeeds = 50
+	plannerSeeds := make([]uint64, 0, plannerDefaultSeeds)
+	for seed := uint64(1); seed <= plannerDefaultSeeds; seed++ {
+		plannerSeeds = append(plannerSeeds, seed)
+	}
 	want := map[string][]uint64{
 		"engine":  {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
 		"crash":   {1, 2, 3, 4},
-		"planner": {1, 2, 3, 4, 5, 6, 7, 8},
+		"planner": plannerSeeds,
 		"chaos":   {1, 2, chaosRaceSeed},
 	}
 	if syncfixture.RaceDetectorEnabled {
