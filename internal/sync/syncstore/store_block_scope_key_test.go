@@ -251,7 +251,7 @@ func TestRetryWorkSchema_ChecksRefuseTheStatesTheEngineUsedToAssert(t *testing.T
 	require.Error(t, err, "a scope row needs a key")
 }
 
-// Validates: R-2.5.6
+// Validates: R-2.5.6, R-2.5.9
 func TestApplySchema_RefusesAGeneration28Store(t *testing.T) {
 	t.Parallel()
 
@@ -266,5 +266,8 @@ func TestApplySchema_RefusesAGeneration28Store(t *testing.T) {
 
 	err = applySchema(t.Context(), db)
 	require.ErrorIs(t, err, errIncompatibleSchema)
-	assert.Contains(t, err.Error(), "generation 28 is unsupported")
+	var generationErr *storeGenerationError
+	require.ErrorAs(t, err, &generationErr)
+	assert.True(t, generationErr.IsOlder(), "generation 28 is older than the current one: the engine rebuilds it")
+	assert.Contains(t, err.Error(), "generation 28")
 }

@@ -28,6 +28,7 @@ type stateStoreIncompatibleReason string
 const (
 	StateStoreIncompatibleReasonOpenFailed         stateStoreIncompatibleReason = "open_failed"
 	StateStoreIncompatibleReasonIncompatibleSchema stateStoreIncompatibleReason = "incompatible_schema"
+	StateStoreIncompatibleReasonNewerVersion       stateStoreIncompatibleReason = "newer_version"
 	StateStoreIncompatibleReasonCorrupt            stateStoreIncompatibleReason = "corrupt"
 )
 
@@ -71,6 +72,8 @@ func (r stateStoreIncompatibleReason) Description() string {
 		return "its database could not be opened"
 	case StateStoreIncompatibleReasonIncompatibleSchema:
 		return "it was written by an incompatible version of onedrive-go"
+	case StateStoreIncompatibleReasonNewerVersion:
+		return "it was written by a newer version of onedrive-go"
 	case StateStoreIncompatibleReasonCorrupt:
 		return "its database file is damaged"
 	default:
@@ -79,9 +82,21 @@ func (r stateStoreIncompatibleReason) Description() string {
 }
 
 // OpenEngineSyncStore is the engine-owned compatibility boundary for existing
-// state DBs. It never mutates or recreates durable state during startup:
-// missing DBs bootstrap normally via NewSyncStore, while unreadable or
-// incompatible existing DBs surface a typed store-incompatible error.
+// state DBs. A missing DB bootstraps the canonical schema. A DB an older
+// onedrive-go wrote (its generation marker names an older generation) is
+// rebuilt: its file family is deleted and a fresh canonical store created in
+// its place, as `drive reset-sync-state` does (R-2.5.9). State is a cache of
+// local and remote truth, and a store without a baseline never plans a
+// delete. Every other unusable DB is left as it is and surfaces a typed
+// store-incompatible error: one a newer version wrote (rebuilding it would
+// throw that version's state away each time an older binary started), one
+// without a readable marker or with another shape at the current generation
+// (nothing says which version wrote it), and a damaged or unreadable one.
+//
+// The caller holds the engine's store lock (acquireEngineLocks in package
+// sync), so no other engine or offline change has the store open while it is
+// rebuilt.
+//
 // now is the engine's run clock, which the store dates its delete-ledger
 // rows, retry timing and pending-create intents by, so a retry the store
 // schedules is judged due by the same clock; nil is the wall clock. hooks are
@@ -90,6 +105,15 @@ func OpenEngineSyncStore(
 	ctx context.Context, dbPath string, logger *slog.Logger, now func() time.Time, hooks Hooks,
 ) (*SyncStore, error) {
 	store, err := openSyncStoreWithHooks(ctx, dbPath, logger, true, now, hooks)
+	var generationErr *storeGenerationError
+	if errors.As(err, &generationErr) && generationErr.IsOlder() {
+		// A delete that fails is a filesystem failure, reported as such: it is
+		// not a store a reset would fix, and the next start tries again.
+		if rebuildErr := rebuildOlderGenerationStore(dbPath, logger, generationErr, hooks); rebuildErr != nil {
+			return nil, rebuildErr
+		}
+		store, err = openSyncStoreWithHooks(ctx, dbPath, logger, true, now, hooks)
+	}
 	if err == nil {
 		checkErr := checkStoreIntegrity(ctx, store)
 		if checkErr == nil {
@@ -119,6 +143,8 @@ func OpenEngineSyncStore(
 
 	reason := StateStoreIncompatibleReasonOpenFailed
 	switch {
+	case errors.As(err, &generationErr) && !generationErr.IsOlder():
+		reason = StateStoreIncompatibleReasonNewerVersion
 	case errors.Is(err, errIncompatibleSchema):
 		reason = StateStoreIncompatibleReasonIncompatibleSchema
 	case isSQLiteCorruption(err):
@@ -129,6 +155,26 @@ func OpenEngineSyncStore(
 		Reason: reason,
 		Cause:  err,
 	}
+}
+
+// rebuildOlderGenerationStore deletes the file family of a store an older
+// onedrive-go wrote, so the next open bootstraps a fresh canonical store at
+// its path. The delete takes the database last (RemoveStateDBFiles): one cut
+// short leaves the older store in place, and the next start rebuilds it again.
+func rebuildOlderGenerationStore(
+	dbPath string, logger *slog.Logger, generationErr *storeGenerationError, hooks Hooks,
+) error {
+	logger.Warn("rebuilding sync state written by an older onedrive-go version; "+
+		"the next sync compares local and remote files afresh and deletes nothing",
+		slog.String("db_path", dbPath),
+		slog.Int("stored_generation", generationErr.stored),
+		slog.Int("current_generation", generationErr.current),
+	)
+	if err := hooks.removeStoreFiles(dbPath); err != nil {
+		return fmt.Errorf("rebuild sync store from an older version: %w", err)
+	}
+
+	return nil
 }
 
 // StateDBFamilyExists reports whether any file of the store at dbPath is on

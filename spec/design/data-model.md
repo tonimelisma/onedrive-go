@@ -343,6 +343,9 @@ bootstrap that schema in one transaction, seed the zero-or-one-row
 `observation_state` table when absent, and reopen against the same shape.
 
 Existing DBs are trusted only when they already match the current canonical
-table and column layout. Stores with stale or incompatible shapes are rejected
-loudly so startup can require an explicit mount-state reset instead of
-migrating or guessing forward.
+table and column layout. The store never migrates: a store whose generation
+marker names an older generation is rebuilt from scratch at engine startup
+(R-2.5.9, `sync-store.md`), one that names a newer generation is refused
+unmodified, and any other stale or incompatible shape is rejected loudly so
+startup can require an explicit mount-state reset instead of guessing
+forward.

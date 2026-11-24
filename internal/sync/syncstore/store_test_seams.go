@@ -40,6 +40,20 @@ type Hooks struct {
 	// no test cuts the power, so the waits buy a test nothing and were most
 	// of what its commits cost. Production keeps synchronous=FULL.
 	SkipFsync bool
+	// RemoveStoreFiles deletes the file family of a store an older version
+	// wrote, before startup rebuilds it (rebuildOlderGenerationStore); nil is
+	// RemoveStateDBFiles. A test fails it to prove a rebuild that cannot
+	// delete keeps the older store.
+	RemoveStoreFiles func(dbPath string) error
+}
+
+// removeStoreFiles deletes the store family at dbPath for a rebuild.
+func (h Hooks) removeStoreFiles(dbPath string) error {
+	if h.RemoveStoreFiles == nil {
+		return RemoveStateDBFiles(dbPath)
+	}
+
+	return h.RemoveStoreFiles(dbPath)
 }
 
 // driverName is the database/sql driver the store opens its database

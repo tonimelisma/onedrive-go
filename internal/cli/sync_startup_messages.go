@@ -51,6 +51,17 @@ func formatStateStoreIncompatibleMessage(identity *multisync.MountIdentity, err 
 		return err.Error()
 	}
 
+	if identity.IsStandalone() && incompatibleErr.Reason == syncstore.StateStoreIncompatibleReasonNewerVersion {
+		// A reset does not fix a store a newer version wrote; it throws that
+		// version's state away. The newer binary comes first (R-2.5.9).
+		return fmt.Sprintf(
+			"%s. To continue, run the newer onedrive-go that wrote it; to keep syncing other drives "+
+				"meanwhile, pause this one ('%s'); or, to start this drive's state over with this version, run '%s'.",
+			incompatibleErr.Error(),
+			syncPauseDriveCommand(identity.CanonicalID),
+			syncStateResetCommand(identity.CanonicalID),
+		)
+	}
 	if identity.IsStandalone() {
 		return fmt.Sprintf(
 			"%s. To continue, either pause or stop this mount first ('%s'), "+

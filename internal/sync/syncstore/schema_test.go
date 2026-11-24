@@ -124,7 +124,7 @@ func TestApplySchema_SeedsObservationStateRowForCurrentSchema(t *testing.T) {
 	assert.Equal(t, 1, rows)
 }
 
-// Validates: R-2.5.6
+// Validates: R-2.5.6, R-2.5.9
 func TestApplySchema_RejectsGeneration6RemoteStateDriveOwnership(t *testing.T) {
 	t.Parallel()
 
@@ -149,6 +149,55 @@ func TestApplySchema_RejectsGeneration6RemoteStateDriveOwnership(t *testing.T) {
 	require.NoError(t, err)
 
 	err = applySchema(t.Context(), db)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "incompatible sync store schema")
+	require.ErrorIs(t, err, errIncompatibleSchema)
+	var generationErr *storeGenerationError
+	require.ErrorAs(t, err, &generationErr, "the stored generation decides before the columns are compared")
+	assert.True(t, generationErr.IsOlder())
+}
+
+// A store stamped with a generation this version does not know yet was
+// written by a newer onedrive-go, whatever its columns.
+//
+// Validates: R-2.5.9
+func TestApplySchema_NewerGenerationIsNamedNewer(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", SqliteFileURI(filepath.Join(t.TempDir(), "state.db"), nil))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, db.Close()) })
+
+	_, err = db.ExecContext(t.Context(), CanonicalSchemaSQLForTest()+`; CREATE TABLE future_table (path TEXT)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), sqlEnsureStoreMetadataRow, currentSyncStoreGeneration+1)
+	require.NoError(t, err)
+
+	err = applySchema(t.Context(), db)
+	require.ErrorIs(t, err, errIncompatibleSchema)
+	var generationErr *storeGenerationError
+	require.ErrorAs(t, err, &generationErr)
+	assert.False(t, generationErr.IsOlder())
+	assert.Equal(t, currentSyncStoreGeneration+1, generationErr.stored)
+}
+
+// A store at the current generation whose shape does not match was written by
+// a build that changed the schema without a new generation: neither older nor
+// newer, so it is refused for an explicit reset.
+//
+// Validates: R-2.5.6, R-2.5.9
+func TestApplySchema_CurrentGenerationWithAnotherShapeIsNotAGenerationMismatch(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", SqliteFileURI(filepath.Join(t.TempDir(), "state.db"), nil))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, db.Close()) })
+
+	_, err = db.ExecContext(t.Context(), CanonicalSchemaSQLForTest()+`; CREATE TABLE future_table (path TEXT)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), sqlEnsureStoreMetadataRow, currentSyncStoreGeneration)
+	require.NoError(t, err)
+
+	err = applySchema(t.Context(), db)
+	require.ErrorIs(t, err, errIncompatibleSchema)
+	var generationErr *storeGenerationError
+	assert.NotErrorAs(t, err, &generationErr)
 }

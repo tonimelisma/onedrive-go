@@ -2,7 +2,7 @@
 
 GOVERNS: main.go, internal/cli/*.go, internal/logfile/logfile.go, internal/loglevel/loglevel.go, internal/sdnotify/sdnotify.go
 
-Implements: R-1 [implemented], R-6.2.17 [verified], R-6.2.18 [verified], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.36 [verified], R-6.6.33 [verified], R-6.6.37 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.8.28 [verified], R-6.8.31 [verified]
+Implements: R-1 [implemented], R-6.2.17 [verified], R-6.2.18 [verified], R-2.3.3 [verified], R-6.3.6 [verified], R-2.5.5 [verified], R-2.5.6 [verified], R-2.5.9 [verified], R-2.8.3 [verified], R-2.9 [verified], R-2.10.4 [designed], R-2.10.47 [verified], R-6.6.8 [verified], R-6.6.11 [verified], R-6.6.17 [verified], R-6.6.18 [verified], R-6.6.19 [verified], R-6.6.20 [verified], R-6.6.21 [verified], R-6.6.22 [verified], R-6.6.23 [verified], R-6.6.24 [verified], R-6.6.25 [verified], R-6.6.26 [verified], R-6.6.27 [verified], R-6.6.28 [verified], R-2.6.5 [verified], R-6.6.29 [verified], R-6.6.31 [verified], R-6.6.32 [verified], R-6.6.36 [verified], R-6.6.33 [verified], R-6.6.37 [verified], R-6.8.16 [verified], R-2.10.50 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.8.28 [verified], R-6.8.31 [verified]
 
 ## Overview
 
@@ -1314,11 +1314,15 @@ data directory" instead of "No accounts configured". In practice the catalog
 load reports an unreadable data directory first, since every managed read
 opens the directory through `fsroot`; the discovery error is the backstop.
 
-`sync` and `sync --watch` never auto-delete an existing DB. When startup sees
-an unreadable, incompatible, or unsupported existing DB, the CLI renders the
-same guidance in one-shot and watch flows: pause that drive first, rerun with
-`--drive` selecting only other drives, or run `drive reset-sync-state --drive
-...`. One-shot renders startup-ineligible drives through the shared startup
+`sync` and `sync --watch` auto-delete an existing DB only when an older
+version wrote it, and then rebuild it (R-2.5.9, `sync-store.md`). When startup
+sees an unreadable, incompatible, or unsupported existing DB, the CLI renders
+the same guidance in one-shot and watch flows: pause that drive first, rerun
+with `--drive` selecting only other drives, or run `drive reset-sync-state
+--drive ...`. A DB a newer version wrote gets its own guidance, because a
+reset does not fix it: run the newer onedrive-go that wrote it, pause the
+drive to keep syncing others meanwhile, or reset only to start the drive's
+state over with this version. One-shot renders startup-ineligible drives through the shared startup
 message path, reports completed runs separately, and exits non-zero after
 reporting any affected drives. Watch mode warns immediately about each skipped
 drive and continues healthy mounts unless none can start. Paused drives are

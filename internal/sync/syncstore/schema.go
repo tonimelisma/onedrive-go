@@ -285,7 +285,8 @@ type storeCompatibilityMetadata struct {
 
 // errIncompatibleSchema marks a state DB that cannot be trusted under the
 // current canonical schema. The state is rebuildable, so incompatible stores
-// fail loudly instead of being guessed at or partially imported.
+// are never guessed at or partially imported: engine startup rebuilds one an
+// older version wrote (storeGenerationError) and refuses every other.
 var errIncompatibleSchema = errors.New("syncstore: incompatible sync store schema")
 
 func canonicalSyncStoreColumns() map[string][]string {
@@ -366,6 +367,12 @@ func applySchema(ctx context.Context, db *sql.DB) error {
 		return nil
 	}
 
+	// The stored generation decides before the shape is compared: a store
+	// from another generation has another shape by design, and whether it is
+	// older or newer is what tells startup whether it may rebuild it.
+	if err := refuseOtherStoreGeneration(ctx, db, userTables); err != nil {
+		return err
+	}
 	if err := validateCanonicalSchema(ctx, db, userTables); err != nil {
 		return err
 	}
@@ -449,6 +456,60 @@ func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []str
 	return nil
 }
 
+// storeGenerationError is a store whose generation marker names a generation
+// other than this version's. It is an incompatible schema (errIncompatibleSchema)
+// either way; which side of the current generation it is on is what startup
+// branches on: an older store is rebuilt, a newer one is refused untouched.
+type storeGenerationError struct {
+	stored  int
+	current int
+}
+
+func (e *storeGenerationError) Error() string {
+	return fmt.Sprintf("%s: sync store generation %d is unsupported; expected %d",
+		errIncompatibleSchema.Error(), e.stored, e.current)
+}
+
+func (e *storeGenerationError) Is(target error) bool {
+	return target == errIncompatibleSchema
+}
+
+// IsOlder reports whether an older onedrive-go wrote the store.
+func (e *storeGenerationError) IsOlder() bool {
+	return e.stored < e.current
+}
+
+// refuseOtherStoreGeneration returns a storeGenerationError when the store's
+// generation marker is readable and names another generation. A store with no
+// readable marker (no store_metadata table, no row, another column) returns
+// nil, so validateCanonicalSchema refuses it as an unknown shape: without a
+// marker nothing says which version wrote it.
+func refuseOtherStoreGeneration(ctx context.Context, db *sql.DB, userTables []string) error {
+	if !slices.Contains(userTables, "store_metadata") {
+		return nil
+	}
+	columns, err := listTableColumns(ctx, db, "store_metadata")
+	if err != nil {
+		return fmt.Errorf("syncstore: inspect schema columns for store_metadata: %w", err)
+	}
+	if !slices.Equal(columns, canonicalSyncStoreColumns()["store_metadata"]) {
+		return nil
+	}
+
+	var stored int
+	err = db.QueryRowContext(ctx, `SELECT schema_generation FROM store_metadata LIMIT 1`).Scan(&stored)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("syncstore: inspect store compatibility metadata: %w", err)
+	case stored != currentSyncStoreGeneration:
+		return &storeGenerationError{stored: stored, current: currentSyncStoreGeneration}
+	}
+
+	return nil
+}
+
 func ensureStoreCompatibilityMetadata(ctx context.Context, exec interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 },
@@ -466,12 +527,7 @@ func validateStoreGeneration(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if metadata.SchemaGeneration != currentSyncStoreGeneration {
-		return fmt.Errorf(
-			"%w: sync store generation %d is unsupported; expected %d",
-			errIncompatibleSchema,
-			metadata.SchemaGeneration,
-			currentSyncStoreGeneration,
-		)
+		return &storeGenerationError{stored: metadata.SchemaGeneration, current: currentSyncStoreGeneration}
 	}
 
 	return nil
