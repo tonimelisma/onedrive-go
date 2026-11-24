@@ -1,6 +1,6 @@
 # Sync Planning
 
-GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_composition.go, internal/sync/internal/syncplan/planner_content_holds.go, internal/sync/internal/syncplan/planner_set_aside.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go
+GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_compose.go, internal/sync/internal/syncplan/planner_move_emit.go, internal/sync/internal/syncplan/planner_move_emit_park.go, internal/sync/internal/syncplan/planner_move_emit_landing.go, internal/sync/internal/syncplan/planner_move_inputs.go, internal/sync/internal/syncplan/planner_move_actions.go, internal/sync/internal/syncplan/planner_move_create_filter.go, internal/sync/internal/syncplan/planner_move_withhold.go, internal/sync/internal/syncplan/planner_move_reconcile_drop.go, internal/sync/internal/syncplan/planner_content_holds.go, internal/sync/internal/syncplan/planner_set_aside.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go
 
 Implements: R-2.1.3 [verified], R-2.17.11 [verified], R-2.17.12 [verified], R-2.17.13 [verified], R-2.1.7 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.2.16 [verified], R-6.4.2 [verified]
 
@@ -145,9 +145,18 @@ same derivation rather than a second planner-shaped helper.
    derived status.
 7. Emit the current runtime action set from reconciliation rows, including
    conflict expansion into concrete actions.
-8. Compose moves per item (`planner_move_composition.go`) and normalize the
-   action set: preserve a deleted parent folder only when runnable descendant
-   actions in the current sync mode need that parent to exist, then rebase
+8. Compose moves per item and normalize the action set. Move composition is
+   split by concern: `planner_move_compose.go` (node model and target
+   choice), `planner_move_emit.go`, `planner_move_emit_park.go` and
+   `planner_move_emit_landing.go` (emission order, parking, and where a move
+   may land), `planner_move_inputs.go` (nodes from the SQLite comparison),
+   `planner_move_actions.go` (composed moves as actions),
+   `planner_move_create_filter.go` (creates onto composed items),
+   `planner_move_withhold.go` (deletes of held work) and
+   `planner_move_reconcile_drop.go` (reconciliation the composed moves
+   replace). Normalization: preserve a deleted parent folder only when
+   runnable descendant actions in the current sync mode need that parent to
+   exist, then rebase
    remote-origin local writes to where folders sit locally and new local
    content under a folder this plan renames locally to the folder's new path.
 9. Partition the normalized action set into admitted work and mode-deferred

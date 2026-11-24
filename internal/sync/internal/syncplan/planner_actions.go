@@ -327,7 +327,7 @@ func rebaseRemoteCreatesThroughLocalFolderMoves(actions []syncdomain.Action) []s
 // inside docs while docs was renamed locally to renamed-docs must land at
 // renamed-docs/x. Applied at the remote path, the write re-created docs/
 // locally, and the next pass uploaded the stray folder. Moves are already
-// composed (planner_move_composition.go), and a local move waits for the
+// composed (planner_move_compose.go), and a local move waits for the
 // writes under its source, so the rebased writes run before it. Remote-side
 // writes need no rebasing: they address parents by item ID.
 func rebaseLocalWritesToLocalFolderPositions(actions []syncdomain.Action, remoteToLocal []graphFolderMoveBoundary) []syncdomain.Action {
@@ -598,7 +598,7 @@ func buildActionsForReconciliation(
 	case syncdomain.ReconcileReplaceLocal:
 		return buildReplaceLocalActions(view), nil
 	case syncdomain.ReconcileLocalMove, syncdomain.ReconcileRemoteMove:
-		// Moves are composed per item (planner_move_composition.go).
+		// Moves are composed per item (planner_move_compose.go).
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("sync: unsupported reconciliation kind %s for %s", rec.ReconciliationKind, rec.Path)
