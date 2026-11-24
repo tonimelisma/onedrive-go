@@ -255,12 +255,7 @@ func attributeNightlyFailures(ctx context.Context, gh ghClient, repoRoot string,
 		if !reports[i].hasLog() || nightlyAggregateRepeats(reports, i) {
 			continue
 		}
-		id := strconv.FormatInt(reports[i].id, 10)
-		log, err := gh.output(
-			ctx, repoRoot,
-			fmt.Sprintf("nightly job log %s (GET repos/{owner}/{repo}/actions/jobs/%s/logs)", reports[i].name, id),
-			"api", "repos/{owner}/{repo}/actions/jobs/"+id+"/logs",
-		)
+		log, err := readNightlyJobLog(ctx, gh, repoRoot, reports[i].name, reports[i].id)
 		if err != nil {
 			if ctx.Err() != nil {
 				return fmt.Errorf("read nightly job log %s: %w", reports[i].name, ctx.Err())
@@ -277,6 +272,35 @@ func attributeNightlyFailures(ctx context.Context, gh ghClient, repoRoot string,
 	}
 
 	return nil
+}
+
+// githubAllowEscapesFlag asks newer gh releases to print a response that
+// holds terminal escape sequences, which they otherwise refuse
+// (githubEscapeRefusalPattern). Earlier releases print any response and
+// reject the flag as unknown.
+const githubAllowEscapesFlag = "--allow-escape-sequences"
+
+// githubEscapeRefusalPattern finds gh's refusal to print a response holding
+// terminal escape sequences, which names the flag that allows it.
+var githubEscapeRefusalPattern = regexp.MustCompile(
+	`terminal escape sequences; pass ` + regexp.QuoteMeta(githubAllowEscapesFlag))
+
+// readNightlyJobLog fetches the log of the job jobID, named jobName. GitHub's job logs hold the escape
+// sequences of the runner's colored output, which newer gh releases refuse to
+// print unasked, and the flag that asks is unknown to earlier releases, the
+// gh of a session among them: the read is made plainly, and repeated once
+// with the flag only when gh refused it naming the flag, which proves the gh
+// knows it (LI-20261121-02).
+func readNightlyJobLog(ctx context.Context, gh ghClient, repoRoot string, jobName string, jobID int64) ([]byte, error) {
+	id := strconv.FormatInt(jobID, 10)
+	call := fmt.Sprintf("nightly job log %s (GET repos/{owner}/{repo}/actions/jobs/%s/logs)", jobName, id)
+	args := []string{"api", "repos/{owner}/{repo}/actions/jobs/" + id + "/logs"}
+	log, err := gh.output(ctx, repoRoot, call, args...)
+	if err == nil || !githubEscapeRefusalPattern.MatchString(err.Error()) {
+		return log, err
+	}
+
+	return gh.output(ctx, repoRoot, call, append(args, githubAllowEscapesFlag)...)
 }
 
 // nightlyFailureNames keys a log's failed top-level tests: a test whose

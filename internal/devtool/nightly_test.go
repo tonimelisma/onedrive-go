@@ -216,8 +216,15 @@ type claimRemote struct {
 	// for the label list, the report's first read of the issue;
 	// labelSearchErrs and issueListErrs do it for the label list and the open
 	// issue list of one label.
-	jobLogErrs      map[string][]error
-	jobLogCalls     map[string]int
+	jobLogErrs  map[string][]error
+	jobLogCalls map[string]int
+	// ghRefusesEscapes makes the fake answer as newer gh releases do: a
+	// response holding a terminal escape sequence is refused unless the
+	// request passes --allow-escape-sequences. Without it the fake is an
+	// earlier gh, which prints any response and knows no such flag.
+	ghRefusesEscapes bool
+	// jobLogArgs are the arguments of every job-log fetch.
+	jobLogArgs      [][]string
 	runListErrs     []error
 	labelListErrs   []error
 	labelSearchErrs map[string][]error
@@ -444,6 +451,23 @@ func (r *claimRemote) Output(_ context.Context, _ string, _ []string, name strin
 	return nil, fmt.Errorf("unexpected command: %s", joined)
 }
 
+// ghPrint answers a gh request whose response is body the way the gh the
+// fake models does (ghRefusesEscapes).
+func (r *claimRemote) ghPrint(args []string, body string) ([]byte, error) {
+	allows := slices.Contains(args, githubAllowEscapesFlag)
+	if !r.ghRefusesEscapes {
+		if allows {
+			return nil, ghFailure("unknown flag: " + githubAllowEscapesFlag)
+		}
+		return []byte(body), nil
+	}
+	if strings.Contains(body, "\x1b") && !allows {
+		return nil, ghFailure("the response contains terminal escape sequences; pass " +
+			githubAllowEscapesFlag + " to output it anyway")
+	}
+	return []byte(body), nil
+}
+
 // github answers the gh reads of the nightly check and report.
 func (r *claimRemote) github(joined string, args []string) ([]byte, error) {
 	switch {
@@ -460,11 +484,12 @@ func (r *claimRemote) github(joined string, args []string) ([]byte, error) {
 	case strings.HasPrefix(joined, "gh api repos/{owner}/{repo}/actions/jobs/"):
 		id := strings.TrimSuffix(strings.TrimPrefix(args[1], "repos/{owner}/{repo}/actions/jobs/"), "/logs")
 		r.jobLogCalls[id]++
+		r.jobLogArgs = append(r.jobLogArgs, slices.Clone(args))
 		if failures := r.jobLogErrs[id]; len(failures) > 0 {
 			r.jobLogErrs[id] = failures[1:]
 			return nil, failures[0]
 		}
-		return []byte(r.jobLogs[id]), nil
+		return r.ghPrint(args, r.jobLogs[id])
 	case strings.HasPrefix(joined, "gh api "+githubRepoPath+"/pulls/"):
 		body, err := json.Marshal(map[string]any{"body": r.prBody, "head": map[string]string{"ref": r.prBranch}})
 		if err != nil {

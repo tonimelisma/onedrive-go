@@ -122,6 +122,57 @@ func TestNightlyReportOpensOneIssuePerFailingSeed(t *testing.T) {
 	assert.Contains(t, remote.issues[0].body, "failed tests: `"+engine+"`, `"+planner+"`")
 }
 
+// Validates: R-6.10.24, R-6.10.25
+//
+// GitHub's job logs carry the terminal escape sequences of the runner's
+// colored output, and newer gh releases refuse to print a response holding
+// one unless asked. The nightly report of 2026-11-23 read no red job's log
+// for that reason (LI-20261121-02), so a red night opened neither test keys
+// nor seed issues. A refused read is repeated once with the flag the refusal
+// names, and the night's seeds and failed tests are reported.
+func TestNightlyReportReadsALogThatHoldsEscapeSequences(t *testing.T) {
+	t.Parallel()
+
+	remote := seedNightlyRemote(t)
+	remote.ghRefusesEscapes = true
+	remote.jobLogs[nightlyTestSeedsLog] = "\x1b[36;1mgo run ./cmd/devtool verify seeds\x1b[0m\n" +
+		remote.jobLogs[nightlyTestSeedsLog]
+
+	out := runNightlyReport(t, remote, false)
+
+	assert.NotContains(t, out, "could not be read")
+	require.Len(t, remote.jobLogArgs, 2, "the refused read and its repeat")
+	assert.NotContains(t, remote.jobLogArgs[0], githubAllowEscapesFlag, "an earlier gh knows no such flag")
+	assert.Contains(t, remote.jobLogArgs[1], githubAllowEscapesFlag)
+	engine, planner := nightlyTestSeedKeys()
+	issues := seedIssuesOf(remote)
+	require.Len(t, issues, 2)
+	assert.Equal(t, seedIssueTitlePrefix+engine, issues[0].title)
+	assert.Equal(t, seedIssueTitlePrefix+planner, issues[1].title)
+	require.Len(t, remote.issues, len(issues)+1, "and the nightly issue")
+	assert.Contains(t, remote.issues[0].body, "failed tests: `"+engine+"`, `"+planner+"`")
+}
+
+// Validates: R-6.10.24
+//
+// An older gh prints a log whatever it holds and refuses the
+// flag as unknown, so the report never passes it unasked: the one plain read
+// is the whole fetch.
+func TestNightlyReportReadsALogWithAnEarlierGHInOneRequest(t *testing.T) {
+	t.Parallel()
+
+	remote := seedNightlyRemote(t)
+	remote.jobLogs[nightlyTestSeedsLog] = "\x1b[36;1mgo run ./cmd/devtool verify seeds\x1b[0m\n" +
+		remote.jobLogs[nightlyTestSeedsLog]
+
+	out := runNightlyReport(t, remote, false)
+
+	assert.NotContains(t, out, "could not be read")
+	require.Len(t, remote.jobLogArgs, 1)
+	assert.NotContains(t, remote.jobLogArgs[0], githubAllowEscapesFlag)
+	assert.Len(t, seedIssuesOf(remote), 2)
+}
+
 // Validates: R-6.10.25
 //
 // A seed that fails on a second night keeps its one issue, which gets one
