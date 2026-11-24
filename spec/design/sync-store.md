@@ -69,7 +69,12 @@ chains (`listLocalStateRows`, `readObservationStateFromTx`,
 `queryComparisonRowsForTables`, `queryObservationIssueRowsWithRunner`,
 `loadBaselineWithRunner`) and the `sqlTxRunner` they run on are unexported
 (`TestReadPlanningSnapshot_ReturnsThePlannerVisibleCurrentTruth`,
-`TestReadPlanningSnapshot_ReadsEveryFactInOneTransaction`).
+`TestReadPlanningSnapshot_ReadsEveryFactInOneTransaction`). The read takes
+no write lock: the TEMP tables are the connection's own, and the one
+`observation_state` row is made when the store opens and replaced inside the
+writer's transaction, so reading it never ensures it, and a writer on another
+connection holding the write lock never stalls a plan
+(`TestReadPlanningSnapshot_ReadsWhileAnotherConnectionHoldsTheWriteLock`).
 
 `store_planner_visible.go` (previously `planner_visibility.go`) is store-owned
 for the same reason every other table writer is: it issues the `INSERT` and

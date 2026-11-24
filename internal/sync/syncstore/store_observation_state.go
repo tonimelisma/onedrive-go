@@ -314,10 +314,9 @@ func readObservationStateFromTx(
 	ctx context.Context,
 	tx sqlTxRunner,
 ) (*syncdomain.ObservationState, error) {
-	if _, err := tx.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
-		return nil, fmt.Errorf("syncstore: ensuring observation_state row: %w", err)
-	}
-
+	// The schema makes the one observation_state row when the store opens,
+	// and writeObservationStateToTx replaces it inside its own transaction,
+	// so a read only reads: a read that ensured the row took the write lock.
 	var (
 		contentDriveID string
 		state          syncdomain.ObservationState

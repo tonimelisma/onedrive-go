@@ -1,6 +1,11 @@
 package syncstore
 
 import (
+	"context"
+	"database/sql"
+	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/perf"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
 // The planning read returns the planner-visible current truth: the content
@@ -112,4 +118,37 @@ func TestReadPlanningSnapshot_ReadsEveryFactInOneTransaction(t *testing.T) {
 	require.NoError(t, store.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM temp.sqlite_master WHERE name LIKE 'planner_visible_%'`).Scan(&tempTables))
 	assert.Zero(t, tempTables, "the read's temp tables are rolled back")
+}
+
+// The planning read is a read: it took SQLite's write lock for an insert of
+// the observation_state row that the schema already makes when the store
+// opens, so a writer on another connection (another process inspecting or
+// confirming deletes) stalled it for the busy timeout and then failed it. It
+// now reads while another connection holds the write lock.
+func TestReadPlanningSnapshot_ReadsWhileAnotherConnectionHoldsTheWriteLock(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	require.NoError(t, os.WriteFile(dbPath, loadTestStoreTemplate(t), 0o600))
+	store, err := OpenSyncStoreForTest(t.Context(), dbPath, synctest.TestLogger(t), false, nil, Hooks{})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, store.Close(context.Background())) })
+
+	other, err := sql.Open(SqliteDriverName, SqliteFileURI(dbPath, url.Values{SqlitePragmaParam: {"journal_mode(WAL)"}}))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, other.Close()) })
+	conn, err := other.Conn(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, conn.Close()) })
+	_, err = conn.ExecContext(t.Context(), `BEGIN IMMEDIATE`)
+	require.NoError(t, err, "the other connection takes the write lock")
+	t.Cleanup(func() {
+		_, rollbackErr := conn.ExecContext(context.Background(), `ROLLBACK`)
+		assert.NoError(t, rollbackErr)
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), storeBusyTimeout/2)
+	defer cancel()
+	_, err = store.ReadPlanningSnapshot(ctx, driveid.New(syncfixture.EngineTestDriveID), syncdomain.ContentFilterConfig{})
+	require.NoError(t, err, "the planning read waits on no writer")
 }

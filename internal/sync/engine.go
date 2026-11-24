@@ -348,7 +348,11 @@ func openBoundSyncTree(
 	if err != nil {
 		return nil, syncdomain.ResolvedSyncRoot{}, err
 	}
-	warnAboutPutBackWindow(syncTree, cfg.Logger)
+	// A shortcut child (an expected identity) syncs a folder inside its
+	// parent's sync folder, whose engine probed that filesystem already.
+	if cfg.ExpectedSyncRootIdentity == nil {
+		warnAboutPutBackWindow(syncTree, cfg.Logger)
+	}
 	return syncTree, binding, nil
 }
 
@@ -358,7 +362,7 @@ const putBackWindowWarning = "This sync folder's filesystem has neither hard lin
 	"(a FAT-family filesystem): a file saved at the very moment sync puts a file it had set aside back " +
 	"under the same name can be replaced"
 
-// warnAboutPutBackWindow warns once, as the engine starts, when the sync
+// warnAboutPutBackWindow warns once, as a sync root's engine starts, when the sync
 // folder's filesystem offers neither hard links nor the no-replace rename
 // flag (synctree.Root.ProbeNoReplaceSupport). There a set-aside file is put
 // back, and a rename that must not replace is made, by a check that the name

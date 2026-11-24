@@ -39,7 +39,6 @@ type EngineMockClient struct {
 
 	// ItemClient
 	GetItemFn         func(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
-	GetItemByPathFn   func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error)
 	ListChildrenFn    func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
 	CreateFolderFn    func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
 	MoveItemFn        func(ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string) (*graph.Item, error)
@@ -51,7 +50,6 @@ type EngineMockClient struct {
 	) (*graph.Item, error)
 	DeleteItemFn        func(ctx context.Context, driveID driveid.ID, itemID string) error
 	DeleteItemIfMatchFn func(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error
-	PermanentDeleteFn   func(ctx context.Context, driveID driveid.ID, itemID string) error
 
 	// Downloader
 	DownloadFn func(ctx context.Context, driveID driveid.ID, itemID string, w io.Writer) (int64, error)
@@ -118,14 +116,6 @@ func (m *EngineMockClient) GetItem(ctx context.Context, driveID driveid.ID, item
 	}
 
 	return DefaultMockGetItem(driveID, itemID), nil
-}
-
-func (m *EngineMockClient) GetItemByPath(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error) {
-	if m.GetItemByPathFn != nil {
-		return m.GetItemByPathFn(ctx, driveID, remotePath)
-	}
-
-	return nil, graph.ErrNotFound
 }
 
 func (m *EngineMockClient) ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
@@ -214,14 +204,6 @@ func (m *EngineMockClient) DeleteItemIfMatch(ctx context.Context, driveID drivei
 	}
 	if m.DeleteItemFn != nil {
 		return m.DeleteItemFn(ctx, driveID, itemID)
-	}
-
-	return nil
-}
-
-func (m *EngineMockClient) PermanentDeleteItem(ctx context.Context, driveID driveid.ID, itemID string) error {
-	if m.PermanentDeleteFn != nil {
-		return m.PermanentDeleteFn(ctx, driveID, itemID)
 	}
 
 	return nil

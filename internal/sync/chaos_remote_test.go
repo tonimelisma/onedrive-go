@@ -448,12 +448,6 @@ func (c *chaosGraph) wrap(inner *syncfixture.EngineMockClient) *syncfixture.Engi
 		}
 		return inner.GetItemFn(ctx, driveID, itemID)
 	}
-	out.GetItemByPathFn = func(ctx context.Context, driveID driveid.ID, remotePath string) (*graph.Item, error) {
-		if err := c.before(c.call("get-by-path", remotePath), "get-by-path"); err != nil {
-			return nil, err
-		}
-		return inner.GetItemByPathFn(ctx, driveID, remotePath)
-	}
 	out.ListChildrenFn = func(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error) {
 		if err := c.before(c.call("list-children", parentID), "list-children"); err != nil {
 			return nil, err

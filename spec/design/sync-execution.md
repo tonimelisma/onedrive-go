@@ -859,7 +859,14 @@ folder, that a save landing during a put-back can be replaced
 `TestEngine_NoPutBackWarningWhereTheFilesystemHasHardLinks`,
 `TestRoot_ProbeNoReplaceSupport_FindsNeitherWhereTheSystemOffersNeither`,
 `TestRoot_ProbeNoReplaceSupport_FindsHardLinksAndLeavesNothing`). A probe
-that fails decides nothing and is logged at Debug.
+that fails decides nothing and is logged at Debug. Only a sync root's engine
+probes: a shortcut child's folder lies inside its parent's sync folder, on the
+filesystem its parent's engine probed, so it neither probes nor warns again
+(`TestEngine_AShortcutChildLeavesThePutBackProbeToItsParent`). Before it makes
+its own file, the probe removes every probe file an earlier run that died
+inside it left in the sync folder, reading the folder in bounded batches and
+leaving any entry that is not a regular file
+(`TestRoot_ProbeNoReplaceSupport_RemovesWhatAnEarlierProbeLeft`).
 
 The trash side of a take-out is reached the way the sync folder is: through
 one descriptor. Before the file is opened, the folder of the trash entry's
