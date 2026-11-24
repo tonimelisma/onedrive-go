@@ -59,7 +59,7 @@ func (c *storeLocalHashCache) Record(ctx context.Context, entries []syncdomain.L
 	if len(entries) == 0 {
 		return nil
 	}
-	tx, err := BeginPerfTx(ctx, c.store.db)
+	tx, err := beginPerfTx(ctx, c.store.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin local hash cache transaction: %w", err)
 	}
@@ -87,7 +87,7 @@ func (c *storeLocalHashCache) Record(ctx context.Context, entries []syncdomain.L
 // pruneLocalHashCacheTx drops cached hashes the baseline now owns and those
 // of files the committed local snapshot no longer has. It runs inside the
 // snapshot's own transaction.
-func pruneLocalHashCacheTx(ctx context.Context, tx SqlTxRunner) error {
+func pruneLocalHashCacheTx(ctx context.Context, tx sqlTxRunner) error {
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM local_hash_cache
 		 WHERE path IN (SELECT path FROM baseline)

@@ -215,10 +215,10 @@ func queryShortcutRootRecords(
 }
 
 // ReplaceShortcutRoots atomically replaces the parent shortcut-root table. It
-// begins through BeginPerfTx like every other write of the sync's store, so
+// begins through beginPerfTx like every other write of the sync's store, so
 // the replacement counts in status --perf.
 func (s *SyncStore) ReplaceShortcutRoots(ctx context.Context, records []syncshortcut.ShortcutRootRecord) (err error) {
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning shortcut_roots replacement: %w", err)
 	}

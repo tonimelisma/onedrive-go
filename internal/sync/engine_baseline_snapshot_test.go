@@ -31,18 +31,15 @@ func TestPlanning_UsesBaselineFromTheComparisonSnapshot(t *testing.T) {
 	_, found := cached.GetByPath("fm2")
 	require.False(t, found)
 
-	tx, err := eng.baseline.BeginPerfTx(ctx)
+	snapshot, err := flow.readPlanningSnapshot(ctx, eng.baseline, eng.driveID)
 	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, tx.Rollback())
-	}()
-	inputs, err := flow.loadCurrentInputsTx(ctx, tx, eng.driveID)
-	require.NoError(t, err)
+	_, found = snapshot.Baseline.GetByPath("fm2")
+	require.True(t, found, "the planning read's own baseline holds the row")
 
 	// The planner takes the snapshot type alone, so the cached view cannot
 	// be handed to it. Before: "sync: missing baseline entry for comparison
 	// path" tore down the drive runner.
-	plan, err := newEngineFlow(eng.flowInputs()).planCurrentActions(&inputs, syncdomain.SyncBidirectional, RunOptions{})
+	plan, err := flow.planCurrentActions(snapshot, syncdomain.SyncBidirectional, RunOptions{})
 	require.NoError(t, err)
 	assert.NotNil(t, plan)
 }

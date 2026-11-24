@@ -24,7 +24,7 @@ type HeldDeleteRow struct {
 // `sync --confirm-deletes` approves. An empty list (the hold released,
 // confirmed, or no longer warranted) clears it.
 func (s *SyncStore) ReplaceHeldDeletes(ctx context.Context, held []syncdomain.HeldDelete) (err error) {
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin held deletes transaction: %w", err)
 	}
@@ -51,7 +51,7 @@ func (s *SyncStore) ReplaceHeldDeletes(ctx context.Context, held []syncdomain.He
 	return nil
 }
 
-func QueryHeldDeleteRowsWithRunner(ctx context.Context, runner SqlTxRunner) ([]HeldDeleteRow, error) {
+func QueryHeldDeleteRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]HeldDeleteRow, error) {
 	rows, err := runner.QueryContext(ctx,
 		`SELECT path, side, reason, item_type, item_id FROM held_deletes ORDER BY side, path`)
 	if err != nil {

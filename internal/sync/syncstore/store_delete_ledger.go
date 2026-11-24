@@ -19,7 +19,7 @@ import (
 // ledger inside the outcome's own transaction, so a crash leaves the ledger
 // and the baseline agreeing. A delete exempt from the hold is not recorded
 // (BaselineMutation.ExemptFromDeleteHold).
-func (s *SyncStore) recordDeleteLedgerTx(ctx context.Context, tx SqlTxRunner, o *syncdomain.BaselineMutation) error {
+func (s *SyncStore) recordDeleteLedgerTx(ctx context.Context, tx sqlTxRunner, o *syncdomain.BaselineMutation) error {
 	if o.ExemptFromDeleteHold {
 		return nil
 	}

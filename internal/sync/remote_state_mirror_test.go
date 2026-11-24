@@ -33,7 +33,7 @@ func TestCommitObservation_NewItemCreatesMirrorRowAndToken(t *testing.T) {
 	}}, "delta-token-1", driveID)
 	require.NoError(t, err)
 
-	row := syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "item1")
+	row := syncstoretest.ReadRemoteStateRow(t, mgr, "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, "hello.txt", row.Path)
 	assert.Equal(t, "hash1", row.Hash)
@@ -66,7 +66,7 @@ func TestCommitObservation_DeleteRemovesMirrorRow(t *testing.T) {
 		IsDeleted: true,
 	}}, "delta-token-2", driveID))
 
-	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "item1"))
+	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "item1"))
 	assert.Equal(t, "delta-token-2", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
 }
 
@@ -94,7 +94,7 @@ func TestCommitObservation_PreservesObservedDriveIDPerRemoteStateRow(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, contentDriveID, state.ContentDriveID)
 
-	row := syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "shared-item")
+	row := syncstoretest.ReadRemoteStateRow(t, mgr, "shared-item")
 	require.NotNil(t, row)
 	assert.Equal(t, sharedDriveID, row.DriveID)
 	assert.Equal(t, "Shared/inside.txt", row.Path)
@@ -135,7 +135,7 @@ func TestCommitObservation_UnchangedItemDoesNotRewriteStateOrCursor(t *testing.T
 		ETag:     "etag1",
 	}}, "", driveID))
 
-	row := syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "item1")
+	row := syncstoretest.ReadRemoteStateRow(t, mgr, "item1")
 	require.NotNil(t, row)
 	assert.Equal(t, "same.txt", row.Path)
 	assert.Equal(t, "delta-token-1", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
@@ -157,7 +157,7 @@ func TestCommitObservation_DeleteMissingItemOnlyAdvancesCursor(t *testing.T) {
 		IsDeleted: true,
 	}}, "delta-token-delete", driveID))
 
-	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "missing-item"))
+	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "missing-item"))
 	assert.Equal(t, "delta-token-delete", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
 }
 
@@ -177,7 +177,7 @@ func TestCommitObservation_PersistsJunkRowsAsRawRemoteTruth(t *testing.T) {
 		Hash:     "hash-junk",
 	}}, "delta-token-junk", driveID))
 
-	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "item-junk"))
+	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "item-junk"))
 	assert.Equal(t, "delta-token-junk", syncfixture.ReadObservationCursor(t, mgr.RawDBForTest(), syncfixture.TestDriveID))
 }
 
@@ -214,7 +214,7 @@ func TestCommitObservation_FolderRenameRepathsDescendants(t *testing.T) {
 		"b":   "links-renamed/sub/b.txt",
 		"sib": "links-other/c.txt",
 	} {
-		row := syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), id)
+		row := syncstoretest.ReadRemoteStateRow(t, mgr, id)
 		require.NotNil(t, row, id)
 		assert.Equal(t, want, row.Path, id)
 	}
@@ -245,9 +245,9 @@ func TestCommitObservation_FolderDeleteRemovesDescendants(t *testing.T) {
 	}, "t2", driveID))
 
 	for _, id := range []string{"dir", "sub", "kid"} {
-		assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), id), id)
+		assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr, id), id)
 	}
-	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "sib"), "a sibling with the same name prefix stays")
+	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "sib"), "a sibling with the same name prefix stays")
 }
 
 // A remote_state row that cannot be read is a failed read, not an absent row.
@@ -307,8 +307,8 @@ func TestForgetRemoteItem_RemovesTheSubtreeAndFailsOnAnUnreadableItemType(t *tes
 	}, "t1", driveID))
 
 	require.NoError(t, mgr.ForgetRemoteItem(ctx, "dir"))
-	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "dir"))
-	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "kid"), "the subtree goes with the folder")
+	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "dir"))
+	assert.Nil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "kid"), "the subtree goes with the folder")
 
 	db := mgr.RawDBForTest()
 	for _, statement := range []string{
@@ -320,5 +320,5 @@ func TestForgetRemoteItem_RemovesTheSubtreeAndFailsOnAnUnreadableItemType(t *tes
 		require.NoError(t, err, statement)
 	}
 	require.ErrorContains(t, mgr.ForgetRemoteItem(ctx, "odd"), `"bundle"`)
-	assert.NotNil(t, syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "odd-kid"), "nothing is half removed")
+	assert.NotNil(t, syncstoretest.ReadRemoteStateRow(t, mgr, "odd-kid"), "nothing is half removed")
 }

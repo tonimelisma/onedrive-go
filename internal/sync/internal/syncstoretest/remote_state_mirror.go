@@ -1,7 +1,6 @@
 package syncstoretest
 
 import (
-	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,41 +10,17 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
-func ReadRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *syncdomain.RemoteStateRow {
+// ReadRemoteStateRow is the remote_state row of itemID, nil when the store
+// has none. It reads through the store's own lookup (GetRemoteStateByID),
+// so a test sees the row as the store returns it.
+func ReadRemoteStateRow(t *testing.T, store *syncstore.SyncStore, itemID string) *syncdomain.RemoteStateRow {
 	t.Helper()
 
-	var (
-		rawDriveID string
-		row        syncdomain.RemoteStateRow
-		hash       sql.NullString
-		size       sql.NullInt64
-		mtime      sql.NullInt64
-		etag       sql.NullString
-	)
-
-	err := db.QueryRowContext(t.Context(),
-		`SELECT `+syncstore.SqlSelectRemoteStateCols+`
-		FROM remote_state WHERE item_id = ?`,
-		itemID,
-	).Scan(
-		&rawDriveID, &row.ItemID, &row.Path, &row.ItemType,
-		&hash, &size, &mtime, &etag,
-	)
-	if err == sql.ErrNoRows {
+	row, found, err := store.GetRemoteStateByID(t.Context(), driveid.ID{}, itemID)
+	require.NoError(t, err)
+	if !found {
 		return nil
 	}
 
-	require.NoError(t, err)
-
-	row.DriveID = syncstore.RemoteStateDriveID(rawDriveID, driveid.ID{})
-	row.Hash = hash.String
-	row.ETag = etag.String
-	if size.Valid {
-		row.Size = size.Int64
-	}
-	if mtime.Valid {
-		row.Mtime = mtime.Int64
-	}
-
-	return &row
+	return row
 }

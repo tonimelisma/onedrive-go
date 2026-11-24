@@ -1,6 +1,39 @@
 package syncdomain
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/tonimelisma/onedrive-go/internal/driveid"
+)
+
+// PlanningSnapshot is the current truth one planning read returns
+// (syncstore's SyncStore.ReadPlanningSnapshot): every fact below was read in
+// one store transaction, so a commit that lands during the read is in all of
+// them or in none. The facts are raw: the comparison rows carry the decision
+// table's inputs but no decided kind, since deciding is the planner's
+// (syncplan.DecideComparisons).
+type PlanningSnapshot struct {
+	// ContentDriveID is the drive whose content the store mirrors, or the
+	// default drive the read was given while the store has recorded none; a
+	// remote row without a drive of its own is this drive's.
+	ContentDriveID driveid.ID
+	// Comparisons are the planner-visible paths' comparison rows in path
+	// order, with ComparisonKind unset (ComparisonUnclassified).
+	Comparisons []SQLiteComparisonRow
+	// Local and Remote are the planner-visible current rows: the content
+	// filter applied, and the rows below a folder the baseline knows but the
+	// side no longer has pruned.
+	Local  []LocalStateRow
+	Remote []RemoteStateRow
+	// ObservationIssues are the observation issues the content filter keeps.
+	ObservationIssues []ObservationIssueRow
+	// Baseline is read in the same transaction as the comparison rows, so a
+	// row with a baseline side always has its entry. It is a snapshot, a type
+	// a run's live baseline view is not: the planner cannot be handed the
+	// cache, which can lag or lead the comparison rows when a commit lands
+	// between them.
+	Baseline *BaselineSnapshot
+}
 
 type SQLiteComparisonRow struct {
 	Path                    string
@@ -85,6 +118,27 @@ func (r *SQLiteComparisonRow) DecisionState() DecisionState {
 		RemoteSubtreeChanged:           r.RemoteSubtreeChanged,
 		MetadataDrift:                  r.MetadataDrift,
 	}
+}
+
+// ReconciliationRow is the reconciliation row decision makes of this
+// comparison row. An unclassified row carries the decision table's inputs,
+// so the plan error names them (R-6.2.16).
+func (r *SQLiteComparisonRow) ReconciliationRow(decision Decision) SQLiteReconciliationRow {
+	rec := SQLiteReconciliationRow{
+		Path:               r.Path,
+		ItemType:           r.ItemType(),
+		ComparisonKind:     decision.Comparison,
+		ReconciliationKind: decision.Reconciliation,
+		LocalMoveTarget:    r.LocalMoveTarget,
+		LocalMoveSource:    r.LocalMoveSource,
+		RemoteMoveTarget:   r.RemoteMoveTarget,
+		RemoteMoveSource:   r.RemoteMoveSource,
+	}
+	if rec.IsUnclassified() {
+		rec.DecisionInputs = r.DecisionState().Inputs()
+	}
+
+	return rec
 }
 
 type SQLiteReconciliationRow struct {

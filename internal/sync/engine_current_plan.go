@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -111,7 +110,7 @@ func (rt *watchRuntime) runSteadyStateCurrentPlan(
 }
 
 type currentObservation struct {
-	inputs                   currentInputs
+	snapshot                 *syncdomain.PlanningSnapshot
 	observedPaths            int
 	pendingRemoteObservation *syncobserve.RemoteObservationBatch
 	childPublication         syncshortcut.ShortcutChildWorkSnapshot
@@ -172,20 +171,6 @@ type runtimePlan struct {
 	ChildPublication         syncshortcut.ShortcutChildWorkSnapshot
 	RetryRows                []syncdomain.RetryWorkRow
 	BlockScopes              []*syncdomain.BlockScope
-}
-
-type currentInputs struct {
-	comparisons       []syncdomain.SQLiteComparisonRow
-	reconciliations   []syncdomain.SQLiteReconciliationRow
-	localRows         []syncdomain.LocalStateRow
-	remoteRows        []syncdomain.RemoteStateRow
-	observationIssues []syncdomain.ObservationIssueRow
-	// baseline is read in the same transaction as the comparison rows, so a
-	// row with a baseline side always has its entry. It is a snapshot, a type the
-	// run's live baseline view is not: the planner cannot be handed the cache,
-	// which can lag or lead the comparison rows when a commit lands between
-	// them.
-	baseline *syncdomain.BaselineSnapshot
 }
 
 func (flow *engineFlow) observeAndCommitCurrentState(
@@ -434,14 +419,14 @@ func (flow *engineFlow) loadDryRunCurrentObservation(
 		return nil, fmt.Errorf("sync: committing dry-run local snapshot to scratch store: %w", commitErr)
 	}
 
-	inputs, err := flow.loadCurrentInputs(ctx, scratchStore, flow.cfg.driveID)
+	snapshot, err := flow.readPlanningSnapshot(ctx, scratchStore, flow.cfg.driveID)
 	if err != nil {
 		return nil, fmt.Errorf(errReadingPlanningState, err)
 	}
 
 	return &currentObservation{
-		inputs:        inputs,
-		observedPaths: len(inputs.localRows) + len(inputs.remoteRows),
+		snapshot:      snapshot,
+		observedPaths: len(snapshot.Local) + len(snapshot.Remote),
 	}, nil
 }
 
@@ -449,7 +434,7 @@ func (flow *engineFlow) loadCommittedCurrentObservation(
 	ctx context.Context,
 	pendingRemoteObservation *syncobserve.RemoteObservationBatch,
 ) (*currentObservation, error) {
-	inputs, err := flow.loadCurrentInputs(ctx, flow.deps.store, flow.cfg.driveID)
+	snapshot, err := flow.readPlanningSnapshot(ctx, flow.deps.store, flow.cfg.driveID)
 	if err != nil {
 		return nil, fmt.Errorf(errReadingPlanningState, err)
 	}
@@ -459,8 +444,8 @@ func (flow *engineFlow) loadCommittedCurrentObservation(
 	}
 
 	return &currentObservation{
-		inputs:                   inputs,
-		observedPaths:            len(inputs.localRows) + len(inputs.remoteRows),
+		snapshot:                 snapshot,
+		observedPaths:            len(snapshot.Local) + len(snapshot.Remote),
 		pendingRemoteObservation: pendingRemoteObservation,
 		childPublication:         childPublication,
 	}, nil
@@ -485,107 +470,33 @@ func (flow *engineFlow) currentShortcutChildPublication(
 	), nil
 }
 
-func (flow *engineFlow) loadCurrentInputs(
+// readPlanningSnapshot reads the current truth a plan is built from in one
+// store read (syncstore's ReadPlanningSnapshot). The store owns the read and
+// the schema it runs over; the planner decides its rows
+// (planCurrentActions). The caller wraps a read error once
+// (errReadingPlanningState): the store's error names the read that failed.
+func (flow *engineFlow) readPlanningSnapshot(
 	ctx context.Context,
 	store *syncstore.SyncStore,
 	defaultDriveID driveid.ID,
-) (currentInputs, error) {
-	tx, err := store.BeginPerfTx(ctx)
+) (*syncdomain.PlanningSnapshot, error) {
+	snapshot, err := store.ReadPlanningSnapshot(ctx, defaultDriveID, flow.cfg.contentFilter)
 	if err != nil {
-		return currentInputs{}, fmt.Errorf("sync: beginning current action planner read transaction: %w", err)
+		return nil, err
 	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			flow.deps.logger.Debug("current action planner read transaction rollback failed",
-				slog.Any("error", rollbackErr),
-			)
-		}
-	}()
+	flow.mustAssertDecisionStatesValid(snapshot.Comparisons)
 
-	return flow.loadCurrentInputsTx(ctx, tx, defaultDriveID)
+	return snapshot, nil
 }
 
-func (flow *engineFlow) loadCurrentInputsTx(
-	ctx context.Context,
-	tx syncstore.SqlTxRunner,
-	defaultDriveID driveid.ID,
-) (currentInputs, error) {
-	rawLocalRows, err := syncstore.ListLocalStateRows(ctx, tx)
-	if err != nil {
-		return currentInputs{}, fmt.Errorf("sync: listing local_state rows: %w", err)
-	}
-	observationState, err := syncstore.ReadObservationStateFromTx(ctx, tx)
-	if err != nil {
-		return currentInputs{}, fmt.Errorf("sync: reading observation state for remote_state: %w", err)
-	}
-	contentDriveID := observationState.ContentDriveID
-	if contentDriveID.IsZero() {
-		contentDriveID = defaultDriveID
-	}
-	remoteRows, err := syncstore.QueryRemoteStateRowsWithRunner(
-		ctx,
-		tx,
-		`SELECT `+syncstore.SqlSelectRemoteStateCols+` FROM remote_state`,
-		contentDriveID,
-	)
-	if err != nil {
-		return currentInputs{}, fmt.Errorf("sync: listing remote_state rows: %w", err)
-	}
-	localRows := syncstore.FilterLocalStateRowsForPlanning(rawLocalRows, flow.cfg.contentFilter)
-	remoteRows = syncstore.FilterRemoteStateRowsForPlanning(remoteRows, flow.cfg.contentFilter)
-	plannerVisibleRows, err := syncstore.ReplacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows, contentDriveID)
-	if err != nil {
-		return currentInputs{}, err
-	}
-	comparisons, reconciliations, err := flow.queryPlannerRowsTx(ctx, tx)
-	if err != nil {
-		return currentInputs{}, err
-	}
-	observationIssues, err := syncstore.QueryObservationIssueRowsWithRunner(ctx, tx)
-	if err != nil {
-		return currentInputs{}, fmt.Errorf("sync: listing observation issues: %w", err)
-	}
-	observationIssues = syncstore.FilterObservationIssueRowsForPlanning(observationIssues, flow.cfg.contentFilter)
-	snapshotBaseline, err := syncstore.LoadBaselineWithRunner(ctx, tx, contentDriveID)
-	if err != nil {
-		return currentInputs{}, fmt.Errorf("sync: loading planning baseline snapshot: %w", err)
-	}
-	return currentInputs{
-		baseline:          snapshotBaseline,
-		comparisons:       comparisons,
-		reconciliations:   reconciliations,
-		localRows:         plannerVisibleRows.Local,
-		remoteRows:        plannerVisibleRows.Remote,
-		observationIssues: observationIssues,
-	}, nil
-}
-
-// queryPlannerRowsTx reads every path's decision-table inputs over the
-// planner-visible tables, in one query, and decides each in Go
-// (syncdomain.Decide). An unclassified row carries its inputs, so the plan
-// error PlanCurrentState returns names them (R-6.2.16).
-func (flow *engineFlow) queryPlannerRowsTx(
-	ctx context.Context,
-	tx syncstore.SqlTxRunner,
-) ([]syncdomain.SQLiteComparisonRow, []syncdomain.SQLiteReconciliationRow, error) {
-	decide := syncstore.Decider(syncdomain.Decide)
+// decider is the decision table this run plans with: syncdomain.Decide,
+// unless a test replaced it (engineHooks.decideOverride).
+func (flow *engineFlow) decider() syncplan.Decider {
 	if flow.hooks.decideOverride != nil {
-		decide = flow.hooks.decideOverride
+		return flow.hooks.decideOverride
 	}
 
-	comparisons, reconciliations, err := syncstore.QueryPlannerRows(
-		ctx,
-		tx,
-		syncstore.PlannerVisibleLocalStateTable,
-		syncstore.PlannerVisibleRemoteStateTable,
-		decide,
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("sync: querying planner rows: %w", err)
-	}
-	flow.mustAssertDecisionStatesValid(comparisons)
-
-	return comparisons, reconciliations, nil
+	return syncdomain.Decide
 }
 
 // mustAssertDecisionStatesValid holds, under the engine's invariant checks,
@@ -620,7 +531,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	}
 
 	planStart := flow.deps.now()
-	plan, err := flow.planCurrentActions(&observation.inputs, mode, opts)
+	plan, err := flow.planCurrentActions(observation.snapshot, mode, opts)
 	if err != nil {
 		return nil, fmt.Errorf("sync: planning actions: %w", err)
 	}
@@ -637,9 +548,9 @@ func (flow *engineFlow) buildCurrentPlanStage(
 		return nil, fmt.Errorf("sync: reading the recorded mount points the hold guards: %w", err)
 	}
 	if err := syncplan.ApplyDeleteSafetyHold(plan, &syncplan.DeleteSafetyInput{
-		Baseline:        observation.inputs.baseline,
-		LocalRows:       observation.inputs.localRows,
-		RemoteRows:      observation.inputs.remoteRows,
+		Baseline:        observation.snapshot.Baseline,
+		LocalRows:       observation.snapshot.Local,
+		RemoteRows:      observation.snapshot.Remote,
 		Approved:        approved,
 		RecentDeletes:   recentDeletes,
 		MountBoundaries: mountBoundaries,
@@ -802,23 +713,19 @@ func (flow *engineFlow) loadRuntimeState(ctx context.Context) ([]syncdomain.Retr
 	return retryRows, blockScopes, nil
 }
 
-// buildCurrentActionPlanFromInputs plans the run's actions from the inputs
-// one transaction read. A removed shared folder's final drain
+// planCurrentActions plans the current actionable set from the snapshot one
+// store read returned, deciding its rows with the run's decision table
+// (decider). A removed shared folder's final drain
 // (RunOptions.ReleaseLocalTree) plans for a mount that releases its local
 // tree, so it creates nothing new locally (leaveOutNewLocalItems).
-// planCurrentActions plans the current actionable set from the run's inputs.
 func (flow *engineFlow) planCurrentActions(
-	inputs *currentInputs,
+	snapshot *syncdomain.PlanningSnapshot,
 	mode syncdomain.SyncMode,
 	opts RunOptions,
 ) (*syncdomain.ActionPlan, error) {
-	return flow.planner.PlanCurrentState(
-		inputs.comparisons,
-		inputs.reconciliations,
-		inputs.localRows,
-		inputs.remoteRows,
-		inputs.observationIssues,
-		inputs.baseline,
+	return flow.planner.PlanSnapshot(
+		snapshot,
+		flow.decider(),
 		syncplan.PlannerMountContext{
 			DriveID:           flow.cfg.driveID,
 			ReleasesLocalTree: opts.ReleaseLocalTree,

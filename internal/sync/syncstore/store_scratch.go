@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	sqlListScratchRemoteState = `SELECT ` + SqlSelectRemoteStateCols + `
+	sqlListScratchRemoteState = `SELECT ` + sqlSelectRemoteStateCols + `
 		FROM remote_state
 		ORDER BY path`
 	sqlInsertScratchRemoteState = `INSERT INTO remote_state
@@ -108,7 +108,7 @@ func (s *SyncStore) CreateScratchPlanningStore(
 }
 
 func (s *SyncStore) readScratchPlanningSeed(ctx context.Context) (seed scratchPlanningSeed, err error) {
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return scratchPlanningSeed{}, fmt.Errorf("sync: beginning scratch planning seed read transaction: %w", err)
 	}
@@ -116,7 +116,7 @@ func (s *SyncStore) readScratchPlanningSeed(ctx context.Context) (seed scratchPl
 		err = finalizeTxRollback(err, tx, "sync: rollback scratch planning seed read transaction")
 	}()
 
-	observationState, err := ReadObservationStateFromTx(ctx, tx)
+	observationState, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return scratchPlanningSeed{}, fmt.Errorf("sync: reading scratch planning observation state: %w", err)
 	}
@@ -145,7 +145,7 @@ func (s *SyncStore) readScratchPlanningSeed(ctx context.Context) (seed scratchPl
 }
 
 func (s *SyncStore) applyScratchPlanningSeed(ctx context.Context, seed scratchPlanningSeed) (err error) {
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning scratch planning seed transaction: %w", err)
 	}
@@ -182,7 +182,7 @@ func (s *SyncStore) applyScratchPlanningSeed(ctx context.Context, seed scratchPl
 
 func insertScratchBaselineEntries(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 	entries []*syncdomain.BaselineEntry,
 ) error {
 	for i := range entries {
@@ -194,7 +194,7 @@ func insertScratchBaselineEntries(
 	return nil
 }
 
-func listScratchRemoteStateRows(ctx context.Context, runner SqlTxRunner) ([]syncdomain.RemoteStateRow, error) {
+func listScratchRemoteStateRows(ctx context.Context, runner sqlTxRunner) ([]syncdomain.RemoteStateRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlListScratchRemoteState)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying scratch remote_state seed rows: %w", err)
@@ -225,7 +225,7 @@ func listScratchRemoteStateRows(ctx context.Context, runner SqlTxRunner) ([]sync
 			return nil, fmt.Errorf("sync: scanning scratch remote_state seed row: %w", err)
 		}
 
-		row.DriveID = RemoteStateDriveID(rawDriveID, driveid.ID{})
+		row.DriveID = remoteStateDriveID(rawDriveID, driveid.ID{})
 		row.Hash = hash.String
 		row.ETag = etag.String
 		if size.Valid {
@@ -247,7 +247,7 @@ func listScratchRemoteStateRows(ctx context.Context, runner SqlTxRunner) ([]sync
 
 func insertScratchRemoteStateRows(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 	rows []syncdomain.RemoteStateRow,
 ) error {
 	for i := range rows {
@@ -269,7 +269,7 @@ func insertScratchRemoteStateRows(
 	return nil
 }
 
-func listScratchKeptLocalFolders(ctx context.Context, runner SqlTxRunner) ([]keptLocalFolderRow, error) {
+func listScratchKeptLocalFolders(ctx context.Context, runner sqlTxRunner) ([]keptLocalFolderRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlCopyScratchKeptLocalFolders)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying scratch kept local folders: %w", err)

@@ -70,11 +70,11 @@ func TestFinalizeTxRollback_JoinsExistingError(t *testing.T) {
 var errTestTxRolledBack = errors.New("test transaction rolled back")
 
 // runTestPerfTx runs one transaction the way every store function does:
-// BeginPerfTx, a statement, then Commit, or an error that the deferred
+// beginPerfTx, a statement, then Commit, or an error that the deferred
 // finalizeTxRollback rolls back. The transaction's start is moved startedAgo
 // into the past, so its recorded duration is at least that long.
 func runTestPerfTx(ctx context.Context, db *sql.DB, commit bool, startedAgo time.Duration) (err error) {
-	tx, err := BeginPerfTx(ctx, db)
+	tx, err := beginPerfTx(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func TestPerfTx_RecordsAFailedCommitOnce(t *testing.T) {
 	collector := perf.NewCollector(nil)
 	ctx, cancel := context.WithCancel(perf.WithCollector(t.Context(), collector))
 
-	tx, err := BeginPerfTx(ctx, store.db)
+	tx, err := beginPerfTx(ctx, store.db)
 	require.NoError(t, err)
 	cancel()
 	commitErr := tx.Commit()

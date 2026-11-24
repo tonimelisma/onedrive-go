@@ -2300,7 +2300,7 @@ func TestWatch_CommitsObservations(t *testing.T) {
 	syncfixture.StopWatch(t, cancel, done)
 
 	assert.Equal(t, "token-1", syncfixture.ReadObservationCursor(t, store.RawDBForTest(), driveID.String()))
-	row := syncstoretest.ReadRemoteStateRow(t, store.RawDBForTest(), "f1")
+	row := syncstoretest.ReadRemoteStateRow(t, store, "f1")
 	require.NotNil(t, row, "remote observation should persist mirrored state")
 	assert.Equal(t, driveID, row.DriveID)
 	assert.Equal(t, "a.txt", row.Path)

@@ -320,35 +320,6 @@ func TestRunOnce_Bidirectional_FullRun(t *testing.T) {
 	assert.True(t, ok, "local.txt not in baseline after sync")
 }
 
-// Validates: R-2.1.3
-func TestLoadCurrentInputsStageTx_ReadsSnapshotWritesFromProvidedTransaction(t *testing.T) {
-	t.Parallel()
-
-	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
-	flow := testEngineFlow(t, eng)
-	ctx := t.Context()
-
-	tx, err := eng.baseline.BeginPerfTx(ctx)
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, tx.Rollback())
-	}()
-
-	_, err = syncstore.ReplaceLocalStateTxForTest(ctx, tx, []syncdomain.LocalStateRow{{
-		Path:     "tx-only.txt",
-		ItemType: syncdomain.ItemTypeFile,
-		Hash:     "hash",
-		Size:     4,
-		Mtime:    5,
-	}})
-	require.NoError(t, err)
-
-	inputs, err := flow.loadCurrentInputsTx(ctx, tx, eng.driveID)
-	require.NoError(t, err)
-	require.Len(t, inputs.localRows, 1)
-	assert.Equal(t, "tx-only.txt", inputs.localRows[0].Path)
-}
-
 // Validates: R-2.10.33
 func TestReconcileRuntimeState_PrunesRetryAndScopeState(t *testing.T) {
 	t.Parallel()
@@ -424,8 +395,7 @@ func TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation(t *testin
 	assert.Equal(t, "local.txt", localRows[0].Path)
 	assert.NotEmpty(t, localRows[0].Hash)
 
-	reconciliationRows, err := eng.baseline.QueryReconciliationState(t.Context())
-	require.NoError(t, err)
+	reconciliationRows := reconciliationRowsForStore(t, eng.baseline)
 	require.Len(t, reconciliationRows, 2)
 
 	byPath := make(map[string]syncdomain.SQLiteReconciliationRow, len(reconciliationRows))
@@ -522,16 +492,16 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 	result, err := flow.loadDryRunCurrentObservation(ctx, bl, false)
 	require.NoError(t, err)
 
-	localPaths := make([]string, 0, len(result.inputs.localRows))
-	for i := range result.inputs.localRows {
-		localPaths = append(localPaths, result.inputs.localRows[i].Path)
+	localPaths := make([]string, 0, len(result.snapshot.Local))
+	for i := range result.snapshot.Local {
+		localPaths = append(localPaths, result.snapshot.Local[i].Path)
 	}
 	assert.Contains(t, localPaths, "fresh-local.txt")
 	assert.NotContains(t, localPaths, "stale-local.txt")
 
-	remotePaths := make([]string, 0, len(result.inputs.remoteRows))
-	for i := range result.inputs.remoteRows {
-		remotePaths = append(remotePaths, result.inputs.remoteRows[i].Path)
+	remotePaths := make([]string, 0, len(result.snapshot.Remote))
+	for i := range result.snapshot.Remote {
+		remotePaths = append(remotePaths, result.snapshot.Remote[i].Path)
 	}
 	assert.Contains(t, remotePaths, "remote-preview.txt")
 
@@ -626,9 +596,9 @@ func TestLoadDryRunCurrentInputs_LocalObservationFindingsStayScratchOnly(t *test
 	result, err := flow.loadDryRunCurrentObservation(ctx, bl, false)
 	require.NoError(t, err)
 
-	issuePaths := make([]string, 0, len(result.inputs.observationIssues))
-	for i := range result.inputs.observationIssues {
-		issuePaths = append(issuePaths, result.inputs.observationIssues[i].Path)
+	issuePaths := make([]string, 0, len(result.snapshot.ObservationIssues))
+	for i := range result.snapshot.ObservationIssues {
+		issuePaths = append(issuePaths, result.snapshot.ObservationIssues[i].Path)
 	}
 	assert.Contains(t, issuePaths, "CON")
 	assert.NotContains(t, issuePaths, "stale-invalid.txt")

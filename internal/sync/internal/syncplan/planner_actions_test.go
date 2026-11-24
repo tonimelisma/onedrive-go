@@ -64,26 +64,10 @@ func TestPlannerPlanCurrentState_BuildsActionsFromSQLiteReconciliation(t *testin
 		},
 	}, "", driveID))
 
-	bl, err := store.BaselineSnapshotForTest(ctx)
-	require.NoError(t, err)
-
-	comparisons, err := store.QueryComparisonState(ctx)
-	require.NoError(t, err)
-	reconciliations, err := store.QueryReconciliationState(ctx)
-	require.NoError(t, err)
-	localRows, err := store.ListLocalState(ctx)
-	require.NoError(t, err)
-	remoteRows, err := store.ListRemoteState(ctx)
-	require.NoError(t, err)
-
 	planner := NewPlanner(syncfixture.TestLogger(t))
-	plan, err := planner.PlanCurrentState(
-		comparisons,
-		reconciliations,
-		localRows,
-		remoteRows,
-		nil,
-		bl,
+	plan, err := planner.PlanSnapshot(
+		syncstoretest.ReadPlanningSnapshot(t, store),
+		syncdomain.Decide,
 		PlannerMountContext{DriveID: driveID},
 		syncdomain.SyncBidirectional,
 	)
@@ -417,26 +401,10 @@ func TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions(t *t
 		ETag:     "etag-remote",
 	}}, "", driveID))
 
-	bl, err := store.BaselineSnapshotForTest(ctx)
-	require.NoError(t, err)
-
-	comparisons, err := store.QueryComparisonState(ctx)
-	require.NoError(t, err)
-	reconciliations, err := store.QueryReconciliationState(ctx)
-	require.NoError(t, err)
-	localRows, err := store.ListLocalState(ctx)
-	require.NoError(t, err)
-	remoteRows, err := store.ListRemoteState(ctx)
-	require.NoError(t, err)
-
 	planner := NewPlanner(syncfixture.TestLogger(t))
-	plan, err := planner.PlanCurrentState(
-		comparisons,
-		reconciliations,
-		localRows,
-		remoteRows,
-		nil,
-		bl,
+	plan, err := planner.PlanSnapshot(
+		syncstoretest.ReadPlanningSnapshot(t, store),
+		syncdomain.Decide,
 		PlannerMountContext{DriveID: driveID},
 		syncdomain.SyncBidirectional,
 	)
@@ -798,26 +766,10 @@ func TestPlannerPlanCurrentState_UploadOnlyDefersRemoteWinnerDownloadWithoutConf
 		ETag:     "etag-remote",
 	}}, "", driveID))
 
-	bl, err := store.BaselineSnapshotForTest(ctx)
-	require.NoError(t, err)
-
-	comparisons, err := store.QueryComparisonState(ctx)
-	require.NoError(t, err)
-	reconciliations, err := store.QueryReconciliationState(ctx)
-	require.NoError(t, err)
-	localRows, err := store.ListLocalState(ctx)
-	require.NoError(t, err)
-	remoteRows, err := store.ListRemoteState(ctx)
-	require.NoError(t, err)
-
 	planner := NewPlanner(syncfixture.TestLogger(t))
-	plan, err := planner.PlanCurrentState(
-		comparisons,
-		reconciliations,
-		localRows,
-		remoteRows,
-		nil,
-		bl,
+	plan, err := planner.PlanSnapshot(
+		syncstoretest.ReadPlanningSnapshot(t, store),
+		syncdomain.Decide,
 		PlannerMountContext{DriveID: driveID},
 		syncdomain.SyncUploadOnly,
 	)
@@ -840,96 +792,14 @@ func planCurrentStateForStoreWithMode(t *testing.T, store *syncstore.SyncStore, 
 	return planCurrentStateForStoreWithLogger(t, store, mode, syncfixture.TestLogger(t))
 }
 
-// plannerInputs is what a pass's planner reads of the store: the
-// comparison and reconciliation rows, the planner-visible local and remote
-// rows, the observation issues and the baseline.
-type plannerInputs struct {
-	comparisons       []syncdomain.SQLiteComparisonRow
-	reconciliations   []syncdomain.SQLiteReconciliationRow
-	localRows         []syncdomain.LocalStateRow
-	remoteRows        []syncdomain.RemoteStateRow
-	observationIssues []syncdomain.ObservationIssueRow
-	baseline          *syncdomain.BaselineSnapshot
-}
-
-// plannerInputsForStore reads what store holds as the engine reads it at the
-// start of a pass.
-func plannerInputsForStore(t *testing.T, store *syncstore.SyncStore) *plannerInputs {
-	t.Helper()
-
-	ctx := t.Context()
-	bl, err := store.BaselineSnapshotForTest(ctx)
-	require.NoError(t, err)
-
-	tx, err := syncstore.BeginPerfTx(ctx, store.RawDBForTest())
-	require.NoError(t, err)
-	defer func() { _ = tx.Rollback() }()
-
-	rawLocalRows, err := syncstore.ListLocalStateRows(ctx, tx)
-	require.NoError(t, err)
-
-	observationState, err := syncstore.ReadObservationStateFromTx(ctx, tx)
-	require.NoError(t, err)
-	contentDriveID := observationState.ContentDriveID
-	if contentDriveID.IsZero() {
-		contentDriveID = driveid.New(syncfixture.EngineTestDriveID)
-	}
-
-	rawRemoteRows, err := syncstore.QueryRemoteStateRowsWithRunner(
-		ctx,
-		tx,
-		`SELECT `+syncstore.SqlSelectRemoteStateCols+` FROM remote_state`,
-		contentDriveID,
-	)
-	require.NoError(t, err)
-
-	visibleRows, err := syncstore.ReplacePlannerVisibleStateTx(ctx, tx, rawLocalRows, rawRemoteRows, contentDriveID)
-	require.NoError(t, err)
-
-	comparisons, err := syncstore.QueryComparisonStateWithRunnerForTables(
-		ctx,
-		tx,
-		syncstore.PlannerVisibleLocalStateTable,
-		syncstore.PlannerVisibleRemoteStateTable,
-	)
-	require.NoError(t, err)
-	reconciliations, err := syncstore.QueryReconciliationStateWithRunnerForTables(
-		ctx,
-		tx,
-		syncstore.PlannerVisibleLocalStateTable,
-		syncstore.PlannerVisibleRemoteStateTable,
-	)
-	require.NoError(t, err)
-	observationIssues, err := syncstore.QueryObservationIssueRowsWithRunner(ctx, tx)
-	require.NoError(t, err)
-	for i := range comparisons {
-		require.NoError(t, comparisons[i].DecisionState().Valid(), "the decision state of %q", comparisons[i].Path)
-	}
-
-	return &plannerInputs{
-		comparisons:       comparisons,
-		reconciliations:   reconciliations,
-		localRows:         visibleRows.Local,
-		remoteRows:        visibleRows.Remote,
-		observationIssues: observationIssues,
-		baseline:          bl,
-	}
-}
-
 // planCurrentStateForStoreWithLogger plans what store holds, as the engine
 // reads it at the start of a pass, logging to logger.
 func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore, mode syncdomain.SyncMode, logger *slog.Logger) *syncdomain.ActionPlan {
 	t.Helper()
 
-	in := plannerInputsForStore(t, store)
-	planner := NewPlanner(logger)
-	plan, err := planner.PlanCurrentState(
-		in.comparisons,
-		in.reconciliations,
-		in.localRows,
-		in.remoteRows,
-		in.observationIssues,
-		in.baseline,
+	plan, err := NewPlanner(logger).PlanSnapshot(
+		syncstoretest.ReadPlanningSnapshot(t, store),
+		syncdomain.Decide,
 		PlannerMountContext{DriveID: driveid.New(syncfixture.EngineTestDriveID)},
 		mode,
 	)

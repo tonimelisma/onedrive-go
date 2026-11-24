@@ -365,7 +365,7 @@ func TestCommitMutation_UploadWithContentKeepsTheRecordForItsEcho(t *testing.T) 
 	require.Equal(t, testPlaceholderID, pending.ItemID)
 
 	require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{placeholder}, "t-echo", driveID))
-	row := syncstoretest.ReadRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
+	row := syncstoretest.ReadRemoteStateRow(t, store, testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, int64(7), row.Size, "the echo of the empty state is not a remote change")
 }
@@ -491,7 +491,7 @@ func TestCommitObservation_UnknownSizeOfAPendingItemIsNotAStaleEcho(t *testing.T
 	sizeless.Hash, sizeless.ETag, sizeless.SizeUnknown = "", placeholderLaterETag, true
 	require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{sizeless}, "t-sizeless", driveID))
 
-	row := syncstoretest.ReadRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
+	row := syncstoretest.ReadRemoteStateRow(t, store, testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, placeholderLaterETag, row.ETag, "the observation is applied like any item's")
 	assert.False(t, row.SizeKnown)
@@ -541,7 +541,7 @@ func TestCommitObservation_UnknownSizeOfAPendingItemIsNotAdopted(t *testing.T) {
 
 			_, _, adopted := syncstoretest.ReadBaselineRow(t, store, testPlaceholderID)
 			assert.False(t, adopted, "nothing is adopted on a size nobody knows")
-			require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID), "the item is observed like any other")
+			require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, store, testPlaceholderID), "the item is observed like any other")
 			kept, found, err := store.PendingCreateAt(t.Context(), "doc.txt")
 			require.NoError(t, err)
 			require.True(t, found, "the record stays")
@@ -591,7 +591,7 @@ func TestCommitObservation_AdoptedPlaceholderRenamedWhileEmptyTakesItsRecordAlon
 	echo := renamed
 	echo.ETag = `"p,2b"`
 	require.NoError(t, store.CommitObservation(t.Context(), []syncdomain.ObservedItem{echo}, "t-echo", driveID))
-	row := syncstoretest.ReadRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
+	row := syncstoretest.ReadRemoteStateRow(t, store, testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, int64(7), row.Size, "the echo of the empty item is not a remote change")
 }
@@ -619,7 +619,7 @@ func TestCommitObservation_PlaceholderMovedBeforeItWasAdoptedLosesItsRecord(t *t
 	requireNoPendingCreateAt(t, store, renamedPath, "and does not follow an item it never adopted")
 	_, _, adopted := syncstoretest.ReadBaselineRow(t, store, testPlaceholderID)
 	assert.False(t, adopted)
-	row := syncstoretest.ReadRemoteStateRow(t, store.RawDBForTest(), testPlaceholderID)
+	row := syncstoretest.ReadRemoteStateRow(t, store, testPlaceholderID)
 	require.NotNil(t, row)
 	assert.Equal(t, renamedPath, row.Path)
 }
@@ -701,8 +701,8 @@ func TestRunOnce_LookupFailureAfterACreateKeepsItsParentInRemoteTruth(t *testing
 	assert.Equal(t, 1, report.Failed, "errors: %v", report.Errors)
 	assert.Zero(t, report.Superseded, "a failed lookup proves nothing about the plan")
 	assert.Zero(t, report.LocalDeletes+report.HeldLocalDeletes)
-	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, eng.baseline.RawDBForTest(), "folder-docs"), "the parent folder stays in remote truth")
-	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, eng.baseline.RawDBForTest(), "item-keep"), "and so does its subtree")
+	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, eng.baseline, "folder-docs"), "the parent folder stays in remote truth")
+	require.NotNil(t, syncstoretest.ReadRemoteStateRow(t, eng.baseline, "item-keep"), "and so does its subtree")
 	assert.FileExists(t, filepath.Join(syncRoot, "docs", "keep.txt"))
 }
 

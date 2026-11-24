@@ -687,7 +687,7 @@ ranges, and the followed-ancestor sets are materialized once instead of
 re-evaluated per path. A rename now costs about a quiet pass; the quiet pass
 itself (about 11 s per query at 100k items) is the next target.
 
-Since 2026-11-20 the benchmark times `QueryPlannerRows`, what a plan reads:
+Since 2026-11-20 the benchmark times what a plan reads (then `QueryPlannerRows`; since the planning read moved into the store and the decision into the planner, `decidedComparisonRows`, the same query and loop):
 one query over the comparison chain, then the Go decision table
 (`syncdomain.Decide`) on every row. Before, the two SQL `CASE` expressions
 decided and the chain ran twice, once per query. Same host, one iteration
@@ -753,7 +753,7 @@ the actions times their depth (10k to 100k is 8x), and the equivalence test
 oracle's edges, duplicates included, over random plans of every shape.
 
 `BenchmarkReplacePlannerVisibleState` (`internal/sync/syncstore/store_planner_visible_bench_test.go`)
-times `ReplacePlannerVisibleStateTx`, the TEMP-table build inside every
+times `replacePlannerVisibleStateTx`, the TEMP-table build inside every
 plan's read transaction, over 9,910 rows a side against a baseline of the
 same tree (ten top folders of 90 folders of 10 files): a quiet tree, and one
 whose first top folder is gone from both sides while its 991 descendants are

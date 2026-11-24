@@ -13,8 +13,9 @@ import (
 )
 
 // Benchmarks of the comparison SQL at drive scale (D-098): every plan runs
-// QueryPlannerRows over the whole state (one query, then the Go decision
-// table on every row), so its cost bounds how fast a pass over a large drive
+// the comparison query over the whole state and then the Go decision table
+// on every row (decidedComparisonRows, what ReadPlanningSnapshot's query and
+// syncplan.DecideComparisons do), so its cost bounds how fast a pass over a large drive
 // can be. Shapes:
 //
 //   - steady: everything synced, nothing changed (a quiet pass);
@@ -47,8 +48,7 @@ func BenchmarkComparisonQueries(b *testing.B) {
 
 				b.ResetTimer()
 				for b.Loop() {
-					comparisons, reconciliations, err := QueryPlannerRows(ctx, store.RawDBForTest(),
-						"local_state", "remote_state", syncdomain.Decide)
+					comparisons, reconciliations, err := decidedComparisonRows(ctx, store)
 					require.NoError(b, err)
 					b.ReportMetric(float64(len(comparisons)), "comparison-rows")
 					b.ReportMetric(float64(len(reconciliations)), "reconciliation-rows")

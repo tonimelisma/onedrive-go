@@ -1,18 +1,21 @@
 # Sync Planning
 
-GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_compose.go, internal/sync/internal/syncplan/planner_move_emit.go, internal/sync/internal/syncplan/planner_move_emit_park.go, internal/sync/internal/syncplan/planner_move_emit_landing.go, internal/sync/internal/syncplan/planner_move_inputs.go, internal/sync/internal/syncplan/planner_move_actions.go, internal/sync/internal/syncplan/planner_move_create_filter.go, internal/sync/internal/syncplan/planner_move_withhold.go, internal/sync/internal/syncplan/planner_move_reconcile_drop.go, internal/sync/internal/syncplan/planner_content_holds.go, internal/sync/internal/syncplan/planner_set_aside.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go
+GOVERNS: internal/sync/internal/syncplan/planner.go, internal/sync/internal/syncplan/planner_decide.go, internal/sync/internal/syncplan/planner_dependencies.go, internal/sync/internal/syncplan/planner_actions.go, internal/sync/internal/syncplan/planner_kinds.go, internal/sync/internal/syncplan/planner_move_compose.go, internal/sync/internal/syncplan/planner_move_emit.go, internal/sync/internal/syncplan/planner_move_emit_park.go, internal/sync/internal/syncplan/planner_move_emit_landing.go, internal/sync/internal/syncplan/planner_move_inputs.go, internal/sync/internal/syncplan/planner_move_actions.go, internal/sync/internal/syncplan/planner_move_create_filter.go, internal/sync/internal/syncplan/planner_move_withhold.go, internal/sync/internal/syncplan/planner_move_reconcile_drop.go, internal/sync/internal/syncplan/planner_content_holds.go, internal/sync/internal/syncplan/planner_set_aside.go, internal/sync/internal/syncplan/planner_delete_safety.go, internal/sync/internal/syncplan/planner_truth_overlay.go, internal/sync/internal/syncplan/planner_test_seams.go, internal/sync/internal/syncplan/doc.go
 
 Implements: R-2.1.3 [verified], R-2.17.11 [verified], R-2.17.12 [verified], R-2.17.13 [verified], R-2.1.7 [verified], R-6.2.11 [verified], R-2.1.4 [verified], R-2.2 [verified], R-2.3.1 [verified], R-2.14.2 [verified], R-6.2.1 [verified], R-6.2.5 [verified], R-6.2.16 [verified], R-6.4.2 [verified]
 
 ## Overview
 
-Planning is split between SQLite reconciliation and a Go action builder.
+Planning is split between the store's SQLite comparison read and the
+planner's Go decision and action builder.
 
-- SQLite computes deterministic comparison and reconciliation rows from raw
+- The store's planning read (`SyncStore.ReadPlanningSnapshot`) computes
+  deterministic comparison rows, the decision table's inputs, from raw
   `baseline` plus planner-visible `local_state` and `remote_state` temp tables.
   Those temp tables are filter-scoped and then pruned for same-side descendants
   under a baseline folder that is missing on that side.
-- Go turns reconciliation rows into the current executable action set, then
+- The planner decides each comparison row (`DecideComparisons`), turns the
+  reconciliation rows into the current executable action set, then
   normalizes action-level execution semantics, partitions work by sync mode,
   and builds dependencies.
 
@@ -53,10 +56,13 @@ intent; multisync receives only that child work intent.
 
 ## Ownership Contract
 
-- Owns: preparing planner-visible current truth for SQLite reconciliation and
-  turning reconciliation rows into the current executable action set, including
+- Owns: deciding every comparison row of the planning read with the decision
+  table (`DecideComparisons`, `PlanSnapshot`) and turning the resulting
+  reconciliation rows into the current executable action set, including
   conflict expansion, action normalization, filtering, deferral, and dependency
-  ordering
+  ordering. Preparing the planner-visible current truth (filtering, pruning,
+  the comparison query) is the store's read (sync-store.md,
+  `ReadPlanningSnapshot`), not the planner's.
 - Does Not Own: observation, execution, retry timing, scope persistence, or remote/local I/O
 - Source of Truth: raw `baseline`, raw current-state tables, and the engine's
   compiled `contentFilter`. Planning sees filtered current-state views through
@@ -97,7 +103,7 @@ intent; multisync receives only that child work intent.
 | A delete on OneDrive of a synced file whose content the upload of the file here writes at another path, where that upload needs the path the delete frees, is a move of the item to a free temporary name above every folder the plan deletes; the next pass deletes it once the upload holds the content, or moves it back where the file is here (R-2.17.12). | `TestPlannerPairs_AFileUploadedOntoThePathItsDeleteFreesIsSetAsideOnOneDrive`, `TestAsidePath_ParksAboveTheDeletedFoldersUnderAFreeName`, `TestRunOnce_AFileMovedUpOntoItsDeletedFoldersPathStaysOnOneDriveUntilItsUploadRuns` |
 | Mode-specific deferral and dependency ordering stay planner-owned rather than executor- or CLI-owned. | `TestSyncModeFromFlags`, `internal/sync/internal/syncplan/planner_actions_test.go`, `internal/sync/internal/syncplan/planner_move_composition_test.go` (`TestBuildDependencies_NestedMoveEdges`, `TestBuildDependencies_WorkUnderAFileMovesOldPathWaitsForTheMove`), `internal/sync/internal/syncplan/planner_delete_safety_test.go` (`TestDeleteSafetyHold_DependentOfHeldDeleteIsHeldToo`) |
 | Every single-path combination of baseline, local and remote state (absent, file A/B/C, folder), and the move combinations of one synced file, has its plan checked in as `testdata/reconcile/matrix.golden` (refresh with `-update`); with `ONEDRIVE_GO_RECONCILE_CONVERGE=1` each cell is also run to convergence on a pure model and must end at the reference planner's content set. A planner-level model test applies random edits to both sides of a pure model, plans it through the real comparison SQL and planner, applies the plan without an executor (items addressed by ID, a create onto a taken name failing as a 409), and must converge with every written content kept (D-093). | `TestReconcileMatrix_Golden`, `TestPlannerModel_RandomTriplesConverge` |
-| The decision table is Go and its kinds are typed enums; a side type the enum lacks fails the row scan naming the path. Every valid state a side holds is classified, except a drive root only one side holds (all 8,388,608 normalized states); a row outside the table, or a folder planned as a content transfer, fails the plan before the unavailable-truth suppression can plan it as nothing, naming the path; so does a built action whose type or folder create side is outside its enum, before any rule reads it, and every decision on the action type panics on such a value instead of answering it (R-6.2.16). Content proven equal on both sides never transfers, whichever side changed: a local edit equal to OneDrive's unchanged content is a baseline update that records the new local facts beside the remote ones, and the next plan is empty (R-2.2.3). | `TestPlannerKinds_ParseRoundTripsEveryMemberAndRefusesOthers`, `TestQueryPlannerRows_UnknownSideTypeFailsTheScanNamingThePath`, `TestQueryPlannerRows_GoDecidesEveryRowOfOneQuery`, `TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable`, `TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan`, `TestPlanCurrentState_FolderTransferFailsThePlan`, `TestPlanCurrentState_UnlistedActionTypeFailsThePlan`, `TestActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpdate`, `TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing`, `TestRunOnce_UnclassifiedRowFailsThePassNamingThePath`, `TestDecide_EveryValidStateHasTheTableProperties`, `TestDecide_ARootOnlyOneSideHoldsIsUnclassified`, `TestDecisionState_ValidNamesTheBrokenRule` |
+| The decision table is Go and its kinds are typed enums; a side type the enum lacks fails the row scan naming the path. Every valid state a side holds is classified, except a drive root only one side holds (all 8,388,608 normalized states); a row outside the table, or a folder planned as a content transfer, fails the plan before the unavailable-truth suppression can plan it as nothing, naming the path; so does a built action whose type or folder create side is outside its enum, before any rule reads it, and every decision on the action type panics on such a value instead of answering it (R-6.2.16). Content proven equal on both sides never transfers, whichever side changed: a local edit equal to OneDrive's unchanged content is a baseline update that records the new local facts beside the remote ones, and the next plan is empty (R-2.2.3). | `TestPlannerKinds_ParseRoundTripsEveryMemberAndRefusesOthers`, `TestQueryComparisonRows_UnknownSideTypeFailsTheScanNamingThePath`, `TestDecideComparisons_GoDecidesEveryRowOfOneRead`, `TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable`, `TestPlanCurrentState_UnclassifiedComparisonRowFailsThePlan`, `TestPlanCurrentState_FolderTransferFailsThePlan`, `TestPlanCurrentState_UnlistedActionTypeFailsThePlan`, `TestActionTypeDecisions_PanicOnATypeOutsideTheEnum`, `TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpdate`, `TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing`, `TestRunOnce_UnclassifiedRowFailsThePassNamingThePath`, `TestDecide_EveryValidStateHasTheTableProperties`, `TestDecide_ARootOnlyOneSideHoldsIsUnclassified`, `TestDecisionState_ValidNamesTheBrokenRule` |
 | Planner decisions stay row-driven and action-shaped across conflict and folder-parent preservation cases. | `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_DownloadOnlyKeepsParentDeleteWhenEditedChildUploadDeferred`, `internal/sync/syncstore/store_planner_visible_test.go` |
 
 ## Inputs
@@ -112,13 +118,20 @@ intent; multisync receives only that child work intent.
 - `Mode`: bidirectional, download-only, or upload-only
 - runtime safety/policy inputs owned by the engine
 
-The engine first materializes transaction-local planner-visible current-state
-tables from `local_state` and `remote_state` using the compiled `contentFilter`.
+The store's planning read (`SyncStore.ReadPlanningSnapshot`, sync-store.md)
+first materializes transaction-local planner-visible current-state tables
+from `local_state` and `remote_state` using the drive's `ContentFilterConfig`.
 It then removes same-side descendants below baseline folders that are absent
 from that side's visible current table. Raw `baseline` is not filtered or
 mutated. Those views feed the comparison facts (`comparison_flags`) the Go
 decision table reads, including the invariant that a baseline row absent from both planner-visible
-current snapshots becomes `baseline_remove`.
+current snapshots becomes `baseline_remove`. The read returns them as one
+`syncdomain.PlanningSnapshot` with undecided comparison rows; the planner
+decides each (`DecideComparisons`: a copy of each row carrying its comparison
+kind, and the row's `SQLiteComparisonRow.ReconciliationRow`) with the
+decision table the engine hands it (`Decider`: `syncdomain.Decide`, or a test's
+stand-in through the engine's `decideOverride`), and `PlanSnapshot` plans
+from the decided rows (`TestDecideComparisons_GoDecidesEveryRowOfOneRead`).
 
 Before Go emits actions, a shared derivation step computes one per-path
 truth-status value from `observation_issues`, including any read-boundary
@@ -136,9 +149,10 @@ same derivation rather than a second planner-shaped helper.
 2. Prune planner-visible same-side descendants under any baseline folder that is
    missing from that side's visible current-state table. Descendant matching uses
    exact path-prefix checks, not pattern matching.
-3. Run SQL structural diff and reconciliation over planner-visible current views
-   plus baseline.
-4. Load reconciliation rows into Go.
+3. Run the SQL comparison query over planner-visible current views plus
+   baseline. Steps 1 to 3 are the store's read (`ReadPlanningSnapshot`).
+4. Decide every comparison row in Go (`DecideComparisons`), giving the
+   reconciliation rows.
 5. Derive per-path local/remote truth status from filtered `observation_issues`
    through `truthAvailabilityIndex`.
 6. Apply planner-owned suppression and sync-mode safety rules on top of that
@@ -316,7 +330,9 @@ SQL keeps what is set-valued and per-path facts: the path universe, local and
 remote move pairing, the ancestor-move sets, the descendant probes and the
 scalar flags (`sqlComparisonStateCTEs`). One query per plan
 (`sqlQueryPlannerState`) returns every input of the table for every path, and
-`QueryPlannerRows` decides each row in Go. Until 2026-11-20 two SQL `CASE`
+the planner decides each row in Go (`DecideComparisons`; the store's
+`QueryPlannerRows` decided them until the planning read moved into the store
+and the decision out of it). Until 2026-11-20 two SQL `CASE`
 expressions decided, and the comparison chain ran twice per plan, once for
 each; the Go table was first proven equal to them stage by stage over every
 SQL input (131,072 comparison inputs, 442,368 reconciliation inputs) and run

@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	PlannerVisibleLocalStateTable  = "planner_visible_local_state"
-	PlannerVisibleRemoteStateTable = "planner_visible_remote_state"
+	plannerVisibleLocalStateTable  = "planner_visible_local_state"
+	plannerVisibleRemoteStateTable = "planner_visible_remote_state"
 
 	sqlCreatePlannerVisibleLocalState = `CREATE TEMP TABLE IF NOT EXISTS planner_visible_local_state (
 		path       TEXT    NOT NULL PRIMARY KEY,
@@ -52,7 +52,7 @@ const (
 		path, item_type, hash, size, mtime, ctime, local_device, local_inode, local_birth_time, local_has_identity
 		FROM planner_visible_local_state
 		ORDER BY path`
-	sqlListPlannerVisibleRemoteState = `SELECT ` + SqlSelectRemoteStateCols + `
+	sqlListPlannerVisibleRemoteState = `SELECT ` + sqlSelectRemoteStateCols + `
 		FROM planner_visible_remote_state
 		ORDER BY path`
 	// The prunes remove the rows below folders the baseline knows but the
@@ -119,7 +119,84 @@ type plannerVisibleRows struct {
 	Remote []syncdomain.RemoteStateRow
 }
 
-func FilterLocalStateRowsForPlanning(rows []syncdomain.LocalStateRow, filter syncdomain.ContentFilterConfig) []syncdomain.LocalStateRow {
+// ReadPlanningSnapshot reads the current truth a plan is built from, in one
+// measured transaction, so a commit that lands during the read is in every
+// fact it returns or in none: the planner-visible local and remote rows
+// (filter applied, the rows below a folder a side lost pruned), their
+// comparison rows, the observation issues filter keeps and the baseline.
+// defaultDriveID stands in for the content drive while the store has
+// recorded none. The read writes only the planner-visible TEMP tables the
+// comparison query joins, and rolls them back with the transaction.
+func (s *SyncStore) ReadPlanningSnapshot(
+	ctx context.Context,
+	defaultDriveID driveid.ID,
+	filter syncdomain.ContentFilterConfig,
+) (snapshot *syncdomain.PlanningSnapshot, err error) {
+	tx, err := beginPerfTx(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("syncstore: beginning the planning read: %w", err)
+	}
+	defer func() {
+		err = finalizeTxRollback(err, tx, "syncstore: rolling back the planning read")
+	}()
+
+	return readPlanningSnapshotTx(ctx, tx, defaultDriveID, filter)
+}
+
+func readPlanningSnapshotTx(
+	ctx context.Context,
+	tx sqlTxRunner,
+	defaultDriveID driveid.ID,
+	filter syncdomain.ContentFilterConfig,
+) (*syncdomain.PlanningSnapshot, error) {
+	rawLocalRows, err := listLocalStateRows(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("syncstore: listing local_state rows: %w", err)
+	}
+	observationState, err := readObservationStateFromTx(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("syncstore: reading observation state for remote_state: %w", err)
+	}
+	contentDriveID := observationState.ContentDriveID
+	if contentDriveID.IsZero() {
+		contentDriveID = defaultDriveID
+	}
+	rawRemoteRows, err := queryRemoteStateRowsWithRunner(ctx, tx, sqlListRemoteState, contentDriveID)
+	if err != nil {
+		return nil, fmt.Errorf("syncstore: listing remote_state rows: %w", err)
+	}
+	visible, err := replacePlannerVisibleStateTx(ctx, tx,
+		filterLocalStateRowsForPlanning(rawLocalRows, filter),
+		filterRemoteStateRowsForPlanning(rawRemoteRows, filter),
+		contentDriveID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	comparisons, err := queryComparisonRowsForTables(ctx, tx, plannerVisibleLocalStateTable, plannerVisibleRemoteStateTable)
+	if err != nil {
+		return nil, fmt.Errorf("syncstore: querying comparison rows: %w", err)
+	}
+	observationIssues, err := queryObservationIssueRowsWithRunner(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("syncstore: listing observation issues: %w", err)
+	}
+	baseline, err := loadBaselineWithRunner(ctx, tx, contentDriveID)
+	if err != nil {
+		return nil, fmt.Errorf("syncstore: loading planning baseline snapshot: %w", err)
+	}
+
+	return &syncdomain.PlanningSnapshot{
+		ContentDriveID:    contentDriveID,
+		Comparisons:       comparisons,
+		Local:             visible.Local,
+		Remote:            visible.Remote,
+		ObservationIssues: filterObservationIssueRowsForPlanning(observationIssues, filter),
+		Baseline:          baseline,
+	}, nil
+}
+
+func filterLocalStateRowsForPlanning(rows []syncdomain.LocalStateRow, filter syncdomain.ContentFilterConfig) []syncdomain.LocalStateRow {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -133,7 +210,7 @@ func FilterLocalStateRowsForPlanning(rows []syncdomain.LocalStateRow, filter syn
 	return filtered
 }
 
-func FilterRemoteStateRowsForPlanning(rows []syncdomain.RemoteStateRow, filter syncdomain.ContentFilterConfig) []syncdomain.RemoteStateRow {
+func filterRemoteStateRowsForPlanning(rows []syncdomain.RemoteStateRow, filter syncdomain.ContentFilterConfig) []syncdomain.RemoteStateRow {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -147,7 +224,7 @@ func FilterRemoteStateRowsForPlanning(rows []syncdomain.RemoteStateRow, filter s
 	return filtered
 }
 
-func FilterObservationIssueRowsForPlanning(
+func filterObservationIssueRowsForPlanning(
 	rows []syncdomain.ObservationIssueRow, filter syncdomain.ContentFilterConfig,
 ) []syncdomain.ObservationIssueRow {
 	if len(rows) == 0 {
@@ -163,9 +240,9 @@ func FilterObservationIssueRowsForPlanning(
 	return filtered
 }
 
-func ReplacePlannerVisibleStateTx(
+func replacePlannerVisibleStateTx(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
 	contentDriveID driveid.ID,
@@ -202,7 +279,7 @@ func ReplacePlannerVisibleStateTx(
 	if err != nil {
 		return plannerVisibleRows{}, err
 	}
-	prunedRemoteRows, err := QueryRemoteStateRowsWithRunner(ctx, tx, sqlListPlannerVisibleRemoteState, contentDriveID)
+	prunedRemoteRows, err := queryRemoteStateRowsWithRunner(ctx, tx, sqlListPlannerVisibleRemoteState, contentDriveID)
 	if err != nil {
 		return plannerVisibleRows{}, err
 	}
@@ -215,7 +292,7 @@ func ReplacePlannerVisibleStateTx(
 
 // insertPlannerVisibleLocalRowsTx inserts the rows in multi-row statements
 // of plannerVisibleInsertChunkRows rows each.
-func insertPlannerVisibleLocalRowsTx(ctx context.Context, tx SqlTxRunner, rows []syncdomain.LocalStateRow) error {
+func insertPlannerVisibleLocalRowsTx(ctx context.Context, tx sqlTxRunner, rows []syncdomain.LocalStateRow) error {
 	for start := 0; start < len(rows); start += plannerVisibleInsertChunkRows {
 		chunk := rows[start:min(start+plannerVisibleInsertChunkRows, len(rows))]
 		args := make([]any, 0, len(chunk)*plannerVisibleLocalStateColumns)
@@ -243,7 +320,7 @@ func insertPlannerVisibleLocalRowsTx(ctx context.Context, tx SqlTxRunner, rows [
 	return nil
 }
 
-func insertPlannerVisibleRemoteRowsTx(ctx context.Context, tx SqlTxRunner, rows []syncdomain.RemoteStateRow) error {
+func insertPlannerVisibleRemoteRowsTx(ctx context.Context, tx sqlTxRunner, rows []syncdomain.RemoteStateRow) error {
 	for start := 0; start < len(rows); start += plannerVisibleInsertChunkRows {
 		chunk := rows[start:min(start+plannerVisibleInsertChunkRows, len(rows))]
 		args := make([]any, 0, len(chunk)*plannerVisibleRemoteStateColumns)

@@ -104,14 +104,15 @@ func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
 		ManagedIssueTypes: []syncdomain.IssueType{syncdomain.IssueInvalidFilename},
 	}))
 
-	inputs, err := eng.flow.loadCurrentInputs(ctx, eng.baseline, driveID)
+	snapshot, err := eng.flow.readPlanningSnapshot(ctx, eng.baseline, driveID)
 	require.NoError(t, err)
 
-	assert.Empty(t, inputs.localRows)
-	assert.Empty(t, inputs.remoteRows)
-	assert.Empty(t, inputs.observationIssues)
-	assert.Equal(t, "both_missing", syncfixture.ComparisonKindsByPath(inputs.comparisons)["hidden/file.txt"])
-	assert.Equal(t, "baseline_remove", syncfixture.ReconciliationKindsByPath(inputs.reconciliations)["hidden/file.txt"])
+	assert.Empty(t, snapshot.Local)
+	assert.Empty(t, snapshot.Remote)
+	assert.Empty(t, snapshot.ObservationIssues)
+	comparisons, reconciliations := syncplan.DecideComparisons(snapshot.Comparisons, syncdomain.Decide)
+	assert.Equal(t, "both_missing", syncfixture.ComparisonKindsByPath(comparisons)["hidden/file.txt"])
+	assert.Equal(t, "baseline_remove", syncfixture.ReconciliationKindsByPath(reconciliations)["hidden/file.txt"])
 
 	rawRemote, err := eng.baseline.ListRemoteState(ctx)
 	require.NoError(t, err)
@@ -172,9 +173,9 @@ func TestFilterLifecycle_LocalSnapshotRefreshAndRemoteRawReprojection(t *testing
 	observation, err := eng.flow.loadCommittedCurrentObservation(ctx, pending)
 	require.NoError(t, err)
 
-	assert.True(t, localRowsContainPath(observation.inputs.localRows, "visible/local.txt"))
-	assert.False(t, localRowsContainPath(observation.inputs.localRows, "hidden/local.txt"))
-	assert.False(t, remoteRowsContainPath(observation.inputs.remoteRows, "hidden/remote.txt"))
+	assert.True(t, localRowsContainPath(observation.snapshot.Local, "visible/local.txt"))
+	assert.False(t, localRowsContainPath(observation.snapshot.Local, "hidden/local.txt"))
+	assert.False(t, remoteRowsContainPath(observation.snapshot.Remote, "hidden/remote.txt"))
 
 	rawLocalRows, err := eng.baseline.ListLocalState(ctx)
 	require.NoError(t, err)
@@ -192,8 +193,8 @@ func TestFilterLifecycle_LocalSnapshotRefreshAndRemoteRawReprojection(t *testing
 	observation, err = eng.flow.loadCommittedCurrentObservation(ctx, pending)
 	require.NoError(t, err)
 
-	assert.True(t, localRowsContainPath(observation.inputs.localRows, "hidden/local.txt"))
-	assert.True(t, remoteRowsContainPath(observation.inputs.remoteRows, "hidden/remote.txt"))
+	assert.True(t, localRowsContainPath(observation.snapshot.Local, "hidden/local.txt"))
+	assert.True(t, remoteRowsContainPath(observation.snapshot.Remote, "hidden/remote.txt"))
 	assert.Zero(t, emptyTokenDeltaCalls.Load(), "filter changes should reuse cursor-based remote observation")
 }
 

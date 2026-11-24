@@ -115,8 +115,7 @@ func TestQueryReconciliationState_FolderWithNewItemIDAtSamePathIsBaselineUpdate(
 		{DriveID: driveID, ItemID: "id2", Path: "X", ItemType: syncdomain.ItemTypeFolder},
 	}, "", driveID))
 
-	rows, err := mgr.QueryReconciliationState(ctx)
-	require.NoError(t, err)
+	rows := reconciliationRowsForStore(t, mgr)
 	require.Len(t, rows, 1)
 	assert.Equal(t, syncdomain.ReconcileBaselineUpdate, rows[0].ReconciliationKind)
 }

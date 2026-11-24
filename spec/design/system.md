@@ -316,7 +316,7 @@ performance data.
   store function defers after its commit ends nothing and records nothing
   (`TestPerfTx_RecordsEachEndedTransactionOnce`,
   `TestPerfTx_RecordsAFailedCommitOnce`). Every write transaction of the sync
-  store begins through `BeginPerfTx`, the shortcut-root replacement included
+  store, and its planning read (`ReadPlanningSnapshot`), begins through `beginPerfTx`, the shortcut-root replacement included
   (`TestSyncStore_ReplaceShortcutRootsCountsAsOneTransaction`); the status
   inspector's read-only snapshot transaction does not, because a `status` read
   is not the sync's work. `perf.WithCollector` replaces the context's
