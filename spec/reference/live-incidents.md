@@ -62,6 +62,10 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261124-04 | The e2e fault proxy wrote an answer of unknown length unframed, and a folder create's answer never ended | fixed | test bug | 2026-11-24 | no |
+| LI-20261124-03 | A chaos seed's fault draws were checked on macOS, where the model takes another course | fixed | test bug | 2026-11-24 | no |
+| LI-20261124-02 | A folder OneDrive made at a name a waiting folder here held in another case was made into that folder on macOS | fixed | product bug | 2026-11-24 | no |
+| LI-20261124-01 | An observer's exit event came before the watch counted it stopped | fixed | test bug | 2026-11-24 | no |
 | LI-20261123-02 | A refused retry dropped the intent of a lost create, and the user's new file became a conflict copy beside an empty one | fixed | product bug | 2026-11-23 | no |
 | LI-20261123-01 | A watch test still counted the pools' workers without their floor | fixed | test bug | 2026-11-23 | no |
 | LI-20261121-02 | The nightly report could not read a red job's log and did not say why | mitigated | test harness | 2026-11-21 | no |
@@ -116,6 +120,120 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261124-04: The e2e fault proxy wrote an answer of unknown length unframed, and a folder create's answer never ended
+
+First seen: 2026-11-23 (nightly run 45275981385 on `ec8c705f`)
+Last seen: 2026-11-23
+Area: `e2e` fault proxy (`e2e/sync_lost_create_answer_full_e2e_test.go`)
+Suite / test: `e2e.TestE2E_Sync_CreateWhoseAnswerWasLostFinishesIntoItsOwnFile`
+(`e2e-full`, bucket `full-serial-sync`)
+Classification: test bug
+Status: fixed
+Recurring: no
+Summary: the proxy dropped no answer (`expected: 1, actual: 0`): the file
+create it is there to break was never sent. The folder create before it got
+its 201 through the proxy, and then the CLI read the body until the stall
+watchdog gave up after two minutes ("response stalled: no data moved for
+2m0s", on the proxy's loopback connection), so the pass ended with the
+folder's create left to retry.
+Evidence: the proxy forwarded through a clone of `http.DefaultTransport`,
+which asks for gzip itself and hands back a compressed answer decompressed
+with no length (`ContentLength -1`, `Uncompressed`), and talks HTTP/2 to
+Graph, where a body need not state its length. `Response.Write` writes such a
+body unframed: with `Uncompressed` it adds neither a length nor
+`Connection: close`, and without it `Connection: close` on its own copy of
+the response, so the proxy, which keeps the tunnel open for the next
+request, never closed it and the CLI never saw the body end. A scratch
+program showed both framings. Graph compresses some answers and not others,
+which is why the test passed on other nights.
+Resolution / mitigation: the proxy's transport no longer compresses
+(`DisableCompression`): the CLI's own Accept-Encoding goes through and the
+answer comes back as sent. `writeAnswer` writes every answer as HTTP/1.1,
+the tunnel's protocol, and frames a body of unknown length in chunks, so the
+tunnel stays usable. The live test runs only in the nightly full tier; the
+next nightly is the proof.
+Promoted docs: none (test harness only).
+
+## LI-20261124-03: A chaos seed's fault draws were checked on macOS, where the model takes another course
+
+First seen: 2026-11-23 (nightly run 45275981385 on `ec8c705f`, `verify-full (macos-latest)`)
+Last seen: 2026-11-23
+Area: `internal/sync` chaos model test (`chaos_remote_test.go`)
+Suite / test: `internal/sync.TestModel_ChaosGraphConverges/ONEDRIVE_GO_MODEL_SEED=79`
+Classification: test bug
+Status: fixed
+Recurring: no
+Summary: seed 79 converged with every model check holding, and then failed
+"seed 79 drew no upload-session:timeout-after-create fault". The seed is
+pinned because, on Linux, it draws both faults of a create that took
+effect; the run checks that it still does.
+Evidence: the replay passes on Linux with and without the race detector.
+The model makes case-variant creates (`case-variant-create`), which are one
+entry on a case-insensitive volume, so on macOS the run takes another course
+and draws other faults; nothing failed to converge.
+Resolution / mitigation: the draw check runs only where the seed was
+chosen, a volume that tells the two cases apart (`volumeFoldsCase`, a probe
+in the test's temporary folder); every model check still runs everywhere.
+Promoted docs: none.
+
+## LI-20261124-02: A folder OneDrive made at a name a waiting folder here held in another case was made into that folder on macOS
+
+First seen: 2026-11-23 (nightly run 45275981385 on `ec8c705f`, `verify-full (macos-latest)`)
+Last seen: 2026-11-23
+Area: `internal/sync/internal/syncplan` (`dropCreatesOntoComposedItems`)
+Suite / test: `internal/sync.TestRunOnce_AFileEditedHereThatBothSidesMovedStaysOneItem`,
+`internal/sync.TestRunOnce_AFileWhoseMoveWaitsKeepsItsSyncedRowAndIsNeverCopied`,
+and both again under `internal/sync.TestReverseDispatch_RunOnceScenariosPass`
+Classification: product bug
+Status: fixed
+Recurring: no
+Summary: macOS only. A folder x is renamed x2 here while OneDrive makes X2,
+so x's rename waits (OneDrive takes x2 for X2's name). The sync then made
+X2 here; on a case-insensitive volume that found x2, the old x, and
+recorded it as X2. When OneDrive renamed X2 away, x2's files went with it
+and the old x was deleted on OneDrive (`deletes: [item-x]`), or an edit here
+stayed beside a stale copy instead of being uploaded as the same item.
+Evidence: run on Linux through the case-insensitive volume emulation
+(`synctest.CaseInsensitive`), both tests failed with exactly the macOS
+trees; the DEBUG log showed `created local folder path=X2` while x2's
+move waited. The planner removed a create onto a path a waiting item holds
+only when the paths were spelled alike.
+Resolution / mitigation: `dropCreatesOntoComposedItems` also removes a
+create here at a name an item that stays put here holds under OneDrive's
+name comparison (`foldedHeldPaths`), and the creates below it as spelled
+(`dropCreatesBelowSpelled`), so OneDrive's file downloaded into x2 keeps its
+folder. A first try, refusing the create in the executor when the volume
+found the name under another spelling, failed five other scenarios: the
+refusal superseded the create and its dependents. The recreate scenarios now
+also run on the emulated volume: the two failures in every tier
+(`TestCaseInsensitiveVolume_AFolderOneDriveMadeAtAHeldFoldersNameWaits`), and
+every RunOnce scenario in the exhaustive tier
+(`TestCaseInsensitiveVolume_RunOnceScenariosPass`, sampled like the reversed
+re-run), so Linux CI meets what macOS's volume does.
+Promoted docs: [sync-planning.md](../design/sync-planning.md) (`Dropped`).
+
+## LI-20261124-01: An observer's exit event came before the watch counted it stopped
+
+First seen: 2026-11-23 (nightly run 45275981385 on `ec8c705f`, `stress`)
+Last seen: 2026-11-23
+Area: `internal/sync` watch goroutines (`engine_watch_goroutines.go`)
+Suite / test: `internal/sync.TestRunWatch_ObserverThatIgnoresItsContextIsNamedAfterTheBound`
+(one of fifty race runs)
+Classification: test bug
+Status: fixed
+Recurring: no
+Summary: the stop's Warn named `[local observer remote observer]`; the test
+expects the remote observer alone, as the local one had exited.
+Evidence: the observers sent their exit debug event from a deferred call
+inside the goroutine, before the tracker closed the goroutine's done
+channel. The test waited for the local observer's event and then let the
+bound pass; in the window between the event and the close, the stop found
+the local observer still running.
+Resolution / mitigation: the tracker sends the exit event itself once the
+goroutine has returned and is counted as stopped (`watchGoroutines.exited`,
+`finishWatchGoroutine`); 200 race runs of the test pass.
+Promoted docs: [sync-engine.md](../design/sync-engine.md).
 
 ## LI-20261123-02: A refused retry dropped the intent of a lost create, and the user's new file became a conflict copy beside an empty one
 
