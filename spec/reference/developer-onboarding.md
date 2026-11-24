@@ -379,7 +379,7 @@ organized by file families.
 
 | File family | Role |
 | --- | --- |
-| `root.go`, `doc.go`, `format.go`, `signal.go`, `cleanup.go`, `failure_class.go` | CLI bootstrap, process wiring, shared output boundaries, signal handling, error classification |
+| `root.go`, `logging_setup.go`, `doc.go`, `format.go`, `signal.go`, `cleanup.go`, `failure_class.go` | CLI bootstrap, process wiring, logger construction, shared output boundaries, signal handling, error classification |
 | `auth*.go`, `account_view.go`, `account_view_snapshot.go`, `email_reconcile.go` | Login/logout, account view projection, auth-health, email reconciliation |
 | `drive.go`, `drive_add.go`, `drive_catalog.go`, `drive_cleanup.go`, `drive_list.go`, `drive_list_render.go`, `drive_remove.go`, `drive_search.go` | Drive add/list/search/remove, catalog projection, and drive selection flows |
 | `get.go`, `get_shared.go`, `put.go`, `put_shared.go`, `folder_transfer.go`, `ls.go`, `rm.go`, `mkdir.go`, `mv.go`, `cp.go`, `stat.go`, `purge.go` | User-facing file commands including shared-item get/put; `folder_transfer.go` renders a folder get or put from the events of `driveops.DownloadTree`/`UploadTree` |
@@ -613,7 +613,7 @@ The file-family split inside `internal/devtool` is also worth knowing:
 | `verify_race.go`, `verify_seeds.go`, `seed_replay.go` | The race profile; the seeds profile, its nightly start seed and the seeded families' table; the reading of the model tests' `seed-replay:` lines |
 | `verify_failed.go`, `go_test_log.go` | The failed-test profile; the one reader of go test logs, raw or `-json` |
 | `nightly.go`, `nightly_verdict.go`, `nightly_report.go`, `nightly_seed_issues.go` | The nightly claims and check; the verdict rule of a scheduled run; the nightly's commit status and issue; the failing seeds' issues |
-| `verify_dod.go`, `verify_dod_ci_wait.go` | The DoD stages and their CI waits |
+| `verify_dod.go`, `verify_dod_threads.go`, `verify_dod_threads_rest.go`, `verify_dod_ci_wait.go` | The DoD stages, their review-thread sweep (GraphQL, and REST in a cloud session) and their CI waits |
 | `worktree.go`, `worktree_prune.go` | Worktree creation from a freshly fetched `origin/main` and its bootstrap; removal of the builder worktrees whose work is in `origin/main` |
 | `verify_as_user.go` | Running verify's go test steps as a non-root user when verify runs as root |
 | `bench.go`, `bench_live.go` | Benchmark scenarios, result recording, and live benchmark runs against real accounts |

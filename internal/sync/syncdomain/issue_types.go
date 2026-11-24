@@ -35,7 +35,7 @@ const (
 
 	// Scanner-detectable (hash phase): the scanner records it for a panic in
 	// a hash worker and for any error but "not found" and "permission denied"
-	// while reading a file to hash it (scanner.go), so it means "the content
+	// while reading a file to hash it (scanner_hash.go), so it means "the content
 	// could not be read or checked". Users see it as the condition
 	// ConditionHashError, of the same name (ConditionKeyForIssueType). Store
 	// generation 29 gave the stored value this name; before, it named only
