@@ -10,7 +10,7 @@
 //
 // Related files:
 //   - observer_local.go:            LocalObserver struct, constructor, Watch() entry point
-//   - scanner.go:                   FullScan, walk/hash/filter logic
+//   - scanner.go:                   FullScan, walk/filter logic (hashing in scanner_hash.go)
 
 package syncobserve
 

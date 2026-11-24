@@ -55,12 +55,14 @@ func TestRootReadFailureObservationFindingsBatch_CreatesBoundaryIssue(t *testing
 }
 
 // localScanIssueTypesInSource returns every IssueType constant named in a
-// production file of the sync tree that builds a SkippedItem, with the files
-// that name it: the issue types a local scan can report. It reads the source,
-// so a type a new finding names is seen the moment a builder names it,
-// without a second hand-kept list. A builder file naming a type for another
-// reason is over-reported, which is the safe direction for the check that
-// uses it.
+// production file of a sync tree package that builds a SkippedItem, with the
+// files that name it: the issue types a local scan can report. The package,
+// not the file, is the unit: a file of a builder package may produce the
+// reason another file puts into the item (scanner_names.go's name rules,
+// scanner.go's skipped entry). It reads the source, so a type a new finding
+// names is seen the moment its package names it, without a second hand-kept
+// list. A builder package naming a type for another reason is over-reported,
+// which is the safe direction for the check that uses it.
 func localScanIssueTypesInSource(t *testing.T) map[syncdomain.IssueType][]string {
 	t.Helper()
 
@@ -72,7 +74,8 @@ func localScanIssueTypesInSource(t *testing.T) map[syncdomain.IssueType][]string
 		files = append(files, found...)
 	}
 
-	reported := make(map[syncdomain.IssueType][]string)
+	builderPackages := make(map[string]bool)
+	namedByFile := make(map[string]map[syncdomain.IssueType]struct{})
 	fset := token.NewFileSet()
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") {
@@ -80,9 +83,9 @@ func localScanIssueTypesInSource(t *testing.T) map[syncdomain.IssueType][]string
 		}
 		src, readErr := os.ReadFile(file) //nolint:gosec // the test reads the sync tree's source
 		require.NoError(t, readErr)
-		if !bytes.Contains(src, []byte("SkippedItem")) {
-			// Only a file that names the type can build one; skipping the
-			// rest keeps the parse to a handful of files.
+		if !bytes.Contains(src, []byte("Issue")) {
+			// Only a file that names an issue type can contribute one;
+			// skipping the rest keeps the parse to the files that can.
 			continue
 		}
 		parsed, parseErr := parser.ParseFile(fset, file, src, parser.SkipObjectResolution)
@@ -102,10 +105,18 @@ func localScanIssueTypesInSource(t *testing.T) map[syncdomain.IssueType][]string
 
 			return true
 		})
-		if !buildsSkippedItem {
+		if buildsSkippedItem {
+			builderPackages[filepath.Dir(file)] = true
+		}
+		namedByFile[file] = named
+	}
+
+	reported := make(map[syncdomain.IssueType][]string)
+	for _, file := range files {
+		if !builderPackages[filepath.Dir(file)] {
 			continue
 		}
-		for issueType := range named {
+		for issueType := range namedByFile[file] {
 			reported[issueType] = append(reported[issueType], file)
 		}
 	}

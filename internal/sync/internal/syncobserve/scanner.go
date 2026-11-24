@@ -3,14 +3,15 @@
 //
 // Contents:
 //   - FullScan:                orchestrates walk + hash phases → ScanResult
-//   - hashPhase:               parallel hash computation for discovered files
 //   - makeWalkFunc:            builds the filepath.WalkDir callback
 //   - classifyObservedInfo:    classifies one observed entry against baseline
-//   - computeStableHashWith:   double-stat hash for actively-written files
 //   - shouldObserveWithFilter: unified observation filter (Stage 1: name + path)
 //   - IsOversizedFile:         Stage 2 observation filter (file size > 250GB)
 //
 // Related files:
+//   - scanner_hash.go:            the hash phase and stable hashing
+//   - scanner_collisions.go:      case and Unicode-form collision detection
+//   - scanner_names.go:           OneDrive name and path validation
 //   - observer_local.go:          LocalObserver struct and Watch() entry point
 //   - observer_local_handlers.go: watch-mode event handlers
 
@@ -26,17 +27,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	stdsync "sync"
 	"sync/atomic"
-	"unicode/utf16"
-	"unicode/utf8"
-
-	"golang.org/x/sync/errgroup"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
-	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
-	"github.com/tonimelisma/onedrive-go/internal/panicguard"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncshortcut"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -72,33 +66,6 @@ const (
 	// bytesPerGB renders the oversized-file detail in GB (1024^3 bytes).
 	bytesPerGB = 1 << 30
 )
-
-// defaultCheckWorkers is the default parallel hash goroutine limit when
-// checkWorkers is zero (not configured).
-const defaultCheckWorkers = 4
-
-// hashJob describes a file that needs hashing during FullScan phase 2.
-type hashJob struct {
-	fsPath           string
-	dbRelPath        string
-	size             int64
-	mtime            int64
-	ctime            int64
-	localDevice      uint64
-	localInode       uint64
-	localBirthTime   int64
-	localHasIdentity bool
-	isNew            bool // true for creates, false for modifies
-}
-
-// resolveCheckWorkers returns the effective check worker count.
-func (o *LocalObserver) resolveCheckWorkers() int {
-	if o.checkWorkers > 0 {
-		return o.checkWorkers
-	}
-
-	return defaultCheckWorkers
-}
 
 // FullScan walks the sync root directory and returns a ScanResult holding a
 // row for every entry on disk, the entries that are new or changed against
@@ -231,142 +198,6 @@ func (o *LocalObserver) validateFullScanRoot(tree *synctree.Root, syncRoot strin
 		return err
 	}
 	return nil
-}
-
-// hashPhase runs hash jobs in parallel using errgroup with checkWorkers limit.
-// Returns a row for every hashed file, an event for each one whose content
-// differs from the baseline, plus any skipped items from panics in hash
-// goroutines. Panics are recovered and
-// converted to SkippedItem entries — a single corrupted file cannot crash the
-// entire scan (defensive coding per eng philosophy).
-//
-//nolint:funlen // The hashing pipeline keeps local-scan concurrency and panic recovery in one explicit owner.
-func (o *LocalObserver) hashPhase(
-	ctx context.Context, jobs []hashJob,
-) ([]syncdomain.LocalEntry, []syncdomain.LocalStateRow, []syncdomain.SkippedItem, error) {
-	workers := o.resolveCheckWorkers()
-
-	o.logger.Debug("starting parallel hash phase",
-		slog.Int("jobs", len(jobs)),
-		slog.Int("workers", workers),
-	)
-
-	hashFn := o.hooks.HashFile
-	if hashFn == nil {
-		hashFn = driveops.ComputeQuickXorHashContext
-	}
-
-	// mu guards the three result slices below. The walk fans out to workers
-	// bounded by g.SetLimit, and each appends its own findings through skip and
-	// keep, the only holders of mu, which release it with defer: a worker's
-	// panic boundary records the file through skip, and would wait forever on
-	// a lock a panic left held.
-	var mu stdsync.Mutex
-	var events []syncdomain.LocalEntry
-	var rows []syncdomain.LocalStateRow
-	var skipped []syncdomain.SkippedItem
-	skip := func(item syncdomain.SkippedItem) {
-		mu.Lock()
-		defer mu.Unlock()
-		skipped = append(skipped, item)
-	}
-	keep := func(ev *syncdomain.LocalEntry, row *syncdomain.LocalStateRow) {
-		mu.Lock()
-		defer mu.Unlock()
-		if ev != nil {
-			events = append(events, *ev)
-		}
-		rows = append(rows, *row)
-	}
-
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(workers)
-	recorder := newHashCacheRecorder(o.hashCache, o.logger)
-	defer recorder.flush(ctx)
-
-	for _, job := range jobs {
-		g.Go(func() (retErr error) {
-			// Recover from panics in hash computation (e.g., corrupt file
-			// triggering a nil dereference in the hash library). Convert to
-			// SkippedItem so the rest of the scan completes normally.
-			defer func() {
-				if r := recover(); r != nil {
-					panicErr := panicguard.Recovered(o.logger, "while hashing "+job.dbRelPath, r,
-						slog.String("path", job.dbRelPath))
-					skip(syncdomain.SkippedItem{
-						Path:   job.dbRelPath,
-						Reason: syncdomain.IssueHashError,
-						Detail: panicErr.Error(),
-					})
-				}
-			}()
-
-			if gCtx.Err() != nil {
-				return gCtx.Err()
-			}
-
-			hash, err := hashFn(gCtx, job.fsPath)
-			if err != nil {
-				// Debug: this repeats on every safety scan for a file that
-				// stats but cannot be opened. An unreadable file is recorded
-				// as a skipped item instead, reported once and in `status`.
-				o.logger.Debug("hash computation failed, emitting event with empty hash",
-					slog.String("path", job.dbRelPath), slog.Any("error", err))
-				switch {
-				case errors.Is(err, os.ErrPermission):
-					skip(syncdomain.SkippedItem{
-						Path:   job.dbRelPath,
-						Reason: syncdomain.IssueLocalReadDenied,
-						Detail: "file not readable (check filesystem permissions)",
-					})
-				case !errors.Is(err, os.ErrNotExist):
-					// An I/O error is not a content change: without the
-					// issue the empty hash would read as "changed", and an
-					// upload that failed the same way would be planned on
-					// every pass (D-005). The issue makes the path
-					// unavailable truth.
-					skip(syncdomain.SkippedItem{
-						Path:   job.dbRelPath,
-						Reason: syncdomain.IssueHashError,
-						Detail: fmt.Sprintf("could not read the file to check its content (%v)", err),
-					})
-				}
-			}
-
-			row := syncdomain.LocalStateRow{
-				Path:             job.dbRelPath,
-				ItemType:         syncdomain.ItemTypeFile,
-				Hash:             hash,
-				Size:             job.size,
-				Mtime:            job.mtime,
-				Ctime:            job.ctime,
-				LocalDevice:      job.localDevice,
-				LocalInode:       job.localInode,
-				LocalBirthTime:   job.localBirthTime,
-				LocalHasIdentity: job.localHasIdentity,
-			}
-
-			// For modifies: check if hash matches baseline (no real change).
-			if !job.isNew && hash != "" {
-				if existing, found := o.baseline.GetByPath(job.dbRelPath); found && hash == existing.LocalHash {
-					keep(nil, &row)
-					return nil
-				}
-			}
-
-			recorder.addJob(gCtx, &job, hash)
-
-			keep(&syncdomain.LocalEntry{Path: job.dbRelPath, ItemType: syncdomain.ItemTypeFile}, &row)
-
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return nil, nil, nil, fmt.Errorf("syncobserve: hash phase: %w", err)
-	}
-
-	return events, rows, skipped, nil
 }
 
 // makeWalkFunc returns a WalkDirFunc that classifies filesystem entries
@@ -657,22 +488,6 @@ func baselineLocalStateRow(base *syncdomain.BaselineEntry) syncdomain.LocalState
 	}
 }
 
-// withoutDroppedHashJobs removes the jobs of twins admitSyncedEntry set
-// aside: a file twin's own job and every job below a folder twin.
-func withoutDroppedHashJobs(jobs []hashJob, availability *scanAvailability) []hashJob {
-	if len(availability.droppedHashJobs) == 0 && len(availability.droppedTrees) == 0 {
-		return jobs
-	}
-	kept := jobs[:0]
-	for i := range jobs {
-		if !availability.hashJobDropped(jobs[i].fsPath) {
-			kept = append(kept, jobs[i])
-		}
-	}
-
-	return kept
-}
-
 func (o *LocalObserver) processObservedInfo(
 	fsPath, dbRelPath string,
 	info fs.FileInfo,
@@ -922,291 +737,6 @@ func sortedLocalStateRows(current map[string]syncdomain.LocalStateRow) []syncdom
 	return rows
 }
 
-// DetectCaseCollisions finds the new and changed entries whose name collides
-// with another entry of the same directory on disk: names OneDrive treats as
-// one (case, Unicode form, ignored characters, R-2.12.1). Each collider is
-// removed from events and returned as a SkippedItem; uploading both would
-// make one silently overwrite the other.
-//
-// names is every entry the scan found on disk (ScanNames). Only on-disk
-// rivals count: a synced name that is gone is the old name of a case-only
-// rename or a delete, which the planner orders, not a collision. An
-// unchanged synced entry has no event and gets no finding, so it keeps
-// syncing while the new name beside it waits (R-2.12.2). Two on-disk entries
-// with one stored form (an NFC and an NFD twin) collide even when one of them
-// is synced (R-2.13.2).
-//
-// O(n) time, O(n) memory. Pure function, no side effects.
-func DetectCaseCollisions(
-	events []syncdomain.LocalEntry, names ScanNames,
-) (clean []syncdomain.LocalEntry, collisions []syncdomain.SkippedItem) {
-	if len(events) == 0 {
-		return nil, nil
-	}
-
-	changed := make(map[string]bool, len(events))
-	for i := range events {
-		changed[events[i].Path] = true
-	}
-
-	colliderSet := make(map[int]struct{})
-	findings := make(map[int]nameCollision)
-	for i := range events {
-		d := names[filepath.Dir(events[i].Path)]
-		if d == nil {
-			continue
-		}
-		others, sameForm := d.rivals(filepath.Base(events[i].Path))
-		if len(others) == 0 && !sameForm {
-			continue
-		}
-		colliderSet[i] = struct{}{}
-		findings[i] = nameCollision{others: others, sameForm: sameForm}
-	}
-
-	// Suppress children of colliding directories.
-	childColliderSet, collidingDirPrefixes := suppressDirectoryChildren(events, colliderSet)
-
-	if len(colliderSet) == 0 {
-		return events, nil
-	}
-
-	collisions = buildCollisionSkippedItems(events, findings, changed, childColliderSet, collidingDirPrefixes)
-
-	clean = make([]syncdomain.LocalEntry, 0, len(events)-len(colliderSet))
-	for i := range events {
-		if _, collider := colliderSet[i]; !collider {
-			clean = append(clean, events[i])
-		}
-	}
-
-	return clean, collisions
-}
-
-// nameCollision is what DetectCaseCollisions found for one entry: the
-// on-disk spellings of its rivals, and whether a twin shares its stored form.
-type nameCollision struct {
-	others   []string
-	sameForm bool
-}
-
-// suppressDirectoryChildren marks children of colliding directories as colliders.
-// They can't be uploaded to a folder that won't exist on OneDrive.
-func suppressDirectoryChildren(
-	events []syncdomain.LocalEntry, colliderSet map[int]struct{},
-) (childColliderSet map[int]struct{}, collidingDirPrefixes []string) {
-	childColliderSet = make(map[int]struct{})
-
-	for idx := range colliderSet {
-		if events[idx].ItemType == syncdomain.ItemTypeFolder {
-			collidingDirPrefixes = append(collidingDirPrefixes, events[idx].Path+"/")
-		}
-	}
-
-	for i := range events {
-		if _, already := colliderSet[i]; already {
-			continue
-		}
-
-		for _, prefix := range collidingDirPrefixes {
-			if strings.HasPrefix(events[i].Path, prefix) {
-				colliderSet[i] = struct{}{}
-				childColliderSet[i] = struct{}{}
-
-				break
-			}
-		}
-	}
-
-	return childColliderSet, collidingDirPrefixes
-}
-
-// buildCollisionSkippedItems constructs one SkippedItem per colliding stored
-// path, with a Detail naming the other collider(s), and one per child of a
-// colliding directory.
-func buildCollisionSkippedItems(
-	events []syncdomain.LocalEntry,
-	findings map[int]nameCollision,
-	changed map[string]bool,
-	childColliderSet map[int]struct{},
-	collidingDirPrefixes []string,
-) []syncdomain.SkippedItem {
-	collisions := make([]syncdomain.SkippedItem, 0, len(findings)+len(childColliderSet))
-
-	seen := make(map[string]bool, len(findings))
-	for idx := range events {
-		found, ok := findings[idx]
-		if !ok {
-			continue
-		}
-		ev := &events[idx]
-		if seen[ev.Path] {
-			continue // the same stored path is reported once
-		}
-		seen[ev.Path] = true
-		collisions = append(collisions, syncdomain.SkippedItem{
-			Path:   ev.Path,
-			Reason: syncdomain.IssueCaseCollision,
-			Detail: nameCollisionDetail(ev.Path, found, changed),
-		})
-	}
-
-	// Child collisions — distinct Detail indicating the parent directory collision.
-	for idx := range events {
-		if _, isChild := childColliderSet[idx]; !isChild {
-			continue
-		}
-		ev := &events[idx]
-
-		parentDir := ""
-		for _, prefix := range collidingDirPrefixes {
-			if strings.HasPrefix(ev.Path, prefix) {
-				parentDir = strings.TrimSuffix(prefix, "/")
-
-				break
-			}
-		}
-
-		collisions = append(collisions, syncdomain.SkippedItem{
-			Path:   ev.Path,
-			Reason: syncdomain.IssueCaseCollision,
-			Detail: fmt.Sprintf("parent directory %q has a case collision",
-				filepath.Base(parentDir)),
-		})
-	}
-
-	return collisions
-}
-
-// nameCollisionDetail is the finding's detail for the entry stored at path. A
-// rival with no event of its own is a synced file the user did not change.
-func nameCollisionDetail(path string, found nameCollision, changed map[string]bool) string {
-	dir, name := filepath.Dir(path), filepath.Base(path)
-	others := make([]string, 0, len(found.others))
-	rivalChanged := false
-	for _, other := range found.others {
-		stored := namekey.Stored(other)
-		others = append(others, stored)
-		if changed[filepath.Join(dir, stored)] {
-			rivalChanged = true
-		}
-	}
-
-	if found.sameForm {
-		detail := sameUnicodeFormCollisionDetail
-		if len(others) > 0 {
-			detail += "; it also conflicts with " + strings.Join(others, ", ")
-		}
-
-		return detail
-	}
-
-	prefix := "conflicts with synced file"
-	if rivalChanged {
-		prefix = "conflicts with"
-	}
-
-	return collisionDetail(prefix, name, others)
-}
-
-// collisionDetail names the other colliding file(s) and what to do. When the
-// names differ in characters OneDrive ignores when comparing names (emoji and
-// anything else beyond U+FFFF), the visible difference would leave the user
-// puzzled about why `a.txt` and `a😀.txt` collide, so the detail says why.
-func collisionDetail(prefix, name string, others []string) string {
-	detail := prefix + " " + strings.Join(others, ", ")
-	for _, other := range others {
-		if namekey.DiffersInIgnoredCharacters(name, other) {
-			return fmt.Sprintf("%s: OneDrive ignores emoji and other characters outside the Basic Multilingual Plane "+
-				"when it compares names, so %q and %q are one name there; rename one of them", detail, name, other)
-		}
-	}
-
-	if len(others) == 0 {
-		return detail
-	}
-
-	return fmt.Sprintf("%s: OneDrive treats %q and %q as the same name; rename one of them", detail, name, others[0])
-}
-
-// sameUnicodeFormCollisionDetail is the finding's detail for two entries of
-// one folder whose names differ only in Unicode form: stored paths are NFC
-// (R-2.13.1), so both have one path, and naming the other would print the
-// same name twice.
-const sameUnicodeFormCollisionDetail = "another file here has the same name in a different Unicode form " +
-	"(for example é typed as e plus an accent); rename one of them"
-
-// ---------------------------------------------------------------------------
-// File hashing
-// ---------------------------------------------------------------------------
-
-// computeStableHash hashes a file and verifies it was not modified during the
-// hash operation by comparing pre/post stat results. Returns errFileChangedDuringHash
-// if the file changed (B-119). Caller-specific handling: handleWrite skips
-// (Write events guarantee a follow-up), handleCreate and scanNewDirectory emit
-// with empty hash (Create events and directory scans have no guaranteed follow-up; B-203).
-//
-// The double os.Stat is intentional: pre-stat captures baseline metadata,
-// post-stat detects changes that occurred during hashing. The caller's earlier
-// stat cannot substitute because time may pass between the caller's stat and
-// the hash operation.
-func computeStableHashWith(
-	ctx context.Context,
-	fsPath string,
-	hashFunc func(ctx context.Context, path string) (string, error),
-) (string, error) {
-	pre, err := trustedStat(fsPath)
-	if err != nil {
-		return "", fmt.Errorf("stat before hashing: %w", err)
-	}
-
-	if hashFunc == nil {
-		hashFunc = driveops.ComputeQuickXorHashContext
-	}
-
-	hash, err := hashFunc(ctx, fsPath)
-	if err != nil {
-		return "", fmt.Errorf("compute quickxor hash: %w", err)
-	}
-
-	post, err := trustedStat(fsPath)
-	if err != nil {
-		return "", fmt.Errorf("stat after hashing: %w", err)
-	}
-
-	// ctime too: an in-place rewrite that restores the old mtime during the
-	// read leaves size and mtime equal, and the hash would describe neither
-	// version (R-2.2.4).
-	if pre.Size() != post.Size() || pre.ModTime() != post.ModTime() || syncdomain.FileChangeTime(pre) != syncdomain.FileChangeTime(post) {
-		return "", errFileChangedDuringHash
-	}
-
-	return hash, nil
-}
-
-func trustedStat(path string) (os.FileInfo, error) {
-	file, err := localpath.OpenRegular(path)
-	if err != nil {
-		// No path here: the *os.PathError already names it.
-		return nil, fmt.Errorf("open trusted path: %w", err)
-	}
-
-	info, statErr := file.Stat()
-	closeErr := file.Close()
-	if statErr != nil {
-		if closeErr != nil {
-			return nil, errors.Join(statErr, closeErr)
-		}
-
-		return nil, fmt.Errorf("stat trusted path: %w", statErr)
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("closing %s: %w", path, closeErr)
-	}
-
-	return info, nil
-}
-
 // ---------------------------------------------------------------------------
 // Unified observation filter
 // ---------------------------------------------------------------------------
@@ -1269,57 +799,6 @@ func dirEntryKind(d fs.DirEntry) syncdomain.ObservedKind {
 	return syncdomain.ObservedKindFile
 }
 
-// validateOneDriveNameFor applies the name rules of the target drive type.
-// personal relaxes the Business/SharePoint-only reservations (lockfiles,
-// desktop.ini, "~$" owner files) that OneDrive Personal accepts.
-func validateOneDriveNameFor(name string, personal bool) (reason syncdomain.IssueType, detail string) {
-	if name == "" {
-		return syncdomain.IssueInvalidFilename, "the name is empty"
-	}
-
-	// Graph would reinterpret invalid bytes (0xFF arrives as "ÿ"), and the
-	// renamed remote item would then rename the local file to match.
-	if !utf8.ValidString(name) {
-		return syncdomain.IssueInvalidFilename, "the name is not valid UTF-8"
-	}
-
-	if containsControlChar(name) {
-		return syncdomain.IssueInvalidFilename, "the name contains a control character (such as a tab or newline)"
-	}
-
-	if name[len(name)-1] == '.' {
-		return syncdomain.IssueInvalidFilename, "the name ends with a period"
-	}
-
-	if name[len(name)-1] == ' ' {
-		return syncdomain.IssueInvalidFilename, "the name ends with a space"
-	}
-
-	if name[0] == ' ' {
-		return syncdomain.IssueInvalidFilename, "the name starts with a space"
-	}
-
-	lower := strings.ToLower(name)
-
-	if isReservedDeviceName(lower) {
-		return syncdomain.IssueInvalidFilename, "the name is reserved by Windows"
-	}
-
-	if strings.Contains(lower, "_vti_") {
-		return syncdomain.IssueInvalidFilename, `OneDrive reserves names containing "_vti_"`
-	}
-
-	if !personal && isReservedPattern(name, lower) {
-		return syncdomain.IssueInvalidFilename, "OneDrive for work or school reserves this name"
-	}
-
-	if containsInvalidChars(name) {
-		return syncdomain.IssueInvalidFilename, `the name contains a character OneDrive does not allow (" * : < > ? / \ |)`
-	}
-
-	return "", ""
-}
-
 // ---------------------------------------------------------------------------
 // Filtering and validation helpers
 // ---------------------------------------------------------------------------
@@ -1333,86 +812,6 @@ func SyncRootExists(syncRoot string) bool {
 
 	info, err := tree.Stat(".")
 	return err == nil && info.IsDir()
-}
-
-func validateObservedName(name, path string, rules syncdomain.LocalObservationRules) (reason syncdomain.IssueType, detail string) {
-	if reason, detail := validateOneDriveNameFor(name, rules.PersonalNameRules); reason != "" {
-		return reason, detail
-	}
-
-	if rules.RejectSharePointRootForms && isSharePointRootForms(name, path) {
-		return syncdomain.IssueInvalidFilename, "the name is reserved at the root of a SharePoint library"
-	}
-
-	return "", ""
-}
-
-func isSharePointRootForms(name, path string) bool {
-	return path == name && strings.EqualFold(name, "forms")
-}
-
-// isReservedDeviceName returns true for Windows reserved device names
-// (case-insensitive): CON, PRN, AUX, NUL, COM0-COM9, LPT0-LPT9, with or
-// without an extension. OneDrive rejects "con.txt" and "nul.tar.gz" exactly
-// like "con", so only the part before the first period matters.
-func isReservedDeviceName(lower string) bool {
-	if base, _, found := strings.Cut(lower, "."); found {
-		lower = base
-	}
-
-	switch lower {
-	case "con", "prn", "aux", "nul":
-		return true
-	}
-
-	// COM0-COM9, LPT0-LPT9: exactly 4 characters, prefix + single digit.
-	if len(lower) == deviceNameWithDigitLen &&
-		(strings.HasPrefix(lower, "com") || strings.HasPrefix(lower, "lpt")) {
-		digit := lower[3]
-		return digit >= '0' && digit <= '9'
-	}
-
-	return false
-}
-
-// containsControlChar reports C0 control characters and DEL, which Graph
-// rejects in names.
-func containsControlChar(name string) bool {
-	for _, c := range name {
-		if c < 0x20 || c == 0x7f {
-			return true
-		}
-	}
-
-	return false
-}
-
-// isReservedPattern returns true for the names OneDrive for work or school
-// reserves: .lock extension, desktop.ini, ~$ prefix (Office temp). "_vti_" is
-// checked separately because every drive type rejects it.
-func isReservedPattern(name, lower string) bool {
-	if strings.HasSuffix(lower, ".lock") {
-		return true
-	}
-
-	if lower == "desktop.ini" {
-		return true
-	}
-
-	return strings.HasPrefix(name, "~$")
-}
-
-// containsInvalidChars returns true if the name contains characters
-// forbidden by OneDrive: " * : < > ? / \ |
-func containsInvalidChars(name string) bool {
-	for _, c := range name {
-		switch c {
-		case '"', '*', ':', '<', '>', '?', '/', '\\', '|':
-			return true
-		}
-	}
-
-	return false
 }
 
 // skipEntry returns filepath.SkipDir for directories (to skip the subtree)
@@ -1435,18 +834,6 @@ func BuildLocalStateRows(result ScanResult) []syncdomain.LocalStateRow {
 	return rows
 }
 
-// oneDrivePathLength counts a path the way OneDrive's 400-character limit
-// does: in UTF-16 code units, the unit its error messages and its 260-unit
-// emoji names measure (L-05). Counting UTF-8 bytes skipped valid paths: a
-// 150-character CJK path is 450 bytes, and 300 "ä" are 600.
-func oneDrivePathLength(path string) int {
-	return len(utf16.Encode([]rune(path)))
-}
-
 // errSyncRootMissing is returned when the sync root directory does not exist
 // or is not a directory.
 var errSyncRootMissing = errors.New("sync folder does not exist")
-
-// errFileChangedDuringHash is returned when a file's metadata changes between
-// pre-hash stat and post-hash stat, indicating active writing (B-119).
-var errFileChangedDuringHash = errors.New("file changed while it was being hashed")

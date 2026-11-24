@@ -9,7 +9,7 @@
 //
 // Related files:
 //   - observer_local_handlers.go:  watch event loop + fsnotify event handlers
-//   - scanner.go:                   FullScan, walk/hash/filter logic
+//   - scanner.go:                   FullScan, walk/filter logic (hashing in scanner_hash.go)
 
 package syncobserve
 
