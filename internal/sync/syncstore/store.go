@@ -12,7 +12,7 @@
 //   - nullKnownInt64:   preserve zero for known values like file sizes
 //
 // Related files:
-//   - store_write_baseline.go:     baseline CRUD and outcome commits
+//   - store_write_baseline.go:     baseline outcome commits (reads in store_read_baseline.go)
 //   - store_write_observation.go:  remote state observation persistence
 //   - store_observation_issues.go: observation issue recording and read helpers
 //   - store_retry_work.go:         exact retry work persistence and mutation helpers
