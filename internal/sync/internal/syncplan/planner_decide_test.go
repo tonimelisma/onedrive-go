@@ -13,12 +13,11 @@ import (
 //
 // The store reads the inputs and the planner decides in Go: the comparison
 // and reconciliation rows of a path carry the same kinds, the decider's; an
-// unclassified row carries the inputs the plan error prints; and the rows
-// the read returned stay undecided.
+// unclassified row carries the inputs the plan error prints.
 func TestDecideComparisons_GoDecidesEveryRowOfOneRead(t *testing.T) {
 	t.Parallel()
 
-	read := []syncdomain.SQLiteComparisonRow{
+	read := []syncdomain.ComparisonRow{
 		{Path: "new.txt", LocalType: syncdomain.SideFile, LocalChanged: true},
 		{Path: "other.txt", LocalType: syncdomain.SideFile, LocalChanged: true},
 	}
@@ -34,7 +33,6 @@ func TestDecideComparisons_GoDecidesEveryRowOfOneRead(t *testing.T) {
 		assert.Equal(t, syncdomain.ComparisonLocalOnlyCreate, reconciliations[i].ComparisonKind)
 		assert.Equal(t, syncdomain.ReconcileUpload, reconciliations[i].ReconciliationKind)
 		assert.Nil(t, reconciliations[i].DecisionInputs)
-		assert.Equal(t, syncdomain.ComparisonUnclassified, read[i].ComparisonKind, "the read's rows are not changed")
 	}
 
 	refuseNew := func(_ syncdomain.DecisionState) syncdomain.Decision {

@@ -237,3 +237,23 @@ func newWorkerTestSetupWith(t *testing.T, configure func(*syncexec.ExecutorInput
 
 	return mustNewTestExecutorConfig(t, &in), mgr, syncRoot
 }
+
+// reconciliationKindsByPath names each row's reconciliation kind by its path.
+func reconciliationKindsByPath(rows []syncdomain.SQLiteReconciliationRow) map[string]string {
+	out := make(map[string]string, len(rows))
+	for i := range rows {
+		out[rows[i].Path] = rows[i].ReconciliationKind.String()
+	}
+
+	return out
+}
+
+// comparisonKindsByPath names each decided row's comparison kind by its path.
+func comparisonKindsByPath(rows []syncplan.DecidedComparison) map[string]string {
+	out := make(map[string]string, len(rows))
+	for i := range rows {
+		out[rows[i].Path] = rows[i].ComparisonKind.String()
+	}
+
+	return out
+}

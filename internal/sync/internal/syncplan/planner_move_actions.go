@@ -365,11 +365,11 @@ func displaceFoldersDeletedHere(inputs *moveInputs, localDeletes map[string]bool
 func giveWayFoldersReplacedOnOneDrive(
 	inputs *moveInputs,
 	reconciled []syncdomain.Action,
-	comparisons []syncdomain.SQLiteComparisonRow,
+	comparisons []DecidedComparison,
 	views map[string]*syncdomain.PathView,
 	localRows []syncdomain.LocalStateRow,
 ) []syncdomain.Action {
-	cmpByPath := make(map[string]*syncdomain.SQLiteComparisonRow, len(comparisons))
+	cmpByPath := make(map[string]*DecidedComparison, len(comparisons))
 	for i := range comparisons {
 		cmpByPath[comparisons[i].Path] = &comparisons[i]
 	}
@@ -418,7 +418,7 @@ func giveWayFoldersReplacedOnOneDrive(
 // at its baseline path here, whose path OneDrive gives another synced item it
 // moved there (cmp is the comparison row of that path, synced the keys of
 // the synced items).
-func replacedOnOneDriveAndLeftHere(n *moveNode, cmp *syncdomain.SQLiteComparisonRow, synced map[string]bool) bool {
+func replacedOnOneDriveAndLeftHere(n *moveNode, cmp *DecidedComparison, synced map[string]bool) bool {
 	p := n.paths[moveCoordBaseline]
 	return n.itemType == syncdomain.ItemTypeFolder && n.displace == moveDisplaceNever && !n.present(moveCoordRemote) &&
 		n.paths[moveCoordLocal] == p && cmp != nil && cmp.RemoteType.Present() &&

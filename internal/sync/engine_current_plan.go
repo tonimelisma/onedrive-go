@@ -503,7 +503,7 @@ func (flow *engineFlow) decider() syncplan.Decider {
 // every row the comparison query produced to the states it can produce
 // (syncdomain.DecisionState.Valid): the decision table's properties are
 // proven over valid states only, so a row outside them is a query bug.
-func (flow *engineFlow) mustAssertDecisionStatesValid(comparisons []syncdomain.SQLiteComparisonRow) {
+func (flow *engineFlow) mustAssertDecisionStatesValid(comparisons []syncdomain.ComparisonRow) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}

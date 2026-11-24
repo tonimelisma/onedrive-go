@@ -8,34 +8,28 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // decidedComparisonRows reads every path's comparison row over the durable
 // current-state tables and decides each with the decision table, as the
-// planner does (syncplan.DecideComparisons, which these tests cannot
-// import): the store's tests prove the comparison facts by the kinds they
-// decide to.
+// planner does (syncplan.DecideComparisons): the store's tests prove the
+// comparison facts by the kinds they decide to.
 func decidedComparisonRows(
 	ctx context.Context,
 	store *SyncStore,
-) ([]syncdomain.SQLiteComparisonRow, []syncdomain.SQLiteReconciliationRow, error) {
+) ([]syncplan.DecidedComparison, []syncdomain.SQLiteReconciliationRow, error) {
 	comparisons, err := queryComparisonRowsForTables(ctx, store.db, "local_state", "remote_state")
 	if err != nil {
 		return nil, nil, err
 	}
-	reconciliations := make([]syncdomain.SQLiteReconciliationRow, len(comparisons))
-	for i := range comparisons {
-		decision := syncdomain.Decide(comparisons[i].DecisionState())
-		comparisons[i].ComparisonKind = decision.Comparison
-		reconciliations[i] = comparisons[i].ReconciliationRow(decision)
-	}
+	decided, reconciliations := syncplan.DecideComparisons(comparisons, syncdomain.Decide)
 
-	return comparisons, reconciliations, nil
+	return decided, reconciliations, nil
 }
 
-func queryComparisonState(ctx context.Context, store *SyncStore) ([]syncdomain.SQLiteComparisonRow, error) {
+func queryComparisonState(ctx context.Context, store *SyncStore) ([]syncplan.DecidedComparison, error) {
 	comparisons, _, err := decidedComparisonRows(ctx, store)
 	return comparisons, err
 }
@@ -57,11 +51,11 @@ func TestQueryReconciliationState_BaselineAbsentFromBothRemovesBaseline(t *testi
 
 	comparisonRows, err := queryComparisonState(t.Context(), store)
 	require.NoError(t, err)
-	assert.Equal(t, "both_missing", syncfixture.ComparisonKindsByPath(comparisonRows)["gone.txt"])
+	assert.Equal(t, "both_missing", comparisonKindsByPath(comparisonRows)["gone.txt"])
 
 	reconciliationRows, err := queryReconciliationState(t.Context(), store)
 	require.NoError(t, err)
-	assert.Equal(t, "baseline_remove", syncfixture.ReconciliationKindsByPath(reconciliationRows)["gone.txt"])
+	assert.Equal(t, "baseline_remove", reconciliationKindsByPath(reconciliationRows)["gone.txt"])
 }
 
 // Validates: R-2.1.3, R-2.1.4
@@ -102,7 +96,7 @@ func TestQueryReconciliationState_FileDecisionMatrix(t *testing.T) {
 
 	reconciliationRows, err := queryReconciliationState(ctx, store)
 	require.NoError(t, err)
-	got := syncfixture.ReconciliationKindsByPath(reconciliationRows)
+	got := reconciliationKindsByPath(reconciliationRows)
 
 	assert.Equal(t, "upload", got["upload.txt"])
 	assert.Equal(t, "download", got["download.txt"])
@@ -143,7 +137,7 @@ func TestQueryReconciliationState_FolderDecisionMatrix(t *testing.T) {
 
 	reconciliationRows, err := queryReconciliationState(ctx, store)
 	require.NoError(t, err)
-	got := syncfixture.ReconciliationKindsByPath(reconciliationRows)
+	got := reconciliationKindsByPath(reconciliationRows)
 
 	// A folder the user deleted locally is deleted on OneDrive, exactly like
 	// a file. It must never be re-created locally (that resurrected the source
@@ -181,11 +175,11 @@ func TestQueryReconciliationState_FolderMetadataChurnIsNoop(t *testing.T) {
 
 	comparisonRows, err := queryComparisonState(ctx, store)
 	require.NoError(t, err)
-	assert.Equal(t, "unchanged", syncfixture.ComparisonKindsByPath(comparisonRows)["stable-folder"])
+	assert.Equal(t, "unchanged", comparisonKindsByPath(comparisonRows)["stable-folder"])
 
 	reconciliationRows, err := queryReconciliationState(ctx, store)
 	require.NoError(t, err)
-	assert.Equal(t, "noop", syncfixture.ReconciliationKindsByPath(reconciliationRows)["stable-folder"])
+	assert.Equal(t, "noop", reconciliationKindsByPath(reconciliationRows)["stable-folder"])
 }
 
 // Validates: R-2.1.3, R-2.1.4
@@ -216,13 +210,13 @@ func TestQueryReconciliationState_LocalFolderMoveUsesFilesystemIdentity(t *testi
 
 	comparisonRows, err := queryComparisonState(ctx, store)
 	require.NoError(t, err)
-	kinds := syncfixture.ComparisonKindsByPath(comparisonRows)
+	kinds := comparisonKindsByPath(comparisonRows)
 	assert.Equal(t, "local_move_source", kinds["Projects"])
 	assert.Equal(t, "local_move_dest", kinds["Renamed Projects"])
 
 	reconciliationRows, err := queryReconciliationState(ctx, store)
 	require.NoError(t, err)
-	got := syncfixture.ReconciliationKindsByPath(reconciliationRows)
+	got := reconciliationKindsByPath(reconciliationRows)
 	assert.Equal(t, "local_move", got["Projects"])
 }
 
@@ -262,7 +256,7 @@ func TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove(
 
 	reconciliationRows, err := queryReconciliationState(ctx, store)
 	require.NoError(t, err)
-	got := syncfixture.ReconciliationKindsByPath(reconciliationRows)
+	got := reconciliationKindsByPath(reconciliationRows)
 	assert.Equal(t, "remote_delete", got["old.txt"])
 	assert.Equal(t, "upload", got["identity-target.txt"])
 	assert.Equal(t, "upload", got["same-hash-copy.txt"])
@@ -327,7 +321,7 @@ func TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration(t *t
 
 			reconciliationRows, err := queryReconciliationState(ctx, store)
 			require.NoError(t, err)
-			got := syncfixture.ReconciliationKindsByPath(reconciliationRows)
+			got := reconciliationKindsByPath(reconciliationRows)
 			if tt.wantMove {
 				assert.Equal(t, "local_move", got["vim.swp"])
 				assert.Equal(t, "local_move", got["secret.txt"])
@@ -401,7 +395,7 @@ func TestQueryReconciliationState_IdentityChangeAtSamePathIsNotAnEdit(t *testing
 
 	reconciliationRows, err := queryReconciliationState(ctx, store)
 	require.NoError(t, err)
-	got := syncfixture.ReconciliationKindsByPath(reconciliationRows)
+	got := reconciliationKindsByPath(reconciliationRows)
 	assert.Equal(t, "baseline_update", got["same-content.txt"])
 	assert.Equal(t, "upload", got["edited.txt"])
 	assert.Equal(t, "upload", got["unhashed.txt"])
@@ -453,7 +447,7 @@ func TestQueryReconciliationState_MissingRemoteHashIsUnknownNotChanged(t *testin
 
 	reconciliationRows, err := queryReconciliationState(ctx, store)
 	require.NoError(t, err)
-	got := syncfixture.ReconciliationKindsByPath(reconciliationRows)
+	got := reconciliationKindsByPath(reconciliationRows)
 	assert.NotEqual(t, "download", got["lost-hash.txt"])
 	assert.Equal(t, "download", got["resized.txt"])
 	assert.Equal(t, "baseline_update", got["empty.txt"], "two empty files are equal without a conflict copy")
@@ -483,7 +477,7 @@ func TestQueryReconciliationState_LocallyDeletedFolderReplacedOnlineIsRecreatedL
 
 	reconciliationRows, err := queryReconciliationState(ctx, store)
 	require.NoError(t, err)
-	assert.Equal(t, "folder_create_local", syncfixture.ReconciliationKindsByPath(reconciliationRows)["shared"])
+	assert.Equal(t, "folder_create_local", reconciliationKindsByPath(reconciliationRows)["shared"])
 }
 
 // Validates: R-2.17.8
@@ -535,7 +529,7 @@ func TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated(t *tes
 
 	comparisonRows, err := queryComparisonState(ctx, store)
 	require.NoError(t, err)
-	kinds := syncfixture.ComparisonKindsByPath(comparisonRows)
+	kinds := comparisonKindsByPath(comparisonRows)
 	assert.Equal(t, "unchanged", kinds["linked.txt"], "a hard link leaves the synced name in place")
 	assert.Equal(t, "local_only_create", kinds["hard-link.txt"])
 	assert.Equal(t, "unchanged", kinds["copied.txt"])
@@ -547,7 +541,7 @@ func TestQueryReconciliationState_MovePairingRequiresTheSourceToBeVacated(t *tes
 
 	reconciliationRows, err := queryReconciliationState(ctx, store)
 	require.NoError(t, err)
-	got := syncfixture.ReconciliationKindsByPath(reconciliationRows)
+	got := reconciliationKindsByPath(reconciliationRows)
 	assert.Equal(t, "upload", got["hard-link.txt"])
 	assert.Equal(t, "upload", got["copy.txt"])
 }
@@ -611,7 +605,7 @@ func TestQueryReconciliationState_LocalMovePairingComparesBirthTimes(t *testing.
 
 				reconciliationRows, err := queryReconciliationState(ctx, store)
 				require.NoError(t, err)
-				got := syncfixture.ReconciliationKindsByPath(reconciliationRows)
+				got := reconciliationKindsByPath(reconciliationRows)
 				if tc.wantMove {
 					assert.Equal(t, "local_move", got["old"])
 					assert.Equal(t, "local_move", got["new"])
@@ -679,7 +673,7 @@ func TestQueryReconciliationState_BirthTimeAtTheSamePath(t *testing.T) {
 
 			reconciliationRows, err := queryReconciliationState(ctx, store)
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, syncfixture.ReconciliationKindsByPath(reconciliationRows)["a.txt"])
+			assert.Equal(t, tc.want, reconciliationKindsByPath(reconciliationRows)["a.txt"])
 		})
 	}
 }
@@ -738,7 +732,7 @@ func TestQueryReconciliationState_LocalEditEqualToUnchangedRemoteIsABaselineUpda
 
 	reconciliationRows, err := queryReconciliationState(ctx, store)
 	require.NoError(t, err)
-	assert.Equal(t, "baseline_update", syncfixture.ReconciliationKindsByPath(reconciliationRows)["a.txt"])
+	assert.Equal(t, "baseline_update", reconciliationKindsByPath(reconciliationRows)["a.txt"])
 }
 
 // Validates: R-6.2.16
@@ -822,4 +816,24 @@ func TestQueryComparisonState_SideTypesCarryPresenceAndItemType(t *testing.T) {
 			assert.Error(t, err, "%s accepts item_type %q", table, itemType)
 		}
 	}
+}
+
+// reconciliationKindsByPath names each row's reconciliation kind by its path.
+func reconciliationKindsByPath(rows []syncdomain.SQLiteReconciliationRow) map[string]string {
+	out := make(map[string]string, len(rows))
+	for i := range rows {
+		out[rows[i].Path] = rows[i].ReconciliationKind.String()
+	}
+
+	return out
+}
+
+// comparisonKindsByPath names each decided row's comparison kind by its path.
+func comparisonKindsByPath(rows []syncplan.DecidedComparison) map[string]string {
+	out := make(map[string]string, len(rows))
+	for i := range rows {
+		out[rows[i].Path] = rows[i].ComparisonKind.String()
+	}
+
+	return out
 }

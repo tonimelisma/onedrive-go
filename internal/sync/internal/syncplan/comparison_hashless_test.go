@@ -179,14 +179,14 @@ func TestBuildActionsForReconciliation_RefusesFolderTransfers(t *testing.T) {
 
 	_, err := buildActionsForReconciliation(
 		&syncdomain.SQLiteReconciliationRow{Path: "local-dir", ReconciliationKind: syncdomain.ReconcileUpload},
-		&syncdomain.SQLiteComparisonRow{Path: "local-dir"},
+		&DecidedComparison{ComparisonRow: syncdomain.ComparisonRow{Path: "local-dir"}},
 		views,
 	)
 	require.ErrorIs(t, err, errFolderTransferPlanned)
 
 	_, err = buildActionsForReconciliation(
 		&syncdomain.SQLiteReconciliationRow{Path: "remote-dir", ReconciliationKind: syncdomain.ReconcileDownload},
-		&syncdomain.SQLiteComparisonRow{Path: "remote-dir"},
+		&DecidedComparison{ComparisonRow: syncdomain.ComparisonRow{Path: "remote-dir"}},
 		views,
 	)
 	require.ErrorIs(t, err, errFolderTransferPlanned)

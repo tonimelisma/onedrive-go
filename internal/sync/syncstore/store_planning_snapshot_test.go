@@ -65,8 +65,6 @@ func TestReadPlanningSnapshot_ReturnsThePlannerVisibleCurrentTruth(t *testing.T)
 	comparisonPaths := make([]string, 0, len(snapshot.Comparisons))
 	for i := range snapshot.Comparisons {
 		comparisonPaths = append(comparisonPaths, snapshot.Comparisons[i].Path)
-		assert.Equal(t, syncdomain.ComparisonUnclassified, snapshot.Comparisons[i].ComparisonKind,
-			"the store does not decide: %s", snapshot.Comparisons[i].Path)
 	}
 	assert.Equal(t, []string{"docs", "docs/file.txt", "new.txt"}, comparisonPaths)
 	require.Len(t, snapshot.ObservationIssues, 1)

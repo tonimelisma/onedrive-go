@@ -705,11 +705,10 @@ func TestPlannerPlanCurrentState_UsesRemoteRowDriveOwnershipForDownloadActions(t
 
 	plan := planCurrentStateForInputs(
 		t,
-		[]syncdomain.SQLiteComparisonRow{{
-			Path:           "Shared/report.txt",
-			RemoteType:     syncdomain.SideFile,
-			ComparisonKind: syncdomain.ComparisonRemoteOnlyCreate,
-		}},
+		[]DecidedComparison{{ComparisonRow: syncdomain.ComparisonRow{
+			Path:       "Shared/report.txt",
+			RemoteType: syncdomain.SideFile,
+		}, ComparisonKind: syncdomain.ComparisonRemoteOnlyCreate}},
 		[]syncdomain.SQLiteReconciliationRow{{
 			Path:               "Shared/report.txt",
 			ComparisonKind:     syncdomain.ComparisonRemoteOnlyCreate,
@@ -810,7 +809,7 @@ func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore
 
 func planCurrentStateForInputs(
 	t *testing.T,
-	comparisons []syncdomain.SQLiteComparisonRow,
+	comparisons []DecidedComparison,
 	reconciliations []syncdomain.SQLiteReconciliationRow,
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
@@ -997,15 +996,14 @@ func planForUnavailableLocalMoveSource(t *testing.T) *syncdomain.ActionPlan {
 
 	return planCurrentStateForInputs(
 		t,
-		[]syncdomain.SQLiteComparisonRow{{
-			Path:           "docs/source.txt",
-			BaselineType:   syncdomain.SideFile,
-			LocalType:      syncdomain.SideFile,
-			RemoteType:     syncdomain.SideFile,
-			LocalChanged:   true,
-			RemoteChanged:  false,
-			ComparisonKind: syncdomain.ComparisonLocalMoveSource,
-		}},
+		[]DecidedComparison{{ComparisonRow: syncdomain.ComparisonRow{
+			Path:          "docs/source.txt",
+			BaselineType:  syncdomain.SideFile,
+			LocalType:     syncdomain.SideFile,
+			RemoteType:    syncdomain.SideFile,
+			LocalChanged:  true,
+			RemoteChanged: false,
+		}, ComparisonKind: syncdomain.ComparisonLocalMoveSource}},
 		[]syncdomain.SQLiteReconciliationRow{{
 			Path:               "docs/source.txt",
 			ComparisonKind:     syncdomain.ComparisonLocalMoveSource,
@@ -1040,15 +1038,14 @@ func planForUnavailableRemoteMoveDestination(t *testing.T) *syncdomain.ActionPla
 
 	return planCurrentStateForInputs(
 		t,
-		[]syncdomain.SQLiteComparisonRow{{
-			Path:           "Shared/dest.txt",
-			BaselineType:   syncdomain.SideFile,
-			LocalType:      syncdomain.SideFile,
-			RemoteType:     syncdomain.SideFile,
-			LocalChanged:   false,
-			RemoteChanged:  true,
-			ComparisonKind: syncdomain.ComparisonRemoteMoveDest,
-		}},
+		[]DecidedComparison{{ComparisonRow: syncdomain.ComparisonRow{
+			Path:          "Shared/dest.txt",
+			BaselineType:  syncdomain.SideFile,
+			LocalType:     syncdomain.SideFile,
+			RemoteType:    syncdomain.SideFile,
+			LocalChanged:  false,
+			RemoteChanged: true,
+		}, ComparisonKind: syncdomain.ComparisonRemoteMoveDest}},
 		[]syncdomain.SQLiteReconciliationRow{{
 			Path:               "Shared/dest.txt",
 			ComparisonKind:     syncdomain.ComparisonRemoteMoveDest,

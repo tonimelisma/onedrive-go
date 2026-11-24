@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-// kindUnclassified is the name both kind enums give their zero member.
+// kindUnclassified is ComparisonUnclassified's name.
 const kindUnclassified = "unclassified"
 
 // ComparisonKind is the per-path comparison the decision table computes
@@ -93,6 +93,10 @@ func (k ComparisonKind) String() string {
 // ReconcileReplaceLocal stays last (allReconciliationKinds).
 type ReconciliationKind uint8
 
+// reconciliationKindUnclassified is ReconcileUnclassified's name, the name
+// the comparison kinds give their zero member too.
+const reconciliationKindUnclassified = "unclassified"
+
 const (
 	ReconcileUnclassified ReconciliationKind = iota
 	ReconcileNoop
@@ -118,7 +122,7 @@ const (
 func (k ReconciliationKind) String() string {
 	switch k {
 	case ReconcileUnclassified:
-		return kindUnclassified
+		return reconciliationKindUnclassified
 	case ReconcileNoop:
 		return "noop"
 	case ReconcileBaselineRemove:

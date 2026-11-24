@@ -9,23 +9,30 @@ import (
 // classified (R-6.2.16).
 type Decider func(syncdomain.DecisionState) syncdomain.Decision
 
+// DecidedComparison is a comparison row of one planning read with the
+// comparison kind the decision table gave it (DecideComparisons). The kind is
+// the planner's: the store's row cannot carry one.
+type DecidedComparison struct {
+	syncdomain.ComparisonRow
+	ComparisonKind syncdomain.ComparisonKind
+}
+
 // DecideComparisons decides every comparison row of one planning read with
-// decide: it returns copies of the rows carrying their comparison kind, and
+// decide: it returns the rows with their comparison kinds, and
 // each row's reconciliation row, in the same order. The store reads the rows
 // and decides nothing (syncstore's ReadPlanningSnapshot); the planner owns
 // the decision. An unclassified row carries its inputs for the plan error
 // PlanCurrentState returns (R-6.2.16).
 func DecideComparisons(
-	comparisons []syncdomain.SQLiteComparisonRow,
+	comparisons []syncdomain.ComparisonRow,
 	decide Decider,
-) ([]syncdomain.SQLiteComparisonRow, []syncdomain.SQLiteReconciliationRow) {
-	decided := make([]syncdomain.SQLiteComparisonRow, len(comparisons))
+) ([]DecidedComparison, []syncdomain.SQLiteReconciliationRow) {
+	decided := make([]DecidedComparison, len(comparisons))
 	reconciliations := make([]syncdomain.SQLiteReconciliationRow, len(comparisons))
 	for i := range comparisons {
-		decided[i] = comparisons[i]
-		decision := decide(decided[i].DecisionState())
-		decided[i].ComparisonKind = decision.Comparison
-		reconciliations[i] = decided[i].ReconciliationRow(decision)
+		decision := decide(comparisons[i].DecisionState())
+		decided[i] = DecidedComparison{ComparisonRow: comparisons[i], ComparisonKind: decision.Comparison}
+		reconciliations[i] = syncdomain.ReconciliationRowOf(&comparisons[i], decision)
 	}
 
 	return decided, reconciliations

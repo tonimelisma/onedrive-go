@@ -79,7 +79,7 @@ func FirstUnclassifiedRow(rows []syncdomain.SQLiteReconciliationRow) int {
 // The error names the first unclassified path (rows come ordered by path) and
 // counts the rest. Comparison rows are checked too: move composition reads
 // their kinds directly.
-func validatePlannerKinds(comparisons []syncdomain.SQLiteComparisonRow, reconciliations []syncdomain.SQLiteReconciliationRow) error {
+func validatePlannerKinds(comparisons []DecidedComparison, reconciliations []syncdomain.SQLiteReconciliationRow) error {
 	if first := FirstUnclassifiedRow(reconciliations); first >= 0 {
 		unclassified := unclassifiedRowError(&reconciliations[first])
 		for i := first + 1; i < len(reconciliations); i++ {

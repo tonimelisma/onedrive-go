@@ -111,8 +111,8 @@ func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
 	assert.Empty(t, snapshot.Remote)
 	assert.Empty(t, snapshot.ObservationIssues)
 	comparisons, reconciliations := syncplan.DecideComparisons(snapshot.Comparisons, syncdomain.Decide)
-	assert.Equal(t, "both_missing", syncfixture.ComparisonKindsByPath(comparisons)["hidden/file.txt"])
-	assert.Equal(t, "baseline_remove", syncfixture.ReconciliationKindsByPath(reconciliations)["hidden/file.txt"])
+	assert.Equal(t, "both_missing", comparisonKindsByPath(comparisons)["hidden/file.txt"])
+	assert.Equal(t, "baseline_remove", reconciliationKindsByPath(reconciliations)["hidden/file.txt"])
 
 	rawRemote, err := eng.baseline.ListRemoteState(ctx)
 	require.NoError(t, err)

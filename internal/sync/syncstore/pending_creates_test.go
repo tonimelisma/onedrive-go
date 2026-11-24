@@ -587,7 +587,7 @@ func TestCommitObservation_AdoptedHashlessPlaceholderWithMovedETagIsNotAConflict
 		require.NoError(t, mgr.CommitObservation(t.Context(), []syncdomain.ObservedItem{observed}, fmt.Sprintf("t%d", i+2), driveID))
 		rows, queryErr := queryReconciliationState(t.Context(), mgr)
 		require.NoError(t, queryErr)
-		assert.Equal(t, "upload", syncfixture.ReconciliationKindsByPath(rows)["doc.txt"], "observation %d is no remote edit", i)
+		assert.Equal(t, "upload", reconciliationKindsByPath(rows)["doc.txt"], "observation %d is no remote edit", i)
 	}
 
 	bl, err := mgr.Load(t.Context())

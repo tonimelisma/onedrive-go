@@ -27,7 +27,7 @@ var errFolderTransferPlanned = errors.New("sync: folder planned as a content tra
 // planned (validatePlannerKinds), and a built action outside the action enums
 // fails it before any rule reads one (planBuiltActions).
 func (p *Planner) PlanCurrentState(
-	comparisons []syncdomain.SQLiteComparisonRow,
+	comparisons []DecidedComparison,
 	reconciliations []syncdomain.SQLiteReconciliationRow,
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
@@ -93,7 +93,7 @@ func (p *Planner) PlanCurrentState(
 // records OneDrive's folder at the path; a move of the item that left it
 // commits by item ID wherever it lands.
 func createFoldersOneDriveMadeAtAMovedSource(
-	comparisons []syncdomain.SQLiteComparisonRow, views map[string]*syncdomain.PathView,
+	comparisons []DecidedComparison, views map[string]*syncdomain.PathView,
 ) []syncdomain.Action {
 	var creates []syncdomain.Action
 	for i := range comparisons {
@@ -428,7 +428,7 @@ func logMoveNotices(logger *slog.Logger, notices []moveNotice) {
 	}
 }
 
-func comparisonPaths(rows []syncdomain.SQLiteComparisonRow) []string {
+func comparisonPaths(rows []DecidedComparison) []string {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -468,12 +468,12 @@ func logActionPlanSummary(logger *slog.Logger, message string, plan *syncdomain.
 }
 
 func buildSQLitePathViews(
-	comparisons []syncdomain.SQLiteComparisonRow,
+	comparisons []DecidedComparison,
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
 	baseline syncdomain.BaselineView,
 	truthStatusByPath map[string]syncdomain.PathTruthStatus,
-) (map[string]*syncdomain.PathView, map[string]*syncdomain.SQLiteComparisonRow, error) {
+) (map[string]*syncdomain.PathView, map[string]*DecidedComparison, error) {
 	localByPath := make(map[string]syncdomain.LocalStateRow, len(localRows))
 	for i := range localRows {
 		localByPath[localRows[i].Path] = localRows[i]
@@ -485,7 +485,7 @@ func buildSQLitePathViews(
 	}
 
 	views := make(map[string]*syncdomain.PathView, len(comparisons))
-	comparisonByPath := make(map[string]*syncdomain.SQLiteComparisonRow, len(comparisons))
+	comparisonByPath := make(map[string]*DecidedComparison, len(comparisons))
 
 	for i := range comparisons {
 		row := comparisons[i]
@@ -530,7 +530,7 @@ func buildSQLitePathViews(
 //nolint:gocyclo // One switch maps SQL reconciliation kinds to concrete action constructors.
 func buildActionsForReconciliation(
 	rec *syncdomain.SQLiteReconciliationRow,
-	cmp *syncdomain.SQLiteComparisonRow,
+	cmp *DecidedComparison,
 	views map[string]*syncdomain.PathView,
 ) ([]syncdomain.Action, error) {
 	if rec == nil || cmp == nil {
