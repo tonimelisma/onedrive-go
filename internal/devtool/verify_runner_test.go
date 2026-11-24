@@ -40,11 +40,11 @@ const lintPassCount = 3
 // cmdBuildFirstPlatform, so everything after them is expressed relative to
 // that run rather than hardcoded.
 const (
-	cmdUnitTests        = cmdBuildFirstPlatform + supportedPlatformCount
-	cmdE2EFullCompile   = cmdUnitTests + 1
-	cmdTaggedVetE2E     = cmdE2EFullCompile + 1
-	cmdTaggedVetInteg   = cmdTaggedVetE2E + 1
-	cmdTaggedVetRace    = cmdTaggedVetInteg + 1
+	cmdUnitTests      = cmdBuildFirstPlatform + supportedPlatformCount
+	cmdE2EFullCompile = cmdUnitTests + 1
+	cmdTaggedVetE2E   = cmdE2EFullCompile + 1
+	cmdTaggedVetInteg = cmdTaggedVetE2E + 1
+	cmdTaggedVetRace  = cmdTaggedVetInteg + 1
 
 	verifyPublicCommandCount = cmdTaggedVetRace + 1
 )
