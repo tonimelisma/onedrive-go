@@ -72,7 +72,7 @@ func (t ItemType) String() string {
 func (t *ItemType) Scan(src any) error {
 	s, ok := src.(string)
 	if !ok {
-		return fmt.Errorf("sync: ItemType.Scan: expected string, got %T", src)
+		return fmt.Errorf("syncdomain: ItemType.Scan: expected string, got %T", src)
 	}
 
 	parsed, err := ParseItemType(s)
@@ -101,7 +101,7 @@ func ParseItemType(s string) (ItemType, error) {
 	case StrRoot:
 		return ItemTypeRoot, nil
 	default:
-		return ItemTypeFile, fmt.Errorf("sync: unknown item type %q", s)
+		return ItemTypeFile, fmt.Errorf("syncdomain: unknown item type %q", s)
 	}
 }
 
@@ -208,7 +208,7 @@ func parseActionType(s string) (ActionType, error) {
 	case strCleanup:
 		return ActionCleanup, nil
 	default:
-		return 0, fmt.Errorf("sync: invalid ActionType %q", s)
+		return 0, fmt.Errorf("syncdomain: invalid ActionType %q", s)
 	}
 }
 
@@ -216,7 +216,7 @@ func parseActionType(s string) (ActionType, error) {
 func (a *ActionType) Scan(src any) error {
 	s, ok := src.(string)
 	if !ok {
-		return fmt.Errorf("sync: ActionType.Scan: expected string, got %T", src)
+		return fmt.Errorf("syncdomain: ActionType.Scan: expected string, got %T", src)
 	}
 
 	parsed, err := parseActionType(s)
@@ -233,7 +233,7 @@ func (a *ActionType) Scan(src any) error {
 // the enum is refused, so no store row can carry one.
 func (a ActionType) Value() (driver.Value, error) {
 	if !a.IsMember() {
-		return nil, fmt.Errorf("sync: invalid ActionType %d", a)
+		return nil, fmt.Errorf("syncdomain: invalid ActionType %d", a)
 	}
 
 	return a.String(), nil

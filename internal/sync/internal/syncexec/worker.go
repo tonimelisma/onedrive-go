@@ -14,8 +14,8 @@ import (
 )
 
 var (
-	ErrUnknownActionType         = errors.New("sync: unknown action type in worker dispatch")
-	errPublicationOnlyActionType = errors.New("sync: publication-only action routed to worker")
+	ErrUnknownActionType         = errors.New("syncexec: unknown action type in worker dispatch")
+	errPublicationOnlyActionType = errors.New("syncexec: publication-only action routed to worker")
 )
 
 // minWorkers is the floor for total worker count.
@@ -576,6 +576,6 @@ func (wp *WorkerPool) closeCompletions() {
 // ErrWorkerPoolStopped ends the context the workers were started under, so an
 // action it interrupts completes with RunEnded set, as a shutdown.
 const (
-	ErrActionReturned    syncdomain.CancelCauseError = "sync: action returned"
-	ErrWorkerPoolStopped syncdomain.CancelCauseError = "sync: worker pool stopped"
+	ErrActionReturned    syncdomain.CancelCauseError = "syncexec: action returned"
+	ErrWorkerPoolStopped syncdomain.CancelCauseError = "syncexec: worker pool stopped"
 )

@@ -296,7 +296,7 @@ func IssueTypeIsRootReadFailure(issueType IssueType) bool {
 func ParseIssueType(stored string) (IssueType, error) {
 	issueType := IssueType(stored)
 	if !issueType.IsMember() {
-		return "", fmt.Errorf("sync: unknown issue type %q", stored)
+		return "", fmt.Errorf("syncdomain: unknown issue type %q", stored)
 	}
 
 	return issueType, nil

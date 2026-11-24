@@ -147,7 +147,7 @@ func (b *DirtyBuffer) FlushDebounced(ctx context.Context, debounce time.Duration
 	b.mu.Lock()
 	if b.notify != nil {
 		b.mu.Unlock()
-		panic("sync: DirtyBuffer FlushDebounced called twice on the same DirtyBuffer")
+		panic("syncobserve: DirtyBuffer FlushDebounced called twice on the same DirtyBuffer")
 	}
 
 	b.notify = make(chan struct{}, 1)

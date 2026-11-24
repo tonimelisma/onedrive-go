@@ -545,7 +545,7 @@ func newUnclassifiedPlanTestEngine(t *testing.T) (*testEngine, string, *atomic.I
 // unclassifiedNewFileError is how the planner reports new.txt under the
 // decision table without its upload rule: the path, both kinds, and the
 // inputs the diagnostic read found (abridged here to the presence bits).
-const unclassifiedNewFileError = `sync: planning actions: sync: planner state is outside the decision table: "new.txt" ` +
+const unclassifiedNewFileError = `sync: planning actions: syncplan: planner state is outside the decision table: "new.txt" ` +
 	`(comparison local_only_create, reconciliation unclassified; baseline_present=0 local_present=1 remote_present=0 `
 
 // Validates: R-6.2.16

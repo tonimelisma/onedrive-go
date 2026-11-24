@@ -40,6 +40,11 @@ func runOutputBoundaries(
 	if err != nil {
 		return err
 	}
+	prefixViolations, err := findErrorPrefixViolations(repoRoot)
+	if err != nil {
+		return err
+	}
+	violations = append(violations, prefixViolations...)
 	if len(violations) == 0 {
 		return nil
 	}

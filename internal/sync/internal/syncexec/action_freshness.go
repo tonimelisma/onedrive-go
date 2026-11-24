@@ -63,7 +63,7 @@ func EvaluateActionFreshnessFromStore(
 	// completes as shutdown without a freshness check.
 	select {
 	case <-ctx.Done():
-		return actionFreshnessDecision{}, fmt.Errorf("sync: validating action freshness after cancellation: %w", ctx.Err())
+		return actionFreshnessDecision{}, fmt.Errorf("syncexec: validating action freshness after cancellation: %w", ctx.Err())
 	default:
 	}
 	if store == nil || action == nil || actionSkipsFreshnessValidation(action) {
@@ -71,7 +71,7 @@ func EvaluateActionFreshnessFromStore(
 	}
 	if !actionHasPlannerView(action) {
 		return actionFreshnessDecision{}, fmt.Errorf(
-			"sync: validating action freshness: %s %q missing planner view",
+			"syncexec: validating action freshness: %s %q missing planner view",
 			action.Type,
 			action.Path,
 		)
@@ -94,7 +94,7 @@ func loadActionFreshnessInputs(
 
 	state, err := store.ReadObservationState(ctx)
 	if err != nil {
-		return inputs, fmt.Errorf("sync: reading observation state for action freshness: %w", err)
+		return inputs, fmt.Errorf("syncexec: reading observation state for action freshness: %w", err)
 	}
 	if state != nil {
 		inputs.LocalTruthComplete = state.LocalTruthComplete
@@ -124,7 +124,7 @@ func loadLocalActionFreshnessInputs(
 	if actionUsesLocalFreshness(action) {
 		row, found, err := store.GetLocalStateByPath(ctx, localFreshnessPath(action))
 		if err != nil {
-			return fmt.Errorf("sync: reading local truth for action freshness: %w", err)
+			return fmt.Errorf("syncexec: reading local truth for action freshness: %w", err)
 		}
 		inputs.LocalAtView = row
 		inputs.LocalAtViewFound = found
@@ -133,7 +133,7 @@ func loadLocalActionFreshnessInputs(
 	if peerPath, ok := localMovePeerPath(action); ok {
 		row, found, err := store.GetLocalStateByPath(ctx, peerPath)
 		if err != nil {
-			return fmt.Errorf("sync: reading local move peer for action freshness: %w", err)
+			return fmt.Errorf("syncexec: reading local move peer for action freshness: %w", err)
 		}
 		inputs.LocalAtMovePeer = row
 		inputs.LocalAtMovePeerFound = found
@@ -164,7 +164,7 @@ func loadRemoteActionFreshnessInputs(
 	if peerPath, ok := movePeerPath(action); ok {
 		row, found, err := store.GetRemoteStateByPath(ctx, peerPath, driveid.ID{})
 		if err != nil {
-			return fmt.Errorf("sync: reading remote move peer for action freshness: %w", err)
+			return fmt.Errorf("syncexec: reading remote move peer for action freshness: %w", err)
 		}
 		inputs.RemoteAtMovePeer = row
 		inputs.RemoteAtMovePeerFound = found
@@ -173,7 +173,7 @@ func loadRemoteActionFreshnessInputs(
 	if actionNeedsRemoteIdentityFreshness(action) {
 		row, found, err := store.GetRemoteStateByID(ctx, driveid.ID{}, action.ItemID)
 		if err != nil {
-			return fmt.Errorf("sync: reading remote identity for action freshness: %w", err)
+			return fmt.Errorf("syncexec: reading remote identity for action freshness: %w", err)
 		}
 		inputs.RemoteByID = row
 		inputs.RemoteByIDFound = found
@@ -192,14 +192,14 @@ func loadPlannedRemoteTruth(ctx context.Context, store ExecutorStore, action *sy
 	if planned := action.View.Remote; planned != nil && !planned.IsDeleted && planned.ItemID != "" {
 		row, found, err := store.GetRemoteStateByID(ctx, driveid.ID{}, planned.ItemID)
 		if err != nil {
-			return nil, false, fmt.Errorf("sync: reading remote truth for action freshness: %w", err)
+			return nil, false, fmt.Errorf("syncexec: reading remote truth for action freshness: %w", err)
 		}
 		return row, found, nil
 	}
 
 	row, found, err := store.GetRemoteStateByPath(ctx, syncdomain.ActionViewPath(action), driveid.ID{})
 	if err != nil {
-		return nil, false, fmt.Errorf("sync: reading remote truth for action freshness: %w", err)
+		return nil, false, fmt.Errorf("syncexec: reading remote truth for action freshness: %w", err)
 	}
 
 	return row, found, nil
