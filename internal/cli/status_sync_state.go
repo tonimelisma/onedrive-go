@@ -59,6 +59,10 @@ func storeVersionOf(err error) string {
 		return storeVersionOlder
 	case syncstore.StateStoreIncompatibleReasonNewerVersion:
 		return storeVersionNewer
+	case syncstore.StateStoreIncompatibleReasonOpenFailed,
+		syncstore.StateStoreIncompatibleReasonIncompatibleSchema,
+		syncstore.StateStoreIncompatibleReasonCorrupt:
+		return ""
 	default:
 		return ""
 	}

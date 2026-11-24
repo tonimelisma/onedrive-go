@@ -35,7 +35,7 @@ func TestStatusCommand_StoreFromAnOlderVersionSaysTheNextSyncRebuildsIt(t *testi
 	cid, cfgPath := seedDamagedStatusDrive(t)
 	statePath := config.DriveStatePath(cid)
 	stampTestStateDBGeneration(t, statePath, -1)
-	before, err := os.ReadFile(statePath)
+	before, err := os.ReadFile(statePath) //nolint:gosec // test-owned temp path
 	require.NoError(t, err)
 
 	drive, syncState, logs := runStatusJSONForDrive(t, cfgPath, cid)
@@ -48,7 +48,7 @@ func TestStatusCommand_StoreFromAnOlderVersionSaysTheNextSyncRebuildsIt(t *testi
 	assert.Empty(t, syncState.ReadError, "the store was read far enough to know which version wrote it")
 	assert.NotContains(t, logs, "cannot read the sync state", "an expected store is not a Warn")
 
-	after, err := os.ReadFile(statePath)
+	after, err := os.ReadFile(statePath) //nolint:gosec // test-owned temp path
 	require.NoError(t, err)
 	assert.Equal(t, before, after, "status never rebuilds a store")
 }

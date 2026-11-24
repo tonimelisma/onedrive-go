@@ -32,7 +32,7 @@ const (
 	// StateStoreIncompatibleReasonOlderVersion is reported only by the
 	// read-only inspector: engine startup rebuilds such a store instead.
 	StateStoreIncompatibleReasonOlderVersion stateStoreIncompatibleReason = "older_version"
-	StateStoreIncompatibleReasonCorrupt            stateStoreIncompatibleReason = "corrupt"
+	StateStoreIncompatibleReasonCorrupt      stateStoreIncompatibleReason = "corrupt"
 )
 
 var errStateStoreIncompatible = errors.New("syncstore: incompatible sync state DB")

@@ -72,7 +72,7 @@ func TestReadDriveStatusSnapshot_NamesAStoreAnotherVersionWrote(t *testing.T) {
 
 			dbPath := filepath.Join(t.TempDir(), "state.db")
 			writeStoreAtGeneration(t, dbPath, tc.generation)
-			before, err := os.ReadFile(dbPath)
+			before, err := os.ReadFile(dbPath) //nolint:gosec // test-owned temp path
 			require.NoError(t, err)
 
 			_, err = ReadDriveStatusSnapshot(t.Context(), dbPath, syncfixture.NewTestLogger(t))
@@ -80,7 +80,7 @@ func TestReadDriveStatusSnapshot_NamesAStoreAnotherVersionWrote(t *testing.T) {
 			require.ErrorAs(t, err, &refusal)
 			assert.Equal(t, tc.want, refusal.Reason)
 
-			after, err := os.ReadFile(dbPath)
+			after, err := os.ReadFile(dbPath) //nolint:gosec // test-owned temp path
 			require.NoError(t, err)
 			assert.Equal(t, before, after, "an inspector never writes")
 		})

@@ -2,8 +2,8 @@ package cli
 
 import (
 	"bytes"
-	"errors"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"

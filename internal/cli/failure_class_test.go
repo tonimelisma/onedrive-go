@@ -221,13 +221,13 @@ func TestCommandExitCode_EveryFailureClassHasAStatus(t *testing.T) {
 		err  error
 		want []int
 	}{
-		errclass.ClassSuccess:    {err: nil, want: []int{exitSuccess}},
-		errclass.ClassShutdown:   {err: context.Canceled, want: []int{exitFailure, exitInterrupted}},
+		errclass.ClassSuccess:  {err: nil, want: []int{exitSuccess}},
+		errclass.ClassShutdown: {err: context.Canceled, want: []int{exitFailure, exitInterrupted}},
 		errclass.ClassActionable: {
 			err:  graph.ErrNotLoggedIn,
 			want: []int{exitSignInRequired, exitConfigInvalid, exitStateStoreNeedsUser},
 		},
-		errclass.ClassFatal:      {err: errors.New("boom"), want: []int{exitFailure}},
+		errclass.ClassFatal: {err: errors.New("boom"), want: []int{exitFailure}},
 	}
 
 	for class, tt := range byClass {
