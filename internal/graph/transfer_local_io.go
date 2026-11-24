@@ -382,6 +382,17 @@ func (l *localIO) end() {
 // run is the goroutine: it runs each call it is handed and answers it,
 // until the transfer ends or abandons it.
 func (l *localIO) run() {
+	// perform recovers a panic of the file call itself; this one is a panic
+	// of the hand-back around it, which ends the goroutine: it is logged,
+	// and the transfer's next call meets errLocalIOEnded.
+	defer func() {
+		if r := recover(); r != nil {
+			_ = panicguard.Recovered(l.logger, "in a transfer's local file goroutine", r)
+			l.mu.Lock()
+			l.ended = true
+			l.mu.Unlock()
+		}
+	}()
 	for call := range l.requests {
 		res := l.perform(call)
 

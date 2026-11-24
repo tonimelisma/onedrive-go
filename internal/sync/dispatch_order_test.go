@@ -165,6 +165,7 @@ func parentTestName(name string) string {
 func runOnceScenarios() []func(*testing.T) {
 	return []func(*testing.T){
 		TestRunOnce_AMountRootPositionThatIsNotALinkIsRecoveredByAFullEnumeration,
+		TestRunOnce_AMountRootPositionWhoseChangeListLeadsBackIsRecoveredByAFullEnumeration,
 		TestRunOnce_ASavedPositionThatIsNotALinkIsRecoveredByAFullEnumeration,
 		TestRunOnce_DryRunLeavesSpellingRenameLeftover,
 		TestRunOnce_FileMovedOutOfASubfolderIntoTheRemadeFolderWithTheSubfolderRemovedConverges,

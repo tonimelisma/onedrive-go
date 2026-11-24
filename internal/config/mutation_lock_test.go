@@ -284,14 +284,15 @@ func TestWithConfigMutationLock_AFilesystemWithoutFlockChangesUnderTheLockFile(t
 
 			dir := t.TempDir()
 			cfgPath := filepath.Join(dir, "config.toml")
-			require.NoError(t, os.WriteFile(cfgPath, []byte("# before\n"), 0o600))
 			lockPath := filepath.Join(dir, configLockFileName)
+			cid := driveid.MustCanonicalID("personal:nolock@example.com")
+			// Seeded before the fake flock: the temp filesystem can flock.
+			require.NoError(t, AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 
 			locker := defaultConfigLocker()
 			locker.flock = func(int, int) error { return errno }
 			locker.lockFile = testLockFileIdentity("this-host", nil)
 
-			cid := driveid.MustCanonicalID("personal:nolock@example.com")
 			require.NoError(t, locker.setDriveKey(t.Context(), cfgPath, cid, "paused", "true"))
 			written, err := os.ReadFile(cfgPath) //nolint:gosec // the test's own temp file
 			require.NoError(t, err)
