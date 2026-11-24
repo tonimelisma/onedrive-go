@@ -581,7 +581,8 @@ stage so a reader can see the flow at a glance. Current-plan construction
 should read from `engine_current_plan.go`; runtime-start/admission should read
 from `engine_runtime_start.go`; and completion plus publication drain should
 read from `engine_runtime_completion.go` plus the trial-specific
-`engine_runtime_completion_trial.go`.
+`engine_runtime_completion_trial.go`, with the retry delays and supersede
+streaks a completion records in `engine_runtime_retry_delay.go`.
 
 Parent child-admission readiness is part of the normal parent run path.
 Multisync attaches a child work snapshot sink before it starts a selected
