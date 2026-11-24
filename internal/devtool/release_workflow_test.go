@@ -37,7 +37,7 @@ func newReleaseRepo(t *testing.T) *releaseRepo {
 func (r *releaseRepo) git(args ...string) string {
 	r.t.Helper()
 
-	cmd := exec.CommandContext(r.t.Context(), "git", args...)
+	cmd := exec.CommandContext(r.t.Context(), "git", args...) //nolint:gosec // git with the test's own arguments
 	cmd.Dir = r.dir
 	cmd.Env = append(os.Environ(),
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
@@ -94,7 +94,7 @@ func releaseOutputs(action, version, latest string) map[string]string {
 // Validates: R-6.10.41
 //
 // The version script gives the first release v0.1.0, bumps the patch of the
-// highest vX.Y.Z tag after that, honours a higher requested version, lets a
+// highest vX.Y.Z tag after that, honors a higher requested version, lets a
 // rerun finish the release a commit already has, and skips a commit a newer
 // release already contains.
 func TestReleaseVersionScript_ChoosesTheNextVersion(t *testing.T) {
@@ -273,7 +273,7 @@ func TestReleaseWorkflow_OnlyMainReleasesAndNothingRunsOnTags(t *testing.T) {
 
 	on := regexp.MustCompile(`(?ms)^on:\n(.*?)\n\S`).FindStringSubmatch(workflow)
 	require.Len(t, on, 2)
-	triggers := regexp.MustCompile(`(?m)^  (\w+):`).FindAllStringSubmatch(on[1], -1)
+	triggers := regexp.MustCompile(`(?m)^ {2}(\w+):`).FindAllStringSubmatch(on[1], -1)
 	var names []string
 	for _, trigger := range triggers {
 		names = append(names, trigger[1])
@@ -292,7 +292,8 @@ func TestReleaseWorkflow_OnlyMainReleasesAndNothingRunsOnTags(t *testing.T) {
 	steps := strings.Index(workflow, "    steps:\n")
 	require.Positive(t, steps)
 	firstStep := workflow[steps:]
-	firstStep = firstStep[:strings.Index(firstStep, "      - uses:")]
+	firstStep, _, found := strings.Cut(firstStep, "      - uses:")
+	require.True(t, found, "release.yml has no action step")
 	assert.Contains(t, firstStep, "name: Refuse any ref but main")
 	assert.Contains(t, firstStep, `if [ "${REF}" != refs/heads/main ]; then`)
 	assert.Contains(t, firstStep, "exit 1")
