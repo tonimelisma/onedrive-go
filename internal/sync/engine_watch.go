@@ -446,9 +446,6 @@ func (rt *watchRuntime) startLocalObserver(
 	// The goroutine holds the observation and its send-only outputs only.
 	obs := &rt.observation
 	rt.resources.goroutines.start(ctx, rt.deps.clock, watchGoroutineLocalObserver, func(ctx context.Context) {
-		defer obs.deps.emit(syncdomain.EngineDebugEvent{
-			Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverLocal,
-		})
 		defer close(localBatches)
 		defer close(protectedRootEvents)
 		defer recoverObserverPanic(obs.deps.logger, observerNameLocal, errs)

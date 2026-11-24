@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -801,6 +802,13 @@ func (r *modelRun) takeConcurrentEdits() []syncfixture.ModelEdit {
 // what they name (the seeds below it draw one or neither).
 const chaosRaceSeed = 79
 
+// The draws are those of a byte-exact volume, as Linux's are: the model's
+// case-variant creates are one entry on a case-insensitive volume (macOS by
+// default), the run takes another course there, and seed 79 drew no
+// timed-out session on macOS while it converged as it must. The run checks
+// the draws only where the seed was chosen, and every model check
+// everywhere.
+//
 // chaosRaceSeedFaults are the fault kinds chaosRaceSeed must draw.
 func chaosRaceSeedFaults() []string {
 	return []string{chaosCreateResponseLost, chaosSessionTimedOut}
@@ -826,7 +834,7 @@ func TestModel_ChaosGraphConverges(t *testing.T) {
 			syncfixture.LogSeedReplayOnFailure(t, modelSeedEnv, seed)
 			run := runModelScenarioWith(t, seed, chaosRunOptions())
 			require.Positive(t, run.chaos.faultCount(), "the storm injected no fault")
-			if seed != chaosRaceSeed {
+			if seed != chaosRaceSeed || volumeFoldsCase(t) {
 				return
 			}
 			run.chaos.mu.Lock()
@@ -1021,4 +1029,21 @@ func TestChaosGraph_SplitKeepsLastOccurrence(t *testing.T) {
 		}
 		assert.Equal(t, want, order, "seed %d: last occurrences out of order", seed)
 	}
+}
+
+// volumeFoldsCase reports whether the volume t's temporary folders are on
+// finds a name in another case: a case-insensitive volume, as macOS's is by
+// default.
+func volumeFoldsCase(t *testing.T) bool {
+	t.Helper()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "probe"), nil, 0o600))
+	_, err := os.Lstat(filepath.Join(dir, "PROBE"))
+	if err == nil {
+		return true
+	}
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	return false
 }

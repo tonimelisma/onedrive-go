@@ -59,8 +59,8 @@ in parallel jobs: `verify lint` (golangci-lint, then a pinned actionlint over
 for it), and `verify quick` (format, the repo rules,
 the builds and `go test -short`, split into shards with `--shard k/n`) on
 Linux plus `verify platform` (host build and the same short tier) on macOS. `-short` skips the tests marked exhaustive (randomized
-model runs, replays, the reverse-dispatch re-run of every scenario, the
-reconcile matrix); the race detector and the coverage gate do not run there.
+model runs, replays, the reverse-dispatch and case-insensitive re-runs of
+every scenario, the reconcile matrix); the race detector and the coverage gate do not run there.
 Every push to `main` also runs `verify race`, the `./internal/sync/...` tree
 under the race detector and unshortened, so a data race in the sync packages
 fails the push that brought it. The full tier (`verify public` on both

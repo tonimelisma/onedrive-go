@@ -23,9 +23,6 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	if rt.hasRemoteMountRoot() {
 		rt.warnMountRootWebsocketFallback()
 		rt.resources.goroutines.start(ctx, rt.deps.clock, watchGoroutineRemoteObserver, func(ctx context.Context) {
-			defer obs.deps.emit(syncdomain.EngineDebugEvent{
-				Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote,
-			})
 			defer close(batches)
 			defer recoverObserverPanic(obs.deps.logger, observerNameRemote, errs)
 
@@ -62,9 +59,6 @@ func (rt *watchRuntime) startPrimaryRootWatch(
 	}
 
 	rt.resources.goroutines.start(ctx, rt.deps.clock, watchGoroutineRemoteObserver, func(ctx context.Context) {
-		defer obs.deps.emit(syncdomain.EngineDebugEvent{
-			Type: syncdomain.EngineDebugEventObserverExited, Observer: syncdomain.EngineDebugObserverRemote,
-		})
 		defer close(batches)
 		defer recoverObserverPanic(obs.deps.logger, observerNameRemote, errs)
 

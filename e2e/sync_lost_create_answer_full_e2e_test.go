@@ -110,11 +110,17 @@ func startFaultProxy(t *testing.T, dropAnswer func(req *http.Request, body []byt
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	upstream, ok := http.DefaultTransport.(*http.Transport)
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
 	require.True(t, ok, "http.DefaultTransport is an *http.Transport")
+	upstream := defaultTransport.Clone()
+	// The CLI's own Accept-Encoding goes to OneDrive and its answer comes
+	// back as sent. With compression on, the transport asked for gzip itself
+	// and handed back the body decompressed with no length, which the
+	// tunnel then wrote unframed (writeAnswer).
+	upstream.DisableCompression = true
 	proxy := &faultProxy{
 		t: t, listener: listener, caPath: caPath, ca: ca, caKey: caKey,
-		upstream: upstream.Clone(), ctx: t.Context(), dropAnswer: dropAnswer,
+		upstream: upstream, ctx: t.Context(), dropAnswer: dropAnswer,
 		leaves: map[string]*tls.Certificate{}, conns: map[net.Conn]struct{}{},
 	}
 	server := &http.Server{Handler: http.HandlerFunc(proxy.serveConnect), ReadHeaderTimeout: faultProxyReadHeaderTimeout}
@@ -271,11 +277,27 @@ func (p *faultProxy) forward(ctx context.Context, client net.Conn, req *http.Req
 		return false
 	}
 
-	if err := resp.Write(client); err != nil {
+	if err := writeAnswer(client, resp); err != nil {
 		return false
 	}
 
 	return !req.Close && !resp.Close
+}
+
+// writeAnswer writes OneDrive's answer to the tunnel as HTTP/1.1, the
+// protocol the tunnel speaks, framing a body of unknown length in chunks.
+// OneDrive answers over HTTP/2, where a body need not state its length, and
+// Response.Write sends such a body unframed, to be ended by closing the
+// connection, which a tunnel kept open for the next request never does: the
+// CLI read a created folder's answer until its stall watchdog gave up after
+// two minutes, and the create the test is about was never sent.
+func writeAnswer(client net.Conn, resp *http.Response) error {
+	resp.Proto, resp.ProtoMajor, resp.ProtoMinor = "HTTP/1.1", 1, 1
+	if resp.ContentLength < 0 && resp.Body != nil && resp.Body != http.NoBody {
+		resp.TransferEncoding = []string{"chunked"}
+	}
+
+	return resp.Write(client) //nolint:wrapcheck // the tunnel's caller only needs to know it ended
 }
 
 // leafFor makes, once per host, a certificate for the host the client

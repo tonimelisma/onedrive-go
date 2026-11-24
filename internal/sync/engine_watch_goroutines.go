@@ -48,6 +48,12 @@ type watchGoroutine struct {
 // stop on a value that started nothing returns at once.
 type watchGoroutines struct {
 	started []watchGoroutine
+	// exited, when set, is called on a goroutine's own goroutine once it has
+	// returned and its done is closed, so whatever it reports (the
+	// observers' exit debug events) is never seen before stop counts the
+	// goroutine as stopped. It is set before the first start and never
+	// changes.
+	exited func(watchGoroutineKind)
 	// expired closes once watchGoroutineStopTimeout has passed since the
 	// first wait for the goroutines began: the stop's drain, waiting for the
 	// observers' exits and a refresh's result, and stop itself share the one
@@ -79,17 +85,34 @@ func (g *watchGoroutines) start(ctx context.Context, clock syncdomain.SyncClock,
 	done := make(chan struct{})
 	g.started = append(g.started, watchGoroutine{kind: kind, cancel: cancel, done: done})
 
-	clock.Go(func() { runWatchGoroutine(goroutineCtx, done, fn) })
+	exited := g.exited
+	clock.Go(func() { runWatchGoroutine(goroutineCtx, kind, done, exited, fn) })
 }
 
-// runWatchGoroutine runs fn and then closes done. It holds no panic boundary
+// runWatchGoroutine runs fn, closes done and then reports the exit to
+// exited, when set. It holds no panic boundary
 // of its own: every fn the watch starts defers a recover that hands the panic
 // to panicguard.Recovered and reports it to the watch, which a boundary here
 // could not do. The panic-boundary scan follows each call of start
 // to the function it hands over and holds that function to the rule.
-func runWatchGoroutine(ctx context.Context, done chan<- struct{}, fn func(context.Context)) {
-	defer close(done)
+func runWatchGoroutine(
+	ctx context.Context,
+	kind watchGoroutineKind,
+	done chan<- struct{},
+	exited func(watchGoroutineKind),
+	fn func(context.Context),
+) {
+	defer finishWatchGoroutine(kind, done, exited)
 	fn(ctx)
+}
+
+// finishWatchGoroutine marks a goroutine stopped, then reports its exit:
+// in that order, so stop never names a goroutine whose exit was reported.
+func finishWatchGoroutine(kind watchGoroutineKind, done chan<- struct{}, exited func(watchGoroutineKind)) {
+	close(done)
+	if exited != nil {
+		exited(kind)
+	}
 }
 
 // forgetExited drops the goroutines that have already returned, releasing
