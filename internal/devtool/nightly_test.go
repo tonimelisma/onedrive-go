@@ -208,6 +208,8 @@ type claimRemote struct {
 	// claimWritesForbidden makes every claim write fail with HTTP 403, as
 	// GitHub answers credentials that may not write issues.
 	claimWritesForbidden bool
+	// listLag is how many list reads leave out an issue the fake creates.
+	listLag int
 	// jobLogErrs are the failures the job-log fetch of a job id answers
 	// with, in order, before it returns the log; jobLogCalls counts the
 	// fetches. runListErrs does the same for the run list, and labelListErrs
@@ -235,6 +237,9 @@ type claimRemote struct {
 
 // fakeIssue is one issue of the fake repository.
 type fakeIssue struct {
+	// unlisted is how many more list reads leave the issue out: GitHub's
+	// issue list shows a new issue only some seconds after it is created.
+	unlisted int
 	number   int
 	title    string
 	labels   []string
@@ -583,6 +588,7 @@ func (r *claimRemote) restIssueWrite(joined string, args []string) ([]byte, bool
 		r.labels[label] = true
 		issue := &fakeIssue{
 			number: len(r.issues) + 1, title: fields["title"], labels: []string{label}, body: fields["body"], open: true,
+			unlisted: r.listLag,
 		}
 		r.issues = append(r.issues, issue)
 		return fmt.Appendf(nil, `{"number":%d}`, issue.number), true, nil
@@ -695,7 +701,12 @@ const fakeIssueListPageSize = 2
 func (r *claimRemote) openIssueList(label string) ([]byte, error) {
 	open := []map[string]any{{"number": 9999, "title": "a pull request", "pull_request": map[string]string{"url": "x"}}}
 	for i := len(r.issues) - 1; i >= 0; i-- {
-		if issue := r.issues[i]; issue.open && slices.Contains(issue.labels, label) {
+		issue := r.issues[i]
+		if issue.unlisted > 0 {
+			issue.unlisted--
+			continue
+		}
+		if issue.open && slices.Contains(issue.labels, label) {
 			open = append(open, map[string]any{
 				"number": issue.number, "title": issue.title, "body": issue.body, "comments": len(issue.comments),
 			})
@@ -1705,6 +1716,48 @@ func TestNightlyCheckClosesTheDuplicateOfALoserThatStoppedEarly(t *testing.T) {
 	claim, held := remote.claim(nightlyTestKey)
 	require.True(t, held)
 	assert.Equal(t, nightlyTestOther, claim.Owner)
+}
+
+// Validates: R-6.10.23, R-6.10.40
+//
+// GitHub's issue list shows a new issue only some seconds after it is
+// created. A claim's create waits for its own issue to be listed before it
+// ranks the claim's issues, so the lag never reads as a lost race: the claim
+// is taken with one issue, which stays open.
+func TestNightlyClaimCreateWaitsForItsIssueToBeListed(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, checkConclusionSuccess)
+	remote.listLag = 3
+	next := nightlyClaim{State: nightlyStateClaimed, Key: nightlyTestKey, Format: nightlyClaimFormat, Owner: nightlyTestOwner}
+
+	require.NoError(t, swapNightlyClaim(t.Context(), newGHClient(remote, remote.sleeps.sleep), "/repo",
+		nightlyClaimName(nightlyTestKey), "", &next))
+
+	require.Len(t, remote.issues, 1, "one issue, not a new one per attempt")
+	assert.True(t, remote.issues[0].open, "the claim's issue stays open")
+	assert.Len(t, remote.sleeps.waits, remote.listLag, "one wait per list read that left the issue out")
+}
+
+// Validates: R-6.10.23, R-6.10.40
+//
+// An issue that is still not listed after the bounded wait fails the create
+// plainly, never as a lost race, which would make the caller open another
+// issue: the issue is closed and nothing else is opened.
+func TestNightlyClaimCreateFailsWhenItsIssueIsNeverListed(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, checkConclusionSuccess)
+	remote.listLag = nightlyClaimListBackAttempts + 1
+	next := nightlyClaim{State: nightlyStateClaimed, Key: nightlyTestKey, Format: nightlyClaimFormat, Owner: nightlyTestOwner}
+
+	err := swapNightlyClaim(t.Context(), newGHClient(remote, remote.sleeps.sleep), "/repo",
+		nightlyClaimName(nightlyTestKey), "", &next)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, errNightlyClaimLost)
+	assert.Contains(t, err.Error(), "not listed")
+	require.Len(t, remote.issues, 1)
+	assert.False(t, remote.issues[0].open, "the unlisted issue is closed")
 }
 
 // Validates: R-6.10.23

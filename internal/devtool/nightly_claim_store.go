@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The nightly claims live in GitHub issues, read and written over REST
@@ -268,6 +269,43 @@ func swapNightlyClaim(
 	return err
 }
 
+// nightlyClaimListBackAttempts bounds the list reads a create makes for its
+// own new issue, nightlyClaimListBackWait apart: GitHub's issue list shows a
+// new issue some seconds after it is created (seen: about ten).
+const (
+	nightlyClaimListBackAttempts = 12
+	nightlyClaimListBackWait     = 5 * time.Second
+)
+
+// listClaimsShowing reads the claims until the listing shows issue, the
+// create's own, or the bounded wait is over; listed reports which. It ranks
+// nothing before its own issue is listed: GitHub's list lags behind a create,
+// and an issue missing from it would read as a lost race. The ranking then
+// assumes the list indexes issues in the order they were opened, so a lower
+// number, a racing agent's earlier issue, is listed by the time this one is.
+func listClaimsShowing(ctx context.Context, gh ghClient, repoRoot string, issue int) (map[string]nightlyClaimEntry, bool, error) {
+	for attempt := 1; ; attempt++ {
+		claims, duplicates, err := readNightlyClaims(ctx, gh, repoRoot)
+		if err != nil {
+			return nil, false, err
+		}
+		if slices.Contains(duplicates, issue) {
+			return claims, true, nil
+		}
+		for _, entry := range claims {
+			if entry.Issue == issue {
+				return claims, true, nil
+			}
+		}
+		if attempt == nightlyClaimListBackAttempts {
+			return claims, false, nil
+		}
+		if err := gh.sleep(ctx, nightlyClaimListBackWait); err != nil {
+			return nil, false, fmt.Errorf("wait for nightly claim issue #%d to be listed: %w", issue, err)
+		}
+	}
+}
+
 // createNightlyClaim opens an issue for name's claim and reads the claims
 // back: when the claim of name is then another issue, opened first by a
 // racing agent, it closes its own and the claim is lost.
@@ -290,22 +328,25 @@ func createNightlyClaim(ctx context.Context, gh ghClient, repoRoot string, name 
 	if decodeErr := json.Unmarshal(out, &created); decodeErr != nil || created.Number <= 0 {
 		return fmt.Errorf("decode nightly claim issue of %s: %q", name, strings.TrimSpace(string(out)))
 	}
-	claims, err := syncNightlyClaims(ctx, gh, repoRoot)
+	claims, listed, err := listClaimsShowing(ctx, gh, repoRoot, created.Number)
 	if err != nil {
 		return err
 	}
-	held, listed := claims[name]
-	if listed && held.Issue == created.Number {
+	if !listed {
+		// Not a lost race: reporting one would make the caller open another
+		// issue for the same lag.
+		if closeErr := closeNightlyClaimIssue(ctx, gh, repoRoot, created.Number); closeErr != nil {
+			return closeErr
+		}
+		return fmt.Errorf("nightly claim %s: issue #%d was not listed back after %d reads; run the check again",
+			name, created.Number, nightlyClaimListBackAttempts)
+	}
+	held := claims[name]
+	if held.Issue == created.Number {
 		return nil
 	}
 	if err := closeNightlyClaimIssue(ctx, gh, repoRoot, created.Number); err != nil {
 		return err
-	}
-	if !listed {
-		// The list did not show the new issue yet; closing it and
-		// retaking the decision is safe, where keeping an issue the list
-		// may later rank behind another's would not be.
-		return fmt.Errorf("%w: %s: issue #%d was not listed back", errNightlyClaimLost, name, created.Number)
 	}
 
 	return fmt.Errorf("%w: %s: issue #%d was opened first", errNightlyClaimLost, name, held.Issue)
