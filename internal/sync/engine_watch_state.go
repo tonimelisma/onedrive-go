@@ -185,8 +185,26 @@ func newWatchRuntime(engine *Engine) *watchRuntime {
 	rt.signals = rt
 	rt.inspect = rt
 	rt.admitted = rt
+	rt.resources.goroutines.exited = rt.reportGoroutineExited
 
 	return rt
+}
+
+// reportGoroutineExited emits an observer's exit debug event once its
+// goroutine has returned. It runs on that goroutine, after the goroutine
+// tracker counts it as stopped, so a reader of the event can rely on the
+// stop not naming it.
+func (rt *watchRuntime) reportGoroutineExited(kind watchGoroutineKind) {
+	var observer string
+	switch kind {
+	case watchGoroutineLocalObserver:
+		observer = syncdomain.EngineDebugObserverLocal
+	case watchGoroutineRemoteObserver:
+		observer = syncdomain.EngineDebugObserverRemote
+	case watchGoroutineFullRefresh, watchGoroutineWakeSource:
+		return
+	}
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverExited, Observer: observer})
 }
 
 func (rt *watchRuntime) phase() watchPhase {
