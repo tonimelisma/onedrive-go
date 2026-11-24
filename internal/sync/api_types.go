@@ -146,9 +146,9 @@ type engineInputs struct {
 	RemoteRootItemID         string
 	RemoteRootDeltaCapable   bool
 	ExpectedSyncRootIdentity *synctree.FileIdentity
-	Fetcher                  syncdomain.DeltaFetcher
-	SocketIOFetcher          syncdomain.SocketIOEndpointFetcher
-	Items                    syncdomain.ItemClient
+	Fetcher                  DeltaFetcher
+	SocketIOFetcher          SocketIOEndpointFetcher
+	Items                    ItemClient
 	Downloads                driveops.Downloader
 	Uploads                  driveops.Uploader
 	PathConvergence          driveops.PathConvergence

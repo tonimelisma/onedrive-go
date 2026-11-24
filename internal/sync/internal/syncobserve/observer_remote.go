@@ -56,12 +56,17 @@ type remoteWatchBatchHandler func(
 	topology syncshortcut.ShortcutTopologyBatch,
 ) (RemoteObservationBatch, error)
 
+// DeltaFetcher is the Graph delta read the remote observer pages through.
+type DeltaFetcher interface {
+	Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error)
+}
+
 // RemoteObserver transforms Graph API delta responses into []RemoteItem.
 // It handles pagination, path materialization, change classification, and
 // normalization (NFC, driveID zero-padding). Delegates item conversion to
 // an embedded ItemConverter configured for primary drive observation.
 type RemoteObserver struct {
-	fetcher             syncdomain.DeltaFetcher
+	fetcher             DeltaFetcher
 	Converter           *itemConverter
 	logger              *slog.Logger
 	driveID             driveid.ID
@@ -129,7 +134,7 @@ type observerStats struct {
 // baseline must be a loaded Baseline (from SyncStore.Load); it is
 // read-only during observation. The caller must pass a normalized driveid.ID.
 func NewRemoteObserver(
-	fetcher syncdomain.DeltaFetcher, baseline syncdomain.BaselineView, driveID driveid.ID, logger *slog.Logger,
+	fetcher DeltaFetcher, baseline syncdomain.BaselineView, driveID driveid.ID, logger *slog.Logger,
 ) *RemoteObserver {
 	obs := &RemoteObserver{
 		fetcher: fetcher,
@@ -142,7 +147,7 @@ func NewRemoteObserver(
 	return obs
 }
 
-func (o *RemoteObserver) SetItemClient(items syncdomain.ItemClient) {
+func (o *RemoteObserver) SetItemClient(items ItemReader) {
 	if o == nil || o.Converter == nil {
 		return
 	}

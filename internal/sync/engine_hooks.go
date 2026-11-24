@@ -78,7 +78,7 @@ type engineHooks struct {
 	// socketIOWakeSourceFactory replaces the watch-mode websocket wake
 	// source (newSocketIOWakeSource).
 	socketIOWakeSourceFactory func(
-		syncdomain.SocketIOEndpointFetcher,
+		SocketIOEndpointFetcher,
 		driveid.ID,
 		syncobserve.SocketIOWakeSourceOptions,
 	) socketIOWakeSourceRunner

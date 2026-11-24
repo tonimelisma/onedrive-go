@@ -101,7 +101,7 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 	eng.enableWebsocket = true
 	recorder := attachDebugEventRecorder(eng)
 	started := make(chan struct{}, 1)
-	eng.hooks.socketIOWakeSourceFactory = func(_ syncdomain.SocketIOEndpointFetcher, _ driveid.ID, opts syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.hooks.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, opts syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{
 			started: started,
 			runFn: func(ctx context.Context, _ chan<- struct{}) error {
@@ -185,7 +185,7 @@ const noWakeSourceAfterTheDecision = "no wake source was made for the rest of th
 // made before the source's goroutine runs.
 func countWakeSourcesMade(eng *testEngine) *atomic.Int32 {
 	made := &atomic.Int32{}
-	eng.hooks.socketIOWakeSourceFactory = func(_ syncdomain.SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.hooks.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		made.Add(1)
 		return &stubSocketIOWakeSource{started: make(chan struct{}, 1)}
 	}

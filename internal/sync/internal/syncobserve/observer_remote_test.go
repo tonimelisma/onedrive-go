@@ -23,6 +23,12 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
+// The fixture clients are pinned to the item read the observers make.
+var (
+	_ ItemReader = (*syncfixture.TestMockItemClient)(nil)
+	_ ItemReader = (*syncfixture.EngineMockClient)(nil)
+)
+
 // ---------------------------------------------------------------------------
 // Mock DeltaFetcher
 // ---------------------------------------------------------------------------

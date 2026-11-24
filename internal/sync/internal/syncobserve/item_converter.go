@@ -34,6 +34,12 @@ type inflightParent struct {
 	HasUnmaterializableName bool
 }
 
+// ItemReader is the one item read the observers make: a sparse delta
+// parent's enrichment.
+type ItemReader interface {
+	GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+}
+
 // itemConverter converts []graph.Item into []RemoteItem with full path
 // materialization, NFC normalization, move detection, and deleted-item name
 // recovery. Drive-root and mount-root observation both use this single
@@ -46,8 +52,8 @@ type itemConverter struct {
 	Baseline              syncdomain.BaselineView
 	DriveID               driveid.ID
 	Logger                *slog.Logger
-	Stats                 *observerCounters     // nil-safe: primary observer provides this
-	Items                 syncdomain.ItemClient // nil-safe: sparse parent enrich is best-effort
+	Stats                 *observerCounters // nil-safe: primary observer provides this
+	Items                 ItemReader        // nil-safe: sparse parent enrich is best-effort
 	ShortcutTopology      *syncshortcut.ShortcutTopologyBatch
 	ProtectedRootBindings map[string]syncshortcut.ProtectedRoot
 
@@ -128,7 +134,7 @@ func NewPrimaryConverter(
 	driveID driveid.ID,
 	logger *slog.Logger,
 	stats *observerCounters,
-	items syncdomain.ItemClient,
+	items ItemReader,
 ) *itemConverter {
 	return &itemConverter{
 		Baseline:          baseline,

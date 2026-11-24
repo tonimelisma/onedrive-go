@@ -24,11 +24,28 @@ import (
 // Distinct from StrRoot in types.go which serializes the ItemTypeRoot enum.
 const GraphRootID = "root"
 
+// ItemClient is the Graph item calls the executor makes: the reads that
+// resolve a parent's child and the conditional writes an action performs.
+type ItemClient interface {
+	GetItem(ctx context.Context, driveID driveid.ID, itemID string) (*graph.Item, error)
+	ListChildren(ctx context.Context, driveID driveid.ID, parentID string) ([]graph.Item, error)
+	// GetChildByName and ListChildrenPages look one name up in a folder: the
+	// one read first, the listing a page at a time only when the read cannot
+	// settle it, so a lookup does not cost every page of a large folder.
+	GetChildByName(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+	ListChildrenPages(ctx context.Context, driveID driveid.ID, parentID string, visit graph.ChildrenPageFunc) error
+	CreateFolder(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
+	MoveItemIfMatch(
+		ctx context.Context, driveID driveid.ID, itemID, newParentID, newName string, opts graph.MoveOptions,
+	) (*graph.Item, error)
+	DeleteItemIfMatch(ctx context.Context, driveID driveid.ID, itemID, ifMatch string) error
+}
+
 // ExecutorConfig holds the configuration every per-action executor shares.
 // NewExecutorConfig builds it whole and no run changes it, except
 // parentChecks, which guards itself and is reset for each plan.
 type ExecutorConfig struct {
-	items            syncdomain.ItemClient
+	items            ItemClient
 	downloads        driveops.Downloader
 	uploads          driveops.Uploader
 	syncTree         *synctree.Root
@@ -86,7 +103,7 @@ type Executor struct {
 // configuration from. Items, Downloads, Uploads, Transfers, SyncTree,
 // DriveID, Logger and Now are required; the rest may be zero.
 type ExecutorInputs struct {
-	Items     syncdomain.ItemClient
+	Items     ItemClient
 	Downloads driveops.Downloader
 	Uploads   driveops.Uploader
 	// Transfers handles unified download/upload with resume and disk space

@@ -152,7 +152,7 @@ func TestRunWatch_SocketIOWakeSourcePanicKeepsWatchRunning(t *testing.T) {
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	eng.enableWebsocket = true
 	entered := make(chan struct{})
-	eng.hooks.socketIOWakeSourceFactory = func(_ syncdomain.SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
+	eng.hooks.socketIOWakeSourceFactory = func(_ SocketIOEndpointFetcher, _ driveid.ID, _ syncobserve.SocketIOWakeSourceOptions) socketIOWakeSourceRunner {
 		return &stubSocketIOWakeSource{
 			runFn: func(context.Context, chan<- struct{}) error {
 				close(entered)

@@ -36,9 +36,9 @@ type Engine struct {
 	baseline        *syncstore.SyncStore
 	planner         *syncplan.Planner
 	execCfg         *syncexec.ExecutorConfig
-	fetcher         syncdomain.DeltaFetcher
-	socketIOFetcher syncdomain.SocketIOEndpointFetcher
-	itemsClient     syncdomain.ItemClient
+	fetcher         DeltaFetcher
+	socketIOFetcher SocketIOEndpointFetcher
+	itemsClient     ItemClient
 	driveVerifier   DriveVerifier      // optional (B-074)
 	folderDelta     FolderDeltaFetcher // optional: mount-root delta observation
 	recursiveLister RecursiveLister    // optional: mount-root recursive enumeration fallback

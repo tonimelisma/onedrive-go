@@ -27,6 +27,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
+// The fixture's item client is pinned to the calls the executor makes.
+var _ ItemClient = (*syncfixture.ExecutorMockItemClient)(nil)
+
 const (
 	execHelloWorldContent      = "hello world"
 	execHelloWorldQuickXorHash = "aCgDG9jwBhDc4Q1yawMZAAAAAAA="

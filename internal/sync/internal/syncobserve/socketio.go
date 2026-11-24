@@ -74,11 +74,17 @@ type socketIOConn struct {
 	readerDone chan struct{}
 }
 
+// SocketIOEndpointFetcher fetches the outbound Socket.IO websocket endpoint
+// used for near-real-time remote wakeups in watch mode.
+type SocketIOEndpointFetcher interface {
+	SocketIOEndpoint(ctx context.Context, driveID driveid.ID) (*graph.SocketIOEndpoint, error)
+}
+
 // socketIOWakeSource owns the outbound Socket.IO/WebSocket lifecycle used to
 // wake the remote delta observer. It never interprets change payloads as truth;
 // every notification is reduced to a coalesced wake signal.
 type socketIOWakeSource struct {
-	fetcher          syncdomain.SocketIOEndpointFetcher
+	fetcher          SocketIOEndpointFetcher
 	driveID          driveid.ID
 	logger           *slog.Logger
 	dialFunc         func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
@@ -97,7 +103,7 @@ type socketIOWakeSource struct {
 }
 
 func NewSocketIOWakeSourceWithOptions(
-	fetcher syncdomain.SocketIOEndpointFetcher,
+	fetcher SocketIOEndpointFetcher,
 	driveID driveid.ID,
 	opts SocketIOWakeSourceOptions,
 ) *socketIOWakeSource {

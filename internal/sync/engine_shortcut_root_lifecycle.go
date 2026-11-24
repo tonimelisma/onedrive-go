@@ -28,7 +28,7 @@ type shortcutRoots struct {
 	syncTree      *synctree.Root
 	syncRoot      string
 	roots         *protectedRootSet
-	items         syncdomain.ItemClient
+	items         ItemClient
 	driveID       driveid.ID
 	namespaceID   string
 	sink          syncshortcut.ShortcutChildWorkSink
