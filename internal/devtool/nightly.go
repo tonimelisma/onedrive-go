@@ -523,21 +523,59 @@ func nightlyClaimExpired(claim *nightlyClaim, at time.Time) bool {
 
 // fixIsInRun reports whether the run's head contains the fix commit. For a
 // key that still fails in that run, the fix did not hold.
+//
+// A clone that lacks either commit (a shallow session clone, or a fix commit
+// from before a history rewrite) cannot answer, so the check fetches both by
+// SHA once and asks again. A commit that still cannot be found is not
+// provably in the run: a fixed claim then keeps awaiting a nightly and is not
+// retired, which errs toward keeping a claim, never toward dropping one, and
+// never fails the whole nightly check for one claim it cannot judge.
 func fixIsInRun(ctx context.Context, runner commandRunner, repoRoot string, fixCommit string, runHead string) (bool, error) {
 	if fixCommit == "" || runHead == "" {
 		return true, nil
 	}
-	err := runner.Run(
-		ctx, repoRoot, os.Environ(), io.Discard, io.Discard, "git", "merge-base", "--is-ancestor", fixCommit, runHead,
-	)
-	if err == nil {
-		return true, nil
+	inRun, answered, err := askFixAncestry(ctx, runner, repoRoot, fixCommit, runHead)
+	if answered || err != nil {
+		return inRun, err
 	}
-	var exit interface{ ExitCode() int }
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+	// A refused fetch leaves the commit unknown, which reads as not in the
+	// run (see above), so its error is not returned.
+	if runner.Run(
+		ctx, repoRoot, os.Environ(), io.Discard, io.Discard,
+		"git", "fetch", "--quiet", "--no-tags", "origin", fixCommit, runHead,
+	) != nil {
 		return false, nil
 	}
-	return false, fmt.Errorf("nightly ancestry of fix %s: %w", fixCommit, err)
+	inRun, _, err = askFixAncestry(ctx, runner, repoRoot, fixCommit, runHead)
+
+	return inRun, err
+}
+
+// gitUnknownObjectExit is git's exit status for a command given a commit the
+// repository does not hold.
+const gitUnknownObjectExit = 128
+
+// askFixAncestry runs git merge-base --is-ancestor once. answered is false
+// when git could not judge (exit 128: a commit the clone does not hold).
+func askFixAncestry(ctx context.Context, runner commandRunner, repoRoot string, fixCommit string, runHead string) (inRun bool, answered bool, err error) {
+	runErr := runner.Run(
+		ctx, repoRoot, os.Environ(), io.Discard, io.Discard, "git", "merge-base", "--is-ancestor", fixCommit, runHead,
+	)
+	if runErr == nil {
+		return true, true, nil
+	}
+	var exit interface{ ExitCode() int }
+	if !errors.As(runErr, &exit) {
+		return false, false, fmt.Errorf("nightly ancestry of fix %s: %w", fixCommit, runErr)
+	}
+	switch exit.ExitCode() {
+	case 1:
+		return false, true, nil
+	case gitUnknownObjectExit:
+		return false, false, nil
+	default:
+		return false, false, fmt.Errorf("nightly ancestry of fix %s: %w", fixCommit, runErr)
+	}
 }
 
 // pruneNightlyClaims deletes claims that no longer describe an open failure:
