@@ -58,7 +58,7 @@ func buildPrimaryWatchBatch(
 		primaryEvents,
 		newToken,
 		false,
-		syncdomain.NewRemoteObservationFindingsBatch(),
+		newRemoteObservationFindingsBatch(),
 	)
 	batch.FullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, primaryEvents)
 	batch.Source = syncobserve.RemoteObservationBatchPrimaryWatch
@@ -122,7 +122,7 @@ func (flow *observation) executeDriveRootObservation(
 		events,
 		token,
 		false,
-		syncdomain.NewRemoteObservationFindingsBatch(),
+		newRemoteObservationFindingsBatch(),
 	)
 	batch.FullRefreshDueSoon = deltaWindowDeletesSyncedFolder(bl, events)
 	batch.ShortcutTopology = topology
@@ -180,7 +180,7 @@ func (flow *observation) executeDriveRootFullObservation(
 		full.items,
 		full.token,
 		true,
-		syncdomain.NewRemoteObservationFindingsBatch(),
+		newRemoteObservationFindingsBatch(),
 	)
 	batch.ShortcutTopology = full.topology
 	batch.OrphansUndecided = full.orphansUndecided
@@ -208,7 +208,7 @@ func (flow *observation) executeMountRootObservation(
 		observed.items,
 		observed.token,
 		fullReconcile || completeDelta,
-		syncdomain.NewRemoteObservationFindingsBatch(),
+		newRemoteObservationFindingsBatch(),
 	)
 	batch.OrphansUndecided = completeDelta && observed.orphansUndecided
 

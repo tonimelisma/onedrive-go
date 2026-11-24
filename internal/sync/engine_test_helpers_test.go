@@ -60,10 +60,10 @@ var (
 	_ driveops.Downloader                = (*syncfixture.EngineMockClient)(nil)
 	_ driveops.Uploader                  = (*syncfixture.EngineMockClient)(nil)
 	_ driveops.ItemUploader              = (*syncfixture.EngineMockClient)(nil)
-	_ syncdomain.FolderDeltaFetcher      = (*syncfixture.EngineMockClient)(nil)
-	_ syncdomain.RecursiveLister         = (*syncfixture.EngineMockClient)(nil)
-	_ syncdomain.PermissionChecker       = (*syncfixture.EngineMockClient)(nil)
-	_ syncdomain.DriveVerifier           = (*syncfixture.EngineMockClient)(nil)
+	_ FolderDeltaFetcher                 = (*syncfixture.EngineMockClient)(nil)
+	_ RecursiveLister                    = (*syncfixture.EngineMockClient)(nil)
+	_ PermissionChecker                  = (*syncfixture.EngineMockClient)(nil)
+	_ DriveVerifier                      = (*syncfixture.EngineMockClient)(nil)
 )
 
 // The transfer manager type-asserts the capability, so losing it would fail
@@ -467,7 +467,7 @@ func isTestBlockScopeed(eng *testEngine, key syncdomain.ScopeKey) bool {
 func getTestBlockScope(eng *testEngine, key syncdomain.ScopeKey) (syncdomain.BlockScope, bool) {
 	if eng.runtime != nil {
 		if block, ok := eng.runtime.sched.Scope(key); ok {
-			row, err := syncdomain.BlockScopeRowFromActiveScope(block)
+			row, err := blockScopeRowFromActiveScope(block)
 			if err != nil {
 				panic(fmt.Sprintf("BlockScopeRowFromActiveScope: %v", err))
 			}

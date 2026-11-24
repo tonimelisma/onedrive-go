@@ -151,12 +151,12 @@ func TestCancelCauses_AnswerToCanceledAndNameTheirCancel(t *testing.T) {
 	}{
 		{name: "action returned", cause: syncdomain.ErrActionReturned},
 		{name: "worker pool stopped", cause: syncdomain.ErrWorkerPoolStopped},
-		{name: "one-shot pass failed", cause: syncdomain.ErrOneShotPassFailed},
-		{name: "one-shot pass ended", cause: syncdomain.ErrOneShotPassEnded},
+		{name: "one-shot pass failed", cause: errOneShotPassFailed},
+		{name: "one-shot pass ended", cause: errOneShotPassEnded},
 	} {
 		require.ErrorIs(t, tc.cause, context.Canceled, tc.name)
 		require.NotErrorIs(t, tc.cause, context.DeadlineExceeded, tc.name)
-		assert.True(t, syncdomain.IsCancellationEcho(fmt.Errorf("request canceled: %w", tc.cause)), tc.name)
+		assert.True(t, isCancellationEcho(fmt.Errorf("request canceled: %w", tc.cause)), tc.name)
 		assert.NotContains(t, texts, tc.cause.Error(), "%s has a text of its own", tc.name)
 		texts[tc.cause.Error()] = tc.name
 	}

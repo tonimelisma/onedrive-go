@@ -305,7 +305,7 @@ func TestRunLiveCurrentPlan_FailsClosedWhenRemoteObservationReconcileFails(t *te
 	require.NoError(t, err)
 	var closeStore sync.Once
 	attachDebugEventRecorderWithHook(eng, func(event syncdomain.EngineDebugEvent) {
-		if event.Type != syncdomain.EngineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
+		if event.Type != engineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
 			return
 		}
 		closeStore.Do(func() {
@@ -351,7 +351,7 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 	require.NoError(t, err)
 	var closeStore sync.Once
 	attachDebugEventRecorderWithHook(eng, func(event syncdomain.EngineDebugEvent) {
-		if event.Type != syncdomain.EngineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
+		if event.Type != engineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
 			return
 		}
 		closeStore.Do(func() {

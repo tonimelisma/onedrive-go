@@ -263,7 +263,7 @@ func (flow *engineFlow) logSuppressedShutdownCompletionError(
 	// not be recorded; the next sync rediscovers it from durable truth
 	// (R-2.5.3).
 	var fatalErr *fatalCompletionError
-	if syncdomain.IsCancellationEcho(err) || errors.As(err, &fatalErr) {
+	if isCancellationEcho(err) || errors.As(err, &fatalErr) {
 		flow.deps.logger.Debug("suppressed action completion error during shutdown", fields...)
 		return
 	}

@@ -208,7 +208,7 @@ func TestHandleRemoteObservationBatch_MountRootWatchCommitsObservedRowsAndPendin
 			testRemoteCreateItem("shared-watch.txt", "item-shared", eng.driveID.String()),
 		},
 		pendingCursor,
-		syncdomain.NewRemoteObservationFindingsBatch(),
+		newRemoteObservationFindingsBatch(),
 	)
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)
@@ -251,7 +251,7 @@ func TestHandleRemoteObservationBatch_MountRootEnumerateClampRearmsRefreshTimerI
 		syncdomain.RemoteObservationModeEnumerate,
 		nil,
 		"",
-		syncdomain.NewRemoteObservationFindingsBatch(),
+		newRemoteObservationFindingsBatch(),
 	)
 	err := rt.handleRemoteObservationBatch(ctx, &batch)
 	require.NoError(t, err)

@@ -18,7 +18,7 @@ import (
 func (flow *engineFlow) handOverColdStart(key syncdomain.ScopeKey) {
 	for _, target := range flow.sched.HandOverColdStart(key) {
 		flow.deps.emit(syncdomain.EngineDebugEvent{
-			Type:     syncdomain.EngineDebugEventColdStartHandedOver,
+			Type:     engineDebugEventColdStartHandedOver,
 			ScopeKey: key,
 			Note:     target,
 		})
@@ -37,7 +37,7 @@ func (flow *engineFlow) noteColdStartSuccess(ta *syncdomain.TrackedAction) {
 		return
 	}
 	flow.deps.emit(syncdomain.EngineDebugEvent{
-		Type:  syncdomain.EngineDebugEventColdStartAllowanceRaised,
+		Type:  engineDebugEventColdStartAllowanceRaised,
 		Note:  syncsched.ColdStartTarget(ta),
 		Count: allowance,
 	})
@@ -86,7 +86,7 @@ func (flow *engineFlow) markDispatched(outbox []*syncdomain.TrackedAction, i int
 	ta := outbox[i]
 	flow.sched.Running(ta)
 	flow.deps.emit(syncdomain.EngineDebugEvent{
-		Type: syncdomain.EngineDebugEventActionDispatched,
+		Type: engineDebugEventActionDispatched,
 		Path: ta.Action.Path,
 		Note: syncsched.ColdStartTarget(ta),
 	})

@@ -54,7 +54,7 @@ func rootReadFailureObservationFindingsBatch(
 	driveID driveid.ID,
 	issueType syncdomain.IssueType,
 ) syncdomain.ObservationFindingsBatch {
-	batch := syncdomain.NewRemoteObservationFindingsBatch()
+	batch := newRemoteObservationFindingsBatch()
 	batch.Issues = []syncdomain.ObservationIssue{{
 		Path:      "/",
 		DriveID:   driveID,
@@ -78,5 +78,15 @@ func rootReadFailureIssueType(err error) (issueType syncdomain.IssueType, ok boo
 		return syncdomain.IssueRemoteReadDenied, true
 	default:
 		return "", false
+	}
+}
+
+// newRemoteObservationFindingsBatch is the findings batch of one root
+// observation. It manages both root read issue types, so the next observation
+// replaces whichever one an earlier answer left (a "forbidden" after a "not
+// found", or the reverse) and a read that succeeds clears either.
+func newRemoteObservationFindingsBatch() syncdomain.ObservationFindingsBatch {
+	return syncdomain.ObservationFindingsBatch{
+		ManagedIssueTypes: []syncdomain.IssueType{syncdomain.IssueRemoteReadDenied, syncdomain.IssueRemoteRootNotFound},
 	}
 }

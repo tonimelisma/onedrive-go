@@ -16,7 +16,7 @@ func TestWaitUntilSeenOrExit_HandsBackAResultItTook(t *testing.T) {
 	t.Parallel()
 
 	recorder := NewDebugEventRecorder()
-	recorder.Record(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventShutdownStarted})
+	recorder.Record(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteWakesCoalesced})
 	<-recorder.Events // the wait finds the event only in the history
 
 	runErr := errors.New("the run's own result")

@@ -16,7 +16,7 @@ func (rt *watchRuntime) handleMaintenanceTick(ctx context.Context) {
 	rt.recoverDroppedLocalObservation(ctx)
 	rt.upkeep.purgeExpiredTrash(false)
 	rt.logWatchSummary(ctx)
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventMaintenanceTickHandled})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventMaintenanceTickHandled})
 }
 
 func (rt *watchRuntime) recoverDroppedLocalObservation(ctx context.Context) {
@@ -129,7 +129,7 @@ func (rt *watchRuntime) runFullRemoteRefreshAsync(ctx context.Context, bl syncdo
 		return
 	}
 	rt.resources.refreshActive = true
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshStarted})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventRemoteRefreshStarted})
 
 	// The goroutine holds the observation and the send side of the result
 	// channel only: it cannot reach loop state.
@@ -239,5 +239,5 @@ func (rt *watchRuntime) applyRemoteRefreshResult(
 
 func (rt *watchRuntime) dropRemoteRefreshResultOnShutdown() {
 	rt.resources.refreshActive = false
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshDroppedOnShutdown})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventRemoteRefreshDroppedOnShutdown})
 }

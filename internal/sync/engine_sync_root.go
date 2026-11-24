@@ -29,7 +29,7 @@ func resolveExpectedSyncRoot(
 	}
 	if state.SyncRootIdentity != nil {
 		recorded := *state.SyncRootIdentity
-		if mismatchErr := syncdomain.ValidateExpectedSyncRootIdentity(tree, &recorded, syncdomain.ErrSyncRootRebindHint); mismatchErr != nil {
+		if mismatchErr := syncdomain.ValidateExpectedSyncRootIdentity(tree, &recorded, errSyncRootRebindHint); mismatchErr != nil {
 			return syncdomain.ResolvedSyncRoot{}, mismatchErr
 		}
 		return syncdomain.ResolvedSyncRoot{Expected: &recorded}, nil
@@ -47,7 +47,7 @@ func resolveExpectedSyncRoot(
 			// accept exactly the unmounted or replaced folder this check
 			// exists to refuse.
 			return syncdomain.ResolvedSyncRoot{}, fmt.Errorf("%w: this sync state has no record of its sync folder; %s",
-				syncdomain.ErrMountRootUnavailable, syncdomain.ErrSyncRootRebindHint)
+				syncdomain.ErrMountRootUnavailable, errSyncRootRebindHint)
 		}
 	}
 
@@ -62,3 +62,9 @@ func resolveExpectedSyncRoot(
 
 	return syncdomain.ResolvedSyncRoot{Expected: &current, BindPending: true}, nil
 }
+
+// errSyncRootRebindHint is appended to a primary-root mismatch so the user
+// learns the one explicit way out. It is not offered for shortcut child roots,
+// whose identity is owned by the parent engine.
+const errSyncRootRebindHint = "if you moved or restored the sync folder on purpose, run " +
+	"'onedrive-go drive rebind-root' to sync with the folder that is there now"

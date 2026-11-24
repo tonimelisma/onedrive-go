@@ -22,8 +22,8 @@ import (
 type remoteSource struct {
 	fetcher         syncdomain.DeltaFetcher
 	items           syncdomain.ItemClient
-	folderDelta     syncdomain.FolderDeltaFetcher // optional: mount-root delta observation
-	recursiveLister syncdomain.RecursiveLister    // optional: mount-root recursive enumeration fallback
+	folderDelta     FolderDeltaFetcher // optional: mount-root delta observation
+	recursiveLister RecursiveLister    // optional: mount-root recursive enumeration fallback
 	socketIO        syncdomain.SocketIOEndpointFetcher
 	// wakeSourceFactory replaces the watch-mode websocket wake source; nil
 	// builds the production one (engineHooks.socketIOWakeSourceFactory).

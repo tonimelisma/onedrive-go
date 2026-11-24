@@ -80,7 +80,7 @@ func TestRunWatch_ContextCancel(t *testing.T) {
 	syncfixture.StopWatch(t, cancel, done)
 
 	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted
+		return event.Type == engineDebugEventObserverStarted
 	}), "observers must not start after bootstrap cancellation")
 }
 
@@ -132,17 +132,17 @@ func TestRunWatch_WebsocketEnabledStartsWakeSource(t *testing.T) {
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncDownloadOnly, quietWatchOptions())
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventWebsocketWakeSourceStarted && event.DriveID == driveID.String()
+		return event.Type == engineDebugEventWebsocketWakeSourceStarted && event.DriveID == driveID.String()
 	}, "websocket wake source started")
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventWebsocketConnected &&
+		return event.Type == engineDebugEventWebsocketConnected &&
 			event.DriveID == driveID.String() &&
 			event.Note == "sid=sid-1"
 	}, "websocket connected")
 
 	syncfixture.StopWatch(t, cancel, done)
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventWebsocketWakeSourceStopped && event.DriveID == driveID.String()
+		return event.Type == engineDebugEventWebsocketWakeSourceStopped && event.DriveID == driveID.String()
 	}, "websocket wake source stopped")
 }
 
@@ -171,8 +171,8 @@ func TestRunWatch_WebsocketDisabledKeepsPollingOnly(t *testing.T) {
 	syncfixture.StopWatch(t, cancel, done)
 	assert.Zero(t, wakeSourcesMade.Load(), noWakeSourceAfterTheDecision)
 	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventWebsocketWakeSourceStarted ||
-			event.Type == syncdomain.EngineDebugEventWebsocketConnected
+		return event.Type == engineDebugEventWebsocketWakeSourceStarted ||
+			event.Type == engineDebugEventWebsocketConnected
 	}), "disabled websocket mode must not emit websocket lifecycle events")
 }
 
@@ -201,7 +201,7 @@ func waitForWakeSourceDecision(t *testing.T, recorder *syncfixture.DebugEventRec
 	t.Helper()
 
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started, after the remote observer and its wake source")
 }
 
@@ -227,7 +227,7 @@ func TestRunWatch_MountRootKeepsPollingOnly(t *testing.T) {
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncDownloadOnly, quietWatchOptions())
 
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventWebsocketFallback && event.Note == "mount_root"
+		return event.Type == engineDebugEventWebsocketFallback && event.Note == "mount_root"
 	}, "websocket mount-root fallback")
 	waitForWakeSourceDecision(t, recorder)
 	assert.Zero(t, wakeSourcesMade.Load(), "wake source should not start for mount-root watch")
@@ -255,10 +255,10 @@ func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 
 	cancel()
@@ -266,10 +266,10 @@ func TestRunWatch_CancellationWinsOverFinalObserverExit(t *testing.T) {
 		"RunWatch should prefer graceful shutdown over all-observers-exited")
 
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverExited && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverExited && event.Observer == engineDebugObserverLocal
 	}, "local observer exited")
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventWatchStopped
+		return event.Type == engineDebugEventWatchStopped
 	}, "watch stopped")
 }
 
@@ -297,17 +297,17 @@ func TestRunWatch_UploadOnly_StartsRemoteObserver(t *testing.T) {
 	})
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 
 	syncfixture.StopWatch(t, cancel, done)
 
 	assert.Positive(t, deltaCalls.Load(), "upload-only watch should still issue delta calls")
 	assert.True(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
+		return event.Type == engineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
 	}), "upload-only watch must start a remote observer")
 }
 
@@ -323,7 +323,7 @@ func TestWatchRuntime_HandleMaintenanceTick_EmitsDebugEventWithoutSQLiteProbe(t 
 	testWatchRuntime(t, eng).handleMaintenanceTick(ctx)
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventMaintenanceTickHandled
+		return event.Type == engineDebugEventMaintenanceTickHandled
 	}, "maintenance tick handled")
 }
 
@@ -454,13 +454,13 @@ func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 	})
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	// Wait for the local observer itself: canceling as soon as the remote one
 	// starts raced its startup (the remote start's state read saw the
 	// cancellation and the runtime stopped before the local observer began).
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 
 	// Create a local file. Download-only still observes it, but upload actions
@@ -474,7 +474,7 @@ func TestRunWatch_DownloadOnly_StartsLocalObserver(t *testing.T) {
 	_, found := bl.GetByPath("local-only.txt")
 	assert.False(t, found, "download-only watch mode must ignore local-only files created after bootstrap")
 	assert.True(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}), "download-only watch must start a local observer")
 }
 
@@ -547,12 +547,12 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 
 	cancel()
 	done = recorder.WaitUntilSeenOrExit(t, done, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventShutdownStarted
+		return event.Type == engineDebugEventShutdownStarted
 	}, "shutdown started")
 
 	clock.Advance(10 * time.Second)
@@ -560,23 +560,23 @@ func TestRunWatch_ShutdownStopsRetryAndTrialTimers(t *testing.T) {
 
 	recorder.RequireOrderedSubsequence(t, []func(syncdomain.EngineDebugEvent) bool{
 		func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+			return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 		},
 		func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventShutdownStarted
+			return event.Type == engineDebugEventShutdownStarted
 		},
 		func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventWatchStopped
+			return event.Type == engineDebugEventWatchStopped
 		},
 	}, "local observer start, shutdown, and watch stop should occur in order")
 	for _, forbidden := range []syncdomain.EngineDebugEventType{
-		syncdomain.EngineDebugEventRetryTimerFired,
-		syncdomain.EngineDebugEventRetryHeldReleaseStarted,
-		syncdomain.EngineDebugEventTrialTimerFired,
-		syncdomain.EngineDebugEventTrialHeldReleaseStarted,
+		engineDebugEventRetryTimerFired,
+		engineDebugEventRetryHeldReleaseStarted,
+		engineDebugEventTrialTimerFired,
+		engineDebugEventTrialHeldReleaseStarted,
 	} {
 		recorder.RequireNoEventAfter(t, func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventShutdownStarted
+			return event.Type == engineDebugEventShutdownStarted
 		}, func(event syncdomain.EngineDebugEvent) bool {
 			return event.Type == forbidden
 		}, fmt.Sprintf("%s must not occur after shutdown starts", forbidden))
@@ -651,7 +651,7 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 
 	watchCtx, cancel := context.WithCancel(t.Context())
 	recorder := attachDebugEventRecorderWithHook(eng, func(event syncdomain.EngineDebugEvent) {
-		if event.Type == syncdomain.EngineDebugEventRemoteRefreshCommitted {
+		if event.Type == engineDebugEventRemoteRefreshCommitted {
 			cancel()
 		}
 	})
@@ -662,41 +662,41 @@ func TestRunWatch_ShutdownAfterCommittedRefreshDoesNotDropAppliedBatch(t *testin
 	})
 
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 	syncfixture.ReceiveWithin(t, watcher.Added(), "local watch setup to add a watcher")
 	syncfixture.ReceiveWithin(t, refreshTimerCreated, "the refresh timer to be created")
 
 	clock.Advance(15 * time.Minute)
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventRemoteRefreshStarted
+		return event.Type == engineDebugEventRemoteRefreshStarted
 	}, "full remote refresh started")
 	syncfixture.ReceiveWithin(t, refreshStarted, "the full remote refresh's delta fetch to start")
 
 	close(refreshReleased)
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventShutdownStarted
+		return event.Type == engineDebugEventShutdownStarted
 	}, "shutdown started")
 
 	require.NoError(t, syncfixture.ReceiveWithin(t, done, "the watch loop to exit after shutdown during committed refresh application"))
 
 	recorder.RequireOrderedSubsequence(t, []func(syncdomain.EngineDebugEvent) bool{
 		func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventRemoteRefreshStarted
+			return event.Type == engineDebugEventRemoteRefreshStarted
 		},
 		func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventRemoteRefreshApplied
+			return event.Type == engineDebugEventRemoteRefreshApplied
 		},
 		func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventShutdownStarted
+			return event.Type == engineDebugEventShutdownStarted
 		},
 		func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventWatchStopped
+			return event.Type == engineDebugEventWatchStopped
 		},
 	}, "loop-owned refresh application should complete before shutdown drains the watch loop")
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventRemoteRefreshDroppedOnShutdown
+		return event.Type == engineDebugEventRemoteRefreshDroppedOnShutdown
 	}, 0, "applied full remote refresh batches should not later be dropped as pending shutdown work")
 }
 
@@ -742,7 +742,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	})
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverFallbackStarted
+		return event.Type == engineDebugEventObserverFallbackStarted
 	}, "fallback started")
 	syncfixture.ReceiveWithin(t, tickerCreated, "the fallback ticker to be created")
 	clock.Advance(degradedInterval)
@@ -752,7 +752,7 @@ func TestRunWatch_FallbackSleepHonorsCancellation(t *testing.T) {
 	syncfixture.StopWatch(t, cancel, done)
 
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverFallbackStopped
+		return event.Type == engineDebugEventObserverFallbackStopped
 	}, "fallback stopped")
 }
 

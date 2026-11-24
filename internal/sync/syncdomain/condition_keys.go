@@ -1,7 +1,5 @@
 package syncdomain
 
-import "github.com/tonimelisma/onedrive-go/internal/errclass"
-
 // ConditionKey is the stable sync-domain grouping key consumed by store
 // projections, logs, and CLI-owned rendering.
 type ConditionKey string
@@ -53,38 +51,6 @@ func ConditionKeyForStoredCondition(conditionType IssueType, scopeKey ScopeKey) 
 		scopeKey,
 		DescribeScopeKey(scopeKey).DefaultConditionType,
 	)
-}
-
-// ConditionKeyForRuntimeResult maps one execution-time classified result into
-// the shared condition family used by logs, watch summaries, and status. A
-// transient runtime condition (a timeout, a conflict, a locked item) is an
-// expected failure that is retried, so it has no family; it used to be filed
-// as the unexpected condition. A failure with no condition at all is the
-// unexpected condition, and a result that is not a failure has none.
-func ConditionKeyForRuntimeResult(class errclass.Class, conditionType IssueType) ConditionKey {
-	if key, ok := ConditionKeyForIssueType(conditionType); ok {
-		return key
-	}
-	if conditionType != "" {
-		// ConditionKeyForIssueType names no family only for the transient
-		// members and the empty value.
-		return ""
-	}
-
-	switch class {
-	case errclass.ClassRetryableTransient,
-		errclass.ClassScopeBlockingTransient,
-		errclass.ClassActionable,
-		errclass.ClassFatal:
-		return ConditionUnexpectedCondition
-	case errclass.ClassInvalid,
-		errclass.ClassSuccess,
-		errclass.ClassShutdown,
-		errclass.ClassSuperseded:
-		return ""
-	default:
-		return ""
-	}
 }
 
 // ConditionClearsAutomatically reports whether a condition of this family

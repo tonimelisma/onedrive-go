@@ -152,10 +152,10 @@ type engineInputs struct {
 	Downloads                driveops.Downloader
 	Uploads                  driveops.Uploader
 	PathConvergence          driveops.PathConvergence
-	DriveVerifier            syncdomain.DriveVerifier
-	FolderDelta              syncdomain.FolderDeltaFetcher
-	RecursiveLister          syncdomain.RecursiveLister
-	PermChecker              syncdomain.PermissionChecker
+	DriveVerifier            DriveVerifier
+	FolderDelta              FolderDeltaFetcher
+	RecursiveLister          RecursiveLister
+	PermChecker              PermissionChecker
 	Logger                   *slog.Logger
 	ContentFilter            syncdomain.ContentFilterConfig
 	LocalRules               syncdomain.LocalObservationRules

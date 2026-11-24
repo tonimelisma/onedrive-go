@@ -24,7 +24,7 @@ func (flow *engineFlow) commitLocalScan(
 	flow.logSkippedObservationFindings(skipped, flow.knownObservationIssues(ctx))
 	findings := localObservationFindingsBatchFromSkippedItems(flow.cfg.driveID, skipped)
 	flow.deps.emit(syncdomain.EngineDebugEvent{
-		Type: syncdomain.EngineDebugEventObservationFindingsReconcileStarted,
+		Type: engineDebugEventObservationFindingsReconcileStarted,
 		Note: engineDebugNoteLocalSkipped,
 	})
 
@@ -163,7 +163,7 @@ func (flow *engineFlow) applyObservationFindingsBatch(
 	}
 
 	flow.deps.emit(syncdomain.EngineDebugEvent{
-		Type: syncdomain.EngineDebugEventObservationFindingsReconcileStarted,
+		Type: engineDebugEventObservationFindingsReconcileStarted,
 		Note: reconcileNote,
 	})
 	if err := flow.deps.store.ReconcileObservationFindings(ctx, batch); err != nil {

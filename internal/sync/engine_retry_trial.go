@@ -23,7 +23,7 @@ func (rt *watchRuntime) releaseDueHeldTrialsNow(
 	bl syncdomain.BaselineView,
 ) ([]*syncdomain.TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed("releaseDueHeldTrialsNow", "release due held trials")
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventTrialHeldReleaseStarted})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventTrialHeldReleaseStarted})
 
 	dispatch, err := rt.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
@@ -31,7 +31,7 @@ func (rt *watchRuntime) releaseDueHeldTrialsNow(
 	}
 	rt.armHeldTimers()
 	rt.deps.emit(syncdomain.EngineDebugEvent{
-		Type:  syncdomain.EngineDebugEventTrialHeldReleaseCompleted,
+		Type:  engineDebugEventTrialHeldReleaseCompleted,
 		Count: len(dispatch),
 	})
 	return dispatch, nil
@@ -45,7 +45,7 @@ func (rt *watchRuntime) releaseDueHeldRetriesNow(
 	bl syncdomain.BaselineView,
 ) ([]*syncdomain.TrackedAction, error) {
 	rt.mustAssertHeldReleaseAllowed("releaseDueHeldRetriesNow", "release due held retries")
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRetryHeldReleaseStarted})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventRetryHeldReleaseStarted})
 
 	dispatch, err := rt.reduceReadyFrontierStage(ctx, bl, nil)
 	if err != nil {
@@ -53,7 +53,7 @@ func (rt *watchRuntime) releaseDueHeldRetriesNow(
 	}
 	rt.armHeldTimers()
 	rt.deps.emit(syncdomain.EngineDebugEvent{
-		Type:  syncdomain.EngineDebugEventRetryHeldReleaseCompleted,
+		Type:  engineDebugEventRetryHeldReleaseCompleted,
 		Count: len(dispatch),
 	})
 	return dispatch, nil

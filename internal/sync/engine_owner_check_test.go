@@ -277,7 +277,7 @@ func TestRunWatch_UsesRunStateOnlyFromItsGoroutine(t *testing.T) {
 
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncBidirectional, quietWatchOptions())
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	syncfixture.StopWatch(t, cancel, done)
 	ownership.assertRunOwned(t, "(*DepGraph)", "(*Scheduler)", "(*watchTimerState)")

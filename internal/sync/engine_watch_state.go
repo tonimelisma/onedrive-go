@@ -198,13 +198,13 @@ func (rt *watchRuntime) reportGoroutineExited(kind watchGoroutineKind) {
 	var observer string
 	switch kind {
 	case watchGoroutineLocalObserver:
-		observer = syncdomain.EngineDebugObserverLocal
+		observer = engineDebugObserverLocal
 	case watchGoroutineRemoteObserver:
 		observer = syncdomain.EngineDebugObserverRemote
 	case watchGoroutineFullRefresh, watchGoroutineWakeSource:
 		return
 	}
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverExited, Observer: observer})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventObserverExited, Observer: observer})
 }
 
 func (rt *watchRuntime) phase() watchPhase {
@@ -270,7 +270,7 @@ func (rt *watchRuntime) queuePendingReplan(batch syncobserve.DirtyBatch) {
 	if !wasPending {
 		rt.loop.pendingReplanAt = rt.deps.now()
 		rt.startPendingReplanDrainIdleTracking(rt.loop.pendingReplanAt)
-		rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventPendingReplanSet, "", 0, time.Time{})
+		rt.emitRuntimeDebugEvent(engineDebugEventPendingReplanSet, "", 0, time.Time{})
 	}
 	if batch.FullRefresh {
 		rt.loop.pendingReplan.FullRefresh = true
@@ -315,12 +315,12 @@ func (rt *watchRuntime) retireOutboxForPendingReplan() {
 	outbox := rt.currentOutbox()
 	if len(outbox) == 0 {
 		if rt.sched.RunningCount() > 0 {
-			rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
+			rt.emitRuntimeDebugEvent(engineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
 		}
 		return
 	}
 
-	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventDispatchPausedForReplan, "", len(outbox), rt.pendingReplanStartedAt())
+	rt.emitRuntimeDebugEvent(engineDebugEventDispatchPausedForReplan, "", len(outbox), rt.pendingReplanStartedAt())
 	for _, ta := range outbox {
 		// Retired old-runtime nodes stay unresolved; the replacement runtime
 		// rebuilds dependency state from current truth.
@@ -328,9 +328,9 @@ func (rt *watchRuntime) retireOutboxForPendingReplan() {
 	}
 	rt.replaceOutbox(nil)
 	rt.deps.perf.RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(outbox))
-	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventOldOutboxRetired, "", len(outbox), rt.pendingReplanStartedAt())
+	rt.emitRuntimeDebugEvent(engineDebugEventOldOutboxRetired, "", len(outbox), rt.pendingReplanStartedAt())
 	if rt.sched.RunningCount() > 0 {
-		rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
+		rt.emitRuntimeDebugEvent(engineDebugEventWaitingForRunningActions, "", 0, rt.pendingReplanStartedAt())
 	}
 }
 
@@ -356,7 +356,7 @@ func (rt *watchRuntime) retireReadyFrontierForPendingReplan(ready []*syncdomain.
 		rt.sched.Finished(ta)
 	}
 	rt.deps.perf.RecordSuperseded(perf.SupersededSourcePendingReplanRetirement, len(ready))
-	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventOldOutboxRetired, "released_ready_frontier", len(ready), rt.pendingReplanStartedAt())
+	rt.emitRuntimeDebugEvent(engineDebugEventOldOutboxRetired, "released_ready_frontier", len(ready), rt.pendingReplanStartedAt())
 }
 
 func (rt *watchRuntime) recordReplanWorkerIdle(phase perf.ReplanIdlePhase, start time.Time, idleWorkers int) {

@@ -149,7 +149,7 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 	rt.dropGoneCreateIntentsAfterPoll(ctx, batch.PollStartedAt)
 
 	if batch.Source == syncobserve.RemoteObservationBatchFullRefresh {
-		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshCommitted})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventRemoteRefreshCommitted})
 	}
 
 	if batch.Source == syncobserve.RemoteObservationBatchFullRefresh && ctx.Err() != nil {
@@ -157,7 +157,7 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 			rt.resources.dirtyBuf.MarkFullRefresh()
 		}
 		batch.FinishApplied(nil)
-		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshApplied})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
 		return nil
 	}
 
@@ -165,7 +165,7 @@ func (rt *watchRuntime) handleRemoteObservationBatch(
 	batch.FinishApplied(nil)
 
 	if batch.Source == syncobserve.RemoteObservationBatchFullRefresh {
-		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshApplied})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
 	}
 
 	return nil
@@ -199,7 +199,7 @@ func (rt *watchRuntime) handleRemoteObservationBatchApplyFailure(
 		if rt.resources.dirtyBuf != nil {
 			rt.resources.dirtyBuf.MarkFullRefresh()
 		}
-		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRemoteRefreshApplied})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventRemoteRefreshApplied})
 		batch.FinishApplied(nil)
 		return nil
 	default:

@@ -168,7 +168,7 @@ func TestRunWatch_TimedOutRequestIsRetriedAndItsDependentRuns(t *testing.T) {
 
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "the bootstrap to settle and the local observer to start")
 	require.Equal(t, int32(1), creates.Load(), "the bootstrap's create timed out")
 	assert.NotContains(t, remote.tree(), "dir/a.txt", "the upload waits for its folder")

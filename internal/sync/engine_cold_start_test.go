@@ -165,14 +165,14 @@ func newColdStartTrace() *coldStartTrace {
 //nolint:gocritic // Value semantics match SetDebugEventHook, so the hook cannot mutate engine-owned events.
 func (tr *coldStartTrace) record(event syncdomain.DebugEvent) {
 	var line string
-	if event.Type == syncdomain.EngineDebugEventColdStartAllowanceRaised {
+	if event.Type == engineDebugEventColdStartAllowanceRaised {
 		line = fmt.Sprintf("raised(%d)", event.Count)
 		select {
 		case tr.raised <- event.Count:
 		default:
 		}
 	}
-	if event.Type == syncdomain.EngineDebugEventColdStartHandedOver {
+	if event.Type == engineDebugEventColdStartHandedOver {
 		line = "handed-over"
 		select {
 		case tr.handedOver <- struct{}{}:

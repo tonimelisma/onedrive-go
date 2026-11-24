@@ -19,7 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
-func newTestPermHandler(t *testing.T, checker syncdomain.PermissionChecker) (*permissionHandler, string) {
+func newTestPermHandler(t *testing.T, checker PermissionChecker) (*permissionHandler, string) {
 	t.Helper()
 
 	syncRoot := filepath.Join(t.TempDir(), "sync")

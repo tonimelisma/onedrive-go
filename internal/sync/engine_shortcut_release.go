@@ -116,7 +116,7 @@ func (e *Engine) releaseLocalTree(ctx context.Context, report *Report) error {
 // again without it, so it is not work the run left. The next run observes the
 // root again before it plans anything.
 func (e *Engine) forgetSharedFolderReadFailure(ctx context.Context, report *Report) error {
-	batch := syncdomain.NewRemoteObservationFindingsBatch()
+	batch := newRemoteObservationFindingsBatch()
 	if err := e.baseline.ReconcileObservationFindings(ctx, &batch); err != nil {
 		return fmt.Errorf("sync: clearing the read failure of a released shared folder: %w", err)
 	}

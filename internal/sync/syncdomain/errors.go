@@ -188,42 +188,25 @@ func RunEnded(ctx context.Context, err error) bool {
 	return err != nil && ctx.Err() != nil
 }
 
-// IsCancellationEcho reports whether err is what a canceled or expired
-// context hands back to the work it interrupted. A caller that already knows
-// the run has ended (RunEnded) uses it to tell that echo of the stop from a
-// separate failure that landed during it, which is still reported.
-func IsCancellationEcho(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
-}
-
-// cancelCauseError is the cause each cancel the worker pool and the one-shot
+// CancelCauseError is the cause each cancel the worker pool and the one-shot
 // pass make carries, and it answers to context.Canceled as the cause of
 // signal.NotifyContext does. A
 // request interrupted by a cancel carries the cancel's cause in place of
 // context.Canceled, so a cause that did not answer to context.Canceled would
 // make the interrupted work read as a failure; the cause's text says which
 // cancel it was.
-type cancelCauseError string
+type CancelCauseError string
 
-func (e cancelCauseError) Error() string { return string(e) }
+func (e CancelCauseError) Error() string { return string(e) }
 
 // Is answers true for context.Canceled and for nothing else.
-func (cancelCauseError) Is(target error) bool { return target == context.Canceled }
-
-// The causes of a one-shot pass context's cancel: a completion that failed
-// the pass (which RunOnce then returns), or the pass's end.
-//
-//nolint:gosec // G101 reads "Pass" in the names as a password; these are cancel causes, not credentials
-const (
-	ErrOneShotPassFailed cancelCauseError = "sync: one-shot pass failed"
-	ErrOneShotPassEnded  cancelCauseError = "sync: one-shot pass ended"
-)
+func (CancelCauseError) Is(target error) bool { return target == context.Canceled }
 
 // The causes of the worker contexts' cancels. Neither reaches an action while
 // its run goes on: ErrActionReturned lands after the action returned, and
 // ErrWorkerPoolStopped ends the context the workers were started under, so an
 // action it interrupts completes with RunEnded set, as a shutdown.
 const (
-	ErrActionReturned    cancelCauseError = "sync: action returned"
-	ErrWorkerPoolStopped cancelCauseError = "sync: worker pool stopped"
+	ErrActionReturned    CancelCauseError = "sync: action returned"
+	ErrWorkerPoolStopped CancelCauseError = "sync: worker pool stopped"
 )
