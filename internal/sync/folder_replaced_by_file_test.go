@@ -11,6 +11,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
@@ -159,7 +160,7 @@ func crashAfterTheReplacingDownload(t *testing.T, lostWAL bool) *syncHarness {
 	runScenarioPass(t, h.eng)
 	// The synced folder reaches the main database file; the round's commits
 	// stay in the WAL, which the lost-WAL variant then loses.
-	_, err := h.eng.baseline.RawDBForTest().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, err := syncstoretest.RawDB(t, h.eng.baseline).ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 	require.NoError(t, err)
 
 	remote.deleteAt(t, replacedFolderPath)
@@ -207,7 +208,7 @@ func assertPublishesTheReplacingFileInOnePass(t *testing.T, eng *testEngine, rem
 		itemType   syncdomain.ItemType
 		remoteHash string
 	}
-	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(t.Context(),
+	require.NoError(t, syncstoretest.RawDB(t, eng.baseline).QueryRowContext(t.Context(),
 		`SELECT item_type, COALESCE(remote_hash, '') FROM baseline WHERE path = ?`, replacedFolderPath).Scan(
 		&stored.itemType, &stored.remoteHash))
 	assert.Equal(t, syncdomain.ItemTypeFile, stored.itemType, "the stored row records the file")

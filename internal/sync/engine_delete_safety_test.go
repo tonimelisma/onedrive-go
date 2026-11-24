@@ -13,6 +13,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
@@ -49,7 +50,7 @@ func deleteSafetyFilePath(syncRoot string, i int) string {
 func readHeldDeletes(t *testing.T, eng *testEngine) []syncstore.HeldDeleteRow {
 	t.Helper()
 
-	rows, err := syncstore.QueryHeldDeleteRowsWithRunner(t.Context(), eng.baseline.RawDBForTest())
+	rows, err := syncstore.QueryHeldDeleteRowsWithRunner(t.Context(), syncstoretest.RawDB(t, eng.baseline))
 	require.NoError(t, err)
 	return rows
 }

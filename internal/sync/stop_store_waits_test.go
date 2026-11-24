@@ -27,7 +27,7 @@ func TestWatchRuntime_AScanCommitTheStopsDeadlineCutsIsSaidNotAnError(t *testing
 	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.stopBound = workerTestCommitBound
+	rt.hooks.stopBound = workerTestCommitBound
 	stopped := stoppedContext(t)
 	scan := &syncobserve.LocalObservation{
 		Kind: syncobserve.LocalSnapshot,

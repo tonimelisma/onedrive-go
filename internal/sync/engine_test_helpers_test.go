@@ -20,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -422,7 +423,6 @@ var errManualClockSkipsScopeWait = errors.New("manual clock: scope wait skipped"
 // refreshes the deps of the runtime and flow the harness already built.
 func installManualClockForTestEngine(eng *testEngine, clock *syncfixture.ManualClock) {
 	installManualClock(eng.Engine, clock)
-	eng.baseline.SetNowFunc(clock.Now)
 	// A one-shot scope wait is wall-clock time; on a manual clock it would
 	// pass without making the trial due. A test that wants the wait sets a
 	// waitFn of its own that advances its clock.
@@ -552,7 +552,7 @@ func newTestEngineInputs(t *testing.T, mock *syncfixture.EngineMockClient, tmpDi
 	}
 	// A test's store skips the waits for the disk unless the test proves
 	// durability on the production setting (keepRealFsync).
-	inputs.hooks.store.SkipFsync = !usesRealFsync(t)
+	inputs.hooks.store = syncstoretest.WithRawDB(t, syncstore.Hooks{SkipFsync: !usesRealFsync(t)})
 	return inputs
 }
 

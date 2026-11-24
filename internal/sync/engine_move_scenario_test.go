@@ -15,6 +15,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -118,7 +119,7 @@ func TestRunOnce_LegacyFolderBaselineGainsIdentityAndMovesAsOne(t *testing.T) {
 	// Simulate a state database written before folder baselines recorded
 	// their filesystem identity.
 	ctx := t.Context()
-	_, err := eng.baseline.RawDBForTest().ExecContext(ctx, `
+	_, err := syncstoretest.RawDB(t, eng.baseline).ExecContext(ctx, `
 		UPDATE baseline SET local_device = 0, local_inode = 0, local_has_identity = 0
 		WHERE item_type = 'folder'`)
 	require.NoError(t, err)
@@ -358,7 +359,7 @@ func TestRunOnce_RemoteFolderDeleteRemovesLocalTreeAndLeavesNoDrift(t *testing.T
 
 	assert.NoDirExists(t, filepath.Join(syncRoot, "probe"))
 	var leftover int
-	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(t.Context(),
+	require.NoError(t, syncstoretest.RawDB(t, eng.baseline).QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM remote_state WHERE path LIKE 'probe%'`).Scan(&leftover))
 	assert.Zero(t, leftover, "no remote_state rows survive under a deleted folder")
 	assertSyncInvariants(t, h)
@@ -399,7 +400,7 @@ func TestRunOnce_ItemMovedIntoRemotelyDeletedFolderIsDeletedLocally(t *testing.T
 	assert.NoFileExists(t, filepath.Join(syncRoot, "moved.txt"), "the moved item was deleted with the folder")
 	assert.FileExists(t, filepath.Join(syncRoot, "keep.txt"))
 	var ghosts int
-	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(t.Context(),
+	require.NoError(t, syncstoretest.RawDB(t, eng.baseline).QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM remote_state WHERE item_id = 'item-moved'`).Scan(&ghosts))
 	assert.Zero(t, ghosts, "no remote_state row survives for an item deleted with its new parent")
 	assertSyncInvariants(t, h)
@@ -1068,7 +1069,7 @@ func TestRunOnce_RemoteFolderDeleteAfterDeviceRenumberingIsApplied(t *testing.T)
 	runScenarioPass(t, h.eng)
 
 	// The state recorded the old device number; the scan sees the new one.
-	_, err := h.eng.baseline.RawDBForTest().ExecContext(t.Context(),
+	_, err := syncstoretest.RawDB(t, h.eng.baseline).ExecContext(t.Context(),
 		`UPDATE baseline SET local_device = local_device + 1 WHERE local_has_identity = 1`)
 	require.NoError(t, err)
 	require.NoError(t, h.eng.baseline.ReloadBaselineCacheForTest(t.Context()))

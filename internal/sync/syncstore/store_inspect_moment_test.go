@@ -26,25 +26,29 @@ func TestReadDriveStatusSnapshot_AWriteBetweenItsReadsIsNotSeenHalf(t *testing.T
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	require.NoError(t, os.WriteFile(dbPath, loadTestStoreTemplate(t), 0o600))
-	store, err := OpenSyncStoreForTest(synctest.TestContext(t), dbPath, synctest.TestLogger(t), false)
+	store, err := OpenSyncStoreForTest(synctest.TestContext(t), dbPath, synctest.TestLogger(t), false, nil, Hooks{})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close(context.Background())) })
 
-	inspector, err := openStoreInspector(dbPath, synctest.TestLogger(t))
+	// The first snapshot read commits the issue and its retry row between
+	// its two halves; later reads run as production does.
+	var writeErr error
+	written := false
+	inspector, err := openStoreInspector(dbPath, synctest.TestLogger(t), Hooks{BetweenSnapshotReads: func() {
+		if !written {
+			written = true
+			writeErr = commitIssueAndRetryRowTogether(t.Context(), store)
+		}
+	}})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, inspector.Close()) })
 
-	var writeErr error
-	inspector.betweenSnapshotReads = func() {
-		writeErr = commitIssueAndRetryRowTogether(t.Context(), store)
-	}
 	snapshot, err := inspector.ReadDriveStatusSnapshot(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, writeErr)
 	assert.Empty(t, snapshot.ObservationIssues, "committed after the snapshot began")
 	assert.Empty(t, snapshot.RetryingWork, "the retry row committed with the issue is not seen without it")
 
-	inspector.betweenSnapshotReads = nil
 	snapshot, err = inspector.ReadDriveStatusSnapshot(t.Context())
 	require.NoError(t, err)
 	assert.Len(t, snapshot.ObservationIssues, 1, "the next snapshot sees both")

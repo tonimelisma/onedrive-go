@@ -308,8 +308,7 @@ func (e *LocalContentChangedError) Error() string {
 func (e *LocalContentChangedError) Unwrap() error { return syncdomain.ErrActionPreconditionChanged }
 
 // removeVerifiedLocalFile takes the verified file at rel out of the sync
-// folder for a local delete: into the trash, recorded for reason, when the
-// drive has one, otherwise removed.
+// folder for a local delete: into the trash, recorded for reason.
 func (e *Executor) removeVerifiedLocalFile(rel string, verify synctree.VerifyFunc, reason localtrash.Reason) error {
 	return e.takeOutVerifiedLocalFile(rel, verify, reason, syncdomain.CrashPointLocalDeleteTrashed)
 }
@@ -326,20 +325,13 @@ func localDeleteTrashReason(action *syncdomain.Action) localtrash.Reason {
 
 // takeOutVerifiedLocalFile takes the verified file at rel out of the sync
 // folder, only the inode verify approved: into the trash, recorded for
-// reason, when the drive has one, otherwise removed. A local delete and a
-// local move that replaces its destination both take a file out this way.
+// reason. A local delete and a local move that replaces its destination both
+// take a file out this way.
 // trashedPoint is the crash point between the file reaching the trash and
 // its entry being committed.
 func (e *Executor) takeOutVerifiedLocalFile(
 	rel string, verify synctree.VerifyFunc, reason localtrash.Reason, trashedPoint string,
 ) error {
-	if e.trash == nil {
-		if err := e.syncTree.RemoveVerifiedRegularFile(rel, verify); err != nil {
-			return fmt.Errorf("removing verified file: %w", err)
-		}
-		return nil
-	}
-
 	placement, err := e.trash.Reserve(e.syncTree.Path(), rel, reason)
 	if err != nil {
 		// Named as text, as synctree.ErrDestinationFailed names its cause: a

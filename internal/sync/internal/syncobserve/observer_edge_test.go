@@ -44,7 +44,7 @@ func TestRacilyClean_SameSecondDetection(t *testing.T) {
 		LocalMtime:     info.ModTime().UnixNano(),
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 
 	// Immediately scan — the file's mtime is within 1 second of now.
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
@@ -81,7 +81,7 @@ func TestMtimeChangeWithoutContentChange(t *testing.T) {
 		LocalMtime:     info.ModTime().UnixNano() - 2*int64(time.Second), // 2 seconds earlier
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -111,7 +111,10 @@ func TestFullScan_NosyncMarkerDoesNotGuardSync(t *testing.T) {
 	syncfixture.WriteTestFile(t, syncRoot, "file2.txt", "content2")
 	syncfixture.WriteTestFile(t, syncRoot, ".nosync", "")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -231,7 +234,10 @@ func TestValidateOneDriveName_Empty(t *testing.T) {
 func TestIsOversizedFile(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	// Exactly at the limit — should NOT be oversized.
 	assert.False(t, obs.IsOversizedFile(maxOneDriveFileSize, "exactly-250gb.bin"),

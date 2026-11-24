@@ -14,7 +14,7 @@ func TestQueryComparisonRows_UnknownSideTypeFailsTheScanNamingThePath(t *testing
 	t.Parallel()
 
 	store := newTestStore(t)
-	_, err := queryComparisonRows(t.Context(), store.RawDBForTest(),
+	_, err := queryComparisonRows(t.Context(), store.db,
 		`SELECT 'docs/compared.txt', '', '', 0, 0, 0, '', '', 0, '', '',
 			'file', 'bogus', 'file', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0`)
 	require.Error(t, err)

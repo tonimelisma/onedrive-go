@@ -99,7 +99,7 @@ func observationIssuePathsForTest(t *testing.T, store *SyncStore) []string {
 func readBaselineRow(t *testing.T, mgr *SyncStore, itemID string) (path string, localSize int64, found bool) {
 	t.Helper()
 
-	err := mgr.RawDBForTest().QueryRowContext(t.Context(),
+	err := mgr.db.QueryRowContext(t.Context(),
 		`SELECT path, coalesce(local_size, -1) FROM baseline WHERE item_id = ?`, itemID).Scan(&path, &localSize)
 	if err != nil {
 		return "", 0, false
@@ -241,7 +241,7 @@ func newTestStore(tb testing.TB) *SyncStore {
 	ctx := synctest.TestContext(tb)
 	require.NoError(tb, os.WriteFile(dbPath, loadTestStoreTemplate(tb), 0o600), "WriteFile(%q)", dbPath)
 
-	mgr, err := OpenSyncStoreForTest(ctx, dbPath, synctest.TestLogger(tb), false)
+	mgr, err := OpenSyncStoreForTest(ctx, dbPath, synctest.TestLogger(tb), false, nil, Hooks{})
 	require.NoError(tb, err, "NewSyncStore(%q)", dbPath)
 
 	tb.Cleanup(func() {
@@ -288,7 +288,7 @@ func loadTestStoreTemplate(tb testing.TB) []byte {
 func requireStoreTestRawDB(t *testing.T, store *SyncStore) *sql.DB {
 	t.Helper()
 
-	db := store.RawDBForTest()
+	db := store.db
 	require.NotNil(t, db)
 
 	return db

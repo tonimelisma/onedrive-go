@@ -21,8 +21,11 @@ import (
 func TestHooks_ZeroValueIsProduction(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetHooks(Hooks{})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+		Hooks:    Hooks{},
+	})
 
 	watcher, err := obs.newWatcher()
 	require.NoError(t, err)

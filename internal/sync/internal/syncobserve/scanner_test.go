@@ -171,7 +171,10 @@ func TestFullScan_CaseCollision_InSkippedNotEvents(t *testing.T) {
 		t.Skip("case-insensitive filesystem — files are the same inode")
 	}
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -220,7 +223,7 @@ func TestFullScan_CaseCollision_NoFalseDeletion(t *testing.T) {
 		&syncdomain.BaselineEntry{Path: "doc.pdf", DriveID: driveid.New("d"), ItemID: "id2"},
 	)
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -254,7 +257,7 @@ func TestFullScan_CaseCollision_SyncedItemReplacedBySymlinkStillHoldsItsName(t *
 	baseline := syncfixture.BaselineWith(
 		&syncdomain.BaselineEntry{Path: "Foo.txt", DriveID: driveid.New("d"), ItemID: "id1", ItemType: syncdomain.ItemTypeFile},
 	)
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -286,7 +289,10 @@ func TestFullScan_StoresFilesystemIdentityForFilesAndDirectories(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(syncRoot, "Docs"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "Docs", "report.txt"), []byte("hello"), 0o600))
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
@@ -325,7 +331,10 @@ func TestFullScan_OnlyARegularFileIsReportedAsAnInterruptedRemoval(t *testing.T)
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, folderName, "inside.txt"), []byte("user\n"), 0o600))
 	require.NoError(t, syscall.Mkfifo(filepath.Join(syncRoot, fifoName), 0o600))
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
@@ -365,7 +374,10 @@ func TestDetectCaseCollisions_CaseInsensitiveFS(t *testing.T) {
 	// file.txt overwrites this (same inode), so only one file exists.
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "File.txt"), []byte("content"), 0o600))
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
@@ -641,7 +653,10 @@ func TestDetectCaseCollisions_CaseSensitiveFS(t *testing.T) {
 		t.Skip("case-insensitive filesystem — files are the same inode")
 	}
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)

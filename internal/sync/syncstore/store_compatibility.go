@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -81,9 +82,14 @@ func (r stateStoreIncompatibleReason) Description() string {
 // state DBs. It never mutates or recreates durable state during startup:
 // missing DBs bootstrap normally via NewSyncStore, while unreadable or
 // incompatible existing DBs surface a typed store-incompatible error.
-// hooks are the store's test seams; production passes the zero value.
-func OpenEngineSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, hooks Hooks) (*SyncStore, error) {
-	store, err := openSyncStoreWithHooks(ctx, dbPath, logger, true, hooks)
+// now is the engine's run clock, which the store dates its delete-ledger
+// rows, retry timing and pending-create intents by, so a retry the store
+// schedules is judged due by the same clock; nil is the wall clock. hooks are
+// the store's test seams; production passes the zero value.
+func OpenEngineSyncStore(
+	ctx context.Context, dbPath string, logger *slog.Logger, now func() time.Time, hooks Hooks,
+) (*SyncStore, error) {
+	store, err := openSyncStoreWithHooks(ctx, dbPath, logger, true, now, hooks)
 	if err == nil {
 		checkErr := checkStoreIntegrity(ctx, store)
 		if checkErr == nil {
@@ -149,7 +155,7 @@ func StateDBFamilyExists(dbPath string) (bool, error) {
 // quick_check skips the index-to-table cross-check of integrity_check, which
 // keeps it linear in the DB size and cheap enough for every startup.
 func checkStoreIntegrity(ctx context.Context, store *SyncStore) error {
-	rows, err := store.rawDB().QueryContext(ctx, `PRAGMA quick_check`)
+	rows, err := store.db.QueryContext(ctx, `PRAGMA quick_check`)
 	if err != nil {
 		return fmt.Errorf("run sync store quick_check: %w", err)
 	}

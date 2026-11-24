@@ -73,16 +73,15 @@ type ExecutorConfig struct {
 	pathConvergence driveops.PathConvergence
 
 	// trash keeps what local deletes remove and what downloads replace
-	// (R-6.4.9). Nil only in executor-only tests; then removal is permanent.
+	// (R-6.4.9).
 	trash *localtrash.Trash
 
 	// pendingCreates records new files whose empty item exists before their
-	// content is sent (R-5.6.15). Nil in executor-only tests.
+	// content is sent (R-5.6.15).
 	pendingCreates PendingCreateStore
 
 	// moveIntents records a local file move before its rename, so an old
-	// name the move could not remove is its known leftover (R-2.12.9). Nil
-	// in executor-only tests.
+	// name the move could not remove is its known leftover (R-2.12.9).
 	moveIntents LocalMoveIntentStore
 
 	// parentChecks remembers the remote parents already read live for the
@@ -101,7 +100,8 @@ type Executor struct {
 
 // ExecutorInputs is everything NewExecutorConfig builds an executor
 // configuration from. Items, Downloads, Uploads, Transfers, SyncTree,
-// DriveID, Logger and Now are required; the rest may be zero.
+// DriveID, Logger, Trash, PendingCreates, MoveIntents and Now are required;
+// the rest may be zero.
 type ExecutorInputs struct {
 	Items     ItemClient
 	Downloads driveops.Downloader
@@ -124,7 +124,7 @@ type ExecutorInputs struct {
 	SyncRootIdentity *syncdomain.SyncRootIdentity
 	PathConvergence  driveops.PathConvergence
 	// Trash keeps what local deletes remove and what downloads replace
-	// (R-6.4.9); nil makes removal permanent.
+	// (R-6.4.9).
 	Trash *localtrash.Trash
 	// PendingCreates records new files whose empty item exists before their
 	// content is sent (R-5.6.15).
@@ -181,6 +181,9 @@ func (in *ExecutorInputs) missingRequiredField() string {
 		{name: "SyncTree", missing: in.SyncTree == nil},
 		{name: "DriveID", missing: in.DriveID.IsZero()},
 		{name: "Logger", missing: in.Logger == nil},
+		{name: "Trash", missing: in.Trash == nil},
+		{name: "PendingCreates", missing: in.PendingCreates == nil},
+		{name: "MoveIntents", missing: in.MoveIntents == nil},
 		{name: "Now", missing: in.Now == nil},
 	}
 	for _, field := range required {
@@ -600,7 +603,7 @@ func (e *Executor) ExecuteLocalMove(ctx context.Context, action *syncdomain.Acti
 	}
 
 	spellingOnly := isLocalSpellingOnlyMove(action.OldPath, action.Path)
-	recordsIntent := e.moveIntents != nil && !spellingOnly && movedItemType(action) == syncdomain.ItemTypeFile
+	recordsIntent := !spellingOnly && movedItemType(action) == syncdomain.ItemTypeFile
 	if recordsIntent {
 		if err := e.moveIntents.RecordLocalMoveIntent(ctx, action.OldPath, action.Path); err != nil {
 			return e.failedOutcomeWithFailure(action, syncdomain.ActionLocalMove,

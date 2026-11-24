@@ -14,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -65,6 +66,7 @@ func openRootSafetyEngine(t *testing.T, paths rootSafetyPaths, mock *syncfixture
 		RecursiveLister: mock,
 		PermChecker:     mock,
 		Logger:          syncfixture.TestLogger(t),
+		hooks:           engineHooks{store: syncstoretest.WithRawDB(t, syncstore.Hooks{})},
 	})
 	if err != nil {
 		return nil, err
@@ -252,7 +254,7 @@ func TestNewEngine_RootRecreatedAtSamePathIsRefusedEvenIfInodeIsReused(t *testin
 func rewriteRecordedSyncRoot(t *testing.T, paths rootSafetyPaths, edit func(*synctree.RootIdentity)) {
 	t.Helper()
 
-	store, err := syncstore.OpenSyncStoreForTest(t.Context(), paths.dbPath, syncfixture.TestLogger(t), false)
+	store, err := syncstore.OpenSyncStoreForTest(t.Context(), paths.dbPath, syncfixture.TestLogger(t), false, nil, syncstore.Hooks{})
 	require.NoError(t, err)
 	require.NoError(t, store.UpdateObservationStateForTest(t.Context(), func(state *syncdomain.ObservationState) {
 		require.NotNil(t, state.SyncRootIdentity)
@@ -342,7 +344,7 @@ func TestNewEngine_UnboundStateWithSyncedItemsIsRefusedUntilRebind(t *testing.T)
 	require.NoError(t, err)
 	runScenarioPass(t, eng)
 	// Simulate a state that holds synced items but never recorded its folder.
-	_, err = eng.baseline.RawDBForTest().ExecContext(t.Context(), `UPDATE observation_state SET sync_root_bound = 0`)
+	_, err = syncstoretest.RawDB(t, eng.baseline).ExecContext(t.Context(), `UPDATE observation_state SET sync_root_bound = 0`)
 	require.NoError(t, err)
 	closeRootSafetyEngine(t, eng)
 
@@ -415,8 +417,11 @@ func TestWatchObserver_SeesBindingMadeAfterItWasBuilt(t *testing.T) {
 
 	rebound := resetAndReopen(t, paths, remote)
 	t.Cleanup(func() { closeRootSafetyEngine(t, rebound) })
-	watchObserver := syncobserve.NewLocalObserver(syncfixture.EmptyBaseline(), syncfixture.TestLogger(t), 0)
-	watchObserver.SetSyncRootIdentity(rebound.syncRootIdentity)
+	watchObserver := syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{
+		Baseline:     syncfixture.EmptyBaseline(),
+		Logger:       syncfixture.TestLogger(t),
+		RootIdentity: rebound.syncRootIdentity,
+	})
 
 	runScenarioPass(t, rebound) // binds, writing a new marker
 

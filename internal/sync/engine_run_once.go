@@ -659,7 +659,12 @@ func (flow *observation) observeRemoteFullWithShortcutTopology(
 	if err := flow.roots.refresh(ctx); err != nil {
 		return fullRemoteObservation{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
-	obs := flow.remote.observer(ctx, bl, flow.deps.logger, flow.cfg.shortcutNamespaceID, flow.roots.current())
+	obs := flow.remote.observer(ctx, &syncobserve.RemoteObserverInputs{
+		Baseline:            bl,
+		Logger:              flow.deps.logger,
+		ShortcutNamespaceID: flow.cfg.shortcutNamespaceID,
+		ProtectedRoots:      flow.roots.current(),
+	})
 
 	// Full enumeration: empty token returns ALL items as create/modify
 	// events, plus the raw ID of every live item Graph returned. The seen set

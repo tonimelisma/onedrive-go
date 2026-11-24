@@ -19,7 +19,7 @@ func TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderM
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := store.db.ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash)
 		VALUES
 			('folder-docs', 'docs', 'folder', '', ''),
@@ -52,7 +52,7 @@ func TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMi
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := store.db.ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash)
 		VALUES
 			('folder-docs', 'docs', 'folder', '', ''),
@@ -86,7 +86,7 @@ func TestReplacePlannerVisibleStateTx_HidesALocalMovesOldNameOnlyWithoutABaselin
 
 	store := newTestStore(t)
 	ctx := t.Context()
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := store.db.ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash)
 		VALUES ('file-moved', 'b.txt', 'file', 'hash', 'hash'), ('file-unmoved', 'c.txt', 'file', 'hash', 'hash')`)
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func plannerVisibleRowsForTest(
 	t.Helper()
 
 	ctx := t.Context()
-	tx, err := beginPerfTx(ctx, store.RawDBForTest())
+	tx, err := beginPerfTx(ctx, store.db)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 
@@ -307,11 +307,11 @@ func seedPlannerVisibleBaseline(t *testing.T, store *SyncStore, baseline map[str
 	t.Helper()
 
 	ctx := t.Context()
-	_, err := store.RawDBForTest().ExecContext(ctx,
+	_, err := store.db.ExecContext(ctx,
 		`INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash) VALUES ('root', '', 'root', '', '')`)
 	require.NoError(t, err)
 	for path, itemType := range baseline {
-		_, err := store.RawDBForTest().ExecContext(ctx,
+		_, err := store.db.ExecContext(ctx,
 			`INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash) VALUES (?, ?, ?, '', '')`,
 			"id-"+path, path, itemType.String())
 		require.NoError(t, err)
@@ -344,7 +344,7 @@ func plannerVisiblePathsAfterPrune(
 	tb.Helper()
 
 	ctx := tb.Context()
-	tx, err := beginPerfTx(ctx, store.RawDBForTest())
+	tx, err := beginPerfTx(ctx, store.db)
 	require.NoError(tb, err)
 	defer func() { _ = tx.Rollback() }()
 
@@ -376,7 +376,7 @@ func explainPlannerVisiblePrunes(t *testing.T, store *SyncStore) string {
 	t.Helper()
 
 	ctx := t.Context()
-	tx, err := beginPerfTx(ctx, store.RawDBForTest())
+	tx, err := beginPerfTx(ctx, store.db)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 

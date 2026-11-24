@@ -26,7 +26,7 @@ import (
 func newSettleTestObserver(t *testing.T, baseline syncdomain.BaselineView, clock *syncfixture.ManualClock, hashCalls *atomic.Int64) *LocalObserver {
 	t.Helper()
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	obs.clock = clock
 	// Each read returns a new hash: every write in these tests changes the
 	// content.
@@ -202,7 +202,10 @@ func TestHandleCreate_DirectoryRowPrecedesItsContents(t *testing.T) {
 	dir := t.TempDir()
 	syncfixture.WriteTestFile(t, dir, "moved/inner.txt", "content")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	batches := localBatches(obs, 10)
 
 	obs.handleCreate(t.Context(), syncfixture.MustOpenSyncTree(t, dir), filepath.Join(dir, "moved"), "moved", "moved", newMockFsWatcher())
@@ -306,7 +309,10 @@ func TestHashAndEmit_StillChangingAtRetryCapStaysPendingWithoutEmptyHash(t *test
 	dir := t.TempDir()
 	fsPath := syncfixture.WriteTestFile(t, dir, "growing.log", "x")
 	clock := syncfixture.NewManualClock(time.Now())
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.clock = clock
 	// The file grows during every read, as a log being appended to does.
 	grow := 0

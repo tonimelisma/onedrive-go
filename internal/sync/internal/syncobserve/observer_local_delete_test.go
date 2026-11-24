@@ -33,7 +33,7 @@ func TestWatch_DetectsFileDelete(t *testing.T) {
 		ItemType: syncdomain.ItemTypeFile,
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)
 
@@ -59,7 +59,7 @@ func TestWatch_DeleteDirectoryRemovesWatch(t *testing.T) {
 		ItemType: syncdomain.ItemTypeFolder,
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)
 	require.True(t, obs.watchedDirs.has(subDir), "the directory is watched before its delete")
@@ -80,8 +80,11 @@ func TestHandleFsEvent_DefaultSymlinkPolicyIgnoresTransientSymlinkDelete(t *test
 	syncRoot := t.TempDir()
 	syncfixture.WriteTestFile(t, syncRoot, "real.txt", "content")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{FollowSymlinks: false})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      syncfixture.EmptyBaseline(),
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{FollowSymlinks: false},
+	})
 
 	watcher := syncfixture.NewRecordingFsWatcher()
 	batches := localBatches(obs, 4)
@@ -129,8 +132,11 @@ func TestSkipSymlinkDelete_RemainsIgnoredThroughSafetyScan(t *testing.T) {
 		},
 	)
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{FollowSymlinks: false})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      baseline,
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{FollowSymlinks: false},
+	})
 
 	watcher := syncfixture.NewRecordingFsWatcher()
 	tree := syncfixture.MustOpenSyncTree(t, syncRoot)
@@ -172,7 +178,10 @@ func TestAddWatchesRecursive_SkipsSymlinksByDefault(t *testing.T) {
 		addedPaths: make(map[string]bool),
 	}
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	err := obs.AddWatchesRecursive(t.Context(), tracker, syncfixture.MustOpenSyncTree(t, root))
 	require.NoError(t, err)
@@ -201,10 +210,13 @@ func TestAddWatchesRecursive_RespectsIncludeAndIgnoreDirs(t *testing.T) {
 		addedPaths: make(map[string]bool),
 	}
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{
-		IncludedDirs: []string{"Projects"},
-		IgnoredDirs:  []string{"Projects/build"},
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{
+			IncludedDirs: []string{"Projects"},
+			IgnoredDirs:  []string{"Projects/build"},
+		},
 	})
 
 	err := obs.AddWatchesRecursive(t.Context(), tracker, syncfixture.MustOpenSyncTree(t, root))
@@ -300,7 +312,7 @@ func TestHandleDelete_UsesOriginalFsPath(t *testing.T) {
 				ItemType: tt.baseType,
 			})
 
-			obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+			obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 			obs.PendingTimers = make(map[string]syncdomain.SyncTimer)
 			obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
@@ -347,7 +359,7 @@ func TestHandleDelete_SendsTheRemovalOfThePath(t *testing.T) {
 				ItemType: tt.baseType,
 			})
 
-			obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+			obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 			obs.PendingTimers = make(map[string]syncdomain.SyncTimer)
 			obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
@@ -370,7 +382,10 @@ func TestHandleDelete_CancelsCoalesceTimer(t *testing.T) {
 	t.Parallel()
 
 	watcher := syncfixture.NewRecordingFsWatcher()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.PendingTimers = make(map[string]syncdomain.SyncTimer)
 	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
@@ -401,7 +416,7 @@ func TestHandleFsEvent_DeletePassesFsPath(t *testing.T) {
 		ItemType: syncdomain.ItemTypeFolder,
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	obs.PendingTimers = make(map[string]syncdomain.SyncTimer)
 	obs.HashRequests = make(chan HashRequest, HashRequestBufSize)
 
@@ -435,7 +450,7 @@ func TestHandleFsEvent_SyncRootLifecycleEventDoesNotEmitContentDelete(t *testing
 		ItemID:   "child-id",
 		ItemType: syncdomain.ItemTypeFile,
 	})
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	batches := localBatches(obs, 10)
 
 	obs.HandleFsEvent(t.Context(), fsnotify.Event{

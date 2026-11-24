@@ -88,31 +88,13 @@ type RemoteObserver struct {
 	// batch to emit; the batch's cursor token becomes the watch token.
 	recoverExpiredDelta DeltaExpiredRecovery
 
-	// debugEvents is the engine's debug event sink, set by the watch runtime
-	// before Watch; nil reports nothing.
+	// debugEvents is the engine's debug event sink; nil reports nothing.
 	debugEvents func(syncdomain.EngineDebugEvent)
 }
 
 // DeltaExpiredRecovery is the full refresh the engine hands the observer to
 // run for an expired delta token.
 type DeltaExpiredRecovery func(ctx context.Context, kind syncdomain.ResyncKind) (RemoteObservationBatch, error)
-
-// SetClock replaces the observer's time capability. Must be called before
-// the observer fetches.
-func (o *RemoteObserver) SetClock(clock syncdomain.SyncClock) {
-	o.clock = clock
-}
-
-// SetDebugEvents installs the engine's debug event sink (see debugEvents).
-// Must be called before Watch.
-func (o *RemoteObserver) SetDebugEvents(emit func(syncdomain.EngineDebugEvent)) {
-	o.debugEvents = emit
-}
-
-// SetDeltaExpiredRecovery wires the full refresh Watch runs after a 410.
-func (o *RemoteObserver) SetDeltaExpiredRecovery(recovery DeltaExpiredRecovery) {
-	o.recoverExpiredDelta = recovery
-}
 
 // observerCounters holds atomic counters for observer metrics (B-127).
 type observerCounters struct {
@@ -130,53 +112,58 @@ type observerStats struct {
 	HashesComputed int64 // items processed with a content hash (B-282)
 }
 
-// NewRemoteObserver creates a RemoteObserver for the given drive. The
-// baseline must be a loaded Baseline (from SyncStore.Load); it is
-// read-only during observation. The caller must pass a normalized driveid.ID.
-func NewRemoteObserver(
-	fetcher DeltaFetcher, baseline syncdomain.BaselineView, driveID driveid.ID, logger *slog.Logger,
-) *RemoteObserver {
-	obs := &RemoteObserver{
-		fetcher: fetcher,
-		logger:  logger,
-		driveID: driveID,
-		clock:   syncdomain.RealClock{},
+// RemoteObserverInputs is everything a RemoteObserver works with, given once
+// at construction: nothing is installed afterwards, so an observer is whole
+// before any goroutine reads it.
+type RemoteObserverInputs struct {
+	Fetcher DeltaFetcher
+	// Baseline must be loaded (from SyncStore.Load); it is read-only during
+	// observation.
+	Baseline syncdomain.BaselineView
+	// DriveID must be normalized.
+	DriveID driveid.ID
+	Logger  *slog.Logger
+	// Clock is the observer's time capability; nil is the real clock.
+	Clock syncdomain.SyncClock
+	// Items resolves an item the window did not carry (a parent folder);
+	// nil leaves such an item unresolved.
+	Items ItemReader
+	// RemotePathLookup places a deleted item the baseline does not hold by
+	// the path its remote_state row stores (R-2.4.17); nil skips it.
+	RemotePathLookup func(itemID string) (string, bool)
+	// ShortcutNamespaceID and ProtectedRoots are the shortcut topology the
+	// observer reports bindings against.
+	ShortcutNamespaceID string
+	ProtectedRoots      []syncshortcut.ProtectedRoot
+	// DeltaExpiredRecovery, when set, replaces Watch's bare re-enumeration
+	// after a 410 with the engine's full refresh (see recoverExpiredDelta).
+	DeltaExpiredRecovery DeltaExpiredRecovery
+	// DebugEvents is the engine's debug event sink; nil reports nothing.
+	DebugEvents func(syncdomain.EngineDebugEvent)
+}
+
+// NewRemoteObserver creates a RemoteObserver from everything it works with.
+func NewRemoteObserver(in *RemoteObserverInputs) *RemoteObserver {
+	clock := in.Clock
+	if clock == nil {
+		clock = syncdomain.RealClock{}
 	}
-	obs.Converter = NewPrimaryConverter(baseline, driveID, logger, &obs.stats, nil)
+	roots := append([]syncshortcut.ProtectedRoot(nil), in.ProtectedRoots...)
+	obs := &RemoteObserver{
+		fetcher:             in.Fetcher,
+		logger:              in.Logger,
+		driveID:             in.DriveID,
+		shortcutNamespaceID: in.ShortcutNamespaceID,
+		protectedRoots:      roots,
+		clock:               clock,
+		recoverExpiredDelta: in.DeltaExpiredRecovery,
+		debugEvents:         in.DebugEvents,
+	}
+	obs.Converter = NewPrimaryConverter(in.Baseline, in.DriveID, in.Logger, &obs.stats, in.Items)
+	obs.Converter.RemotePathByID = in.RemotePathLookup
+	obs.Converter.ProtectedRootBindings = syncshortcut.ProtectedRootByBinding(roots)
 
 	return obs
-}
-
-func (o *RemoteObserver) SetItemClient(items ItemReader) {
-	if o == nil || o.Converter == nil {
-		return
-	}
-
-	o.Converter.Items = items
-}
-
-// SetRemotePathLookup lets the converter place a deleted item the baseline
-// does not hold by the path its remote_state row stores (R-2.4.17).
-func (o *RemoteObserver) SetRemotePathLookup(lookup func(itemID string) (string, bool)) {
-	if o == nil || o.Converter == nil {
-		return
-	}
-	o.Converter.RemotePathByID = lookup
-}
-
-func (o *RemoteObserver) SetShortcutTopology(
-	namespaceID string,
-	protectedRoots []syncshortcut.ProtectedRoot,
-) {
-	if o == nil {
-		return
-	}
-
-	o.shortcutNamespaceID = namespaceID
-	o.protectedRoots = append([]syncshortcut.ProtectedRoot(nil), protectedRoots...)
-	if o.Converter != nil {
-		o.Converter.ProtectedRootBindings = syncshortcut.ProtectedRootByBinding(protectedRoots)
-	}
 }
 
 // FullDelta fetches all delta pages and returns the accumulated reported items
@@ -326,7 +313,7 @@ func (o *RemoteObserver) fullDelta(
 // without mutating RemoteObserver after construction. On transient errors, it
 // applies exponential backoff (starting at 5s, capped at the poll interval).
 // On ErrDeltaExpired (410), it runs the engine's full refresh through the
-// recovery set with SetDeltaExpiredRecovery (orphan detection included) and
+// recovery of RemoteObserverInputs.DeltaExpiredRecovery (orphan detection included) and
 // continues from its token; without one it resets the token and re-enumerates.
 // The delta token is tracked internally — use CurrentDeltaToken() to read the
 // latest value.

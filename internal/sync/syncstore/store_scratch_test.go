@@ -103,7 +103,7 @@ func seedScratchPlanningBaseline(t *testing.T, store *SyncStore, driveID driveid
 			ItemType: syncdomain.ItemTypeFolder,
 		},
 	} {
-		require.NoError(t, upsertBaselineRowTx(t.Context(), store.RawDBForTest(), entry))
+		require.NoError(t, upsertBaselineRowTx(t.Context(), store.db, entry))
 	}
 }
 
@@ -123,7 +123,7 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 	require.NotNil(t, scratch)
 	require.NotNil(t, cleanup)
 
-	scratchPath := scratchMainDBPath(t, scratch.RawDBForTest())
+	scratchPath := scratchMainDBPath(t, scratch.db)
 	require.NotEmpty(t, scratchPath)
 	scratchDir := filepath.Dir(scratchPath)
 	refreshAt := time.Unix(1700000000, 0).UTC()
@@ -134,7 +134,7 @@ func TestCreateScratchPlanningStore_SeedsCommittedStateAndCleansUp(t *testing.T)
 	assert.Equal(t, "cursor-seeded", state.Cursor)
 	assert.Equal(t, refreshAt.Add(syncdomain.FullRemoteRefreshInterval).UnixNano(), state.NextFullRemoteRefreshAt)
 
-	remoteRows, err := listScratchRemoteStateRows(ctx, scratch.RawDBForTest())
+	remoteRows, err := listScratchRemoteStateRows(ctx, scratch.db)
 	require.NoError(t, err)
 	require.Len(t, remoteRows, 2)
 	assert.Equal(t, "folder/remote-two.txt", remoteRows[0].Path)
@@ -176,7 +176,7 @@ func TestCreateScratchPlanningStore_CopiesTheDatabaseNotAStaleCache(t *testing.T
 	require.NoError(t, err)
 
 	// One row reaches the database behind the cache, one the cache alone.
-	require.NoError(t, upsertBaselineRowTx(ctx, store.RawDBForTest(), &syncdomain.BaselineEntry{
+	require.NoError(t, upsertBaselineRowTx(ctx, store.db, &syncdomain.BaselineEntry{
 		Path: "committed.txt", DriveID: driveID, ItemID: "item-committed", ParentID: "root", ItemType: syncdomain.ItemTypeFile,
 	}))
 	store.cachedBaseline().put(&syncdomain.BaselineEntry{

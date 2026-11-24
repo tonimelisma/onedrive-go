@@ -41,7 +41,7 @@ func TestWatch_HashFailureModifyStillEmitsEvent(t *testing.T) {
 		ItemType: syncdomain.ItemTypeFile, LocalHash: existingHash,
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)
 

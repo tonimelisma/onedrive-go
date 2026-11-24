@@ -22,13 +22,18 @@ func kindTestObserver(t *testing.T, bl syncdomain.BaselineView, items []graph.It
 	fetcher := &mockDeltaFetcher{pages: []mockDeltaPage{{page: syncfixture.DeltaPageWithItems(append([]graph.Item{
 		{ID: "root", IsRoot: true, IsFolder: true, DriveID: driveID},
 	}, items...), "next-token")}}}
-	obs := NewRemoteObserver(fetcher, bl, driveID, syncfixture.TestLogger(t))
-	obs.SetItemClient(&syncfixture.EngineMockClient{GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
-		if getItem == nil {
-			return nil, graph.ErrNotFound
-		}
-		return getItem(itemID)
-	}})
+	obs := NewRemoteObserver(&RemoteObserverInputs{
+		Fetcher:  fetcher,
+		Baseline: bl,
+		DriveID:  driveID,
+		Logger:   syncfixture.TestLogger(t),
+		Items: &syncfixture.EngineMockClient{GetItemFn: func(_ context.Context, _ driveid.ID, itemID string) (*graph.Item, error) {
+			if getItem == nil {
+				return nil, graph.ErrNotFound
+			}
+			return getItem(itemID)
+		}},
+	})
 
 	return obs
 }

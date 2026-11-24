@@ -35,8 +35,8 @@ func newScenarioCreateExecutor(t *testing.T, remote *moveScenarioRemote) (*synce
 }
 
 // newScenarioCreateExecutorOn is newScenarioCreateExecutor through client, a
-// client of remote whose functions the test may still replace, on the clock
-// now (nil is the wall clock).
+// client of remote whose functions the test may still replace, with the
+// executor and the store on the clock now (nil is the wall clock).
 func newScenarioCreateExecutorOn(
 	t *testing.T, remote *moveScenarioRemote, client *syncfixture.EngineMockClient, now func() time.Time,
 ) (*syncexec.Executor, *syncstore.SyncStore, string) {
@@ -46,7 +46,7 @@ func newScenarioCreateExecutorOn(
 	syncTree, err := synctree.Open(syncRoot)
 	require.NoError(t, err)
 	_, logger := syncfixture.NewDebugLogBuffer()
-	store := syncstoretest.NewTestStore(t)
+	store := syncstoretest.NewTestStoreOn(t, now)
 	cfg := mustNewTestExecutorConfig(t, &syncexec.ExecutorInputs{
 		Items:          client,
 		Downloads:      client,
@@ -147,7 +147,6 @@ func TestUploadNewFile_RefusedRetryKeepsTheIntentOfAnEarlierLostCreate(t *testin
 			now := func() time.Time { return clock }
 			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
 			e, store, syncRoot := newScenarioCreateExecutorOn(t, remote, remote.client(t), now)
-			store.SetNowFunc(now)
 			local := syncfixture.WriteExecTestFile(t, syncRoot, "watch-4.txt", "the words the user wrote\n")
 			action := &syncdomain.Action{Type: syncdomain.ActionUpload, Path: "watch-4.txt"}
 			upload := func() (*driveops.UploadResult, error) {
@@ -270,16 +269,19 @@ func TestUploadNewFile_ConflictNeverClaimsAFileThatIsNotItsOwnEmptyCreate(t *tes
 				remote.addFile(t, "stranger", syncexec.GraphRootID, tc.remoteName, tc.remoteContent)
 			}
 			before := remote.tree()
-			now := func() time.Time { return intendedAt.Add(tc.retriedAfter) }
+			// The intent, when there is one, is recorded at intendedAt; the
+			// retry runs tc.retriedAfter later.
+			retriedAt := intendedAt.Add(tc.retriedAfter)
+			clock := intendedAt
+			now := func() time.Time { return clock }
 			e, store, syncRoot := newScenarioCreateExecutorOn(t, remote, remote.client(t), now)
 			local := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", "my words\n")
 			if tc.priorIntent {
-				store.SetNowFunc(func() time.Time { return intendedAt })
 				require.NoError(t, store.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{
 					DriveID: remote.driveID, Path: "doc.txt", ParentID: syncexec.GraphRootID,
 				}))
 			}
-			store.SetNowFunc(now)
+			clock = retriedAt
 			stranger, ok := remote.itemAt("doc.txt")
 			require.True(t, ok)
 

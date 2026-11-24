@@ -172,7 +172,10 @@ func TestFullScan_NewFiles(t *testing.T) {
 	syncfixture.WriteTestFile(t, dir, "hello.txt", "hello world")
 	syncfixture.WriteTestFile(t, dir, "data.csv", "a,b,c")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -195,7 +198,10 @@ func TestFullScan_NewFolder(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "photos"), 0o700), "Mkdir")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -221,7 +227,7 @@ func TestFullScan_ModifiedFile(t *testing.T) {
 		ItemType: syncdomain.ItemTypeFile, LocalHash: hashContent(t, "original content"),
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -246,7 +252,7 @@ func TestFullScan_UnchangedFile(t *testing.T) {
 		ItemType: syncdomain.ItemTypeFile, LocalHash: hashContent(t, content),
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -277,7 +283,7 @@ func TestFullScan_DeletedSyncedFileHasNoRow(t *testing.T) {
 		},
 	)
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -297,7 +303,7 @@ func TestFullScan_DeletedFolder(t *testing.T) {
 		ItemType: syncdomain.ItemTypeFolder,
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -320,7 +326,7 @@ func TestFullScan_MtimeChangeNoContentChange(t *testing.T) {
 		LocalMtime: 999, // intentionally different from actual file mtime
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -350,7 +356,7 @@ func TestFullScan_MtimeSizeFastPath(t *testing.T) {
 		LocalMtime: info.ModTime().UnixNano(),
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -375,7 +381,10 @@ func TestFullScan_SubsecondMtimeDifferenceForcesRehash(t *testing.T) {
 	entry.LocalMtime = fileTime.Add(700 * time.Millisecond).UnixNano()
 
 	var hashCalls atomic.Int32
-	obs := NewLocalObserver(syncfixture.BaselineWith(entry), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.BaselineWith(entry),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.hooks.HashFile = func(ctx context.Context, path string) (string, error) {
 		hashCalls.Add(1)
 		return driveops.ComputeQuickXorHashContext(ctx, path)
@@ -411,7 +420,10 @@ func TestFullScan_ContentChangedWithRestoredMtimeIsDetected(t *testing.T) {
 	require.Equal(t, entry.LocalMtime, info.ModTime().UnixNano(), "mtime restored exactly")
 	require.Equal(t, entry.LocalSize, info.Size(), "same size")
 
-	obs := NewLocalObserver(syncfixture.BaselineWith(entry), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.BaselineWith(entry),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -451,7 +463,10 @@ func TestFullScan_IdentityChangeForcesRehash(t *testing.T) {
 	require.True(t, ok)
 	require.NotEqual(t, entry.LocalInode, identity.Inode, "the replacement is a new inode")
 
-	obs := NewLocalObserver(syncfixture.BaselineWith(entry), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.BaselineWith(entry),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -471,7 +486,10 @@ func TestFullScan_UnchangedFileWithMatchingIdentityAndCtimeSkipsHash(t *testing.
 	require.NoError(t, os.Chtimes(filepath.Join(dir, "keep.txt"), fileTime, fileTime))
 	entry := baselineEntryFromFile(t, dir, "keep.txt", hashContent(t, content))
 
-	obs := NewLocalObserver(syncfixture.BaselineWith(entry), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.BaselineWith(entry),
+		Logger:   synctest.TestLogger(t),
+	})
 	// ctime cannot be set into the past, so the scan clock moves past the
 	// racily-clean window instead.
 	obs.clock = syncfixture.NewManualClock(time.Now().Add(2 * time.Second))
@@ -534,7 +552,7 @@ func TestFullScan_RacilyCleanForcesHash(t *testing.T) {
 		LocalMtime: info.ModTime().UnixNano(),
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -568,7 +586,7 @@ func TestFullScan_RacilyCleanUnchangedFileStillProducesSnapshotRow(t *testing.T)
 		LocalMtime:     info.ModTime().UnixNano(),
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -601,7 +619,7 @@ func TestFullScan_SizeChangeForcesHash(t *testing.T) {
 		LocalMtime: info.ModTime().UnixNano(),
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -618,7 +636,10 @@ func TestFullScan_NosyncMarkerIsOrdinaryFile(t *testing.T) {
 	dir := t.TempDir()
 	syncfixture.WriteTestFile(t, dir, ".nosync", "")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 
 	require.NoError(t, err)
@@ -631,7 +652,10 @@ func TestFullScan_EmptyDir(t *testing.T) {
 
 	dir := t.TempDir()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -647,7 +671,10 @@ func TestFullScan_SymlinkSkippedByDefault(t *testing.T) {
 
 	require.NoError(t, os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")), "Symlink")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -665,8 +692,11 @@ func TestFullScan_FollowSymlinksOptIn(t *testing.T) {
 
 	require.NoError(t, os.Symlink(filepath.Join(dir, "real.txt"), filepath.Join(dir, "link.txt")), "Symlink")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{FollowSymlinks: true})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      syncfixture.EmptyBaseline(),
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{FollowSymlinks: true},
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -688,8 +718,11 @@ func TestFullScan_FollowSymlinkDirectoryOptIn(t *testing.T) {
 
 	require.NoError(t, os.Symlink(filepath.Join(dir, "real"), filepath.Join(dir, "alias")), "Symlink")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{FollowSymlinks: true})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      syncfixture.EmptyBaseline(),
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{FollowSymlinks: true},
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -711,8 +744,11 @@ func TestFullScan_SymlinkDirectoryCycleStopsAtAliasBoundary(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), syncfixture.EventWait)
 	defer cancel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{FollowSymlinks: true})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      syncfixture.EmptyBaseline(),
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{FollowSymlinks: true},
+	})
 	result, err := obs.FullScan(ctx, syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -735,8 +771,11 @@ func TestFullScan_FollowedSymlinkUnreadableTargetRecordsReadBoundary(t *testing.
 	syncfixture.SetTestDirPermissions(t, filepath.Join(dir, "real"), 0o000)
 	t.Cleanup(func() { syncfixture.SetTestDirPermissions(t, filepath.Join(dir, "real"), 0o700) })
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{FollowSymlinks: true})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      syncfixture.EmptyBaseline(),
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{FollowSymlinks: true},
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -758,8 +797,11 @@ func TestFullScan_FollowedSymlinkMissingTargetRecordsReadBoundary(t *testing.T) 
 		&syncdomain.BaselineEntry{Path: "alias", ItemType: syncdomain.ItemTypeFolder},
 		&syncdomain.BaselineEntry{Path: "alias/photo.jpg", ItemType: syncdomain.ItemTypeFile},
 	)
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{FollowSymlinks: true})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      baseline,
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{FollowSymlinks: true},
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -802,7 +844,10 @@ func TestFullScan_InvalidName(t *testing.T) {
 	syncfixture.WriteTestFile(t, dir, "~$Budget.xlsx", "reserved pattern")
 	syncfixture.WriteTestFile(t, dir, "valid.txt", "ok")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -834,8 +879,11 @@ func TestFullScan_SharePointRootFormsProducesSkippedItem(t *testing.T) {
 	syncfixture.WriteTestFile(t, dir, "docs/forms", "allowed below root")
 	syncfixture.WriteTestFile(t, dir, "valid.txt", "ok")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetObservationRules(syncdomain.LocalObservationRules{RejectSharePointRootForms: true})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:         syncfixture.EmptyBaseline(),
+		Logger:           synctest.TestLogger(t),
+		ObservationRules: syncdomain.LocalObservationRules{RejectSharePointRootForms: true},
+	})
 
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
@@ -860,8 +908,11 @@ func TestFullScan_JunkIgnoredWhenConfigured(t *testing.T) {
 	syncfixture.WriteTestFile(t, dir, "~backup", "old")
 	syncfixture.WriteTestFile(t, dir, "legit.txt", "keep me")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{IgnoreJunkFiles: true})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      syncfixture.EmptyBaseline(),
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{IgnoreJunkFiles: true},
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -883,8 +934,11 @@ func TestFullScan_IncludedDirsPruneOutOfScopeSubtreesAndIssues(t *testing.T) {
 	syncfixture.WriteTestFile(t, dir, "Projects/Other/CON", "out of include")
 	syncfixture.WriteTestFile(t, dir, "Archive/CON", "out of include")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{IncludedDirs: []string{"Projects/App"}})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      syncfixture.EmptyBaseline(),
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{IncludedDirs: []string{"Projects/App"}},
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -912,7 +966,10 @@ func TestFullScan_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	_, err := obs.FullScan(ctx, syncfixture.MustOpenSyncTree(t, dir))
 
 	require.Error(t, err, "expected error")
@@ -931,7 +988,10 @@ func TestFullScan_NFCNormalization(t *testing.T) {
 
 	syncfixture.WriteTestFile(t, dir, nfdName, "resume content")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -949,7 +1009,10 @@ func TestFullScan_NestedDirs(t *testing.T) {
 	syncfixture.WriteTestFile(t, dir, "a/b/deep.txt", "deep content")
 	syncfixture.WriteTestFile(t, dir, "top.txt", "top content")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -976,7 +1039,10 @@ func TestFullScan_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	syncfixture.WriteTestFile(t, dir, "empty.txt", "")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -1022,7 +1088,7 @@ func TestFullScan_MixedChanges(t *testing.T) {
 		},
 	)
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -1199,7 +1265,10 @@ func TestFullScan_NosyncMarkerDirIsOrdinaryDirectory(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".nosync"), 0o700), "Mkdir")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 
 	require.NoError(t, err)
@@ -1217,8 +1286,11 @@ func TestFullScan_ExcludedDirSkipsSubtree(t *testing.T) {
 	syncfixture.WriteTestFile(t, dir, "__MACOSX/inner.txt", "hidden")
 	syncfixture.WriteTestFile(t, dir, "visible.txt", "shown")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{IgnoreJunkFiles: true})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      syncfixture.EmptyBaseline(),
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{IgnoreJunkFiles: true},
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -1259,7 +1331,10 @@ func TestFullScan_InvalidNameDirSkipsSubtree(t *testing.T) {
 	syncfixture.WriteTestFile(t, dir, "bad./child.txt", "child")
 	syncfixture.WriteTestFile(t, dir, "good.txt", "good")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -1290,7 +1365,10 @@ func TestFullScan_PermissionDenied(t *testing.T) {
 	syncfixture.SetTestDirPermissions(t, unreadableDir, 0o000)
 	t.Cleanup(func() { syncfixture.SetTestDirPermissions(t, unreadableDir, 0o700) })
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 
@@ -1411,7 +1489,10 @@ func TestFullScan_HashFailureStillEmitsCreate(t *testing.T) {
 		assert.NoError(t, os.Chmod(path, 0o600))
 	})
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 
@@ -1449,7 +1530,7 @@ func TestFullScan_HashFailureModifyStillEmitsEvent(t *testing.T) {
 	require.NoError(t, os.Chmod(path, 0o000))
 	t.Cleanup(func() { assert.NoError(t, os.Chmod(path, 0o600)) })
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 
@@ -1538,7 +1619,10 @@ func TestFullScan_PathTooLong(t *testing.T) {
 	// Also write a normal file to verify it still appears.
 	syncfixture.WriteTestFile(t, dir, "normal.txt", "ok")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 
@@ -1755,23 +1839,26 @@ func TestFullScan_ProtectedRootIdentityMatchSuppressesRenamedRoot(t *testing.T) 
 	require.NoError(t, os.Rename(original, renamed))
 
 	events := make(chan syncshortcut.ProtectedRootEvent, 1)
-	obs := NewLocalObserver(syncfixture.BaselineWith(&syncdomain.BaselineEntry{
-		Path:     "Shared",
-		DriveID:  driveid.New("drive"),
-		ItemID:   "shared-id",
-		ItemType: syncdomain.ItemTypeFolder,
-	}), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{})
-	obs.SetProtectedRoots([]syncshortcut.ProtectedRoot{{
-		Path:        "Shared/Docs",
-		MountID:     "child",
-		BindingID:   "binding",
-		Device:      identity.Device,
-		Inode:       identity.Inode,
-		HasIdentity: true,
-	}})
-	obs.SetProtectedRootEventSink(func(event syncshortcut.ProtectedRootEvent) {
-		events <- event
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.BaselineWith(&syncdomain.BaselineEntry{
+			Path:     "Shared",
+			DriveID:  driveid.New("drive"),
+			ItemID:   "shared-id",
+			ItemType: syncdomain.ItemTypeFolder,
+		}),
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{},
+		ProtectedRoots: []syncshortcut.ProtectedRoot{{
+			Path:        "Shared/Docs",
+			MountID:     "child",
+			BindingID:   "binding",
+			Device:      identity.Device,
+			Inode:       identity.Inode,
+			HasIdentity: true,
+		}},
+		ProtectedRootEvents: func(event syncshortcut.ProtectedRootEvent) {
+			events <- event
+		},
 	})
 
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
@@ -1902,7 +1989,11 @@ func TestHashPhase_PanicRecovery(t *testing.T) {
 				syncfixture.WriteTestFile(t, dir, f, "content of "+f)
 			}
 
-			obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 1)
+			obs := NewLocalObserver(&LocalObserverInputs{
+				Baseline:     syncfixture.EmptyBaseline(),
+				Logger:       synctest.TestLogger(t),
+				CheckWorkers: 1,
+			})
 			// Inject a hash function that panics for the target path.
 			obs.hooks.HashFile = func(_ context.Context, path string) (string, error) {
 				if filepath.Base(path) == tt.panicPath {
@@ -1948,7 +2039,10 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 	syncfixture.WriteTestFile(t, dir, "good.txt", "good content")
 	syncfixture.WriteTestFile(t, dir, badFileName, "bad content")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.hooks.HashFile = func(_ context.Context, path string) (string, error) {
 		if filepath.Base(path) == badFileName {
 			panic("corrupted file")
@@ -1990,7 +2084,10 @@ func TestFullScan_HashPanicDoesNotAbort(t *testing.T) {
 func TestNewLocalObserver_MapsInitialized(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	assert.NotNil(t, obs.PendingTimers, "pendingTimers should be initialized in constructor")
 	assert.NotNil(t, obs.HashRequests, "hashRequests should be initialized in constructor")
 }
@@ -2013,7 +2110,10 @@ func TestFullScan_SkipsFIFOAndSocketWithoutBlocking(t *testing.T) {
 	// Opening the FIFO for reading would block forever; the scan must not.
 	ctx, cancel := context.WithTimeout(t.Context(), syncfixture.EventWait)
 	defer cancel()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(ctx, syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err, "FullScan")
 

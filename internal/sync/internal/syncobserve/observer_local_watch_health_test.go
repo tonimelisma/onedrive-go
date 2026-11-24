@@ -88,7 +88,10 @@ func TestAddWatchesRecursive_EMFILEReturnsWatchUnavailable(t *testing.T) {
 		return strings.HasSuffix(name, string(filepath.Separator)+"a")
 	})
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	err := obs.AddWatchesRecursive(t.Context(), watcher, syncfixture.MustOpenSyncTree(t, root))
 
 	require.ErrorIs(t, err, errLocalWatchUnavailable)
@@ -150,9 +153,12 @@ func TestHandleDelete_DirectoryRemovesDescendantWatchesDeepestFirst(t *testing.T
 	t.Parallel()
 
 	watcher := syncfixture.NewRecordingFsWatcher()
-	obs := NewLocalObserver(syncfixture.BaselineWith(&syncdomain.BaselineEntry{
-		Path: "a", DriveID: driveid.New("d"), ItemID: "a1", ItemType: syncdomain.ItemTypeFolder,
-	}), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.BaselineWith(&syncdomain.BaselineEntry{
+			Path: "a", DriveID: driveid.New("d"), ItemID: "a1", ItemType: syncdomain.ItemTypeFolder,
+		}),
+		Logger: synctest.TestLogger(t),
+	})
 	// "/sync/a/q" is not registered (its Add failed) but a directory below
 	// it is: the subtree walk must still reach it.
 	registerWatchedForTest(obs, "/sync", "/sync/a", "/sync/a/q/r", "/sync/a/x", "/sync/a/x/y", "/sync/a/z", "/sync/ab", "/sync/other/a")
@@ -174,7 +180,10 @@ func TestHandleDelete_UnknownDirectoryDropsTheWatchesBelowIt(t *testing.T) {
 	t.Parallel()
 
 	watcher := syncfixture.NewRecordingFsWatcher()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	registerWatchedForTest(obs, "/sync", "/sync/new/x", "/sync/new/x/y", "/sync/news")
 	tree := syncfixture.MustOpenSyncTree(t, "/sync")
 
@@ -199,7 +208,7 @@ func TestWatch_RenamedDirectoryDescendantEventsUseNewPath(t *testing.T) {
 		&syncdomain.BaselineEntry{Path: "a", DriveID: driveid.New("d"), ItemID: "a1", ItemType: syncdomain.ItemTypeFolder},
 		&syncdomain.BaselineEntry{Path: "a/sub", DriveID: driveid.New("d"), ItemID: "s1", ItemType: syncdomain.ItemTypeFolder},
 	)
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	batches := localBatches(obs, 64)
 	cancel, done := startLocalWatch(t, obs, dir)
 
@@ -231,7 +240,10 @@ func TestHandleCreate_ReplacedDirectoryDropsStaleDescendantWatches(t *testing.T)
 	require.NoError(t, os.Mkdir(filepath.Join(replaced, "fresh"), 0o700))
 
 	watcher := syncfixture.NewRecordingFsWatcher()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	// Registrations left by the directory that used to live at "a" and was
 	// moved away while watched; its delete event was ignored because "a"
 	// exists again.
@@ -258,7 +270,10 @@ func TestHandleCreate_DuplicateDirectoryCreateDoesNotRescanItsTree(t *testing.T)
 	photos := filepath.Join(dir, "photos")
 
 	var hashCalls atomic.Int64
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.hooks.HashFile = func(context.Context, string) (string, error) {
 		hashCalls.Add(1)
 		return "h", nil
@@ -303,7 +318,7 @@ func TestWatch_EventOverflowRunsRecoveryScan(t *testing.T) {
 		},
 	})
 	batches := make(chan LocalObservation, 8)
-	obs.SetLocalObservationBatchChannel(batches)
+	obs.localBatchCh = batches
 
 	cancel, done := startMockWatch(t, obs, watcher, dir)
 
@@ -357,8 +372,11 @@ func TestWatch_RecoveryRequestsCoalesceIntoOneArmedScan(t *testing.T) {
 func TestTrySendLocalObservationBatch_DropRequestsRecoveryScan(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetLocalObservationBatchChannel(make(chan LocalObservation)) // unbuffered, nobody reading
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+		Batches:  make(chan LocalObservation),
+	})
 
 	obs.TrySendLocalObservationBatch(t.Context(), &LocalObservation{DeletedPrefixes: []string{"x"}})
 
@@ -409,7 +427,10 @@ func TestRecoveryScanDelay_ScalesWithScanDurationAndBacksOffUnderStorm(t *testin
 	t.Parallel()
 
 	clock := syncfixture.NewManualClock(time.Now())
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.clock = clock
 	obs.safetyScanInterval = LocalWatchHealthySafetyScanInterval
 
@@ -445,7 +466,10 @@ func TestCancelRecoveryScan_StaleTimerFiringIsIgnored(t *testing.T) {
 	t.Parallel()
 
 	clock := syncfixture.NewManualClock(time.Now())
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.clock = clock
 	obs.armRecoveryScan()
 	clock.Mu.Lock()
@@ -483,7 +507,7 @@ func TestWatch_DirectoryCreatedDuringOverflowIsWatchedAfterRecoveryScan(t *testi
 	})
 	obs.hooks.WatcherFactory = func() (FsWatcher, error) { return watcher, nil }
 	batches := make(chan LocalObservation, 8)
-	obs.SetLocalObservationBatchChannel(batches)
+	obs.localBatchCh = batches
 
 	cancel, done := startMockWatch(t, obs, &watcher.MockFsWatcher, dir)
 
@@ -523,7 +547,10 @@ func TestRewatchUnwatchedDirectories_FailedAddIsRetriedAtNextScan(t *testing.T) 
 		}
 		return false
 	})
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.activeWatcher = watcher
 	tree := syncfixture.MustOpenSyncTree(t, dir)
 	rows := []syncdomain.LocalStateRow{{Path: "flaky", ItemType: syncdomain.ItemTypeFolder}}

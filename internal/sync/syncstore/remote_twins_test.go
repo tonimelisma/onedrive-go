@@ -27,8 +27,8 @@ func TestCommitObservation_RemoteTwinsInOneBatchDoNotFailTheCommit(t *testing.T)
 		// whole commit, and every retry of the drive with it.
 		require.NoError(t, mgr.CommitObservation(t.Context(), items, "t1", driveID), order)
 
-		holder := readRemoteStateRow(t, mgr.RawDBForTest(), order[0])
-		twin := readRemoteStateRow(t, mgr.RawDBForTest(), order[1])
+		holder := readRemoteStateRow(t, mgr.db, order[0])
+		twin := readRemoteStateRow(t, mgr.db, order[1])
 		require.NotNil(t, holder)
 		require.NotNil(t, twin)
 		assert.Equal(t, syncfixture.RemoteTwinPath, holder.Path)
@@ -51,8 +51,8 @@ func TestCommitObservation_RemoteTwinAcrossBatchesKeepsTheBaselinedHolder(t *tes
 		{DriveID: driveID, ItemID: "newcomer", Path: syncfixture.RemoteTwinPath, ItemType: syncdomain.ItemTypeFile, Hash: "h2", Size: 1},
 	}, "t2", driveID))
 
-	assert.Equal(t, syncfixture.RemoteTwinPath, readRemoteStateRow(t, mgr.RawDBForTest(), "synced").Path, "the first holder keeps the path")
-	assert.Equal(t, remoteTwinShadowPath(syncfixture.RemoteTwinPath, "newcomer"), readRemoteStateRow(t, mgr.RawDBForTest(), "newcomer").Path)
+	assert.Equal(t, syncfixture.RemoteTwinPath, readRemoteStateRow(t, mgr.db, "synced").Path, "the first holder keeps the path")
+	assert.Equal(t, remoteTwinShadowPath(syncfixture.RemoteTwinPath, "newcomer"), readRemoteStateRow(t, mgr.db, "newcomer").Path)
 	assert.Equal(t, []string{syncfixture.RemoteTwinPath}, twinIssuePaths(t, mgr))
 }
 
@@ -70,8 +70,8 @@ func TestCommitObservation_RemoteTwinFolderKeepsItsSubtreeApart(t *testing.T) {
 		{DriveID: driveID, ItemID: "kid-b", ParentID: "tonos", Path: folder + "/same.txt", ItemType: syncdomain.ItemTypeFile, Hash: "b", Size: 1},
 	}, "t1", driveID))
 
-	assert.Equal(t, folder+"/same.txt", readRemoteStateRow(t, mgr.RawDBForTest(), "kid-a").Path)
-	assert.Equal(t, remoteTwinShadowPath(folder, "tonos")+"/same.txt", readRemoteStateRow(t, mgr.RawDBForTest(), "kid-b").Path,
+	assert.Equal(t, folder+"/same.txt", readRemoteStateRow(t, mgr.db, "kid-a").Path)
+	assert.Equal(t, remoteTwinShadowPath(folder, "tonos")+"/same.txt", readRemoteStateRow(t, mgr.db, "kid-b").Path,
 		"the twin's child lives under the twin, not next to the holder's child")
 
 	// Deleting the holder folder promotes the twin with its subtree intact.
@@ -79,9 +79,9 @@ func TestCommitObservation_RemoteTwinFolderKeepsItsSubtreeApart(t *testing.T) {
 		{DriveID: driveID, ItemID: "oxia", Path: folder, ItemType: syncdomain.ItemTypeFolder, IsDeleted: true},
 	}, "t2", driveID))
 
-	assert.Nil(t, readRemoteStateRow(t, mgr.RawDBForTest(), "kid-a"))
-	assert.Equal(t, folder, readRemoteStateRow(t, mgr.RawDBForTest(), "tonos").Path)
-	assert.Equal(t, folder+"/same.txt", readRemoteStateRow(t, mgr.RawDBForTest(), "kid-b").Path)
+	assert.Nil(t, readRemoteStateRow(t, mgr.db, "kid-a"))
+	assert.Equal(t, folder, readRemoteStateRow(t, mgr.db, "tonos").Path)
+	assert.Equal(t, folder+"/same.txt", readRemoteStateRow(t, mgr.db, "kid-b").Path)
 	assert.Empty(t, twinIssuePaths(t, mgr))
 }
 
@@ -106,7 +106,7 @@ func TestCommitObservation_RemoteTwinRecoversWhenOneIsDeletedOrRenamed(t *testin
 		require.NoError(t, mgr.CommitObservation(t.Context(), []syncdomain.ObservedItem{
 			{DriveID: driveID, ItemID: "a", Path: syncfixture.RemoteTwinPath, ItemType: syncdomain.ItemTypeFile, IsDeleted: true},
 		}, "t2", driveID))
-		assert.Equal(t, syncfixture.RemoteTwinPath, readRemoteStateRow(t, mgr.RawDBForTest(), "b").Path)
+		assert.Equal(t, syncfixture.RemoteTwinPath, readRemoteStateRow(t, mgr.db, "b").Path)
 		assert.Empty(t, twinIssuePaths(t, mgr))
 	})
 
@@ -116,7 +116,7 @@ func TestCommitObservation_RemoteTwinRecoversWhenOneIsDeletedOrRenamed(t *testin
 		require.NoError(t, mgr.CommitObservation(t.Context(), []syncdomain.ObservedItem{
 			{DriveID: driveID, ItemID: "b", Path: syncfixture.RemoteTwinPath, ItemType: syncdomain.ItemTypeFile, IsDeleted: true},
 		}, "t2", driveID))
-		assert.Equal(t, syncfixture.RemoteTwinPath, readRemoteStateRow(t, mgr.RawDBForTest(), "a").Path)
+		assert.Equal(t, syncfixture.RemoteTwinPath, readRemoteStateRow(t, mgr.db, "a").Path)
 		assert.Empty(t, twinIssuePaths(t, mgr))
 	})
 
@@ -130,8 +130,8 @@ func TestCommitObservation_RemoteTwinRecoversWhenOneIsDeletedOrRenamed(t *testin
 			require.NoError(t, mgr.CommitObservation(t.Context(), []syncdomain.ObservedItem{
 				{DriveID: driveID, ItemID: renamed.moved, Path: "renamed.txt", ItemType: syncdomain.ItemTypeFile, Hash: "h" + renamed.moved, Size: 1},
 			}, "t2", driveID))
-			assert.Equal(t, "renamed.txt", readRemoteStateRow(t, mgr.RawDBForTest(), renamed.moved).Path)
-			assert.Equal(t, syncfixture.RemoteTwinPath, readRemoteStateRow(t, mgr.RawDBForTest(), renamed.stays).Path)
+			assert.Equal(t, "renamed.txt", readRemoteStateRow(t, mgr.db, renamed.moved).Path)
+			assert.Equal(t, syncfixture.RemoteTwinPath, readRemoteStateRow(t, mgr.db, renamed.stays).Path)
 			assert.Empty(t, twinIssuePaths(t, mgr))
 		})
 	}

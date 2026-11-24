@@ -39,7 +39,7 @@ func TestSyncStore_ListObservationIssues_RefusesUnknownStoredIssueType(t *testin
 	ctx := t.Context()
 
 	seedObservationIssueForTest(t, store, "kept.txt", syncdomain.IssueInvalidFilename, syncdomain.ScopeKey{})
-	_, err := store.RawDBForTest().ExecContext(ctx,
+	_, err := store.db.ExecContext(ctx,
 		`INSERT INTO observation_issues (path, issue_type, scope_key) VALUES (?, ?, ?)`,
 		"renamed.txt", "invalid_name", "")
 	require.NoError(t, err)
@@ -76,7 +76,7 @@ func TestSyncStore_ReconcileObservationFindings_RefusesToWriteAnUnknownIssueType
 	require.ErrorContains(t, err, `unknown issue type "invalid_name"`)
 
 	var count int
-	require.NoError(t, store.RawDBForTest().QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_issues`).Scan(&count))
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_issues`).Scan(&count))
 	assert.Zero(t, count)
 }
 

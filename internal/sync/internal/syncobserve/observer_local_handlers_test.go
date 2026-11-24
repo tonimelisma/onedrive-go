@@ -127,7 +127,7 @@ func TestWatch_DetectsFileModify(t *testing.T) {
 		ItemType: syncdomain.ItemTypeFile, LocalHash: existingHash,
 	})
 
-	obs := NewLocalObserver(baseline, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: baseline, Logger: synctest.TestLogger(t)})
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)
 
@@ -146,8 +146,11 @@ func TestWatch_IgnoresExcludedFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetFilterConfig(syncdomain.ContentFilterConfig{IgnoreJunkFiles: true})
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:      syncfixture.EmptyBaseline(),
+		Logger:        synctest.TestLogger(t),
+		ContentFilter: syncdomain.ContentFilterConfig{IgnoreJunkFiles: true},
+	})
 
 	batches := localBatches(obs, 10)
 	cancel, done := startLocalWatch(t, obs, dir)
@@ -169,7 +172,10 @@ func TestLocalWatch_ContextCancellation(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	cancel, done := startLocalWatch(t, obs, dir)
 	syncfixture.StopWatch(t, cancel, done)

@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -12,7 +13,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // An engine built with zero hooks behaves as production does: the real
@@ -28,7 +31,9 @@ func TestEngineHooks_ZeroValueIsProduction(t *testing.T) {
 	const configuredWorkers = 9
 
 	inputs := newTestEngineInputs(t, &syncfixture.EngineMockClient{}, t.TempDir())
-	inputs.hooks = engineHooks{}
+	// Zero hooks, but for the store's OnOpen, which only keeps its database
+	// for storeSynchronous to read the pragma through.
+	inputs.hooks = engineHooks{store: syncstoretest.WithRawDB(t, syncstore.Hooks{})}
 	inputs.TransferWorkers = configuredWorkers
 	eng, err := newEngine(t.Context(), inputs)
 	require.NoError(t, err)
@@ -42,6 +47,10 @@ func TestEngineHooks_ZeroValueIsProduction(t *testing.T) {
 	assert.Equal(t, oneShotMaxPasses, eng.hooks.oneShotPasses(), "one-shot runs make the full pass bound")
 	assert.False(t, newEngineFlow(eng.flowInputs()).invariantChecksEnabled(), "invariant checks are off")
 	assert.Equal(t, sqliteSynchronousFull, storeSynchronous(t, eng), "the store commits with synchronous=FULL")
+	assert.Equal(t, syncdomain.OutcomeCommitTimeout, newEngineFlow(eng.flowInputs()).stopDrainBound(),
+		"a stop records its results within an outcome's commit bound")
+	assert.Equal(t, reflect.ValueOf(isOnReadOnlyFilesystem).Pointer(), reflect.ValueOf(eng.permHandler.readOnlyDir).Pointer(),
+		"the permission handler probes the real filesystem")
 
 	wake := eng.remoteSource(&eng.hooks).newWakeSource(syncobserve.SocketIOWakeSourceOptions{})
 	assert.Equal(t, "*syncobserve.socketIOWakeSource", fmt.Sprintf("%T", wake), "the wake source is the real one")

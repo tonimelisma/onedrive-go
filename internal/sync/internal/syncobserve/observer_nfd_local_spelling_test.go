@@ -51,7 +51,10 @@ func TestRewatchUnwatchedDirectories_WatchesTheNFDNamedFolder(t *testing.T) {
 	onDisk := filepath.Join(dir, syncfixture.NfdCafe+" dir")
 	require.NoError(t, os.Mkdir(onDisk, 0o700))
 	watcher := newAddErrWatcher(nil, nil)
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.activeWatcher = watcher
 
 	obs.rewatchUnwatchedDirectories(syncfixture.MustOpenSyncTree(t, dir), []syncdomain.LocalStateRow{{Path: syncfixture.NfcCafe + " dir", ItemType: syncdomain.ItemTypeFolder}})

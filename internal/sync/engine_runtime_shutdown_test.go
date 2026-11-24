@@ -18,6 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
@@ -148,7 +149,7 @@ func runWatchDrain(ctx context.Context, rt *watchRuntime, p *watchPipeline) erro
 func holdStoreConnection(t *testing.T, store *syncstore.SyncStore) func() {
 	t.Helper()
 
-	conn, err := store.RawDBForTest().Conn(t.Context())
+	conn, err := syncstoretest.RawDB(t, store).Conn(t.Context())
 	require.NoError(t, err)
 	released := false
 	release := func() {
@@ -172,7 +173,7 @@ func stoppingWatchRuntime(t *testing.T) (*testEngine, *watchRuntime, *syncfixtur
 	eng, _ := newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	rt.stopBound = workerTestCommitBound
+	rt.hooks.stopBound = workerTestCommitBound
 
 	return eng, rt, logs
 }
@@ -296,7 +297,7 @@ func TestWatchRuntime_AStopsBoundStartsAtItsCancel(t *testing.T) {
 	t.Parallel()
 
 	eng, rt, _ := stoppingWatchRuntime(t)
-	rt.stopBound = time.Hour
+	rt.hooks.stopBound = time.Hour
 	run, cancelRun := context.WithCancel(t.Context())
 	stopNoting := rt.noteRunCancel(run)
 	defer stopNoting()
@@ -317,9 +318,9 @@ func TestWatchRuntime_AStopsBoundStartsAtItsCancel(t *testing.T) {
 	rt.beginWatchDrain(run)
 
 	require.NotNil(t, rt.stop)
-	assert.True(t, rt.stop.deadline.Equal(rt.canceledAt.Load().Add(rt.stopBound)),
+	assert.True(t, rt.stop.deadline.Equal(rt.canceledAt.Load().Add(rt.stopDrainBound())),
 		"the bound ends one bound after the cancel: %v", rt.stop.deadline)
-	assert.True(t, rt.stop.deadline.Before(seen.Add(rt.stopBound)),
+	assert.True(t, rt.stop.deadline.Before(seen.Add(rt.stopDrainBound())),
 		"the bound does not start when the run first saw its stop")
 }
 
@@ -596,7 +597,7 @@ func TestWatchRuntime_ACompletionAppliedAtTheCancelIsRecorded(t *testing.T) {
 	t.Parallel()
 
 	eng, rt, _ := stoppingWatchRuntime(t)
-	rt.stopBound = time.Hour
+	rt.hooks.stopBound = time.Hour
 	completions := failedUploads(rt.sched, "report.txt")
 	p := &watchPipeline{bl: syncdomain.NewBaselineSnapshot(nil)}
 

@@ -20,7 +20,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
 
-	tables, err := listUserTables(ctx, store.RawDBForTest())
+	tables, err := listUserTables(ctx, store.db)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{
 		"baseline",
@@ -41,7 +41,7 @@ func TestNewSyncStore_CreatesCanonicalSchema(t *testing.T) {
 		"store_metadata",
 	}, tables)
 
-	columns, err := listTableColumns(ctx, store.RawDBForTest(), "observation_state")
+	columns, err := listTableColumns(ctx, store.db, "observation_state")
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{
 		"content_drive_id",

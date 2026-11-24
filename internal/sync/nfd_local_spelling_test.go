@@ -261,12 +261,12 @@ func TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder(t *testing.T)
 	t.Run("read-only mount is one stored boundary", func(t *testing.T) {
 		t.Parallel()
 
-		ph, syncRoot := newTestPermHandler(t, nil)
+		syncRoot := newTestPermSyncRoot(t)
 		mount := filepath.Join(syncRoot, syncfixture.NfdCafe)
 		require.NoError(t, os.MkdirAll(filepath.Join(mount, "photos"), 0o750))
-		ph.readOnlyDir = func(absDir string) bool {
+		ph := newTestPermHandlerIn(t, nil, syncRoot, func(absDir string) bool {
 			return absDir == mount || strings.HasPrefix(absDir, mount+string(filepath.Separator))
-		}
+		})
 
 		evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
 			Path:       syncfixture.NfcCafe + "/photos/a.jpg",
@@ -380,11 +380,10 @@ func handleTwinDelete(t *testing.T, h *syncHarness) []syncobserve.LocalObservati
 
 	bl, err := h.eng.baseline.Load(t.Context())
 	require.NoError(t, err)
-	obs := syncobserve.NewLocalObserver(bl, h.eng.logger, 0)
+	batches := make(chan syncobserve.LocalObservation, 1)
+	obs := syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{Baseline: bl, Logger: h.eng.logger, Batches: batches})
 	obs.PendingTimers = make(map[string]syncdomain.SyncTimer)
 	obs.HashRequests = make(chan syncobserve.HashRequest, syncobserve.HashRequestBufSize)
-	batches := make(chan syncobserve.LocalObservation, 1)
-	obs.SetLocalObservationBatchChannel(batches)
 
 	obs.HandleDelete(t.Context(), syncfixture.NewRecordingFsWatcher(), h.eng.syncTree,
 		filepath.Join(h.syncRoot, syncfixture.TwinSecondName), syncfixture.TwinSyncedName, syncfixture.TwinSyncedName)

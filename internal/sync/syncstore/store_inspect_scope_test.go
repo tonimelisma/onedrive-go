@@ -20,7 +20,7 @@ func TestReadDriveStatusSnapshot_RemoteDriftCountsOnlyTheSyncScope(t *testing.T)
 	t.Parallel()
 
 	store := newTestStore(t)
-	_, err := store.RawDBForTest().ExecContext(t.Context(), `
+	_, err := store.db.ExecContext(t.Context(), `
 		INSERT OR REPLACE INTO remote_state (item_id, path, item_type, hash, size, mtime)
 		VALUES
 			('item-in-dir', 'faults', 'folder', NULL, NULL, 1700000000),

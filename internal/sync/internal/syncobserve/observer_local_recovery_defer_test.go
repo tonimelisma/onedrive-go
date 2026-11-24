@@ -41,7 +41,7 @@ func TestWatch_RecoveryScanDefersWhileRuntimeHasNotTakenObservations(t *testing.
 	// what it was already sent.
 	batches := make(chan LocalObservation, 1)
 	batches <- LocalObservation{DeletedPrefixes: []string{"queued"}}
-	obs.SetLocalObservationBatchChannel(batches)
+	obs.localBatchCh = batches
 
 	cancel, done := startMockWatch(t, obs, watcher, dir)
 
@@ -95,7 +95,7 @@ func TestWatch_SafetyTickDefersWhileRuntimeHasNotTakenObservations(t *testing.T)
 	})
 	batches := make(chan LocalObservation, 1)
 	batches <- LocalObservation{DeletedPrefixes: []string{"queued"}}
-	obs.SetLocalObservationBatchChannel(batches)
+	obs.localBatchCh = batches
 
 	cancel, done := startMockWatch(t, obs, watcher, dir)
 

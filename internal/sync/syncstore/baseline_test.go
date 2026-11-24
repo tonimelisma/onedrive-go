@@ -56,7 +56,7 @@ func TestNewSyncStore_WALMode(t *testing.T) {
 	var journalMode string
 
 	ctx := t.Context()
-	err := mgr.RawDBForTest().QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode)
+	err := mgr.db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode)
 	require.NoError(t, err)
 	assert.Equal(t, "wal", journalMode)
 }
@@ -73,7 +73,7 @@ func TestSyncStore_Close_CheckpointsWAL(t *testing.T) {
 
 	// Write some data to ensure WAL has content.
 	ctx := t.Context()
-	_, err = mgr.RawDBForTest().ExecContext(ctx,
+	_, err = mgr.db.ExecContext(ctx,
 		`INSERT INTO baseline (path, item_id, parent_id, item_type,
 		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -103,7 +103,7 @@ func TestNewSyncStore_AppliesSchema(t *testing.T) {
 
 	var count int
 
-	err := mgr.RawDBForTest().QueryRowContext(ctx,
+	err := mgr.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('baseline', 'remote_state', 'observation_issues', 'block_scopes')",
 	).Scan(&count)
 	require.NoError(t, err)
@@ -119,14 +119,14 @@ func TestCheckpoint_DoesNotPruneRemoteMirrorRows(t *testing.T) {
 
 	// Checkpoint no longer treats remote_state as a lifecycle queue, so mirror
 	// rows are never pruned by database housekeeping.
-	_, err := mgr.RawDBForTest().ExecContext(ctx,
+	_, err := mgr.db.ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"old-item", "/old.txt", "file")
 	require.NoError(t, err)
 
 	// Insert a second row to ensure older/newer mirror entries both survive.
-	_, err = mgr.RawDBForTest().ExecContext(ctx,
+	_, err = mgr.db.ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"new-item", "/new.txt", "file")
@@ -135,7 +135,7 @@ func TestCheckpoint_DoesNotPruneRemoteMirrorRows(t *testing.T) {
 	require.NoError(t, mgr.Checkpoint(ctx))
 
 	var count int
-	err = mgr.RawDBForTest().QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
+	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count, "checkpoint must preserve remote mirror rows")
 }
@@ -152,7 +152,7 @@ func TestCheckpoint_PreservesObservationIssuesAndRetryWork(t *testing.T) {
 
 	// Observation issues are durable truth-status inputs and are no longer
 	// checkpoint-pruned by generic database housekeeping.
-	_, err := mgr.RawDBForTest().ExecContext(ctx,
+	_, err := mgr.db.ExecContext(ctx,
 		`INSERT INTO observation_issues (path, issue_type, scope_key)
 		 VALUES (?, ?, ?)`,
 		"/old-issue.txt", string(syncdomain.IssueInvalidFilename), "")
@@ -160,7 +160,7 @@ func TestCheckpoint_PreservesObservationIssuesAndRetryWork(t *testing.T) {
 
 	// Insert a second issue so we prove checkpoint preserves all rows rather
 	// than leaving a degenerate single-row case behind.
-	_, err = mgr.RawDBForTest().ExecContext(ctx,
+	_, err = mgr.db.ExecContext(ctx,
 		`INSERT INTO observation_issues (path, issue_type, scope_key)
 		 VALUES (?, ?, ?)`,
 		"/new-issue.txt", string(syncdomain.IssueInvalidFilename), "")
@@ -168,7 +168,7 @@ func TestCheckpoint_PreservesObservationIssuesAndRetryWork(t *testing.T) {
 
 	// retry_work is no longer timestamp-diagnostic storage and is likewise not
 	// checkpoint-pruned.
-	_, err = mgr.RawDBForTest().ExecContext(ctx,
+	_, err = mgr.db.ExecContext(ctx,
 		`INSERT INTO retry_work (path, old_path, action_type, scope_key, blocked, attempt_count, next_retry_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		"/pending-issue.txt", "", "upload", "", 0, 1, oldTime)
@@ -177,11 +177,11 @@ func TestCheckpoint_PreservesObservationIssuesAndRetryWork(t *testing.T) {
 	require.NoError(t, mgr.Checkpoint(ctx))
 
 	var count int
-	err = mgr.RawDBForTest().QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_issues`).Scan(&count)
+	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_issues`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count, "checkpoint must preserve observation issues")
 
-	err = mgr.RawDBForTest().QueryRowContext(ctx, `SELECT COUNT(*) FROM retry_work`).Scan(&count)
+	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM retry_work`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "checkpoint should not prune retry_work rows")
 }
@@ -194,7 +194,7 @@ func TestCheckpoint_PreservesRemoteMirrorRows(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert an old remote mirror row.
-	_, err := mgr.RawDBForTest().ExecContext(ctx,
+	_, err := mgr.db.ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"item1", "/old.txt", "file")
@@ -203,7 +203,7 @@ func TestCheckpoint_PreservesRemoteMirrorRows(t *testing.T) {
 	require.NoError(t, mgr.Checkpoint(ctx))
 
 	var count int
-	err = mgr.RawDBForTest().QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
+	err = mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_state`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "checkpoint should not prune the remote mirror")
 }
@@ -417,7 +417,7 @@ func TestCommit_Download(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.nowFunc = func() time.Time { return fixedTime }
 
 	outcomes := []syncdomain.BaselineMutation{{
 		Action:          syncdomain.ActionDownload,
@@ -455,7 +455,7 @@ func TestCommit_Upload(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.nowFunc = func() time.Time { return fixedTime }
 
 	outcomes := []syncdomain.BaselineMutation{{
 		Action:          syncdomain.ActionUpload,
@@ -491,9 +491,9 @@ func TestCommit_FolderCreate(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time {
+	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	})
+	}
 
 	outcomes := []syncdomain.BaselineMutation{{
 		Action:   syncdomain.ActionFolderCreate,
@@ -527,7 +527,7 @@ func TestCommit_BaselineUpdate(t *testing.T) {
 
 	// First commit: create baseline entry.
 	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return t1 })
+	mgr.nowFunc = func() time.Time { return t1 }
 
 	outcomes := []syncdomain.BaselineMutation{{
 		Action:          syncdomain.ActionDownload,
@@ -550,7 +550,7 @@ func TestCommit_BaselineUpdate(t *testing.T) {
 
 	// Second commit: convergent edit updates the stored baseline tuple.
 	t2 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return t2 })
+	mgr.nowFunc = func() time.Time { return t2 }
 
 	outcomes[0].Action = syncdomain.ActionBaselineUpdate
 	outcomes[0].LocalHash = updatedHash
@@ -583,9 +583,9 @@ func TestCommit_DeleteLikeActionsRemoveBaseline(t *testing.T) {
 
 			mgr := newTestStore(t)
 			ctx := t.Context()
-			mgr.SetNowFunc(func() time.Time {
+			mgr.nowFunc = func() time.Time {
 				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-			})
+			}
 
 			create := []syncdomain.BaselineMutation{{
 				Action: syncdomain.ActionDownload, Success: true,
@@ -616,7 +616,7 @@ func TestCommit_Move(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.nowFunc = func() time.Time { return fixedTime }
 
 	// Create original entry.
 	create := []syncdomain.BaselineMutation{{
@@ -658,9 +658,9 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time {
+	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	})
+	}
 
 	outcomes := []syncdomain.BaselineMutation{{
 		Action:  syncdomain.ActionDownload,
@@ -699,9 +699,9 @@ func TestCommit_DeltaTokenRoundTrip(t *testing.T) {
 
 			mgr := newTestStore(t)
 			ctx := t.Context()
-			mgr.SetNowFunc(func() time.Time {
+			mgr.nowFunc = func() time.Time {
 				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-			})
+			}
 
 			outcomes := []syncdomain.BaselineMutation{{
 				Action: syncdomain.ActionDownload, Success: true,
@@ -732,9 +732,9 @@ func TestCommit_RefreshesCache(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time {
+	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	})
+	}
 
 	// Verify baseline is nil before first commit.
 	assert.Nil(t, mgr.cachedBaseline(), "baseline should be nil before first Load/Commit")
@@ -789,7 +789,7 @@ func TestLoad_NullableFields(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert a row with NULL parent_id, hashes, size, mtimes, etag directly.
-	_, err := mgr.RawDBForTest().ExecContext(ctx,
+	_, err := mgr.db.ExecContext(ctx,
 		`INSERT INTO baseline (path, item_id, parent_id, item_type,
 		 local_hash, remote_hash, local_size, remote_size, local_mtime, remote_mtime, etag)
 		 VALUES (?, ?, NULL, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
@@ -824,7 +824,7 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	// Seed a baseline entry.
 	outcomes := []syncdomain.BaselineMutation{{
@@ -855,7 +855,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	// Seed one entry.
 	outcomes := []syncdomain.BaselineMutation{{
@@ -927,7 +927,7 @@ func TestCommitMutation_Download(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.nowFunc = func() time.Time { return fixedTime }
 
 	outcome := syncdomain.BaselineMutation{
 		Action:          syncdomain.ActionDownload,
@@ -963,7 +963,7 @@ func TestCommitMutation_Upload(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	outcome := syncdomain.BaselineMutation{
 		Action:          syncdomain.ActionUpload,
@@ -1023,7 +1023,7 @@ func TestCommitMutation_PersistsSideAwareFileMetadata(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC) }
 
 	outcome := syncdomain.BaselineMutation{
 		Action:          syncdomain.ActionUpload,
@@ -1089,7 +1089,7 @@ func TestCommitMutation_PersistsZeroByteSizeAsKnownZero(t *testing.T) {
 		storedLocalETag sql.NullString
 	)
 
-	err := mgr.RawDBForTest().QueryRowContext(ctx,
+	err := mgr.db.QueryRowContext(ctx,
 		`SELECT local_size, remote_size, etag FROM baseline WHERE path = ?`,
 		"zero.txt",
 	).Scan(&localSize, &remoteSize, &storedLocalETag)
@@ -1137,7 +1137,7 @@ func TestCommitMutation_Delete(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	// Seed an entry first.
 	seed := syncdomain.BaselineMutation{
@@ -1193,7 +1193,7 @@ func TestCommitMutation_Move(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	// Seed original entry.
 	seed := syncdomain.BaselineMutation{
@@ -1308,7 +1308,7 @@ func TestCommitMutation_UnknownAction_ReturnsErrorAndSkipsDBWrite(t *testing.T) 
 	require.ErrorContains(t, err, syncdomain.OutsideTheEnum(syncdomain.ActionType(999)))
 
 	var count int
-	queryErr := mgr.RawDBForTest().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline WHERE path = ?`, "unknown.txt").Scan(&count)
+	queryErr := mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline WHERE path = ?`, "unknown.txt").Scan(&count)
 	require.NoError(t, queryErr)
 	assert.Zero(t, count, "unknown actions must not write baseline rows")
 
@@ -1362,7 +1362,7 @@ func TestCommitMutation_FolderCreate(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	outcome := syncdomain.BaselineMutation{
 		Action:   syncdomain.ActionFolderCreate,
@@ -1455,7 +1455,7 @@ func TestCommitObservationCursor(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-abc"))
 
@@ -1470,7 +1470,7 @@ func TestCommitObservationCursor_Update(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-1"))
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-2"))
@@ -1721,7 +1721,7 @@ func TestCheckCacheConsistency_ReportsAMismatchInAnyColumn(t *testing.T) {
 			}))
 			require.NoError(t, mgr.CheckCacheConsistency(ctx))
 
-			_, err := mgr.RawDBForTest().ExecContext(ctx, tc.sql)
+			_, err := mgr.db.ExecContext(ctx, tc.sql)
 			require.NoError(t, err)
 
 			err = mgr.CheckCacheConsistency(ctx)
@@ -1751,7 +1751,7 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 
 	for _, table := range expectedTables {
 		var name string
-		err := mgr.RawDBForTest().QueryRowContext(ctx,
+		err := mgr.db.QueryRowContext(ctx,
 			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table,
 		).Scan(&name)
 		require.NoError(t, err, "table %q should exist", table)
@@ -1765,21 +1765,21 @@ func TestConsolidatedSchema_AllTablesCreated(t *testing.T) {
 	assert.Equal(t, "primary-token", state.Cursor)
 
 	// Verify remote_state table structure: insert + query.
-	_, err = mgr.RawDBForTest().ExecContext(ctx,
+	_, err = mgr.db.ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"item1", "/test.txt", "file")
 	require.NoError(t, err)
 
 	// Verify observation_issues table structure: insert + query.
-	_, err = mgr.RawDBForTest().ExecContext(ctx,
+	_, err = mgr.db.ExecContext(ctx,
 		`INSERT INTO observation_issues (path, issue_type, scope_key)
 		 VALUES (?, ?, ?)`,
 		"/bad-file.txt", "invalid_filename", "")
 	require.NoError(t, err)
 
 	// Verify remote_state CHECK constraint rejects invalid item types.
-	_, err = mgr.RawDBForTest().ExecContext(ctx,
+	_, err = mgr.db.ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"item2", "/bad.txt", "bogus")
@@ -1794,14 +1794,14 @@ func TestConsolidatedSchema_RemoteStateActivePathUnique(t *testing.T) {
 	ctx := t.Context()
 
 	// Insert an active item at a path.
-	_, err := mgr.RawDBForTest().ExecContext(ctx,
+	_, err := mgr.db.ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"item1", "/test.txt", "file")
 	require.NoError(t, err)
 
 	// Another item at the same path should be rejected by the mirror's unique path index.
-	_, err = mgr.RawDBForTest().ExecContext(ctx,
+	_, err = mgr.db.ExecContext(ctx,
 		`INSERT INTO remote_state (item_id, path, item_type)
 		 VALUES (?, ?, ?)`,
 		"item2", "/test.txt", "file")
@@ -1816,7 +1816,7 @@ func TestBaselineEntryCount_Empty(t *testing.T) {
 	ctx := t.Context()
 
 	var count int
-	err := mgr.RawDBForTest().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count)
+	err := mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 }
@@ -1848,7 +1848,7 @@ func TestBaselineEntryCount_WithEntries(t *testing.T) {
 	require.NoError(t, mgr.CommitMutation(ctx, &outcome))
 
 	var count int
-	err := mgr.RawDBForTest().QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count)
+	err := mgr.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM baseline`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 }

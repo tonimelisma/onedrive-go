@@ -8,15 +8,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 )
 
-// localBatches installs a buffered local observation channel on obs, the one
-// output the watch runtime installs, and returns it.
-func localBatches(obs *syncobserve.LocalObserver, size int) chan syncobserve.LocalObservation {
-	batches := make(chan syncobserve.LocalObservation, size)
-	obs.SetLocalObservationBatchChannel(batches)
-
-	return batches
-}
-
 // drainLocalPatches returns every local patch batches holds now, without
 // waiting.
 func drainLocalPatches(batches <-chan syncobserve.LocalObservation) []syncobserve.LocalObservation {

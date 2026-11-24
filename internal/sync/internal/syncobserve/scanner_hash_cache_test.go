@@ -61,9 +61,12 @@ func writeAgedFile(t *testing.T, path, content string) {
 
 func scanWithCache(t *testing.T, syncRoot string, cache syncdomain.LocalHashCache, reads *atomic.Int32) ScanResult {
 	t.Helper()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hooks.HashFile = countingHasher(reads)
-	obs.SetLocalHashCache(cache)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:  syncfixture.EmptyBaseline(),
+		Logger:    synctest.TestLogger(t),
+		Hooks:     Hooks{HashFile: countingHasher(reads)},
+		HashCache: cache,
+	})
 	// ctime cannot be aged, so the racily-clean guard on it is satisfied
 	// by a scan clock a few seconds ahead of the writes.
 	obs.clock = syncfixture.NewManualClock(time.Now().Add(5 * time.Second))
@@ -140,18 +143,24 @@ func TestFullScan_RecordedHashIsNotTrustedInsideTheRacilyCleanWindow(t *testing.
 	cache := newMapHashCache()
 
 	var reads atomic.Int32
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hooks.HashFile = countingHasher(&reads)
-	obs.SetLocalHashCache(cache)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:  syncfixture.EmptyBaseline(),
+		Logger:    synctest.TestLogger(t),
+		Hooks:     Hooks{HashFile: countingHasher(&reads)},
+		HashCache: cache,
+	})
 	_, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 	require.Equal(t, int32(1), reads.Load())
 	require.Len(t, cache.entries, 1)
 
 	reads.Store(0)
-	obs = NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.hooks.HashFile = countingHasher(&reads)
-	obs.SetLocalHashCache(cache)
+	obs = NewLocalObserver(&LocalObserverInputs{
+		Baseline:  syncfixture.EmptyBaseline(),
+		Logger:    synctest.TestLogger(t),
+		Hooks:     Hooks{HashFile: countingHasher(&reads)},
+		HashCache: cache,
+	})
 	_, err = obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), reads.Load(), "a file this young is read again, cache or not")

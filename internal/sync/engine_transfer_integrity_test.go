@@ -17,6 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
@@ -108,7 +109,7 @@ func TestRunOnce_LocalEditEqualToUnchangedRemoteUploadsNothing(t *testing.T) {
 		size, mtime, ctime, birth int64
 		device, inode             uint64
 	}
-	require.NoError(t, eng.baseline.RawDBForTest().QueryRowContext(ctx,
+	require.NoError(t, syncstoretest.RawDB(t, eng.baseline).QueryRowContext(ctx,
 		`SELECT hash, size, mtime, ctime, local_birth_time, local_device, local_inode
 		FROM local_state WHERE path = ?`, fileName).Scan(
 		&observed.hash, &observed.size, &observed.mtime, &observed.ctime, &observed.birth, &observed.device, &observed.inode))

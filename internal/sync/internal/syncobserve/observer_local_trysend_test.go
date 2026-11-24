@@ -19,7 +19,10 @@ import (
 func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	batches := localBatches(obs, 1)
 	ctx := t.Context()
 
@@ -44,7 +47,10 @@ func TestTrySend_ChannelAvailable_SendsEvent(t *testing.T) {
 func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	batches := localBatches(obs, 1)
 	ctx := t.Context()
 
@@ -72,7 +78,10 @@ func TestTrySend_ChannelFull_DropsEvent(t *testing.T) {
 func TestTrySend_ContextCanceled_NoDrop(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	batches := localBatches(obs, 1)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

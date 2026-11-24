@@ -32,7 +32,7 @@ func TestResetStateDB_RecreatesFreshCanonicalStore(t *testing.T) {
 	require.NoError(t, store.UpsertBlockScope(t.Context(), &syncdomain.BlockScope{
 		Key:           syncdomain.SKService(),
 		TrialInterval: time.Minute,
-		NextTrialAt:   store.NowForTest().Add(time.Minute),
+		NextTrialAt:   store.nowFunc().Add(time.Minute),
 	}))
 	require.NoError(t, store.Close(context.Background()))
 
@@ -41,7 +41,7 @@ func TestResetStateDB_RecreatesFreshCanonicalStore(t *testing.T) {
 
 	require.NoError(t, ResetStateDB(t.Context(), dbPath, syncfixture.NewTestLogger(t)))
 
-	reopened, err := OpenSyncStoreForTest(t.Context(), dbPath, syncfixture.NewTestLogger(t), false)
+	reopened, err := OpenSyncStoreForTest(t.Context(), dbPath, syncfixture.NewTestLogger(t), false, nil, Hooks{})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, reopened.Close(context.Background()))
@@ -125,8 +125,8 @@ func TestStateDBFamily_SQLitePairsALogWithADatabaseByNameAlone(t *testing.T) {
 			assert.NoError(t, store.Close(context.Background()))
 		})
 
-		assert.False(t, syncfixture.SqliteHasTable(t, store.RawDBForTest(), syncfixture.StaleMarkerTable))
-		assert.True(t, syncfixture.SqliteHasTable(t, store.RawDBForTest(), "baseline"))
+		assert.False(t, syncfixture.SqliteHasTable(t, store.db, syncfixture.StaleMarkerTable))
+		assert.True(t, syncfixture.SqliteHasTable(t, store.db, "baseline"))
 	})
 
 	t.Run("control: a log beside its own database is replayed", func(t *testing.T) {

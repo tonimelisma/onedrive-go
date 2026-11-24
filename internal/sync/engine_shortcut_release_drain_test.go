@@ -14,6 +14,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
@@ -380,7 +381,7 @@ func TestReleaseLocalTree_ARowWithoutAModificationTimeWaitsForTheNextDrain(t *te
 	t.Parallel()
 
 	remote, eng, syncRoot := newReleaseScenario(t, nil)
-	result, err := eng.baseline.RawDBForTest().ExecContext(t.Context(),
+	result, err := syncstoretest.RawDB(t, eng.baseline).ExecContext(t.Context(),
 		`UPDATE baseline SET local_mtime = 0 WHERE path = ?`, releaseFileTop)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()

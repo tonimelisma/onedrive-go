@@ -20,7 +20,10 @@ func TestFullScan_RootReadDirEIOReturnsError(t *testing.T) {
 
 	syncRoot := t.TempDir()
 	tree := syncfixture.MustOpenSyncTree(t, syncRoot)
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 
 	var (
 		events  []syncdomain.LocalEntry

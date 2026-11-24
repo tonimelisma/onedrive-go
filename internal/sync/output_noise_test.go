@@ -234,7 +234,7 @@ func TestWatchConditionSummary_AFailedReadIsLoggedOnce(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	// An issue type no member has: the snapshot read refuses the row.
-	db := syncstoretest.RequireStoreTestRawDB(t, eng.baseline)
+	db := syncstoretest.RawDB(t, eng.baseline)
 	_, err := db.ExecContext(t.Context(),
 		`INSERT INTO observation_issues (path, issue_type, scope_key) VALUES ('x.txt', 'not_an_issue_type', '')`)
 	require.NoError(t, err)

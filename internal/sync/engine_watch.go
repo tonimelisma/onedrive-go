@@ -401,37 +401,40 @@ func (rt *watchRuntime) buildWatchLocalObserver(
 	localBatches chan<- syncobserve.LocalObservation,
 	protectedRootEvents chan<- syncshortcut.ProtectedRootEvent,
 ) (*syncobserve.LocalObserver, error) {
-	localObs := rt.local.observer(bl, rt.deps.logger)
 	hashCache, err := rt.deps.store.NewLocalHashCache(ctx)
 	if err != nil {
 		return nil, err
 	}
-	localObs.SetLocalHashCache(hashCache)
-	localObs.SetFilterConfig(rt.cfg.contentFilter)
-	localObs.SetProtectedRoots(rt.roots.current())
-	localObs.SetObservationRules(rt.cfg.localRules)
-	localObs.SetSyncRootIdentity(rt.local.identity)
 	mountFlags, err := rt.deps.store.ListMountBoundaries(ctx)
 	if err != nil {
 		return nil, err
 	}
-	localObs.SetMountBoundaryFlags(mountFlags)
-	localObs.SetProtectedRootEventSink(func(event syncshortcut.ProtectedRootEvent) {
-		select {
-		case protectedRootEvents <- event:
-		default:
-			// Debug: self-healing back-pressure; reconciliation retries.
-			rt.deps.logger.Debug("managed shortcut root event channel full; parent engine reconciliation will retry",
-				slog.String("path", event.Path),
-				slog.String("binding_id", event.BindingID),
-			)
-		}
-	})
-	localObs.SetLocalObservationBatchChannel(localBatches)
-	localObs.SetSafetyScan(syncobserve.LocalWatchHealthySafetyScanInterval, true)
-	localObs.SetDebugEvents(rt.deps.emit)
+	logger := rt.deps.logger
 
-	return localObs, nil
+	return rt.local.observer(&syncobserve.LocalObserverInputs{
+		Baseline:         bl,
+		Logger:           logger,
+		HashCache:        hashCache,
+		ContentFilter:    rt.cfg.contentFilter,
+		ProtectedRoots:   rt.roots.current(),
+		ObservationRules: rt.cfg.localRules,
+		ProtectedRootEvents: func(event syncshortcut.ProtectedRootEvent) {
+			select {
+			case protectedRootEvents <- event:
+			default:
+				// Debug: self-healing back-pressure; reconciliation retries.
+				logger.Debug("managed shortcut root event channel full; parent engine reconciliation will retry",
+					slog.String("path", event.Path),
+					slog.String("binding_id", event.BindingID),
+				)
+			}
+		},
+		MountBoundaryFlags: mountFlags,
+		Batches:            localBatches,
+		SafetyScanInterval: syncobserve.LocalWatchHealthySafetyScanInterval,
+		StartupSafetyScan:  true,
+		DebugEvents:        rt.deps.emit,
+	}), nil
 }
 
 // startLocalObserver owns the local observer goroutine, mirroring

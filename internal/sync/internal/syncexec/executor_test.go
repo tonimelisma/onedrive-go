@@ -111,8 +111,9 @@ func newTestExecutorConfigWithPathConvergence(
 const testMountRootID = "mount-root-id"
 
 // mustNewExecutorConfig builds a configuration from in, filling what it
-// leaves zero of the transfer manager (over its downloader and uploader) and
-// the clock (the wall clock).
+// leaves zero of the transfer manager (over its downloader and uploader), the
+// clock (the wall clock), the trash (a fresh one in a temp directory) and the
+// pending-create and move-intent records (in memory, on the clock).
 func mustNewExecutorConfig(t *testing.T, in *ExecutorInputs) *ExecutorConfig {
 	t.Helper()
 
@@ -121,6 +122,18 @@ func mustNewExecutorConfig(t *testing.T, in *ExecutorInputs) *ExecutorConfig {
 	}
 	if in.Now == nil {
 		in.Now = time.Now
+	}
+	if in.Trash == nil {
+		in.Trash = localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
+	}
+	if in.PendingCreates == nil || in.MoveIntents == nil {
+		records := syncfixture.NewMemoryExecutorRecords(in.Now)
+		if in.PendingCreates == nil {
+			in.PendingCreates = records
+		}
+		if in.MoveIntents == nil {
+			in.MoveIntents = records
+		}
 	}
 	cfg, err := NewExecutorConfig(in)
 	require.NoError(t, err)
@@ -3797,10 +3810,10 @@ func TestExecutor_RemoteMove_ItemAlreadyAtDestinationSucceedsWithoutMoving(t *te
 // A local move that replaces its destination (OneDrive moved an item over a
 // file it deleted) replaces only the version the plan saw; a destination that
 // changed since planning is stale and stays untouched. The version replaced
-// leaves the sync folder once, by the local delete rule: into the trash when
-// the drive has one, where it is the destination's own file and is there
-// exactly once, and removed otherwise. The rename then replaces nothing: the
-// destination name holds the moved file itself.
+// leaves the sync folder once, by the local delete rule: into the trash,
+// where it is the destination's own file and is there exactly once. The
+// rename then replaces nothing: the destination name holds the moved file
+// itself.
 func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
 	t.Parallel()
 
@@ -3808,21 +3821,15 @@ func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
 		name        string
 		destination string
 		wantReplace bool
-		withTrash   bool
 	}{
-		{name: "unchanged destination is replaced", destination: "bravo\n", wantReplace: true},
+		{name: "unchanged destination goes to the trash", destination: "bravo\n", wantReplace: true},
 		{name: "changed destination is stale", destination: "edited after planning\n", wantReplace: false},
-		{name: "unchanged destination goes to the trash", destination: "bravo\n", wantReplace: true, withTrash: true},
-		{name: "changed destination is stale with a trash", destination: "edited after planning\n", withTrash: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
-			trash := localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
-			if tc.withTrash {
-				cfg.trash = trash
-			}
+			trash := cfg.trash
 			e := NewExecution(cfg, syncfixture.EmptyBaseline())
 			syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", "alpha\n")
 			syncfixture.WriteExecTestFile(t, syncRoot, "b.txt", "bravo\n")
@@ -3862,10 +3869,8 @@ func TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination(t *testing.T) {
 			assert.NoFileExists(t, filepath.Join(syncRoot, "a.txt"))
 			assert.Equal(t, moved, syncfixture.EntryIdentity(t, filepath.Join(syncRoot, "b.txt")), "b.txt is the moved file itself")
 			assert.Equal(t, []string{"b.txt"}, syncfixture.LocalNames(t, syncRoot), "nothing is left beside it")
-			if tc.withTrash {
-				kept := syncfixture.RequireTrashHoldsOnce(t, trash, "b.txt", "bravo\n")
-				assert.Equal(t, displaced, syncfixture.EntryIdentity(t, kept.ItemPath), "the trash holds the destination's own file, not a copy")
-			}
+			kept := syncfixture.RequireTrashHoldsOnce(t, trash, "b.txt", "bravo\n")
+			assert.Equal(t, displaced, syncfixture.EntryIdentity(t, kept.ItemPath), "the trash holds the destination's own file, not a copy")
 		})
 	}
 }

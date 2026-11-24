@@ -24,7 +24,10 @@ func TestFullScan_LongNonASCIIPathWithinTheCharacterLimitIsObserved(t *testing.T
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(rel)), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, rel), []byte("x"), 0o600))
 
-	obs := syncobserve.NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	result, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, dir))
 	require.NoError(t, err)
 

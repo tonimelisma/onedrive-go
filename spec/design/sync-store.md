@@ -152,7 +152,8 @@ and every other significant type in the tree already matched its own name
 
 | Behavior | Evidence |
 | --- | --- |
-| The store's test seams are one `Hooks` value (`store_test_seams.go`), passed to `OpenEngineSyncStore`; its zero value opens through the SQLite driver with `synchronous(FULL)` and makes every crash point a no-op, and only `SkipFsync`, which tests set, turns synchronous off (R-6.10.29). | `TestHooks_ZeroValueIsProduction`, `TestHooks_SkipFsyncTurnsSynchronousOff` |
+| The store's clock, which dates delete-ledger rows, retry and trial timing and pending-create intents, is given when the store opens (`OpenEngineSyncStore`'s `now`; nil is the wall clock) and never replaced: the engine declares itself before it opens its store and passes its run clock as a method value, so the store reads the engine's clock from its first read (sync-tree binding, protected roots) and follows a test that replaces the run clock after construction. | `TestEngine_StoreAndExecutorTellTheEngineClocksTime` |
+| The store's test seams are one `Hooks` value (`store_test_seams.go`), passed to `OpenEngineSyncStore` and carried by every inspector the store opens over its connection; its zero value opens through the SQLite driver with `synchronous(FULL)`, makes every crash point a no-op and reads a status snapshot without pausing between its halves (`BetweenSnapshotReads`), and only `SkipFsync`, which tests set, turns synchronous off (R-6.10.29). | `TestHooks_ZeroValueIsProduction`, `TestHooks_SkipFsyncTurnsSynchronousOff` |
 | The store remains the sole durable owner of schema validation/open semantics and explicit reset flows. | `TestNewSyncStore_CreatesDB`, `TestNewSyncStore_AppliesSchema`, `TestNewSyncStore_CreatesCanonicalSchema`, `TestNewSyncStore_RejectsNonCanonicalSchema`, `TestRunDriveResetSyncStateWithInput_ResetsAndRecreatesStateDB` |
 | A store write that fails part-way (a statement inside the transaction, or the commit itself) leaves the database and the in-memory baseline cache agreeing, with the failed outcome in neither, and the same write succeeds once the fault is gone; a failed read is returned, never answered as an empty result. Proven through `openSyncStoreWithDriver`, the seam the tests use to open the store through a fault-injecting wrapper of the SQLite driver that fails the next statement matching a SQL fragment or the next commit. | `TestFault_CommitMutationFailureLeavesCacheAndDatabaseAgreeing`, `TestFault_RefreshLocalBaselineCommitFailureLeavesTheOldRow`, `TestFault_ReadFailureIsReturnedNotEmpty` |
 | Baseline, local observation truth, remote mirror truth, observation cursor/confidence, observation issues, retry work, and block scopes survive close/reopen as one restart authority. | `TestSyncStore_ReopenPreservesDurableRecoveryTruth` |
@@ -1139,7 +1140,16 @@ which is every production store, keeps `synchronous(FULL)`
 (`TestHooks_ZeroValueIsProduction`, `TestEngineHooks_ZeroValueIsProduction`),
 and the delete-boundary crash test runs on it
 (`TestCrashRecovery_DeleteBoundariesDeleteOnceAndKeepTheTrashEntry`,
-`TestTestEngines_SkipFsyncUnlessTheTestKeepsIt`). The inspector's read-only URI (`mode=ro`, `query_only`, `inspectorBusyTimeout`,
+`TestTestEngines_SkipFsyncUnlessTheTestKeepsIt`). The store hands its
+`*sql.DB` to no importer: a test that seeds or reads tables below the typed
+API gets the database through `Hooks.OnOpen`, which the store calls once as
+it opens (`TestHooks_OnOpenIsToldTheStoreAndItsDatabase`), and which
+`syncstoretest.WithRawDB` (every store `syncstoretest` and the engine test
+helpers open) sets to keep it for `syncstoretest.RawDB(tb, store)` until the
+test ends. Production never sets a `Hooks` field (R-6.10.29), so no product
+code can reach the handle; a package outside the sync tree, which cannot
+import `syncstoretest` (the CLI's tests), opens a connection of its own on
+the closed store's file. The store's own tests use its unexported `db`. The inspector's read-only URI (`mode=ro`, `query_only`, `inspectorBusyTimeout`,
 1 s) is built the same way
 (`TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters`,
 `TestSQLiteFileURI_EscapesTheDatabasePath`). Tests in other packages open a

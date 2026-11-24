@@ -77,16 +77,19 @@ func TestWatchRuntime_SafetyScanWithoutNewTruthKeepsAdmittedPlan(t *testing.T) {
 	// The observer's safety scan of the unchanged tree, exactly as watch
 	// mode produces it: a full scan against the baseline, handed over as a
 	// full snapshot batch.
-	obs := syncobserve.NewLocalObserver(bl, eng.logger, 0)
-	obs.SetFilterConfig(eng.contentFilter)
-	obs.SetObservationRules(eng.localRules)
-	obs.SetSyncRootIdentity(eng.syncRootIdentity)
+	batches := make(chan syncobserve.LocalObservation, 1)
+	obs := syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{
+		Baseline:         bl,
+		Logger:           eng.logger,
+		ContentFilter:    eng.contentFilter,
+		ObservationRules: eng.localRules,
+		RootIdentity:     eng.syncRootIdentity,
+		Batches:          batches,
+	})
 	result, err := obs.FullScan(ctx, eng.syncTree)
 	require.NoError(t, err)
 	require.NotEmpty(t, result.Events, "against the baseline the edit is still an event")
 
-	batches := make(chan syncobserve.LocalObservation, 1)
-	obs.SetLocalObservationBatchChannel(batches)
 	obs.TrySendFullLocalSnapshot(ctx, result)
 	snapshot := syncfixture.ReceiveWithin(t, batches, "safety scan snapshot")
 	require.Equal(t, syncobserve.LocalSnapshot, snapshot.Kind)
@@ -154,9 +157,13 @@ func TestWatchRuntime_ASnapshotWhoseLastFindingClearedMarksDirty(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	rt.resources.dirtyBuf = syncobserve.NewDirtyBuffer(eng.logger)
-	obs := syncobserve.NewLocalObserver(syncdomain.NewBaselineSnapshot(nil), eng.logger, 1)
 	batches := make(chan syncobserve.LocalObservation, 1)
-	obs.SetLocalObservationBatchChannel(batches)
+	obs := syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{
+		Baseline:     syncdomain.NewBaselineSnapshot(nil),
+		Logger:       eng.logger,
+		CheckWorkers: 1,
+		Batches:      batches,
+	})
 	tree := syncfixture.MustOpenSyncTree(t, syncRoot)
 	leftover := filepath.Join(syncRoot, leftoverName)
 	require.NoError(t, os.WriteFile(leftover, []byte("half-removed\n"), 0o600))
@@ -187,9 +194,13 @@ func TestWatchRuntime_FallbackScanRecordsAndClearsFindings(t *testing.T) {
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
 	ctx := t.Context()
-	obs := syncobserve.NewLocalObserver(syncdomain.NewBaselineSnapshot(nil), eng.logger, 1)
 	batches := make(chan syncobserve.LocalObservation, 1)
-	obs.SetLocalObservationBatchChannel(batches)
+	obs := syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{
+		Baseline:     syncdomain.NewBaselineSnapshot(nil),
+		Logger:       eng.logger,
+		CheckWorkers: 1,
+		Batches:      batches,
+	})
 	tree := syncfixture.MustOpenSyncTree(t, syncRoot)
 	leftover := filepath.Join(syncRoot, leftoverName)
 	require.NoError(t, os.WriteFile(leftover, []byte("half-removed\n"), 0o600))
@@ -262,8 +273,12 @@ func TestWatchRuntime_ASnapshotRefreshesTheObserversMountFlags(t *testing.T) {
 	eng, _ := newTestEngine(t, &syncfixture.EngineMockClient{})
 	setupWatchEngine(t, eng)
 	rt := testWatchRuntime(t, eng)
-	obs := syncobserve.NewLocalObserver(syncdomain.NewBaselineSnapshot(nil), eng.logger, 1)
-	obs.SetMountBoundaryFlags(nil)
+	obs := syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{
+		Baseline:           syncdomain.NewBaselineSnapshot(nil),
+		Logger:             eng.logger,
+		CheckWorkers:       1,
+		MountBoundaryFlags: nil,
+	})
 	rt.resources.localObs = obs
 
 	applySnapshot(t, rt, &syncobserve.LocalObservation{

@@ -33,8 +33,8 @@ func TestActionTypeRefusals_ATypeOutsideTheEnumIsAnError(t *testing.T) {
 	require.ErrorContains(t, err, syncdomain.OutsideTheEnum(unlisted))
 	_, err = PublicationMutationFromAction(&syncdomain.Action{Type: unlisted, Path: "a.txt"}, driveid.New("d"))
 	require.ErrorContains(t, err, "ActionType(10) is not publication-only")
-	require.ErrorContains(t, store.recordDeleteLedgerTx(ctx, store.RawDBForTest(), mutation), syncdomain.OutsideTheEnum(unlisted))
-	require.ErrorContains(t, updateRemoteStateOnOutcome(ctx, store.RawDBForTest(), mutation), syncdomain.OutsideTheEnum(unlisted))
+	require.ErrorContains(t, store.recordDeleteLedgerTx(ctx, store.db, mutation), syncdomain.OutsideTheEnum(unlisted))
+	require.ErrorContains(t, updateRemoteStateOnOutcome(ctx, store.db, mutation), syncdomain.OutsideTheEnum(unlisted))
 
 	outcome := (&syncexec.WorkerPool{}).DispatchActionForTest(ctx, nil, &syncdomain.TrackedAction{Action: syncdomain.Action{Type: unlisted, Path: "a.txt"}})
 	require.ErrorIs(t, outcome.Error, syncexec.ErrUnknownActionType)

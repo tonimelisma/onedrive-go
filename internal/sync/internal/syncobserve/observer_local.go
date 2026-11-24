@@ -462,7 +462,7 @@ type LocalObserver struct {
 	// watchIdentityIndexMaxAge. Touched only by the goroutine running Watch.
 	// mountBoundaryFlags are the folders recorded as crossed mount points:
 	// set by the engine before a scan, and by the watch runtime after each
-	// snapshot it commits (SetMountBoundaryFlags). A scan reads the set once,
+	// snapshot it commits (ReplaceMountBoundaryFlags). A scan reads the set once,
 	// at its start; the set is replaced whole, never changed in place.
 	mountBoundaryFlags   atomic.Pointer[map[string]struct{}]
 	watchIdentityLookup  *scanAvailability
@@ -471,8 +471,7 @@ type LocalObserver struct {
 	// hooks are the observer's test seams; the zero value is production.
 	hooks Hooks
 
-	// debugEvents is the engine's debug event sink, set by the watch runtime
-	// before Watch; nil reports nothing.
+	// debugEvents is the engine's debug event sink; nil reports nothing.
 	debugEvents func(syncdomain.EngineDebugEvent)
 
 	// descriptorBudget caps the open descriptors watch setup may commit to
@@ -529,93 +528,108 @@ type LocalObserver struct {
 	localWatchState
 }
 
-// NewLocalObserver creates a LocalObserver. checkWorkers controls the number
-// of parallel goroutines used for file hashing during FullScan (0 → default 4).
-// The baseline must be loaded (from SyncStore.Load); it is read-only
-// during observation.
-func NewLocalObserver(baseline syncdomain.BaselineView, logger *slog.Logger, checkWorkers int) *LocalObserver {
-	return &LocalObserver{
-		baseline:         baseline,
-		logger:           logger,
-		checkWorkers:     checkWorkers,
-		clock:            syncdomain.RealClock{},
-		localWatchState:  newLocalWatchState(),
-		descriptorBudget: watchDescriptorBudget(),
-		filesystemKind:   localFilesystemKind,
+// LocalObserverInputs is everything a LocalObserver works with, given once
+// at construction: nothing is installed afterwards, so an observer is whole
+// before any goroutine reads it. The only collaborator replaced while the
+// observer runs is the mount-boundary set (ReplaceMountBoundaryFlags).
+type LocalObserverInputs struct {
+	// Baseline must be loaded (from SyncStore.Load); it is read-only during
+	// observation.
+	Baseline syncdomain.BaselineView
+	Logger   *slog.Logger
+	// CheckWorkers is the number of parallel hash goroutines of FullScan
+	// (0 → default 4).
+	CheckWorkers int
+	// Clock is the observer's time capability; nil is the real clock.
+	Clock syncdomain.SyncClock
+	// Hooks are the observer's test seams; the zero value is production.
+	Hooks Hooks
+	// HashCache is the durable record of hashes a full scan computed for
+	// files the baseline did not know (R-2.2.8). Nil (a dry run, or a test)
+	// means every new file is hashed and nothing is kept.
+	HashCache syncdomain.LocalHashCache
+	// ContentFilter is the per-drive sync content filter. The observer copies
+	// its slices, so later config mutations cannot change a running scan.
+	ContentFilter syncdomain.ContentFilterConfig
+	// ProtectedRoots is the engine-derived shortcut boundary protection,
+	// derived from parent shortcut_roots state, not user filter config.
+	ProtectedRoots []syncshortcut.ProtectedRoot
+	// ProtectedRootEvents receives protected-root lifecycle facts for the
+	// parent watch runtime. The observer never mutates those roots; it only
+	// reports that the parent engine should reconcile. Nil reports nothing.
+	ProtectedRootEvents syncshortcut.ProtectedRootEventSink
+	// ObservationRules are the platform-derived local validation rules, kept
+	// apart from user filter knobs so drive semantics are not conflated with
+	// local exclusions.
+	ObservationRules syncdomain.LocalObservationRules
+	// RootIdentity is the identity scans validate the sync root against: the
+	// engine's shared one, so a binding made while the observer runs is
+	// enforced at once. Nil validates nothing.
+	RootIdentity *syncdomain.SyncRootIdentity
+	// MountBoundaryFlags are the folders previously recorded as crossed
+	// mount points.
+	MountBoundaryFlags []string
+	// Batches carries local observation batches to the watch runtime (see
+	// localBatchCh). Nil drops every batch: a scan-only observer.
+	Batches chan<- LocalObservation
+	// SafetyScanInterval is the healthy safety-scan interval (0 → 5 minutes).
+	SafetyScanInterval time.Duration
+	// StartupSafetyScan runs one safety scan when Watch starts, closing the
+	// gap between the bootstrap scan and the first watch event.
+	StartupSafetyScan bool
+	// DebugEvents is the engine's debug event sink; nil reports nothing.
+	DebugEvents func(syncdomain.EngineDebugEvent)
+}
+
+// NewLocalObserver creates a LocalObserver from everything it works with.
+func NewLocalObserver(in *LocalObserverInputs) *LocalObserver {
+	clock := in.Clock
+	if clock == nil {
+		clock = syncdomain.RealClock{}
 	}
-}
-
-// SetLocalObservationBatchChannel sets the channel that carries local
-// observation batches to the watch runtime (see localBatchCh). Must be called
-// before Watch.
-func (o *LocalObserver) SetLocalObservationBatchChannel(ch chan<- LocalObservation) {
-	o.localBatchCh = ch
-}
-
-// SetFilterConfig installs per-drive sync content filters. The observer copies
-// slices so later config mutations cannot silently change an already-running
-// watch/scanner.
-func (o *LocalObserver) SetFilterConfig(cfg syncdomain.ContentFilterConfig) {
-	o.filterConfig = syncdomain.ContentFilterConfig{
-		IgnoredDirs:      append([]string(nil), cfg.IgnoredDirs...),
-		IncludedDirs:     append([]string(nil), cfg.IncludedDirs...),
-		IgnoredPaths:     append([]string(nil), cfg.IgnoredPaths...),
-		IgnoreDotfiles:   cfg.IgnoreDotfiles,
-		IgnoreJunkFiles:  cfg.IgnoreJunkFiles,
-		FollowSymlinks:   cfg.FollowSymlinks,
-		CrossFilesystems: cfg.CrossFilesystems,
+	o := &LocalObserver{
+		baseline:     in.Baseline,
+		logger:       in.Logger,
+		hashCache:    in.HashCache,
+		checkWorkers: in.CheckWorkers,
+		filterConfig: syncdomain.ContentFilterConfig{
+			IgnoredDirs:      append([]string(nil), in.ContentFilter.IgnoredDirs...),
+			IncludedDirs:     append([]string(nil), in.ContentFilter.IncludedDirs...),
+			IgnoredPaths:     append([]string(nil), in.ContentFilter.IgnoredPaths...),
+			IgnoreDotfiles:   in.ContentFilter.IgnoreDotfiles,
+			IgnoreJunkFiles:  in.ContentFilter.IgnoreJunkFiles,
+			FollowSymlinks:   in.ContentFilter.FollowSymlinks,
+			CrossFilesystems: in.ContentFilter.CrossFilesystems,
+		},
+		protectedRoots:      append([]syncshortcut.ProtectedRoot(nil), in.ProtectedRoots...),
+		protectedRootEvents: in.ProtectedRootEvents,
+		observationRules:    in.ObservationRules,
+		expectedRoot:        in.RootIdentity,
+		hooks:               in.Hooks,
+		debugEvents:         in.DebugEvents,
+		descriptorBudget:    watchDescriptorBudget(),
+		filesystemKind:      localFilesystemKind,
+		safetyScanInterval:  in.SafetyScanInterval,
+		clock:               clock,
+		startupSafetyScan:   in.StartupSafetyScan,
+		localBatchCh:        in.Batches,
+		localWatchState:     newLocalWatchState(),
 	}
+	o.ReplaceMountBoundaryFlags(in.MountBoundaryFlags)
+
+	return o
 }
 
-// SetProtectedRoots installs engine-derived shortcut boundary protection. The
-// roots are derived from parent shortcut_roots state, not user filter config.
-func (o *LocalObserver) SetProtectedRoots(roots []syncshortcut.ProtectedRoot) {
-	o.protectedRoots = append([]syncshortcut.ProtectedRoot(nil), roots...)
-}
-
-// SetProtectedRootEventSink installs the parent watch-runtime notification sink
-// used for protected-root lifecycle facts. The observer never mutates those
-// roots; it only reports that the parent engine should reconcile.
-func (o *LocalObserver) SetProtectedRootEventSink(sink syncshortcut.ProtectedRootEventSink) {
-	o.protectedRootEvents = sink
-}
-
-// SetObservationRules installs platform-derived local validation rules. These
-// stay separate from user-configured filter knobs so drive semantics do not
-// get conflated with local exclusions.
-func (o *LocalObserver) SetObservationRules(rules syncdomain.LocalObservationRules) {
-	o.observationRules = rules
-}
-
-// SetLocalHashCache installs the durable hash cache a full scan consults and
-// feeds (R-2.2.8).
-func (o *LocalObserver) SetLocalHashCache(cache syncdomain.LocalHashCache) {
-	o.hashCache = cache
-}
-
-// SetMountBoundaryFlags installs the folders previously recorded as crossed
-// mount points.
-func (o *LocalObserver) SetMountBoundaryFlags(paths []string) {
+// ReplaceMountBoundaryFlags replaces, whole, the folders recorded as crossed
+// mount points. It is the observer's one runtime update: the watch runtime
+// calls it after each snapshot it commits, while Watch runs, and the next
+// scan reads the new set at its start.
+func (o *LocalObserver) ReplaceMountBoundaryFlags(paths []string) {
 	flags := make(map[string]struct{}, len(paths))
 	for _, flagged := range paths {
 		flags[flagged] = struct{}{}
 	}
 	o.mountBoundaryFlags.Store(&flags)
-}
-
-// SetExpectedRootIdentity validates scans against one fixed identity.
-func (o *LocalObserver) SetExpectedRootIdentity(identity *synctree.RootIdentity) {
-	if identity == nil {
-		o.expectedRoot = nil
-		return
-	}
-	o.expectedRoot = syncdomain.FixedSyncRootIdentity(identity)
-}
-
-// SetSyncRootIdentity validates scans against the engine's shared identity,
-// so a binding made while the observer runs is enforced at once.
-func (o *LocalObserver) SetSyncRootIdentity(identity *syncdomain.SyncRootIdentity) {
-	o.expectedRoot = identity
 }
 
 func (o *LocalObserver) reportProtectedRootEvent(event syncshortcut.ProtectedRootEvent) {
@@ -641,33 +655,6 @@ func (o *LocalObserver) cancelPendingTimer(path string) {
 	if churn, ok := o.writeChurn[path]; ok {
 		churn.firstPendingAt = time.Time{}
 	}
-}
-
-// SetClock replaces the observer's time capability (see clock). Must be
-// called before the observer scans or watches.
-func (o *LocalObserver) SetClock(clock syncdomain.SyncClock) {
-	o.clock = clock
-}
-
-// SetDebugEvents installs the engine's debug event sink (see debugEvents).
-// Must be called before Watch.
-func (o *LocalObserver) SetDebugEvents(emit func(syncdomain.EngineDebugEvent)) {
-	o.debugEvents = emit
-}
-
-// SetSafetyScan sets the healthy safety-scan interval and whether Watch runs
-// one safety scan at startup, closing the gap between the bootstrap scan and
-// the first watch event. Must be called before Watch.
-func (o *LocalObserver) SetSafetyScan(interval time.Duration, atStartup bool) {
-	o.safetyScanInterval = interval
-	o.startupSafetyScan = atStartup
-}
-
-// SetHooks installs the observer's test seams. The engine passes its own
-// through unchanged; production's are the zero value. Must be called before
-// the observer scans or watches.
-func (o *LocalObserver) SetHooks(hooks Hooks) {
-	o.hooks = hooks
 }
 
 // TrySend hands what a watch handler observed for one path to the runtime as
@@ -860,7 +847,7 @@ func (o *LocalObserver) EstimateDirCount() int {
 }
 
 // Watch monitors the local filesystem for changes using fsnotify and sends
-// what it observes to the batch channel (SetLocalObservationBatchChannel). It
+// what it observes to the batch channel (LocalObserverInputs.Batches). It
 // blocks until the context is canceled, returning nil. A periodic safety scan
 // (every 5 minutes) catches any events that fsnotify may miss (e.g., during
 // brief watcher gaps or platform edge cases).

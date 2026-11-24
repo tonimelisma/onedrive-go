@@ -29,7 +29,10 @@ func TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles(
 	}
 
 	watcher := syncfixture.NewRecordingFsWatcher()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	// kqueue would hold root + sub + six files = eight descriptors.
 	obs.descriptorBudget = 5
 
@@ -49,7 +52,10 @@ func TestAddWatchesRecursive_WithinDescriptorBudgetWatches(t *testing.T) {
 	root := t.TempDir()
 	syncfixture.WriteTestFile(t, root, "sub/a.txt", "x")
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.descriptorBudget = 100
 
 	require.NoError(t, obs.AddWatchesRecursive(t.Context(), syncfixture.NewRecordingFsWatcher(), syncfixture.MustOpenSyncTree(t, root)))
@@ -66,7 +72,10 @@ func TestWatch_NetworkRootShortensSafetyScanInterval(t *testing.T) {
 
 	dir := t.TempDir()
 	watcher := newMockFsWatcher()
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	clock := syncfixture.NewManualClock(time.Now())
 	obs.clock = clock
 	obs.hooks.WatcherFactory = func() (FsWatcher, error) { return watcher, nil }
@@ -87,7 +96,10 @@ func TestWatch_NetworkRootShortensSafetyScanInterval(t *testing.T) {
 func TestAdaptToRootFilesystem_LocalRootKeepsInterval(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.safetyScanInterval = LocalWatchHealthySafetyScanInterval
 	obs.filesystemKind = func(string) (filesystemInfo, error) {
 		return filesystemInfo{kind: "ext4"}, nil
@@ -127,7 +139,10 @@ func TestAdaptToRootFilesystem_NonDefaultIntervalIsNeverOverridden(t *testing.T)
 	t.Parallel()
 
 	for _, chosen := range []time.Duration{time.Minute, 10 * time.Minute} {
-		obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+		obs := NewLocalObserver(&LocalObserverInputs{
+			Baseline: syncfixture.EmptyBaseline(),
+			Logger:   synctest.TestLogger(t),
+		})
 		obs.safetyScanInterval = chosen
 		obs.filesystemKind = func(string) (filesystemInfo, error) {
 			return filesystemInfo{kind: "nfs", remote: true}, nil
@@ -148,7 +163,10 @@ func TestAddWatchesRecursive_DescriptorProjectionCountsSubdirectoriesOnce(t *tes
 		syncfixture.WriteTestFile(t, root, fmt.Sprintf("sub/f%d.txt", i), "x")
 	}
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	// root + sub + six files: kqueue holds exactly eight descriptors (the
 	// watch on sub reuses the descriptor of sub's entry in root).
 	obs.descriptorBudget = 8

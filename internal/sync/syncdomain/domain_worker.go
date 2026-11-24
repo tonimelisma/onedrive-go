@@ -7,7 +7,7 @@ import "time"
 // created item, clearing a succeeded action's retry work, the findings
 // observed before the shutdown, the invariant checks, and the records of the
 // completions a stopping run drains, which share one such bound for the whole
-// drain, measured from the cancel (engineFlow.stopBound). One transaction is
+// drain, measured from the cancel (engineFlow.stopDrainBound). One transaction is
 // milliseconds (and waits at most SQLite's 5 s busy timeout for a lock); the
 // bound only exists so a store whose disk stopped answering cannot block
 // shutdown forever. It is the longest one detached wait of a canceled engine

@@ -24,7 +24,10 @@ import (
 func TestEstimateDirCount_Empty(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	// +1 for root even with empty baseline.
 	assert.Equal(t, 1, obs.EstimateDirCount())
 }
@@ -38,7 +41,7 @@ func TestEstimateDirCount_WithFolders(t *testing.T) {
 		{Path: "file.txt", ItemType: syncdomain.ItemTypeFile},
 	})
 
-	obs := NewLocalObserver(bl, synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{Baseline: bl, Logger: synctest.TestLogger(t)})
 	// 2 folders + 1 for root = 3.
 	assert.Equal(t, 3, obs.EstimateDirCount())
 }
@@ -57,7 +60,10 @@ func TestAddWatchesRecursive_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 
 	watcher := syncfixture.NewEnospcWatcher(1) // fail after first successful Add (root)
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	err := obs.AddWatchesRecursive(t.Context(), watcher, syncfixture.MustOpenSyncTree(t, root))
 
 	require.Error(t, err)
@@ -74,7 +80,10 @@ func TestAddWatchesRecursive_ENOSPCRollsBackAddedWatches(t *testing.T) {
 
 	watcher := syncfixture.NewEnospcWatcher(2) // root + a succeed, a/b fails
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	err := obs.AddWatchesRecursive(t.Context(), watcher, syncfixture.MustOpenSyncTree(t, root))
 
 	require.Error(t, err)
@@ -100,7 +109,10 @@ func TestAddWatchesRecursive_NonENOSPC_ContinuesNormally(t *testing.T) {
 		failAfter: 1,
 	}
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	err := obs.AddWatchesRecursive(t.Context(), watcher, syncfixture.MustOpenSyncTree(t, root))
 
 	// Non-ENOSPC errors should NOT return errLocalWatchUnavailable.
@@ -155,7 +167,10 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 
 	watcher := syncfixture.NewEnospcWatcher(1)
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	obs.hooks.WatcherFactory = func() (FsWatcher, error) { return watcher, nil }
 
 	tree := syncfixture.MustOpenSyncTree(t, root)
@@ -177,7 +192,10 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 func TestFullScan_NonexistentSyncRoot_ReturnsError(t *testing.T) {
 	t.Parallel()
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+	})
 	nonexistent := filepath.Join(t.TempDir(), "does-not-exist")
 
 	_, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, nonexistent))
@@ -197,8 +215,11 @@ func TestFullScan_ExpectedSyncRootIdentityMismatchReturnsMountRootUnavailable(t 
 	require.NoError(t, err)
 	identity.Inode++
 
-	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	obs.SetExpectedRootIdentity(&identity)
+	obs := NewLocalObserver(&LocalObserverInputs{
+		Baseline:     syncfixture.EmptyBaseline(),
+		Logger:       synctest.TestLogger(t),
+		RootIdentity: syncdomain.FixedSyncRootIdentity(&identity),
+	})
 
 	_, err = obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, syncRoot))
 

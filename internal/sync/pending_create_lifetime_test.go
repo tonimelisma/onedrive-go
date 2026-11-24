@@ -1175,7 +1175,7 @@ func pendingCreateCount(t *testing.T, store *syncstore.SyncStore) int {
 	t.Helper()
 
 	var rows int
-	require.NoError(t, store.RawDBForTest().QueryRowContext(t.Context(), `SELECT count(*) FROM pending_creates`).Scan(&rows))
+	require.NoError(t, syncstoretest.RawDB(t, store).QueryRowContext(t.Context(), `SELECT count(*) FROM pending_creates`).Scan(&rows))
 
 	return rows
 }

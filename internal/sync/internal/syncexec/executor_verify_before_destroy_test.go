@@ -139,8 +139,12 @@ func TestHandleDelete_PathThatStillExistsEmitsNoDelete(t *testing.T) {
 
 	syncRoot := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(syncRoot, "file.txt"), []byte("still here\n"), 0o600))
-	obs := syncobserve.NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
-	batches := localBatches(obs, 10)
+	batches := make(chan syncobserve.LocalObservation, 10)
+	obs := syncobserve.NewLocalObserver(&syncobserve.LocalObserverInputs{
+		Baseline: syncfixture.EmptyBaseline(),
+		Logger:   synctest.TestLogger(t),
+		Batches:  batches,
+	})
 
 	obs.HandleDelete(t.Context(), syncfixture.NewRecordingFsWatcher(), syncfixture.MustOpenSyncTree(t, syncRoot),
 		filepath.Join(syncRoot, "file.txt"), "file.txt", "file.txt")

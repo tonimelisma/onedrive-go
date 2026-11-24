@@ -22,6 +22,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
@@ -68,7 +69,7 @@ func newReleaseScenario(t *testing.T, configure func(*engineInputs)) (*moveScena
 func rewriteBaselineLocalHash(t *testing.T, eng *testEngine, storedPath string) {
 	t.Helper()
 
-	result, err := eng.baseline.RawDBForTest().ExecContext(t.Context(),
+	result, err := syncstoretest.RawDB(t, eng.baseline).ExecContext(t.Context(),
 		`UPDATE baseline SET local_hash = ? WHERE path = ?`, syncfixture.TestQuickXor("not what the file holds\n"), storedPath)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
@@ -94,7 +95,7 @@ func changeContentUnseen(t *testing.T, eng *testEngine, syncRoot, storedPath, co
 	require.NoError(t, err)
 	ctime, ok := synctree.ChangeTimeFromFileInfo(after)
 	require.True(t, ok)
-	result, err := eng.baseline.RawDBForTest().ExecContext(t.Context(),
+	result, err := syncstoretest.RawDB(t, eng.baseline).ExecContext(t.Context(),
 		`UPDATE baseline SET local_ctime = ? WHERE path = ?`, ctime, storedPath)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
@@ -925,7 +926,7 @@ func crashDuringRelease(t *testing.T, point string, occurrence int, lostWAL bool
 	remote := newReleaseRemote(t)
 	h := newSyncHarness(t, remote)
 	runScenarioPass(t, h.eng)
-	_, err := h.eng.baseline.RawDBForTest().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, err := syncstoretest.RawDB(t, h.eng.baseline).ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 	require.NoError(t, err)
 
 	capture := &crashCapture{

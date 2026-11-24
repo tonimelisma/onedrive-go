@@ -307,7 +307,12 @@ func (flow *observation) observeRemoteWithShortcutTopology(
 	if refreshErr := flow.roots.refresh(ctx); refreshErr != nil {
 		return nil, "", syncshortcut.ShortcutTopologyBatch{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", refreshErr)
 	}
-	obs := flow.remote.observer(ctx, bl, flow.deps.logger, flow.cfg.shortcutNamespaceID, flow.roots.current())
+	obs := flow.remote.observer(ctx, &syncobserve.RemoteObserverInputs{
+		Baseline:            bl,
+		Logger:              flow.deps.logger,
+		ShortcutNamespaceID: flow.cfg.shortcutNamespaceID,
+		ProtectedRoots:      flow.roots.current(),
+	})
 
 	events, token, topology, err := obs.FullDeltaWithShortcutTopology(ctx, savedToken)
 	if err != nil {
@@ -339,28 +344,31 @@ func (flow *engineFlow) observeLocal(
 		return syncobserve.ScanResult{}, fmt.Errorf("sync: refresh shortcut protected roots: %w", err)
 	}
 
-	obs := flow.local.observer(bl, flow.deps.logger)
-	// This scan runs no timers. Its racily-clean window is measured on the
-	// run's clock, the one every other time decision of the run reads.
-	if flow.deps.clock != nil {
-		obs.SetClock(flow.deps.clock)
-	}
+	var cache syncdomain.LocalHashCache
 	if recordHashes {
-		cache, cacheErr := flow.deps.store.NewLocalHashCache(ctx)
+		var cacheErr error
+		cache, cacheErr = flow.deps.store.NewLocalHashCache(ctx)
 		if cacheErr != nil {
 			return syncobserve.ScanResult{}, cacheErr
 		}
-		obs.SetLocalHashCache(cache)
 	}
-	obs.SetFilterConfig(flow.cfg.contentFilter)
-	obs.SetProtectedRoots(flow.roots.current())
-	obs.SetObservationRules(flow.cfg.localRules)
-	obs.SetSyncRootIdentity(flow.local.identity)
 	mountFlags, err := flow.deps.store.ListMountBoundaries(ctx)
 	if err != nil {
 		return syncobserve.ScanResult{}, err
 	}
-	obs.SetMountBoundaryFlags(mountFlags)
+	obs := flow.local.observer(&syncobserve.LocalObserverInputs{
+		Baseline: bl,
+		Logger:   flow.deps.logger,
+		// This scan runs no timers. Its racily-clean window is measured on
+		// the run's clock, the one every other time decision of the run
+		// reads.
+		Clock:              flow.deps.clock,
+		HashCache:          cache,
+		ContentFilter:      flow.cfg.contentFilter,
+		ProtectedRoots:     flow.roots.current(),
+		ObservationRules:   flow.cfg.localRules,
+		MountBoundaryFlags: mountFlags,
+	})
 
 	result, err := obs.FullScan(ctx, flow.cfg.syncTree)
 	if err != nil {

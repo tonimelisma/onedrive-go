@@ -25,27 +25,27 @@ func TestReadPlanningSnapshot_ReturnsThePlannerVisibleCurrentTruth(t *testing.T)
 	store := newTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
-	_, err := store.RawDBForTest().ExecContext(ctx, `
+	_, err := store.db.ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type, local_hash, remote_hash)
 		VALUES
 			('folder-docs', 'docs', 'folder', '', ''),
 			('file-docs', 'docs/file.txt', 'file', 'hash', 'hash')`)
 	require.NoError(t, err)
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = store.db.ExecContext(ctx, `
 		INSERT INTO local_state (path, item_type, hash, size, mtime)
 		VALUES
 			('docs/file.txt', 'file', 'hash', 1, 1),
 			('new.txt', 'file', 'h', 1, 1),
 			('skip/hidden.txt', 'file', 'h', 1, 1)`)
 	require.NoError(t, err)
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = store.db.ExecContext(ctx, `
 		INSERT INTO remote_state (drive_id, item_id, path, item_type, hash)
 		VALUES
 			('', 'folder-docs', 'docs', 'folder', ''),
 			('', 'file-docs', 'docs/file.txt', 'file', 'hash'),
 			('', 'remote-skip', 'skip/remote.txt', 'file', 'h')`)
 	require.NoError(t, err)
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = store.db.ExecContext(ctx, `
 		INSERT INTO observation_issues (path, issue_type, scope_key)
 		VALUES ('CON', ?, ''), ('skip/CON', ?, '')`,
 		string(syncdomain.IssueInvalidFilename), string(syncdomain.IssueInvalidFilename))
@@ -91,7 +91,7 @@ func TestReadPlanningSnapshot_ReadsEveryFactInOneTransaction(t *testing.T) {
 	ctx := t.Context()
 	cached, err := store.Load(ctx)
 	require.NoError(t, err)
-	_, err = store.RawDBForTest().ExecContext(ctx, `
+	_, err = store.db.ExecContext(ctx, `
 		INSERT INTO baseline (item_id, path, item_type) VALUES ('item-fm2', 'fm2', 'folder')`)
 	require.NoError(t, err)
 	_, found := cached.GetByPath("fm2")
@@ -109,7 +109,7 @@ func TestReadPlanningSnapshot_ReadsEveryFactInOneTransaction(t *testing.T) {
 	assert.True(t, found, "the comparison row's baseline entry is in the snapshot's baseline")
 
 	var tempTables int
-	require.NoError(t, store.RawDBForTest().QueryRowContext(ctx,
+	require.NoError(t, store.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM temp.sqlite_master WHERE name LIKE 'planner_visible_%'`).Scan(&tempTables))
 	assert.Zero(t, tempTables, "the read's temp tables are rolled back")
 }

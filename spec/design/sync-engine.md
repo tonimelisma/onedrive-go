@@ -207,16 +207,19 @@ The engine's test seams are one value, `engineHooks` (`engine_hooks.go`),
 carried by `engineInputs.hooks` into `Engine.hooks`: the invariant checks, the
 run's owner check, the dispatch order and serialized pool, the one-shot pass
 limit and scope wait, the reconciliation query, the catalog clear, the run
-clock, the websocket wake-source factory, the lock `flock` and the sync tree
+clock, the stop's bound (`stopBound`, zero meaning `OutcomeCommitTimeout`),
+the permission handler's read-only-filesystem probe (`readOnlyDir`), the
+websocket wake-source factory, the lock `flock` and the sync tree
 interposer, plus the hooks of the packages the engine builds from:
 `syncexec.Hooks` (crash points, hashing, the detached store and outcome-commit
-bounds), `syncstore.Hooks` (crash points, the database driver) and
+bounds), `syncstore.Hooks` (crash points, the database driver, skipped fsync,
+the status-snapshot pause) and
 `syncobserve.Hooks` (the watcher factory, hashing, the safety-scan and watch
 loop callbacks, the write cooldown), which `newEngine` and
 `localSource.observer` pass through unchanged. `newEngine` builds the executor
 configuration in one call from `syncexec.ExecutorInputs` (R-6.10.30), with
-the store as its pending-create record, the trash and transfer manager it
-built and the run clock (`nowFunc`), and every worker pool from
+the store as its pending-create and local-move-intent record, the trash and
+transfer manager it built and the run clock (`nowFunc`), all required, and every worker pool from
 `syncexec.WorkerPoolInputs`; neither has a setter. Each zero value is production
 behavior (`TestEngineHooks_ZeroValueIsProduction`, and a
 `TestHooks_ZeroValueIsProduction` in each package). Production code passes a
@@ -807,7 +810,7 @@ every recovery is the full refresh above, not a bare token-less enumeration
 the token aged out was missed until the next scheduled refresh, up to a day
 later): one-shot drive-root observation falls through to
 `executeDriveRootFullObservation`, watch mode's remote observer calls the same
-function through `SetDeltaExpiredRecovery` and continues from its token, and
+function through `RemoteObserverInputs.DeltaExpiredRecovery` and continues from its token, and
 mount-root delta re-lists with orphan detection. The recovery is marked as a
 full refresh, so the cadence restarts from it (R-2.15.3). In watch mode a recovery
 that fails backs off like any failed poll and keeps the expired token, and
@@ -1760,7 +1763,7 @@ ended, every one of them ends at the stop's one deadline when that comes
 before its own bound: the run marks its context (`withRunStop`,
 `syncexec.WithRunStop`, on the watch's context and on a one-shot pass's, which
 the workers run under), and `RunDetachedStoreAccess` reads the stop's deadline
-from it (`stopBound` after the cancel, `canceledAt`, which any goroutine may
+from it (`stopDrainBound` after the cancel, `canceledAt`, which any goroutine may
 read). A worker's outcome commit or an executor write that starts after the
 cancel therefore takes what remains of the stop's bound, not a whole bound of
 its own; one that started before the cancel ends within its own bound, which
@@ -1814,7 +1817,7 @@ not record the result, since the record of done work is lost
 
 A local scan that reaches the watch after its context ended is committed
 under the stop's one deadline (`stopDeadline`: the running drain's, or
-`stopBound` after the cancel), never a bound of its own, so it cannot hold a
+`stopDrainBound` after the cancel), never a bound of its own, so it cannot hold a
 stop past that deadline. When the deadline cuts the commit short the lost scan
 is said once at Warn and the watch ends as the stop asked, with no new error:
 a scan is observation, not the record of work done, and the next sync scans

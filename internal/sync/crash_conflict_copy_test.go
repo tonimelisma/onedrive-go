@@ -11,6 +11,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -80,7 +81,7 @@ func conflictCopyUploadCutAfterCreate(t *testing.T, lostWAL bool) (string, strin
 	// The synced state reaches the main database file; the round's commits,
 	// the create's intent among them, stay in the WAL, which the lost-WAL
 	// variant then loses.
-	_, err := h.eng.baseline.RawDBForTest().ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, err := syncstoretest.RawDB(t, h.eng.baseline).ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 	require.NoError(t, err)
 
 	syncfixture.WriteLocalFile(t, h.syncRoot, conflictCrashPath, conflictCrashLocalContent)
