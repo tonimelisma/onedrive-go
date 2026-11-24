@@ -173,3 +173,39 @@ func TestAckHandle_ConcurrentWithFullRefresh_IsRaceFree(t *testing.T) {
 	result := syncfixture.ReceiveWithin(t, rt.resources.refreshResults, "the full remote refresh's result")
 	require.NoError(t, result.FatalErr)
 }
+
+// A goroutine reports its exit after stop can count it stopped, and stop
+// still waits for that report: the observers' exit event once ran after
+// done closed, so the watch returned while a goroutine it had counted
+// stopped was still emitting, and a test that reset its debug hook on return
+// raced it. Inside the report the goroutine is already returned (stop names
+// it no more) and not yet done (stop still waits for it).
+//
+// Validates: R-6.3.4
+func TestRunWatchGoroutine_ReportsItsExitBetweenReturnedAndDone(t *testing.T) {
+	t.Parallel()
+
+	returned := make(chan struct{})
+	done := make(chan struct{})
+	reported := false
+	exited := func(kind watchGoroutineKind) {
+		assert.Equal(t, watchGoroutineLocalObserver, kind)
+		assert.True(t, channelClosed(returned), "the goroutine had returned when it reported its exit")
+		assert.False(t, channelClosed(done), "stop must still wait while the exit is reported")
+		reported = true
+	}
+
+	runWatchGoroutine(t.Context(), watchGoroutineLocalObserver, returned, done, exited, func(context.Context) {})
+
+	assert.True(t, reported)
+	assert.True(t, channelClosed(done))
+}
+
+func channelClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}

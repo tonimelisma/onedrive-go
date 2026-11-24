@@ -216,13 +216,16 @@ Promoted docs: [sync-planning.md](../design/sync-planning.md) (`Dropped`).
 ## LI-20261124-01: An observer's exit event came before the watch counted it stopped
 
 First seen: 2026-11-23 (nightly run 45275981385 on `ec8c705f`, `stress`)
-Last seen: 2026-11-23
+Last seen: 2026-11-24 (push runs of `03cfb9b3` (#1018) and `95b19a80` (#1019), `verify-race`)
 Area: `internal/sync` watch goroutines (`engine_watch_goroutines.go`)
 Suite / test: `internal/sync.TestRunWatch_ObserverThatIgnoresItsContextIsNamedAfterTheBound`
-(one of fifty race runs)
-Classification: test bug
+(one of fifty race runs); after the first fix, a data race failing
+`TestModel_CrashAtSeededPointsRecovers`, `TestModel_SameSeedReplaysIdentically`,
+`TestRunOnce_RandomizedBidirectionalEditsConverge` and the rest of the
+`internal/sync` race binary
+Classification: test bug, then a product race its fix introduced
 Status: fixed
-Recurring: no
+Recurring: yes (the first fix caused the second failure)
 Summary: the stop's Warn named `[local observer remote observer]`; the test
 expects the remote observer alone, as the local one had exited.
 Evidence: the observers sent their exit debug event from a deferred call
@@ -233,6 +236,19 @@ the local observer still running.
 Resolution / mitigation: the tracker sends the exit event itself once the
 goroutine has returned and is counted as stopped (`watchGoroutines.exited`,
 `finishWatchGoroutine`); 200 race runs of the test pass.
+That fix closed done before it sent the event, so stop, which waited for
+done, could return while a goroutine it had counted stopped was still
+emitting: the race detector caught the report's read of the debug hook
+against a model test resetting the hook as the watch returned
+(`Engine.SetDebugEventHook` against `Engine.emitDebugEvent` from
+`reportGoroutineExited`), first in the push run of #1018 and again in the
+next. The tracker now keeps two facts: returned closes when the function
+returns (the Warn reads it, so the reported goroutine is never named) and
+done closes after the report (stop waits for it, past the bound too, since a
+report is one debug event), so no goroutine outlives the watch's return
+(`TestRunWatchGoroutine_ReportsItsExitBetweenReturnedAndDone`). Without the
+change three race runs of the model tests report the race; with it they are
+clean.
 Promoted docs: [sync-engine.md](../design/sync-engine.md).
 
 ## LI-20261123-02: A refused retry dropped the intent of a lost create, and the user's new file became a conflict copy beside an empty one

@@ -892,10 +892,14 @@ drain's wait for the observers' exits and a refresh's result once every
 completion is in, share one bound on the engine clock,
 `watchGoroutineStopTimeout` (5 s): when it passes, one Warn names the kinds
 still running and the watch returns (R-6.3.9). An observer's exit debug
-event is sent by the tracker once the goroutine has returned and is counted
-as stopped (`watchGoroutines.exited`), never from inside the goroutine
-before it returns: a test that waited for the local observer's exit and then
-let the bound pass found it still named in the Warn. The bound plus the drain's one
+event is sent by the tracker once the goroutine's function has returned
+(`watchGoroutine.returned`, which the Warn reads, so a goroutine whose exit
+was reported is never named), and the goroutine is done
+(`watchGoroutine.done`, which stop waits for) only once that report is over:
+a watch never returns while a goroutine it counted stopped is still running
+(`TestRunWatchGoroutine_ReportsItsExitBetweenReturnedAndDone`). Closing done
+before the report let the watch return while the report still read the
+debug hook a returning test then reset, a race the push run of #1018 caught. The bound plus the drain's one
 detached store write (`OutcomeCommitTimeout`, 30 s) stays under the multisync
 runner stop bound (45 s), so the engine names its own slow goroutine first.
 Cancellation wins over non-draining intake, including a dirty-buffer

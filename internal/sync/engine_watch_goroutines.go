@@ -31,12 +31,14 @@ const (
 	watchGoroutineWakeSource     watchGoroutineKind = "socket.io wake source"
 )
 
-// watchGoroutine is one started goroutine: the cancel of its own context, and
-// a channel it closes when it returns.
+// watchGoroutine is one started goroutine: the cancel of its own context,
+// a channel it closes when its function returns, and one it closes when it
+// has finished, its exit report included.
 type watchGoroutine struct {
-	kind   watchGoroutineKind
-	cancel context.CancelFunc
-	done   chan struct{}
+	kind     watchGoroutineKind
+	cancel   context.CancelFunc
+	returned chan struct{}
+	done     chan struct{}
 }
 
 // watchGoroutines owns the goroutines a watch starts beside its loop that
@@ -48,11 +50,13 @@ type watchGoroutine struct {
 // stop on a value that started nothing returns at once.
 type watchGoroutines struct {
 	started []watchGoroutine
-	// exited, when set, is called on a goroutine's own goroutine once it has
-	// returned and its done is closed, so whatever it reports (the
-	// observers' exit debug events) is never seen before stop counts the
-	// goroutine as stopped. It is set before the first start and never
-	// changes.
+	// exited, when set, is called on a goroutine's own goroutine once its
+	// function has returned and its returned is closed, so whatever it
+	// reports (the observers' exit debug events) is never seen before stop
+	// counts the goroutine as stopped; its done closes only after exited
+	// returns, so stop, which waits for done, never returns while a
+	// goroutine is still reporting. It is set before the first start and
+	// never changes.
 	exited func(watchGoroutineKind)
 	// expired closes once watchGoroutineStopTimeout has passed since the
 	// first wait for the goroutines began: the stop's drain, waiting for the
@@ -82,15 +86,16 @@ func (g *watchGoroutines) start(ctx context.Context, clock syncdomain.SyncClock,
 	g.forgetExited()
 	//nolint:gosec // G118: the cancel is kept in started, which stop calls.
 	goroutineCtx, cancel := context.WithCancel(ctx)
+	returned := make(chan struct{})
 	done := make(chan struct{})
-	g.started = append(g.started, watchGoroutine{kind: kind, cancel: cancel, done: done})
+	g.started = append(g.started, watchGoroutine{kind: kind, cancel: cancel, returned: returned, done: done})
 
 	exited := g.exited
-	clock.Go(func() { runWatchGoroutine(goroutineCtx, kind, done, exited, fn) })
+	clock.Go(func() { runWatchGoroutine(goroutineCtx, kind, returned, done, exited, fn) })
 }
 
-// runWatchGoroutine runs fn, closes done and then reports the exit to
-// exited, when set. It holds no panic boundary
+// runWatchGoroutine runs fn, closes returned, reports the exit to exited,
+// when set, and then closes done. It holds no panic boundary
 // of its own: every fn the watch starts defers a recover that hands the panic
 // to panicguard.Recovered and reports it to the watch, which a boundary here
 // could not do. The panic-boundary scan follows each call of start
@@ -98,18 +103,26 @@ func (g *watchGoroutines) start(ctx context.Context, clock syncdomain.SyncClock,
 func runWatchGoroutine(
 	ctx context.Context,
 	kind watchGoroutineKind,
+	returned chan<- struct{},
 	done chan<- struct{},
 	exited func(watchGoroutineKind),
 	fn func(context.Context),
 ) {
-	defer finishWatchGoroutine(kind, done, exited)
+	defer finishWatchGoroutine(kind, returned, done, exited)
 	fn(ctx)
 }
 
-// finishWatchGoroutine marks a goroutine stopped, then reports its exit:
-// in that order, so stop never names a goroutine whose exit was reported.
-func finishWatchGoroutine(kind watchGoroutineKind, done chan<- struct{}, exited func(watchGoroutineKind)) {
-	close(done)
+// finishWatchGoroutine marks a goroutine returned, reports its exit, and
+// marks it done: in that order, so stop never names a goroutine whose exit
+// was reported, and never returns before the report is over.
+func finishWatchGoroutine(
+	kind watchGoroutineKind,
+	returned chan<- struct{},
+	done chan<- struct{},
+	exited func(watchGoroutineKind),
+) {
+	close(returned)
+	defer close(done)
 	if exited != nil {
 		exited(kind)
 	}
@@ -130,10 +143,13 @@ func (g *watchGoroutines) forgetExited() {
 	})
 }
 
-// stop cancels every started goroutine and waits for each to return. When the
-// bound passes first, one Warn names the kinds still running, and stop
-// returns all the same: a goroutine that ignores its context must not hold
-// the watch's return for ever. Safe to call more than once.
+// stop cancels every started goroutine and waits for each to finish. When the
+// bound passes first, one Warn names the kinds whose function has not
+// returned, and stop returns all the same: a goroutine that ignores its
+// context must not hold the watch's return for ever. A goroutine whose
+// function has returned is only reporting its exit, which takes no longer
+// than one debug event, so stop waits for it to finish even past the bound.
+// Safe to call more than once.
 func (g *watchGoroutines) stop(clock syncdomain.SyncClock, logger *slog.Logger) {
 	defer g.disarm()
 	if len(g.started) == 0 {
@@ -160,7 +176,8 @@ func (g *watchGoroutines) stop(clock syncdomain.SyncClock, logger *slog.Logger) 
 			}
 		}
 		select {
-		case <-started[i].done:
+		case <-started[i].returned:
+			<-started[i].done
 		default:
 			running = append(running, string(started[i].kind))
 		}
