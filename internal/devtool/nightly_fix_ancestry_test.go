@@ -2,6 +2,7 @@ package devtool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -28,7 +29,7 @@ type ancestryRunner struct {
 func (r *ancestryRunner) Run(_ context.Context, _ string, _ []string, _, _ io.Writer, name string, args ...string) error {
 	r.commands = append(r.commands, name+" "+strings.Join(args, " "))
 	switch {
-	case len(args) > 0 && args[0] == "merge-base":
+	case len(args) > 0 && args[0] == nightlyTestMergeBase:
 		code := r.mergeBaseExits[0]
 		if len(r.mergeBaseExits) > 1 {
 			r.mergeBaseExits = r.mergeBaseExits[1:]
@@ -47,11 +48,11 @@ func (r *ancestryRunner) Run(_ context.Context, _ string, _ []string, _, _ io.Wr
 }
 
 func (r *ancestryRunner) Output(context.Context, string, []string, string, ...string) ([]byte, error) {
-	return nil, fmt.Errorf("unexpected Output call")
+	return nil, errors.New("unexpected Output call")
 }
 
 func (r *ancestryRunner) CombinedOutput(context.Context, string, []string, string, ...string) ([]byte, error) {
-	return nil, fmt.Errorf("unexpected CombinedOutput call")
+	return nil, errors.New("unexpected CombinedOutput call")
 }
 
 // Validates: R-6.10.23

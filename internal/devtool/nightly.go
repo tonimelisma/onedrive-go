@@ -538,17 +538,21 @@ func fixIsInRun(ctx context.Context, runner commandRunner, repoRoot string, fixC
 	if answered || err != nil {
 		return inRun, err
 	}
-	// A refused fetch leaves the commit unknown, which reads as not in the
-	// run (see above), so its error is not returned.
-	if runner.Run(
-		ctx, repoRoot, os.Environ(), io.Discard, io.Discard,
-		"git", "fetch", "--quiet", "--no-tags", "origin", fixCommit, runHead,
-	) != nil {
+	if !fetchCommits(ctx, runner, repoRoot, fixCommit, runHead) {
 		return false, nil
 	}
 	inRun, _, err = askFixAncestry(ctx, runner, repoRoot, fixCommit, runHead)
 
 	return inRun, err
+}
+
+// fetchCommits fetches the named commits by SHA and reports whether the fetch
+// worked. A refused fetch leaves a commit unknown, which fixIsInRun reads as
+// not in the run, so the fetch's error is deliberately not returned.
+func fetchCommits(ctx context.Context, runner commandRunner, repoRoot string, commits ...string) bool {
+	args := append([]string{"fetch", "--quiet", "--no-tags", "origin"}, commits...)
+
+	return runner.Run(ctx, repoRoot, os.Environ(), io.Discard, io.Discard, "git", args...) == nil
 }
 
 // gitUnknownObjectExit is git's exit status for a command given a commit the
@@ -557,7 +561,13 @@ const gitUnknownObjectExit = 128
 
 // askFixAncestry runs git merge-base --is-ancestor once. answered is false
 // when git could not judge (exit 128: a commit the clone does not hold).
-func askFixAncestry(ctx context.Context, runner commandRunner, repoRoot string, fixCommit string, runHead string) (inRun bool, answered bool, err error) {
+func askFixAncestry(
+	ctx context.Context,
+	runner commandRunner,
+	repoRoot string,
+	fixCommit string,
+	runHead string,
+) (inRun bool, answered bool, err error) {
 	runErr := runner.Run(
 		ctx, repoRoot, os.Environ(), io.Discard, io.Discard, "git", "merge-base", "--is-ancestor", fixCommit, runHead,
 	)

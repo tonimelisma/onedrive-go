@@ -56,9 +56,9 @@ func runWorkflowLint(ctx context.Context, runner commandRunner, repoRoot string,
 		return fmt.Errorf("write status: %w", err)
 	}
 
-	pinFindings, err := readWorkflowPinFindings(repoRoot, files)
-	if err != nil {
-		return err
+	pinFindings, readErr := readWorkflowPinFindings(repoRoot, files)
+	if readErr != nil {
+		return readErr
 	}
 	var pinErr error
 	if len(pinFindings) > 0 {
