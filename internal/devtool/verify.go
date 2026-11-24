@@ -1202,3 +1202,11 @@ func writeStatus(w io.Writer, text string) error {
 
 	return nil
 }
+
+// TierDeadlineDefaults are the go test deadlines of the full race tier, the
+// short tier and the race profile on a host with the CI runners' cores, for
+// the command line's help to state the values the verifier uses instead of
+// copies of them.
+func TierDeadlineDefaults() (unit, short, race time.Duration) {
+	return unitTestBaseTimeout, shortUnitTestBaseTimeout, raceSyncBaseTimeout
+}
