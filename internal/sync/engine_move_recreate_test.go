@@ -1089,6 +1089,142 @@ func TestRunOnce_FileMovedOutOfARenamedSubfolderIntoTheRecreatedFolderConverges(
 	}
 }
 
+// vacatedPathCase is one side a scenario's moves are made on: its name, and
+// the moves OneDrive receives when they are made here (nil when they are made
+// on OneDrive, which receives none).
+type vacatedPathCase struct {
+	name           string
+	onOneDrive     bool
+	wantGraphMoves []string
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// docs/sub is renamed docs/sub2, docs is moved to archive, and
+// archive/sub2/inner.txt is moved onto the path docs left, on this computer
+// or on OneDrive, before one sync. No folder is made at docs, so nothing
+// ordered inner.txt's move: made here, docs's move on OneDrive waited for
+// inner.txt to leave it first and inner.txt's move onto docs for docs's, a
+// cycle the planner dropped on every pass, and nothing moved on OneDrive.
+// inner.txt's move now waits a pass (landsPastARelocatedFolder): docs's and
+// sub's moves carry it, and the next pass moves it onto docs. One sync
+// finishes it on either side (assertOneSyncLeavesTree), each move made here
+// is one move on OneDrive, and inner.txt is moved, not downloaded again.
+func TestRunOnce_FileMovedOutOfARenamedSubfolderOntoTheMovedFoldersPathConverges(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []vacatedPathCase{
+		{name: "made here", wantGraphMoves: []string{"item-sub->sub2", "item-docs->archive", "item-inner->docs"}},
+		{name: "made on OneDrive", onOneDrive: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			remote := newSubfolderScenarioRemote(t)
+			eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+			downloadsBefore := remote.downloads
+			if tc.onOneDrive {
+				remote.moveAt(t, "docs/sub", "docs/sub2")
+				remote.moveAt(t, "docs", "archive")
+				remote.moveAt(t, "archive/sub2/inner.txt", "docs")
+			} else {
+				local := scenarioLocalPath(syncRoot)
+				require.NoError(t, os.Rename(local("docs/sub"), local("docs/sub2")))
+				require.NoError(t, os.Rename(local("docs"), local("archive")))
+				require.NoError(t, os.Rename(local("archive/sub2/inner.txt"), local("docs")))
+			}
+
+			assertOneSyncLeavesTree(t, eng, remote, syncRoot, logs, map[string]string{
+				"archive": "/", "archive/kept.txt": "kept\n", "archive/sub2": "/", "docs": "inner\n",
+				"photos": "/", "photos/photo.jpg": "photo\n",
+			})
+			assert.ElementsMatch(t, tc.wantGraphMoves, remote.moves, "each move made here is one move on OneDrive")
+			assert.Equal(t, downloadsBefore, remote.downloads, "inner.txt is moved, not downloaded again")
+			assert.Equal(t, "docs", remote.pathOf("item-inner"), "inner.txt is still the item it was")
+		})
+	}
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// On OneDrive docs/sub is renamed docs/sub2, docs is moved to archive, photos
+// is moved onto the path docs left, and archive/sub2/inner.txt is moved into
+// it as docs/inner.txt, before one sync. No folder is made at docs: here the
+// move of docs waited for inner.txt to leave it first, inner.txt's for
+// photos's move onto docs, and that move for docs's, a cycle the planner
+// dropped on every pass. inner.txt's move now waits a pass
+// (landsPastARelocatedFolder), and the rename of sub, which runs inside docs
+// before docs moves, no longer waits for photos's move as if it landed in
+// photos. One sync finishes it (assertOneSyncLeavesTree), nothing is
+// downloaded again, and OneDrive receives no move.
+func TestRunOnce_FileMovedOutOfARenamedSubfolderIntoAFolderMovedOntoTheMovedFoldersPathConverges(t *testing.T) {
+	t.Parallel()
+
+	remote := newSubfolderScenarioRemote(t)
+	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	downloadsBefore := remote.downloads
+	remote.moveAt(t, "docs/sub", "docs/sub2")
+	remote.moveAt(t, "docs", "archive")
+	remote.moveAt(t, "photos", "docs")
+	remote.moveAt(t, "archive/sub2/inner.txt", "docs/inner.txt")
+
+	assertOneSyncLeavesTree(t, eng, remote, syncRoot, logs, map[string]string{
+		"archive": "/", "archive/kept.txt": "kept\n", "archive/sub2": "/",
+		"docs": "/", "docs/inner.txt": "inner\n", "docs/photo.jpg": "photo\n",
+	})
+	assert.Empty(t, remote.moves, "OneDrive receives no move")
+	assert.Equal(t, downloadsBefore, remote.downloads, "nothing is downloaded again")
+}
+
+// Validates: R-2.17.6, R-2.17.1
+//
+// docs is moved to archive, a new docs is made, archive/sub is moved out of
+// the moved folder to photos/sub, and photos/sub/inner.txt is moved into the
+// new docs, on this computer or on OneDrive, before one sync. Made here, sub's
+// move on OneDrive waited for inner.txt to leave it first, inner.txt's move
+// for the new docs, the new docs for docs's move, and docs's move for sub to
+// leave it, a cycle the planner dropped on every pass. inner.txt's move now
+// waits a pass (landsPastARelocatedFolder): docs and sub move, the new docs
+// is made, and the next pass moves inner.txt into it. One sync finishes it on
+// either side (assertOneSyncLeavesTree), each move made here is one move on
+// OneDrive, and inner.txt is moved, not uploaded or downloaded again.
+func TestRunOnce_FileMovedOutOfASubfolderThatLeftTheMovedFolderIntoTheRemadeFolderConverges(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []vacatedPathCase{
+		{name: "made here", wantGraphMoves: []string{"item-docs->archive", "item-sub->sub", "item-inner->inner.txt"}},
+		{name: "made on OneDrive", onOneDrive: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			remote := newSubfolderScenarioRemote(t)
+			eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+			downloadsBefore := remote.downloads
+			if tc.onOneDrive {
+				remote.moveAt(t, "docs", "archive")
+				remote.mkdirAt(t, "docs")
+				remote.moveAt(t, "archive/sub", "photos/sub")
+				remote.moveAt(t, "photos/sub/inner.txt", "docs/inner.txt")
+			} else {
+				local := scenarioLocalPath(syncRoot)
+				require.NoError(t, os.Rename(local("docs"), local("archive")))
+				require.NoError(t, os.Mkdir(local("docs"), 0o750))
+				require.NoError(t, os.Rename(local("archive/sub"), local("photos/sub")))
+				require.NoError(t, os.Rename(local("photos/sub/inner.txt"), local("docs/inner.txt")))
+			}
+
+			assertOneSyncLeavesTree(t, eng, remote, syncRoot, logs, map[string]string{
+				"archive": "/", "archive/kept.txt": "kept\n", "docs": "/", "docs/inner.txt": "inner\n",
+				"photos": "/", "photos/photo.jpg": "photo\n", "photos/sub": "/",
+			})
+			assert.ElementsMatch(t, tc.wantGraphMoves, remote.moves, "each move made here is one move on OneDrive")
+			assert.Equal(t, downloadsBefore, remote.downloads, "inner.txt is moved, not downloaded again")
+			assert.Equal(t, "docs/inner.txt", remote.pathOf("item-inner"), "inner.txt is still the item it was")
+		})
+	}
+}
+
 // Validates: R-2.17.6, R-2.17.1
 //
 // On this computer docs is moved to archive, a new docs is made, inner.txt is

@@ -70,11 +70,17 @@ func (c *Client) UploadChunk(
 	// timeout and resumed through the session (D-045).
 	ctx, watchdog := c.watchTransfer(ctx)
 	defer watchdog.stop()
+	localPath := namedLocalFile(chunk)
 
 	resp, err := c.doPreAuth(ctx, uploadChunkDesc, func() (*http.Request, error) {
 		// Fresh SectionReader per attempt — io.ReaderAt.ReadAt is goroutine-safe,
 		// so no race with a previous attempt's transport writeLoop goroutine.
-		reader := watchdog.localBody(io.NewSectionReader(chunk, 0, length))
+		// An abandoned read is safe for the same reason: it reads into the
+		// local I/O goroutine's own buffer, and the next attempt reads the
+		// file afresh. The file stays its owner's to close; an *os.File
+		// closed while a read is stuck in it releases its descriptor when
+		// that read returns.
+		reader := watchdog.localBody(io.NewSectionReader(chunk, 0, length), localPath)
 		uploadURL, urlErr := c.validatedUploadURL(session.UploadURL)
 		if urlErr != nil {
 			return nil, urlErr

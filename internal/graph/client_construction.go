@@ -50,6 +50,9 @@ func NewClient(
 		maxDeltaPages:        defaultMaxDeltaPages,
 		maxListPages:         defaultMaxListPages,
 		maxRecursionDepth:    defaultMaxRecursionDepth,
+		// The client owns the goroutines its transfers abandon on a stuck
+		// local file call, bounded per client (abandonedLocalRecord).
+		abandonedLocal: newAbandonedLocalCalls(maxAbandonedLocalCalls),
 		policies: retryPolicies{
 			driveDiscovery:       retry.DriveDiscoveryPolicy(),
 			rootChildren:         retry.RootChildrenPolicy(),

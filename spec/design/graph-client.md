@@ -1,6 +1,6 @@
 # Graph Client
 
-GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_persist.go, internal/graph/auth_refresh.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/item_create.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/transfer_watchdog.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/lock.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
+GOVERNS: internal/graph/auth.go, internal/graph/auth_browser.go, internal/graph/auth_device.go, internal/graph/auth_persist.go, internal/graph/auth_refresh.go, internal/graph/auth_token.go, internal/graph/client.go, internal/graph/client_auth.go, internal/graph/client_construction.go, internal/graph/client_preauth.go, internal/graph/delta.go, internal/graph/download.go, internal/graph/drives.go, internal/graph/drives_identity.go, internal/graph/drives_shared.go, internal/graph/drives_sites.go, internal/graph/errors.go, internal/graph/item_paths.go, internal/graph/item_create.go, internal/graph/items.go, internal/graph/items_copy.go, internal/graph/items_fetch.go, internal/graph/items_mutation.go, internal/graph/items_permissions.go, internal/graph/normalize.go, internal/graph/quirks.go, internal/graph/redaction.go, internal/graph/response_body.go, internal/graph/shares.go, internal/graph/socketio.go, internal/graph/transfer_local_io.go, internal/graph/transfer_watchdog.go, internal/graph/types.go, internal/graph/upload.go, internal/graph/upload_session.go, internal/graph/upload_transfer.go, internal/graph/url_validation.go, internal/graphtransport/doc.go, internal/graphtransport/profiles.go, internal/tokenfile/lock.go, internal/tokenfile/tempfile.go, internal/tokenfile/tokenfile.go
 
 Implements: R-3.1 [verified], R-6.7 [implemented], R-6.8 [verified], R-1.1 [verified], R-1.4 [verified], R-1.5 [verified], R-1.6 [verified], R-1.6.2 [verified], R-1.7 [verified], R-1.8 [verified], R-1.2.5 [verified], R-1.3.5 [verified], R-3.6.4 [verified], R-6.7.8 [verified], R-6.7.9 [verified], R-6.7.10 [verified], R-6.7.11 [verified], R-6.7.12 [verified], R-6.7.13 [verified], R-6.7.16 [verified], R-6.7.17 [verified], R-6.7.18 [verified], R-6.7.22 [verified], R-6.7.23 [verified], R-6.7.26 [verified], R-6.8.4 [verified], R-6.8.6 [verified], R-6.8.8 [verified], R-6.8.14 [verified], R-6.3.4 [verified], R-6.8.16 [verified], R-6.10.6 [verified], R-6.8.17 [verified], R-6.8.27 [verified], R-6.7.30 [verified], R-6.7.35 [verified], R-6.7.36 [verified], R-6.7.37 [verified], R-6.7.38 [verified], R-6.8.20 [verified]
 
@@ -433,9 +433,43 @@ service window and retries the one file as busy
 `TestDownload_AStallOnTheNetworkSideIsNotALocalStall`,
 `TestClassifyResult_AStallOfTheLocalSideIsRetriedAsBusyAndIsNoServiceEvidence`,
 `TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence`). Go cannot
-interrupt a blocked read or write of a file, so a transfer whose local side
-hangs returns only once that call returns, the stall already recorded: the
-watchdog names the side, it does not free the worker. A stall is
+interrupt a blocked read or write of a file, so a transfer does not make
+the call itself: its local file calls (an upload's reads, a download's
+writes) run on one goroutine the transfer owns (`transfer_local_io.go`,
+`localIO`), started with its first call and ended with the transfer, and
+the transfer waits for each call's result or for the stall. When the stall
+timer fires with a call still inside the file, the transfer returns at
+once with the same errors (`ErrTransferStalled`, `ErrLocalSideStalled`)
+and hands the goroutine to its client's record of abandoned local calls
+(`abandonedLocalCalls`, made by `NewClient`, one per client and so one per
+account; a client built without it abandons nothing), which owns it from then on and records its path,
+side and start; when the stuck call returns, the goroutine finishes its
+file and leaves the record, and one still in it when the process exits
+ends with the process. The record is bounded (`maxAbandonedLocalCalls`,
+8); when it is full the transfer waits for its call as before, so a mount
+that hangs every call cannot grow the process without limit.
+`AbandonedLocalCallCount` reports how many are in it. Only a stall
+abandons a call, never a plain cancellation: a shutdown would otherwise
+disown the partial of every download that was writing, and a call that
+hangs during a shutdown is abandoned when the stall timer, which keeps
+running, fires. The buffer a call reads into or writes from is the
+goroutine's, never the caller's, so an abandoned read cannot fill a buffer
+the transport has handed to the next attempt
+(`TestUploadChunk_AStuckLocalReadIsAbandonedWhileItIsStillBlocked`,
+`TestUploadChunk_AFullRecordOfAbandonedCallsMakesTheTransferWait`,
+`TestLocalIO_AnAbandonedReadNeverFillsTheCallersBuffer`). An upload's
+abandoned read is safe as it stands: the next attempt reads the file
+afresh, and the file stays its owner's to close (an `*os.File` closed
+while a read is stuck in it releases its descriptor when the read
+returns). A download's write is abandoned only when its writer is a
+`graph.AbandonableWriter`, which `driveops`'s partial file is: it is told
+when its write is abandoned (`Abandon`) and, on the goroutine, when the
+write has returned (`AbandonedWriteReturned`), and it disowns its partial
+in between, so the retry never writes beside the stuck write
+([drive-transfers.md](drive-transfers.md));
+any other writer is written directly and a hung write holds the transfer
+(`TestDownload_AStuckLocalWriteIsAbandonedAndItsFileFinishedWhenItReturns`,
+`TestDownload_AStallInTheLocalWriteSaysTheLocalSideStalled`). A stall is
 reported as `ErrTransferStalled` alone, never with `context.Canceled` in the
 chain (`doPreAuth` and `RetryTransport` return `context.Cause`), because sync
 reads a cancellation as a shutdown and would drop the action; sync

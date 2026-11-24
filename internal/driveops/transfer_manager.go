@@ -53,6 +53,15 @@ type TransferManager struct {
 	// the mode of newly created downloads.
 	umaskOnce gosync.Once
 	umask     os.FileMode
+
+	// partialsMu guards heldPartials and singleUsePartials. heldPartials
+	// names the partial files a download write abandoned on a hung disk
+	// still holds (partialSink): no download writes, resumes or truncates
+	// one until that write has returned. singleUsePartials numbers the
+	// partials of another name the next attempts write instead.
+	partialsMu        gosync.Mutex
+	heldPartials      map[string]struct{}
+	singleUsePartials uint64
 }
 
 // Option configures a TransferManager. Pass to NewTransferManager.

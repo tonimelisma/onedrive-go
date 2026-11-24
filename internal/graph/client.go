@@ -136,6 +136,11 @@ type Client struct {
 	// (dispatchRequestWith). Zero means defaultStallTimeout. Tests shorten it.
 	stallTimeout time.Duration
 
+	// abandonedLocal is the record this client's transfers hand a stuck
+	// local file call to (abandonedLocalRecord); NewClient makes it, and
+	// tests give a client their own so the counts are theirs.
+	abandonedLocal *abandonedLocalCalls
+
 	// clampWarned is set once a modification time before 1900 has been
 	// clamped, so the warning is given once per client.
 	clampWarned atomic.Bool

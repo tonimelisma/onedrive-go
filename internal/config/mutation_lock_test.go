@@ -269,14 +269,13 @@ func TestUpdateCatalog_CrossProcessUpdatesAreNotLost(t *testing.T) {
 	assert.Contains(t, final.Accounts, waiterAccount.CanonicalID, "the waiting update was lost")
 }
 
-// A filesystem that cannot lock at all (flock answers ENOLCK, EOPNOTSUPP or
-// ENOSYS on some NFS and FUSE mounts) refuses the change at once, naming the
-// directory and the filesystem's limit: the config and the catalog are never
-// written without the lock, so no unlocked write can lose another process's
-// change. Neither file is touched and nothing waits.
+// A filesystem that cannot flock (flock answers ENOLCK, EOPNOTSUPP or ENOSYS
+// on some NFS and FUSE mounts) still has its config and catalog changed, under
+// the lock file instead: the change is made while the file exists, and the
+// file is gone afterwards. Nothing is written unlocked.
 //
 // Validates: R-4.4.4
-func TestWithConfigMutationLock_AFilesystemWithoutLocksRefusesTheChange(t *testing.T) {
+func TestWithConfigMutationLock_AFilesystemWithoutFlockChangesUnderTheLockFile(t *testing.T) {
 	t.Parallel()
 
 	for _, errno := range []syscall.Errno{syscall.ENOLCK, syscall.EOPNOTSUPP, syscall.ENOSYS} {
@@ -285,41 +284,142 @@ func TestWithConfigMutationLock_AFilesystemWithoutLocksRefusesTheChange(t *testi
 
 			dir := t.TempDir()
 			cfgPath := filepath.Join(dir, "config.toml")
-			const before = "# kept as it was\n"
-			require.NoError(t, os.WriteFile(cfgPath, []byte(before), 0o600))
-
-			attempts := 0
-			locker := defaultConfigLocker()
-			locker.flock = func(int, int) error {
-				attempts++
-				return errno
-			}
-			locker.sleep = func(context.Context, time.Duration) error {
-				assert.Fail(t, "a filesystem that cannot lock is not waited for")
-				return nil
-			}
-
+			lockPath := filepath.Join(dir, configLockFileName)
 			cid := driveid.MustCanonicalID("personal:nolock@example.com")
-			err := locker.setDriveKey(t.Context(), cfgPath, cid, "paused", "true")
-			require.ErrorIs(t, err, ErrConfigLockUnsupported)
-			require.ErrorIs(t, err, errno, "flock's answer is kept")
-			require.NotErrorIs(t, err, ErrConfigLocked)
-			assert.Contains(t, err.Error(), dir)
-			assert.Contains(t, err.Error(), "does not support file locks")
-			assert.Contains(t, err.Error(), "local filesystem")
-			assert.Equal(t, 1, attempts)
-			written, readErr := os.ReadFile(cfgPath) //nolint:gosec // the test's own temp file
-			require.NoError(t, readErr)
-			assert.Equal(t, before, string(written), "the config is not written without the lock")
+			// Seeded before the fake flock: the temp filesystem can flock.
+			require.NoError(t, AppendDriveSection(t.Context(), cfgPath, cid, "~/OneDrive"))
 
-			catalogRan := false
-			err = locker.updateCatalog(t.Context(), dir, func(*Catalog) error {
-				catalogRan = true
+			locker := defaultConfigLocker()
+			locker.flock = func(int, int) error { return errno }
+			locker.lockFile = testLockFileIdentity("this-host", nil)
+
+			require.NoError(t, locker.setDriveKey(t.Context(), cfgPath, cid, "paused", "true"))
+			written, err := os.ReadFile(cfgPath) //nolint:gosec // the test's own temp file
+			require.NoError(t, err)
+			assert.Contains(t, string(written), "paused", "the change is made under the lock file")
+			assert.NoFileExists(t, lockPath, "the lock file is removed when the change is done")
+
+			heldDuring := false
+			require.NoError(t, locker.updateCatalog(t.Context(), dir, func(*Catalog) error {
+				_, statErr := os.Stat(lockPath)
+				heldDuring = statErr == nil
 				return nil
-			})
-			require.ErrorIs(t, err, ErrConfigLockUnsupported)
-			assert.False(t, catalogRan, "the catalog is not changed without the lock")
-			assert.NoFileExists(t, CatalogPathForDataDir(dir))
+			}))
+			assert.True(t, heldDuring, "the catalog change runs while the lock file exists")
+			assert.NoFileExists(t, lockPath)
 		})
 	}
+}
+
+// testLockFileIdentity is a lock-file identity of process 4242 on host, for
+// which running reports the pids in alive as running.
+func testLockFileIdentity(host string, alive map[int]bool) lockFileIdentity {
+	return lockFileIdentity{
+		pid:      4242,
+		hostname: func() (string, error) { return host, nil },
+		running:  func(pid int) bool { return alive[pid] },
+		now:      func() time.Time { return time.Date(2026, 11, 24, 8, 0, 0, 0, time.UTC) },
+	}
+}
+
+// heldLockFileLocker is a locker on a filesystem without flock whose wait
+// ends at once, for the tests of a lock file another process holds.
+func heldLockFileLocker(host string, alive map[int]bool) configLocker {
+	locker := defaultConfigLocker()
+	locker.flock = func(int, int) error { return syscall.ENOLCK }
+	locker.lockFile = testLockFileIdentity(host, alive)
+	locker.timeout = configLockPollInterval
+	locker.sleep = func(context.Context, time.Duration) error { return nil }
+
+	return locker
+}
+
+// A lock file another process holds is waited for, never taken over, not
+// even when its holder no longer runs: the wait ends with ErrConfigLocked
+// naming the holder, and, for a holder of this host that has stopped, the
+// file to remove. The change is not made.
+//
+// Validates: R-4.4.4
+func TestWithConfigMutationLock_AHeldLockFileIsWaitedForAndNamesItsHolder(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		record    string
+		host      string
+		alive     map[int]bool
+		wantIn    []string
+		wantNotIn []string
+	}{
+		"a running process of this host": {
+			record: `{"pid":17,"host":"this-host","since":"2026-11-24T07:59:00Z"}`, host: "this-host",
+			alive: map[int]bool{17: true}, wantIn: []string{"process 17 on this-host", "let that onedrive-go command finish"},
+			wantNotIn: []string{"no longer runs"},
+		},
+		"a stopped process of this host": {
+			record: `{"pid":17,"host":"this-host","since":"2026-11-24T07:59:00Z"}`, host: "this-host",
+			alive: map[int]bool{}, wantIn: []string{"process 17 on this-host", "no longer runs", "remove"},
+		},
+		"a process of another host": {
+			record: `{"pid":17,"host":"other-host","since":"2026-11-24T07:59:00Z"}`, host: "this-host",
+			alive: map[int]bool{}, wantIn: []string{"process 17 on other-host", "let that onedrive-go command finish"},
+			wantNotIn: []string{"no longer runs"},
+		},
+		"a file that names no holder": {
+			record: `not a record`, host: "this-host", alive: map[int]bool{},
+			wantIn: []string{"names no holder", "if no onedrive-go command is running, remove it"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.toml")
+			const before = "# kept as it was\n"
+			require.NoError(t, os.WriteFile(cfgPath, []byte(before), 0o600))
+			lockPath := filepath.Join(dir, configLockFileName)
+			require.NoError(t, os.WriteFile(lockPath, []byte(tc.record), 0o600))
+
+			locker := heldLockFileLocker(tc.host, tc.alive)
+			cid := driveid.MustCanonicalID("personal:held@example.com")
+			err := locker.setDriveKey(t.Context(), cfgPath, cid, "paused", "true")
+			require.ErrorIs(t, err, ErrConfigLocked)
+			for _, want := range tc.wantIn {
+				assert.Contains(t, err.Error(), want)
+			}
+			for _, notWant := range tc.wantNotIn {
+				assert.NotContains(t, err.Error(), notWant)
+			}
+			assert.Contains(t, err.Error(), lockPath, "the error names the lock file")
+
+			written, readErr := os.ReadFile(cfgPath) //nolint:gosec // the test's own temp file
+			require.NoError(t, readErr)
+			assert.Equal(t, before, string(written), "the change is not made")
+			record, readErr := os.ReadFile(lockPath) //nolint:gosec // the test's own temp file
+			require.NoError(t, readErr)
+			assert.Equal(t, tc.record, string(record), "the holder's lock file is left as it was")
+		})
+	}
+}
+
+// A lock file this process took records its pid, host and the time, and is
+// private to the user.
+//
+// Validates: R-4.4.4
+func TestWithConfigMutationLock_ALockFileRecordsItsHolder(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, configLockFileName)
+	locker := heldLockFileLocker("this-host", nil)
+
+	require.NoError(t, locker.withLockFile(t.Context(), dir, func() error {
+		info, err := os.Stat(lockPath)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(configLockFilePermissions), info.Mode().Perm())
+		data, err := os.ReadFile(lockPath) //nolint:gosec // the test's own temp file
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"pid":4242,"host":"this-host","since":"2026-11-24T08:00:00Z"}`, string(data))
+		return nil
+	}))
+	assert.NoFileExists(t, lockPath)
 }

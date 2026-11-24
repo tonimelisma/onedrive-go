@@ -16,7 +16,7 @@ In flight: W57 has branch `test/crash-model-replacing-move` at `c6e273a6` (built
 - [x] W20 — The account identity check never fails or stalls a command — in flight (worktree); ship when a slot is free. — built in #959
 - [x] W34 — `status --perf` counts a committed transaction once — in flight (worktree). — built in #959
 - [x] W6 — Control client: one probe, honest errors, one runtime per sync — CLI and control-plane; not refactor. — built in #975; refusing a one-shot sync beside an owner that does not answer, and the token-cache flush after a rename, built in #979
-- [x] W13 — Config writers: one write per expired pause, a context, portable locks — after W8 (in R1). — built in #975; on a filesystem without flock a config change is refused (never written unlocked) in #979; a lock-file fallback for such homes is not built
+- [x] W13 — Config writers: one write per expired pause, a context, portable locks — after W8 (in R1). — built in #975; on a filesystem without flock a config change is refused (never written unlocked) in #979; a lock-file fallback for such homes is not built; the lock-file fallback (a lock file where flock is refused, never taken over) built in #1011
 - [x] W15 — A live test loses a create's answer on the wire — product handling of a lost answer; not refactor. — built in #979 as a nightly e2e_full test (a TLS proxy drops one create's answer); proved only by the nightly live run
 - [x] W22 — An account email change reaches everything that names the old email — cross-package feature. — partly built in #975; a shortcut child's store, trash folders and upload sessions moving with their parent, a running watch hearing of the change, and a second config file caught up through former emails built in #979
 - [x] W25 — The status model has one field per fact — CLI status; not refactor. — built in #975
@@ -27,14 +27,14 @@ In flight: W57 has branch `test/crash-model-replacing-move` at `c6e273a6` (built
 - [x] W53 — A folder moved into its own former child converges — move planner; after F4. — built in #975
 - [x] W60 — The engine treats every failure to reach OneDrive as one family — classifier change; after the split. — built in #975
 - [x] W63 — A watch user can confirm held deletes — needs a DoR choice; watch loop is rebuilt in E5. — built in #975 (a confirmation names the held set; a stale one is refused)
-- [x] W64 — A local read that times out is retried as busy — classifier; after the split. — built in #975; the rider (a stall of the local side) built in #979: the watchdog names the side, but a blocked file call still holds its worker
-- [x] W68 — A file moved out of a subfolder into the folder re-made at the old path converges — move planner; after F4. — built in #975 (the vacatingFolder rider shapes not checked)
+- [x] W64 — A local read that times out is retried as busy — classifier; after the split. — built in #975; the rider (a stall of the local side) built in #979: the watchdog names the side, but a blocked file call still holds its worker; a hung local file call frees its worker (abandoned to the client's bounded record) in #1011
+- [x] W68 — A file moved out of a subfolder into the folder re-made at the old path converges — move planner; after F4. — built in #975 (the vacatingFolder rider shapes not checked); the vacatingFolder rider shapes converge in one sync in #1011
 - [x] W73 — A name the path route does not resolve is found through its parent's listing in every command — uses G2's `namekey.Find`; after R2. — built in #975; the rider (the CLI fake graph's root ID) built in #979
 - [x] W80 — A folder moved into a new folder at its own path converges — move planner; after F4. — built in #975
 - [x] W81 — A publication's item type has one rule — sync code that moves in the split. — built in #975
 - [x] W91 — The sync summary counts a deleted folder as a folder, not as a file — summary text and counts. — built in #975
 - [x] W92 — A folder made below a path whose old holder has not left waits for it — planner dependencies; after F4. — built in #979 for the OneDrive side (a create waits below a folder another synced item holds); the local side keeps its designed carry
-- [x] W95 — A change list that leads back is refused and recovered wherever it is read — observer code; after G7 and the split. — built in #975 (no new sentinel, per the earlier decision; a shared folder's looping change list still waits for the periodic full refresh)
+- [x] W95 — A change list that leads back is refused and recovered wherever it is read — observer code; after G7 and the split. — built in #975 (no new sentinel, per the earlier decision; a shared folder's looping change list still waits for the periodic full refresh); a shared folder's looping change list is re-enumerated in the same pass in #1011
 - [x] W96 — Every store wait after a run's context ended goes through one helper and the stop's deadline — conflicts with E5's watch-loop edits; after R8. — partly built in #975; a completion at the cancel and the workers' writes share the stop's deadline in #979
 - [x] W100 — A refused stderr line of the sync console and of main's last lines is recorded — CLI. — built in #975
 - [x] W105 — Each account at a shared address has its own view, status row and selector — CLI and config feature. — built in #975; status, drive search, shared and drive add take an account ID for --account in #979
@@ -70,7 +70,7 @@ In flight: W57 has branch `test/crash-model-replacing-move` at `c6e273a6` (built
 
 ## Wording and lint
 - [x] W26 — Human units are rendered by one package — wording. — built in #977
-- [x] W27 — No product code that only its tests call — partly done by G7's riders; the rest after the split (S6 un-exports). — built in #977 (test-only helpers moved into test files; the cross-package test seams stay, since a package cannot import another's test files)
+- [x] W27 — No product code that only its tests call — partly done by G7's riders; the rest after the split (S6 un-exports). — built in #977 (test-only helpers moved into test files; the cross-package test seams stay, since a package cannot import another's test files); the remaining seams are held to tests by lint (forbidigo on ForTest, depguard on the test-support packages) in #1011
 - [x] W28 — An error without a format verb is `errors.New`, held by the linter — lint. — built in #977
 - [x] W29 — Principle labels (P-n) that nothing defines are replaced by requirement IDs, held by a check — wording. — built in #977
 - [x] W97 — The scanner's entries are their own type; `changeEvent` and `changeType` are gone — follows G5-G7 (R3); no behaviour change. — built in #977

@@ -134,3 +134,4 @@ What each merged PR changed, one line per PR, oldest first. `CLAUDE.md` names on
 - #991 (cloud sessions are the one way an increment is built: post-merge merges over REST and restarts the session branch from main, devtool worktree add/bootstrap and .worktreeinclude are gone, --as-user trusts the checkout behind a worktree, CLAUDE.md describes the cloud process as the process)
 - #992 (the cleanup audit judges merged against origin/main, not a local main nothing moves in a cloud session)
 - #993 (post-merge repeats the restarted branch's push when GitHub's deletion of the merged branch races its lease)
+- #1011 (the last parked gaps: config under a lock file where flock is refused, a hung local file call frees its worker, the vacatingFolder move shapes converge, a looping shared-folder change list re-enumerates at once, lint holds test seams to tests; claims wait for GitHub's issue list to show a new claim)

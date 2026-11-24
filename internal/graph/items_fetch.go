@@ -1000,6 +1000,13 @@ type askedPages struct {
 	pageOf map[string]int
 }
 
+// ErrPagingNeverEnds is a paged listing that cannot reach its end: a next
+// link back to a page it already asked for, or a chain of ever new links past
+// the page cap. Following it further would only repeat pages, so a caller
+// that holds a saved position reads it as a position that cannot be
+// continued and lists again from the start.
+var ErrPagingNeverEnds = errors.New("graph: paged listing never ends")
+
 func newAskedPages(listing string, maxPages int) askedPages {
 	return askedPages{listing: listing, maxPages: maxPages, pageOf: make(map[string]int)}
 }
@@ -1009,11 +1016,11 @@ func newAskedPages(listing string, maxPages int) askedPages {
 func (p *askedPages) ask(apiPath string) (int, error) {
 	page := len(p.pageOf) + 1
 	if page > p.maxPages {
-		return 0, fmt.Errorf("graph: %s exceeded %d pages", p.listing, p.maxPages)
+		return 0, fmt.Errorf("graph: %s exceeded %d pages: %w", p.listing, p.maxPages, ErrPagingNeverEnds)
 	}
 
 	if earlier, asked := p.pageOf[apiPath]; asked {
-		return 0, fmt.Errorf("graph: %s looped back from page %d to page %d", p.listing, page-1, earlier)
+		return 0, fmt.Errorf("graph: %s looped back from page %d to page %d: %w", p.listing, page-1, earlier, ErrPagingNeverEnds)
 	}
 
 	p.pageOf[apiPath] = page

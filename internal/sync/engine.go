@@ -509,11 +509,11 @@ func (e *Engine) normalizePersistedAccountAuthRequirement(
 		clearRequirement = config.ClearAccountAuthRequirement
 	}
 	if err := clearRequirement(ctx, e.dataDir, e.accountCanonicalID); err != nil {
-		if !errors.Is(err, config.ErrConfigLocked) && !errors.Is(err, config.ErrConfigLockUnsupported) {
+		if !errors.Is(err, config.ErrConfigLocked) {
 			return fmt.Errorf("sync: clearing catalog auth requirement: %w", err)
 		}
-		// Another onedrive-go process holds the catalog, or its filesystem
-		// cannot lock at all. Either way nothing was written: the clear is
+		// Another onedrive-go process holds the catalog, by flock or, where
+		// the filesystem cannot flock, by its lock file. Nothing was written: the clear is
 		// a best-effort mark, never made without the lock. The proof has
 		// passed, so the sync starts; the stored requirement stands until a
 		// start that can take the lock clears it.

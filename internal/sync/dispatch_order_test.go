@@ -165,6 +165,7 @@ func parentTestName(name string) string {
 func runOnceScenarios() []func(*testing.T) {
 	return []func(*testing.T){
 		TestRunOnce_AMountRootPositionThatIsNotALinkIsRecoveredByAFullEnumeration,
+		TestRunOnce_AMountRootPositionWhoseChangeListLeadsBackIsRecoveredByAFullEnumeration,
 		TestRunOnce_ASavedPositionThatIsNotALinkIsRecoveredByAFullEnumeration,
 		TestRunOnce_DryRunLeavesSpellingRenameLeftover,
 		TestRunOnce_FileMovedOutOfASubfolderIntoTheRemadeFolderWithTheSubfolderRemovedConverges,
@@ -413,6 +414,9 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_AFileMadeHereUnderTheNameOneDriveGaveAMovedFileIsKeptAsAConflictCopy,
 		TestRunOnce_FileMovedOnOneDriveOutOfAFolderMadeHereConverges,
 		TestRunOnce_FileMovedOutOfARenamedSubfolderIntoTheRecreatedFolderConverges,
+		TestRunOnce_FileMovedOutOfARenamedSubfolderOntoTheMovedFoldersPathConverges,
+		TestRunOnce_FileMovedOutOfARenamedSubfolderIntoAFolderMovedOntoTheMovedFoldersPathConverges,
+		TestRunOnce_FileMovedOutOfASubfolderThatLeftTheMovedFolderIntoTheRemadeFolderConverges,
 		TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges,
 		TestRunOnce_FileMovedBackOutOfAFolderMovedIntoAnotherFoldersPathConverges,
 		TestRunOnce_FolderMovedOnOneDriveIntoAFolderMadeWhereAFileLeftConverges,

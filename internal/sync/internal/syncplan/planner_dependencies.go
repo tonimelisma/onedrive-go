@@ -865,7 +865,8 @@ func belowPathKey(k, root namekey.PathKey) bool {
 // path. A local move is not rebased (local_state is observation-owned), so
 // a local move's source below another local move's destination is in
 // what holds that destination now, which leaves it, children first, before
-// move can land there: here p moved into x while OneDrive moved x into p
+// move can land there, whether the move lands outside it or inside it again:
+// here p moved into x while OneDrive moved x into p
 // and z onto x, so p leaves x first, then x moves into p, then z onto x.
 // Ordered after move, a waited for it while move waited for the path a's
 // folder leaves, a cycle dropped on every pass.
@@ -881,10 +882,18 @@ func underMoveDestination(a, move *syncdomain.Action) bool {
 		// (moveDisplaceDeleteFirst), whose delete waits for them.
 		return false
 	}
+	bothLocal := a.Type == syncdomain.ActionLocalMove && move.Type == syncdomain.ActionLocalMove
+	if bothLocal && strings.HasPrefix(a.OldPath, move.Path+"/") {
+		// It moves inside what holds the destination now, wherever it
+		// lands there: a rename of docs/sub to docs/sub2 before docs moves
+		// to archive, while photos moves onto docs. Ordered after photos's
+		// move, it waited for it, photos's for docs's, and docs's for it.
+		return false
+	}
 	if strings.HasPrefix(a.Path, move.Path+"/") {
 		return true
 	}
-	if a.Type == syncdomain.ActionLocalMove && move.Type == syncdomain.ActionLocalMove {
+	if bothLocal {
 		return false
 	}
 

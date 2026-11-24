@@ -120,6 +120,7 @@ Project-specific consequences:
 - No magic numbers — use named constants near their usage
 - Always use named fields in struct literals — positional initialization breaks silently when fields are added
 - Unexported by default. Export only what other packages need. The exported API is a contract.
+- A hook another package's tests need lives in a `*_test_seams.go` file and is named `...ForTest`; lint refuses its use outside tests, and refuses importing a test-support package (`syncfixture`, `syncstoretest`, `synctest`) from product code.
 
 ### Naming
 
