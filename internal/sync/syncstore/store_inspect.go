@@ -143,7 +143,7 @@ func ReadDriveStatusSnapshotWithFilter(
 	logger *slog.Logger,
 	filter syncdomain.ContentFilterConfig,
 ) (DriveStatusSnapshot, error) {
-	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (DriveStatusSnapshot, error) {
+	return readWithInspector(ctx, dbPath, logger, func(inspector *storeInspector) (DriveStatusSnapshot, error) {
 		return inspector.ReadDriveStatusSnapshotWithFilter(ctx, filter)
 	})
 }
@@ -203,7 +203,14 @@ func (s *SyncStore) ReadPathTruthStatus(
 	return inspector.ReadPathTruthStatus(ctx, paths)
 }
 
+// readWithInspector runs read over a read-only inspector of the store at
+// dbPath. A store another version wrote is refused first, with the typed
+// reason naming which side of the current generation it is on: read assumes
+// the current schema, and on another one it would fail on a column it does
+// not know, or read a meaning the column no longer has. The inspector never
+// rebuilds an older store; the engine does that when it starts (R-2.5.9).
 func readWithInspector[T any](
+	ctx context.Context,
 	dbPath string,
 	logger *slog.Logger,
 	read func(*storeInspector) (T, error),
@@ -219,7 +226,34 @@ func readWithInspector[T any](
 		}
 	}()
 
+	if err := refuseInspectedStoreFromAnotherVersion(ctx, inspector.db); err != nil {
+		return result, err
+	}
+
 	return read(inspector)
+}
+
+// refuseInspectedStoreFromAnotherVersion is the inspector's half of the
+// generation rule: a store whose marker names another generation is a typed
+// StateStoreIncompatibleError (older_version or newer_version). A store with
+// no readable marker is left to the read, which reports what it finds.
+func refuseInspectedStoreFromAnotherVersion(ctx context.Context, db *sql.DB) error {
+	userTables, err := listUserTables(ctx, db)
+	if err != nil {
+		return fmt.Errorf("syncstore: inspect schema tables: %w", err)
+	}
+
+	generationErr := refuseOtherStoreGeneration(ctx, db, userTables)
+	var otherGeneration *storeGenerationError
+	if !errors.As(generationErr, &otherGeneration) {
+		return generationErr
+	}
+	reason := StateStoreIncompatibleReasonNewerVersion
+	if otherGeneration.IsOlder() {
+		reason = StateStoreIncompatibleReasonOlderVersion
+	}
+
+	return &StateStoreIncompatibleError{Reason: reason, Cause: generationErr}
 }
 
 // finalizeInspectorRead joins the inspector's close error to the read's

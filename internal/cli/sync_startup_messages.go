@@ -56,7 +56,8 @@ func formatStateStoreIncompatibleMessage(identity *multisync.MountIdentity, err 
 		// version's state away. The newer binary comes first (R-2.5.9).
 		return fmt.Sprintf(
 			"%s. To continue, run the newer onedrive-go that wrote it; to keep syncing other drives "+
-				"meanwhile, pause this one ('%s'); or, to start this drive's state over with this version, run '%s'.",
+				"meanwhile, pause this one ('%s'); or, to start this drive's sync state over with this version, "+
+				"run '%s'.",
 			incompatibleErr.Error(),
 			syncPauseDriveCommand(identity.CanonicalID),
 			syncStateResetCommand(identity.CanonicalID),
@@ -64,8 +65,8 @@ func formatStateStoreIncompatibleMessage(identity *multisync.MountIdentity, err 
 	}
 	if identity.IsStandalone() {
 		return fmt.Sprintf(
-			"%s. To continue, either pause or stop this mount first ('%s'), "+
-				"rerun sync with --drive selecting only other configured parent drives, or fix the DB with '%s'.",
+			"%s. To continue, pause this drive ('%s'), rerun sync with --drive naming only the other drives, "+
+				"or start this drive's sync state over with '%s'.",
 			incompatibleErr.Error(),
 			syncPauseDriveCommand(identity.CanonicalID),
 			syncStateResetCommand(identity.CanonicalID),
@@ -142,19 +143,21 @@ func formatWatchStartupError(err error) error {
 
 // startupFailureError keeps the drives' causes reachable for the exit status
 // (R-6.6.31) only when every failed drive failed for the same reason that a
-// restart cannot fix: all need sign-in, or all have invalid config. A mixed
+// restart cannot fix: all need sign-in, all have invalid config, or all have
+// a saved sync state that needs the user. A mixed
 // set exits 1, because restarting may still bring the other drives up.
 func startupFailureError(message string, failures []multisync.MountStartupResult) error {
 	causes := make([]error, 0, len(failures))
-	allSignIn, allConfig := len(failures) > 0, len(failures) > 0
+	allSignIn, allConfig, allStateStore := len(failures) > 0, len(failures) > 0, len(failures) > 0
 	for i := range failures {
 		cause := failures[i].Err
 		causes = append(causes, cause)
 		allSignIn = allSignIn && cause != nil && isSignInRequired(cause)
 		allConfig = allConfig && cause != nil && errors.Is(cause, config.ErrInvalidConfig)
+		allStateStore = allStateStore && cause != nil && syncstore.IsStateStoreIncompatible(cause)
 	}
 
-	if allSignIn || allConfig {
+	if allSignIn || allConfig || allStateStore {
 		return newPresentedError(message, errors.Join(causes...))
 	}
 

@@ -2,6 +2,7 @@ package syncstore
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -48,4 +49,53 @@ func TestOpenEngineSyncStore_RebuildThatCannotDeleteKeepsTheOlderStore(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, currentSyncStoreGeneration, metadata.SchemaGeneration)
 	require.NoError(t, store.Close(t.Context()))
+}
+
+// The read-only inspector names a store another version wrote instead of
+// failing on a column it does not know, and changes nothing: the engine
+// rebuilds an older store, and a newer one is the newer version's to read.
+//
+// Validates: R-2.5.5, R-2.5.9
+func TestReadDriveStatusSnapshot_NamesAStoreAnotherVersionWrote(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		generation int
+		want       stateStoreIncompatibleReason
+	}{
+		{name: "older", generation: currentSyncStoreGeneration - 1, want: StateStoreIncompatibleReasonOlderVersion},
+		{name: "newer", generation: currentSyncStoreGeneration + 1, want: StateStoreIncompatibleReasonNewerVersion},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dbPath := filepath.Join(t.TempDir(), "state.db")
+			writeStoreAtGeneration(t, dbPath, tc.generation)
+			before, err := os.ReadFile(dbPath) //nolint:gosec // test-owned temp path
+			require.NoError(t, err)
+
+			_, err = ReadDriveStatusSnapshot(t.Context(), dbPath, syncfixture.NewTestLogger(t))
+			var refusal *StateStoreIncompatibleError
+			require.ErrorAs(t, err, &refusal)
+			assert.Equal(t, tc.want, refusal.Reason)
+
+			after, err := os.ReadFile(dbPath) //nolint:gosec // test-owned temp path
+			require.NoError(t, err)
+			assert.Equal(t, before, after, "an inspector never writes")
+		})
+	}
+}
+
+// The current store reads as before.
+//
+// Validates: R-2.5.5
+func TestReadDriveStatusSnapshot_CurrentGenerationReads(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	writeStoreAtGeneration(t, dbPath, currentSyncStoreGeneration)
+
+	_, err := ReadDriveStatusSnapshot(t.Context(), dbPath, syncfixture.NewTestLogger(t))
+	require.NoError(t, err)
 }

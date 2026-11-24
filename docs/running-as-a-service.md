@@ -44,7 +44,7 @@ ExecReload=/bin/kill -HUP $MAINPID
 TimeoutStartSec=5min
 Restart=on-failure
 RestartSec=30s
-RestartPreventExitStatus=77 78
+RestartPreventExitStatus=65 77 78
 WatchdogSec=2min
 ```
 
@@ -57,9 +57,12 @@ WatchdogSec=2min
   immediately.
 - **`TimeoutStartSec=5min`**: startup checks each drive with OneDrive before
   reporting ready, which can take a while on a slow network.
-- **`RestartPreventExitStatus=77 78`**: exit 77 means sign-in is required and
-  78 means the configuration is invalid. Restarting cannot fix either, so
-  systemd stops trying. Fix the cause (`onedrive-go login`, or edit
+- **`RestartPreventExitStatus=65 77 78`**: exit 65 means a drive's saved sync
+  state needs you (a newer onedrive-go wrote it, or it is damaged; state an
+  older version wrote is rebuilt automatically), 77 means sign-in is required
+  and 78 means the configuration is invalid. Restarting cannot fix any of
+  them, so systemd stops trying. Fix the cause (run the newer onedrive-go or
+  `onedrive-go drive reset-sync-state`, `onedrive-go login`, or edit
   `config.toml`), then `systemctl --user restart onedrive-go`.
 - **`WatchdogSec=2min`**: onedrive-go sends keepalives at half this interval;
   if it hangs, systemd restarts it.

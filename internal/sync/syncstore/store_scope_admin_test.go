@@ -464,7 +464,7 @@ func readPathTruthStatus(
 	logger *slog.Logger,
 	paths []string,
 ) (map[string]syncdomain.PathTruthStatus, error) {
-	return readWithInspector(dbPath, logger, func(inspector *storeInspector) (map[string]syncdomain.PathTruthStatus, error) {
+	return readWithInspector(ctx, dbPath, logger, func(inspector *storeInspector) (map[string]syncdomain.PathTruthStatus, error) {
 		return inspector.ReadPathTruthStatus(ctx, paths)
 	})
 }

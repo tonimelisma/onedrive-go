@@ -140,8 +140,9 @@ failure classes, scope keys, HTTP status); the file and `-v` keep them.
   and no timestamps, so `journalctl -p warning` works.
 - Exit codes distinguish "do not restart" (bad config, sign-in required) from
   transient failures, so units can use `RestartPreventExitStatus=`.
-  onedrive-go uses the sysexits values: 77 (EX_NOPERM) for sign-in required,
-  78 (EX_CONFIG) for invalid config, 1 for everything else (R-6.6.31).
+  onedrive-go uses the sysexits values: 65 (EX_DATAERR) for saved sync state
+  that needs the user, 77 (EX_NOPERM) for sign-in required, 78 (EX_CONFIG)
+  for invalid config, 1 for everything else (R-6.6.31).
 - Default log location, when one is used: `$XDG_STATE_HOME/onedrive-go/`
   (`~/.local/state/onedrive-go/`).
 

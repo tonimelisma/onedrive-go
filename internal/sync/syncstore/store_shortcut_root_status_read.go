@@ -22,7 +22,7 @@ func ReadShortcutRootStatusSnapshot(
 	parentSyncRoot string,
 	logger *slog.Logger,
 ) ([]syncshortcut.ShortcutRootStatusView, error) {
-	return readWithInspector(dbPath, logger, func(inspector *storeInspector) ([]syncshortcut.ShortcutRootStatusView, error) {
+	return readWithInspector(ctx, dbPath, logger, func(inspector *storeInspector) ([]syncshortcut.ShortcutRootStatusView, error) {
 		return inspector.ReadShortcutRootStatusSnapshot(ctx, namespaceID, parentSyncRoot)
 	})
 }

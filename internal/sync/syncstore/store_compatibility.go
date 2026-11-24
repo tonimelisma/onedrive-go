@@ -29,7 +29,10 @@ const (
 	StateStoreIncompatibleReasonOpenFailed         stateStoreIncompatibleReason = "open_failed"
 	StateStoreIncompatibleReasonIncompatibleSchema stateStoreIncompatibleReason = "incompatible_schema"
 	StateStoreIncompatibleReasonNewerVersion       stateStoreIncompatibleReason = "newer_version"
-	StateStoreIncompatibleReasonCorrupt            stateStoreIncompatibleReason = "corrupt"
+	// StateStoreIncompatibleReasonOlderVersion is reported only by the
+	// read-only inspector: engine startup rebuilds such a store instead.
+	StateStoreIncompatibleReasonOlderVersion stateStoreIncompatibleReason = "older_version"
+	StateStoreIncompatibleReasonCorrupt      stateStoreIncompatibleReason = "corrupt"
 )
 
 var errStateStoreIncompatible = errors.New("syncstore: incompatible sync state DB")
@@ -74,6 +77,8 @@ func (r stateStoreIncompatibleReason) Description() string {
 		return "it was written by an incompatible version of onedrive-go"
 	case StateStoreIncompatibleReasonNewerVersion:
 		return "it was written by a newer version of onedrive-go"
+	case StateStoreIncompatibleReasonOlderVersion:
+		return "it was written by an older version of onedrive-go"
 	case StateStoreIncompatibleReasonCorrupt:
 		return "its database file is damaged"
 	default:

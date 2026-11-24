@@ -49,9 +49,11 @@ are inserted, updated, pruned, and validated.
 | `sync` names every finished file, summarizes in human units, prints errors once, and renders console logs as human or journal text. | `TestSyncConsole_NamesEveryCompletedFile`, `TestSyncConsole_FailuresGoToStderrAndRetriesOnlyWhenVerbose`, `TestSyncConsole_SummaryInHumanUnits`, `TestSyncConsole_SingleDriveErrorIsLeftToTheReturnedError`, `TestSyncConsole_WatchLinesAreTimestampedAndAnnounceStartAndStop`, `TestConsoleLogHandler_JournalLinesCarryPriorityAndNoTimestamp`, `TestConsoleLogHandler_DefaultConsoleShowsOutageAndItsRecoveryPlainly`, `TestConsoleLogHandler_JournalFilesNoticeAtNoticePriority`, `TestWithConsoleTimestamps_StampsHumanLinesOnly`, `TestNotice_SitsBetweenInfoAndWarn`, `TestReplaceLevelName_PrintsNoticeInStructuredOutput`, `TestCommandLogger_PerfSummaryInLogFileNotDefaultConsole`, `TestCommandLogger_SyncSchemaFieldsOnlyInLogFileAndVerboseConsole`, `TestMainWithWriters_SkipConfigCommandLogsPerfSummaryToLogFile`, `TestMainWithWriters_BootstrapRecordsFollowTheCommandLogger`, `TestCommandErrorText_NetworkFailureIsOnePlainLine`, `TestUnauthorizedAuthReason_DistinguishesExpiredLogin` |
 | Shortcut child lifecycle status is formatted from sync-owned `ShortcutRootStatusView` values, and the CLI supplies the managed data directory to multisync rather than letting the control plane derive ambient paths. | `TestBuildChildStatusDrive_RendersLifecycleState`, `TestBuildChildStatusDrive_SurfacesProtectedPaths`, `TestRunSyncDaemonWithFactory_CallsOrchestrator` |
 | The first SIGINT/SIGTERM cancels the command context cooperatively, the second forces exit, and the stop function releases the signal goroutine and its registration whether or not a first signal arrived (R-6.3.6). | `TestShutdownContext_FirstSignalCancels`, `TestShutdownContext_SecondSignalForcesExit`, `TestShutdownContext_ParentCancelStopsGoroutine`, `TestShutdownContext_CancelReleasesSignalGoroutine`, `TestShutdownContext_StopAfterFirstSignalReleasesSignalGoroutine`, `TestRunSyncWatch_FirstSignalCancelsWatchRunner`, `TestRunSyncWatch_FirstSignalCancelsDaemonOrchestrator` |
+| A watch that stops with an error writes the reason to the log file at Error and shows it on the terminal once: the record carries `log_file_only` (`logFileOnly`), which the console handler leaves out, because main prints the presented error (R-6.6.35). | `TestRunSyncDaemonWithFactory_StopErrorReachesTheLogFileAndTheTerminalOnce` |
+| `status` names a state database another version wrote instead of calling it unreadable: older is `not_synced` (the next sync rebuilds it), newer is `unavailable` with the newer version and then the reset as its action; neither is a Warn, and status changes nothing (R-2.5.9). | `TestStatusCommand_StoreFromAnOlderVersionSaysTheNextSyncRebuildsIt`, `TestStatusCommand_StoreFromANewerVersionNamesTheNewerVersion` |
 | A recovered panic's `stack` attribute stays in the log file and the `--verbose` console; the default console prints the Error line without it. | `TestCommandLogger_PanicStackOnlyInLogFileAndVerboseConsole` |
-| A one-shot `sync` exits 1 when a drive it ran left a file unsynced, and 0 when none did: a failed action, work kept for retry, an issue that keeps a file from syncing, or a change kept from a removed shared folder because it could not be uploaded (counted with the files still not synced). What `status` lists without a file left unsynced (held deletes, a leftover of an interrupted removal, what a removed shared folder's local copy keeps for another reason) does not fail the run. The text summary, the JSON summary and the exit status take their numbers from one method (`Report.LeftWork`), which counts the run's last pass, each file once, and a drive error's 77 or 78 still wins (R-6.6.28). | `TestRunSyncCommand_FailedActionsExitNonZero`, `TestRunSyncCommand_StillOpenConditionsExitNonZero`, `TestRunSyncCommand_MultiDriveCountsTheDrivesThatLeftWork`, `TestRunSyncCommand_ADriveErrorWinsOverLeftWork`, `TestSyncConsole_StillOpenAddsTheIssuesToTheRunsOwnCounts`, `TestSyncConsole_LeftWorkComesFromTheReportAlone`, `TestSyncConsole_AChangeThatCouldNotBeUploadedFailsTheRun`, `TestReport_LeftWorkCountsAChangeTheReleaseCouldNotUpload`, `TestRunOnce_APauseThatRefusesItsTrialAgainLeavesEachFileOnce`, `TestSyncConsole_SummaryCountsWorkAThrottleLeftForTheNextSync`, `TestRunOnceResultError_ADriveWithAnErrorAndAReportIsADriveError`, `TestRunOnce_ReportCountsUnresolvedWork`, `TestRunOnce_RetryRowsThePlanDoesNotActOnAreGone`, `TestRunOnce_FollowUpWorkTheRunEndsOnIsLeftForTheNextSync` |
-| Command failures map into the shared error classes, and the exit status is chosen from typed errors: 77 sign-in required, 78 invalid config, 2 usage, 130 user stop, 1 everything else, a recovered panic and a one-shot sync that left work included. | `TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`, `TestMainWithWriters_ConfigErrorExits78`, `TestMainWithWriters_SignInRequiredExits77`, `TestFormatWatchStartupError_ExitStatusFollowsSharedCause`, `TestConfigFailuresAreTaggedInvalidConfig` |
+| A one-shot `sync` exits 1 when a drive it ran left a file unsynced, and 0 when none did: a failed action, work kept for retry, an issue that keeps a file from syncing, or a change kept from a removed shared folder because it could not be uploaded (counted with the files still not synced). What `status` lists without a file left unsynced (held deletes, a leftover of an interrupted removal, what a removed shared folder's local copy keeps for another reason) does not fail the run. The text summary, the JSON summary and the exit status take their numbers from one method (`Report.LeftWork`), which counts the run's last pass, each file once, and a drive error's 77, 78 or 65 still wins (R-6.6.28). | `TestRunSyncCommand_FailedActionsExitNonZero`, `TestRunSyncCommand_StillOpenConditionsExitNonZero`, `TestRunSyncCommand_MultiDriveCountsTheDrivesThatLeftWork`, `TestRunSyncCommand_ADriveErrorWinsOverLeftWork`, `TestSyncConsole_StillOpenAddsTheIssuesToTheRunsOwnCounts`, `TestSyncConsole_LeftWorkComesFromTheReportAlone`, `TestSyncConsole_AChangeThatCouldNotBeUploadedFailsTheRun`, `TestReport_LeftWorkCountsAChangeTheReleaseCouldNotUpload`, `TestRunOnce_APauseThatRefusesItsTrialAgainLeavesEachFileOnce`, `TestSyncConsole_SummaryCountsWorkAThrottleLeftForTheNextSync`, `TestRunOnceResultError_ADriveWithAnErrorAndAReportIsADriveError`, `TestRunOnce_ReportCountsUnresolvedWork`, `TestRunOnce_RetryRowsThePlanDoesNotActOnAreGone`, `TestRunOnce_FollowUpWorkTheRunEndsOnIsLeftForTheNextSync` |
+| Command failures map into the shared error classes, and the exit status is chosen from typed errors: 65 saved sync state needs the user, 77 sign-in required, 78 invalid config, 2 usage, 130 user stop, 1 everything else, a recovered panic and a one-shot sync that left work included. | `TestClassifyCommandError`, `TestCommandExitCode`, `TestCommandExitCode_EveryFailureClassHasAStatus`, `TestMainWithWriters_ConfigErrorExits78`, `TestMainWithWriters_SignInRequiredExits77`, `TestFormatWatchStartupError_ExitStatusFollowsSharedCause`, `TestConfigFailuresAreTaggedInvalidConfig` |
 | A panic ends a command with exit 1 and never Go's 2 (R-6.3.10): on the command's goroutine through the last line of defense in `mainWithWriters` (the log file and stderr both get the stack), in the signal handler, the systemd keepalive or the performance logger through the command's context, and in a one-shot helper as its unit's failure; a watch a panic ended sets its failure `STATUS=`. In a folder `get` or `put`, a panic in one file's transfer is that file's failure, and a panic while the command renders an event fails the command (`drive-transfers.md`). | `TestMainWithWriters_PanicExitsOne`, `TestMainWithWriters_APanicOnTheCommandsGoroutineWritesOnePerformanceSummary`, `TestFormatWatchStartupError_KeepsAPanicTheErrorCarries`, `TestWithCommandPanic_AHelpersPanicIsTheCommandsError`, `TestShutdownContext_HandlerPanicCancelsTheCommandWithTheError`, `TestShutdownContext_HandlerPanicStopsTheRequestInFlight`, `TestRunSyncDaemon_WatchdogPanicEndsTheWatchWithItsError`, `TestRunSyncDaemon_WatchdogPanicStopsTheWorkInFlight`, `TestRunSyncDaemon_LoopPanicSetsTheFailedStatusAndExitsOne`, `TestSession_UpdatePanicEndsTheCommandWithThePanic`, `TestSession_UpdatePanicStopsTheRequestInFlight`, `TestSession_CompleteReleasesTheCommandContext`, `TestDiscoverAvailableDrives_APanicIsThatAccountsDegradedNotice`, `TestDownloadTree_APanickingTransferFailsOnlyThatFile`, `TestDownloadTree_APanickingReportFailsTheRun` |
 | `sync --watch` reports READY/STATUS/RELOADING/STOPPING/WATCHDOG to systemd through `internal/sdnotify`, and nothing outside systemd. | `TestRunSyncDaemon_NotifiesSystemdOfLifecycle`, `TestRunSyncDaemon_SignInFailureSetsStatusAndExitCode`, `TestRunSyncDaemon_NoDrivesIsAConfigFailure`, `TestSyncNotifierWatchingStatus`, `TestOpenSyncNotifier_BadSocketWarnsAndContinues`, `TestNotifier_SendsProtocolMessages`, `TestOpen_AbstractSocket`, `TestOpen_WatchdogInterval`, `TestRunWatch_ReportsLifecycleTransitions` |
 | The watchdog keepalive goes out only while the watch loop's heartbeat shows progress; a silence is logged once at Error and the keepalive resumes when the loop beats again (R-6.6.36). | `TestSyncNotifier_KeepaliveOnlyWhileTheLoopMakesProgress` |
@@ -157,12 +159,15 @@ scripts and service managers:
 | 0 | success (also `sync --watch` stopped by a signal: the watch finishes cleanly, including one that idled because every drive was paused), unless stderr refused a write or a refreshed sign-in is still unsaved | `err == nil` and no refused stderr write recorded |
 | 1 | any other failure, transient or not, a one-shot `sync` that finished but left a file unsynced, a `sync` (one-shot or a stopped watch) that did its work but whose stdout refused a line of its report (R-6.6.37), a recovered panic, also one that ended a stop the user asked for or travels with a sign-in or configuration failure, a command that worked but could not write to stderr, and a command (a stopped watch included) that worked but holds a refreshed sign-in it could not save | default (`errSyncLeftWork` carries no sentinel); `panicguard.ErrPanic` is checked first, before usage, sign-in, configuration and cancellation; a refused stderr write turns 0 into 1 (`exitCodeAfterStatusStream`); an unsaved sign-in replaces a nil or canceled result (`withTokenSaveFailure`) |
 | 2 | command-line mistake | `*usageError` |
+| 65 (EX_DATAERR) | a drive's saved sync state needs the user: a newer version wrote it, it is damaged, or nothing says which version wrote it (an older one is rebuilt and never gets here, R-2.5.9) | `syncstore.IsStateStoreIncompatible` |
 | 77 (EX_NOPERM) | sign-in required | `graph.ErrNotLoggedIn` or `graph.ErrUnauthorized` (`ErrLoginExpired` travels with it) |
 | 78 (EX_CONFIG) | invalid configuration | `config.ErrInvalidConfig` |
 | 130 | stopped by the user | shutdown context done and the error is a cancellation |
 
-77 and 78 mean "running again unchanged fails the same way", so a unit can set
-`RestartPreventExitStatus=77 78`. A sign-in the user declined or let expire
+65, 77 and 78 mean "running again unchanged fails the same way", so a unit can
+set `RestartPreventExitStatus=65 77 78` (`contrib/systemd/onedrive-go.service`
+does). `sync --watch` keeps a drive's cause only when every drive that could
+not start failed for the same one of the three (`startupFailureError`). A sign-in the user declined or let expire
 during `login` exits 1: rerunning `login` is the fix.
 
 A refreshed sign-in that could not be written to its file is an error once the
@@ -210,10 +215,10 @@ exported read/parse/validate/resolve entrypoints (`Load*`, `Validate*`,
 token-file I/O are not config errors. "No drives configured" is raised in the
 CLI and carries the same sentinel. Composed messages keep their cause through
 `presentedError`. A watch whose drives all failed to start keeps the drives'
-causes only when every one is sign-in or every one is config
-(`startupFailureError`): with a mix, restarting can still bring a drive up, so
+causes only when every one is sign-in, every one is config or every one is a
+saved sync state that needs the user (`startupFailureError`): with a mix, restarting can still bring a drive up, so
 it exits 1. One-shot `sync` keeps its first drive failure as the cause
-(`runOnceResultError`), so a drive error that exits 77 or 78 wins
+(`runOnceResultError`), so a drive error that exits 77, 78 or 65 wins
 (`TestRunSyncCommand_ADriveErrorWinsOverLeftWork`). With no drive failure,
 a drive that left work (Console Output, `Report.LeftWork`) fails the command with
 `errSyncLeftWork`, exit 1: "sync left N files unsynced; run 'onedrive-go
@@ -240,8 +245,8 @@ A panic never ends the process with Go's exit status 2, which would read as a
 usage error and leave nothing in the log file (R-6.3.10). Every panic is
 recovered at its goroutine's boundary through `panicguard.Recovered`
 (system.md) and travels as an error wrapping `panicguard.ErrPanic`, which
-exits 1, also when it travels with a sign-in or configuration failure that
-alone would exit 77 or 78 (a one-shot pass's drive error joined with a panic
+exits 1, also when it travels with a sign-in, configuration or state-store
+failure that alone would exit 77, 78 or 65 (a one-shot pass's drive error joined with a panic
 in `RunOnceResult.Stuck`, a helper's panic joined with the command's own
 error):
 
@@ -957,6 +962,13 @@ condition keys remain private implementation details.
   `unavailable` with `state_reason` `sync_state_unreadable`, the plain reason
   and action, and `sync_state.read_error`; it is never "up to date" with zero
   files, and never "not synced yet" (see Absent Versus Cannot Check below)
+- a state database another onedrive-go version wrote is named for it, with
+  `sync_state.store_version` `older` or `newer` and no Warn
+  (`markStatusDriveSyncStateProblem`): an older one is `not_synced` with
+  `sync_state_from_older_version`, whose action says the next sync rebuilds
+  it and deletes nothing; a newer one is `unavailable` with
+  `sync_state_from_newer_version`, whose action names the newer version and
+  then the reset (R-2.5.9)
 - an account whose token file cannot be checked carries the auth reason
   `saved_login_unreadable`, whose action points at the data directory, not at
   `login`: signing in again would write to the same unreadable place
@@ -1290,8 +1302,11 @@ only other commands that delete it.
 `status` remains read-only. A missing DB is an empty sync snapshot for that
 drive (it has never synced here: "not synced yet"); a DB that exists but
 cannot be checked or read is `unavailable` with `sync_state_unreadable`, one
-Warn naming the path, and the raw error under `--verbose`/`--debug`. Status
-does not mutate state and does not become a DB health control surface.
+Warn naming the path, and the raw error under `--verbose`/`--debug`. One
+another version wrote is named for that version, never rebuilt by status: the
+store's inspector refuses it with the `older_version` or `newer_version`
+reason before it reads a table (R-2.5.9). Status does not mutate state and
+does not become a DB health control surface.
 
 ### Absent Versus Cannot Check
 

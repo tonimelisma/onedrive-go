@@ -259,8 +259,9 @@ func runSyncDaemonWithFactory(
 		// The terminal gets the message through main; the log file gets it
 		// here, so a watch that refuses to start (its sync folder missing,
 		// another sync owning the socket) leaves a trace where the rest of
-		// its history is (R-6.6.35).
-		logger.Error("sync --watch stopped with an error", slog.Any("error", watchErr))
+		// its history is (R-6.6.35). The console leaves this record out, or
+		// the terminal would print the failure twice.
+		logger.Error(watchStoppedWithErrorMessage, slog.Any("error", watchErr), logFileOnly())
 		// The orchestrator's error already says what failed; a "run watch
 		// sync:" prefix only lengthened the line main prints.
 		return formatWatchStartupError(watchErr)
@@ -272,6 +273,10 @@ func runSyncDaemonWithFactory(
 	// a one-shot run does: the warning said so when it happened.
 	return console.OutputError()
 }
+
+// watchStoppedWithErrorMessage is the log-file record of a watch that ended
+// with an error (R-6.6.35).
+const watchStoppedWithErrorMessage = "sync --watch stopped with an error"
 
 func reloadStandaloneMountsFunc(
 	selectors []string,
