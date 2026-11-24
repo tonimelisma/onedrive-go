@@ -3240,10 +3240,20 @@ func recreatedSourceVacated(composition *moveComposition, key string, node *move
 // pass that moves the folder. A write SQLite reconciles at the folder's path
 // here is not rebased and is not held. It returns the actions it keeps and
 // the creates it removes.
+//
+// A create here at a name an item that stays put here holds under OneDrive's
+// name comparison (namekey.OfPath), not as spelled, is removed too
+// (foldedHeldPaths): a case-insensitive volume, as macOS's is by default,
+// finds that item's entry under the new name, so the create adopted it, and
+// a folder renamed here to x2 while OneDrive made X2 became X2, whose later
+// rename on OneDrive carried x2's files away. A byte-exact volume would make
+// a second entry that OneDrive takes for the first one's name, which syncs
+// no better; the create runs once the item has left the name.
 func dropCreatesOntoComposedItems(
 	logger *slog.Logger, actions []syncdomain.Action, inputs *moveInputs, composition *moveComposition,
 ) (kept, dropped []syncdomain.Action) {
 	heldBy := pathsHeldByUnmovedItems(inputs, composition)
+	heldLocally := foldedHeldPaths(heldBy[moveCoordLocal])
 	vacated := pathsVacatedByPlan(actions)
 	heldRebases := heldFolderRebases(actions, inputs, composition)
 	nodeByKey := make(map[string]*moveNode, len(inputs.nodes))
@@ -3252,6 +3262,7 @@ func dropCreatesOntoComposedItems(
 	}
 
 	heldRows := baselineRowsOfHeldItems(actions, inputs, composition)
+	var ontoHeldNames []syncdomain.Action
 	kept = actions[:0:0]
 	for i := range actions {
 		action := &actions[i]
@@ -3267,6 +3278,13 @@ func dropCreatesOntoComposedItems(
 		if holder, held := heldBy[side][action.Path]; held && holder != action.ItemID {
 			dropped = append(dropped, *action)
 			continue
+		}
+		if side == moveCoordLocal {
+			if holder, held := heldLocally[namekey.OfPath(action.Path)]; held && holder.key != action.ItemID {
+				logCreateOntoAHeldName(logger, action, holder.path)
+				ontoHeldNames = append(ontoHeldNames, *action)
+				continue
+			}
 		}
 		if folder, below := belowAnotherItemsFolder(action, side, heldBy[side], nodeByKey); below && side == moveCoordRemote {
 			logCreateBelowAnotherItemsFolder(logger, action, folder)
@@ -3300,7 +3318,36 @@ func dropCreatesOntoComposedItems(
 		kept = append(kept, *action)
 	}
 
-	return dropCreatesBelowDroppedCreates(kept, dropped)
+	kept, dropped = dropCreatesBelowDroppedCreates(kept, dropped)
+	kept, ontoHeldNames = dropCreatesBelowSpelled(kept, ontoHeldNames)
+
+	return kept, append(dropped, ontoHeldNames...)
+}
+
+// dropCreatesBelowSpelled removes, with the creates already dropped, every
+// create here below one of them as spelled. A create held off a name an item
+// here holds (foldedHeldPaths) leaves its own children no folder, but a
+// create into the holder, spelled as the holder is, has its folder: OneDrive's
+// file in a folder whose move waits is downloaded where the folder sits here,
+// which OneDrive's comparison would take for the held create's name.
+func dropCreatesBelowSpelled(kept, dropped []syncdomain.Action) (stillKept, allDropped []syncdomain.Action) {
+	if len(dropped) == 0 {
+		return kept, dropped
+	}
+
+	stillKept = kept[:0:0]
+	for i := range kept {
+		_, isCreate := createSide(&kept[i])
+		if isCreate && slices.ContainsFunc(dropped, func(held syncdomain.Action) bool {
+			return pathAtOrBelow(kept[i].Path, held.Path) && kept[i].Path != held.Path
+		}) {
+			dropped = append(dropped, kept[i])
+			continue
+		}
+		stillKept = append(stillKept, kept[i])
+	}
+
+	return stillKept, dropped
 }
 
 // movesOntoAHeldItemsRow reports a move of another item onto the baseline
@@ -4003,6 +4050,36 @@ func pathsHeldByUnmovedItems(inputs *moveInputs, composition *moveComposition) m
 	}
 
 	return heldBy
+}
+
+// heldName is a path an item holds and that item's key.
+type heldName struct {
+	key  string
+	path string
+}
+
+// foldedHeldPaths indexes held (pathsHeldByUnmovedItems, one side) by
+// OneDrive's comparison of paths, keeping the path each item holds as
+// spelled.
+func foldedHeldPaths(held map[string]string) map[namekey.PathKey]heldName {
+	folded := make(map[namekey.PathKey]heldName, len(held))
+	for p, key := range held {
+		folded[namekey.OfPath(p)] = heldName{key: key, path: p}
+	}
+
+	return folded
+}
+
+// logCreateOntoAHeldName logs, at Debug, a create here held because an item
+// that stays put here holds its name under OneDrive's name comparison.
+func logCreateOntoAHeldName(logger *slog.Logger, action *syncdomain.Action, holderPath string) {
+	if logger == nil {
+		return
+	}
+	logger.Debug("create waits for an item here to leave its name",
+		slog.String("action", action.Type.String()),
+		slog.String("path", action.Path),
+		slog.String("held_by", holderPath))
 }
 
 // pathsVacatedByPlan reports, per side, the paths an action of the plan frees.

@@ -1636,6 +1636,14 @@ set where the planner leaves ready work:
 - `Dropped`: actions removed until the next pass: creates onto a path a
   composed item still holds or at or below the path of a new folder a
   deferred item moves into at its own path (`dropCreatesOntoComposedItems`),
+  creates here at a name an item that stays put here holds under OneDrive's
+  name comparison rather than as spelled (`foldedHeldPaths`: on a
+  case-insensitive volume, macOS's default, a folder OneDrive made as X2
+  while a folder renamed here to x2 waited was made into x2, and OneDrive's
+  later rename of X2 carried x2's files away and deleted the old folder;
+  a byte-exact volume would hold two names OneDrive takes for one), with the
+  creates below such a create as spelled (`dropCreatesBelowSpelled`: a
+  download into the holder, spelled as the holder is, keeps its folder),
   and every create below a create it drops on the same side, which has no
   folder to land in (a new OneDrive folder in a folder renamed differently on
   both sides, at the name of a new local file: its child's download, rebased

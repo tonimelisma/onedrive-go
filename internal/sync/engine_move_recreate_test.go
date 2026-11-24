@@ -3412,7 +3412,10 @@ func newRecreateScenarioEngine(t *testing.T, remote *moveScenarioRemote) (*testE
 
 	logs := &syncfixture.SyncLockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
-	eng, syncRoot := newTestEngineWithLogger(t, remote.client(t), logger)
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), remote.client(t), t.TempDir(), func(inputs *engineInputs) {
+		inputs.Logger = logger
+		inputs.hooks.interposeSyncTree = registeredScenarioVolume(t)
+	})
 	runScenarioPass(t, eng)
 
 	return eng, syncRoot, logs
