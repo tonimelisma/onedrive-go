@@ -49,7 +49,7 @@ const workflowFixture = `jobs:
   verify:
     steps:
       - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.11.3
           install-only: true
