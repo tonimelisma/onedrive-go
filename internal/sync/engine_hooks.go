@@ -73,8 +73,10 @@ type engineHooks struct {
 	// bound lasts (engineFlow.stopDrainBound); zero is OutcomeCommitTimeout.
 	stopBound time.Duration
 	// clock replaces the engine's run clock (runClock); nil runs on the
-	// engine's real clock. Observers the engine builds stay on the real
-	// clock either way (buildLocalObserver).
+	// engine's real clock. The watch's observers stay on the real clock
+	// either way (localSource.observer, remoteSource.observer); a one-shot
+	// scan, which runs no timers, measures its racily-clean window on the
+	// run clock (observeLocal).
 	clock syncdomain.SyncClock
 	// exec, store and observe are the test seams of the executor, the state
 	// store and the local observers the engine builds, passed through to
