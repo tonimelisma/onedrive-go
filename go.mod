@@ -17,12 +17,12 @@ require (
 	github.com/mattn/go-isatty v0.0.24
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
-	golang.org/x/oauth2 v0.30.0
-	golang.org/x/text v0.43.0
+	golang.org/x/oauth2 v0.38.0
+	golang.org/x/text v0.44.0
 	modernc.org/sqlite v1.61.0
 )
 
-require golang.org/x/sys v0.49.0
+require golang.org/x/sys v0.50.0
 
 require (
 	github.com/dustin/go-humanize v1.1.0 // indirect
