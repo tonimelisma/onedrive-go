@@ -160,6 +160,10 @@ type nightlyJobReport struct {
 	// It is empty when the log was read or never asked for, and never holds
 	// text of the failure, which can quote the request or the answer.
 	logReadFailure string
+	// logReadDetail is the failure's own first line, every URL's query cut
+	// (nightlyLogReadDetail), for the report's job log, which only the run's
+	// readers see. It never reaches the issue.
+	logReadDetail string
 }
 
 // workflowJob is the ci.yml job the report's job is a run of.
@@ -262,6 +266,7 @@ func attributeNightlyFailures(ctx context.Context, gh ghClient, repoRoot string,
 				return fmt.Errorf("read nightly job log %s: %w", reports[i].name, ctx.Err())
 			}
 			reports[i].logReadFailure = nightlyLogReadFailure(err)
+			reports[i].logReadDetail = nightlyLogReadDetail(err)
 			continue
 		}
 		parsed := parseGoTestLog(string(log))
@@ -352,6 +357,20 @@ func nightlyLogReadFailure(err error) string {
 	}
 
 	return "the gh request failed without an HTTP status"
+}
+
+// urlQueryPattern finds a URL's query, which for a job log's redirect holds a
+// signed token.
+var urlQueryPattern = regexp.MustCompile(`(https?://[^\s?]+)\?\S*`)
+
+// nightlyLogReadDetail is a failed log read's own words for the report's job
+// log: the first line of the error, each URL's query replaced, so a CI
+// failure can be diagnosed from the run without the public issue quoting a
+// request or a token.
+func nightlyLogReadDetail(err error) string {
+	first, _, _ := strings.Cut(err.Error(), "\n")
+
+	return urlQueryPattern.ReplaceAllString(strings.TrimSpace(first), "$1?<query removed>")
 }
 
 // nightlyFailureKeys names what failed in a run, each key with the ci.yml

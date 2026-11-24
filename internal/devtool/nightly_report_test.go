@@ -880,3 +880,28 @@ func TestREADMEBadgeShowsTheScheduledRunOfMain(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "/actions/workflows/ci.yml/badge.svg?branch=main&event=schedule)")
 }
+
+// Validates: R-6.10.24
+//
+// The report's issue says only that a log could not be read, in its own
+// words. Why the read failed went nowhere, so a failure in CI could not be
+// diagnosed from the run: the report's job log, which only the run's
+// readers see, now carries gh's own words, one line per job, with every
+// URL's query cut, since a log's redirect carries a signed token.
+func TestNightlyReportPrintsWhyAJobLogCouldNotBeRead(t *testing.T) {
+	t.Parallel()
+
+	remote := newClaimRemote(t, "")
+	remote.jobs = nightlyRunView(t, map[string]string{"stress": checkConclusionFailure}, nightlyReportJobEntry())
+	failure := ghFailure("error connecting to https://blob.example.net/logs/13.txt?sv=2026&sig=SECRET\nsecond line")
+	remote.jobLogErrs["13"] = slices.Repeat([]error{failure}, githubAttempts)
+
+	out := runNightlyReport(t, remote, false)
+
+	assert.Contains(t, out, "nightly report: the log of stress could not be read: ")
+	assert.Contains(t, out, "gh [run view 1]: error connecting to https://blob.example.net/logs/13.txt?<query removed>\n")
+	assert.NotContains(t, out, "SECRET")
+	assert.NotContains(t, out, "second line")
+	require.Len(t, remote.issues, 1)
+	assert.NotContains(t, remote.issues[0].body, "blob.example.net", "the public issue keeps the report's own words")
+}

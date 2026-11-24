@@ -68,7 +68,7 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20261124-01 | An observer's exit event came before the watch counted it stopped | fixed | test bug | 2026-11-24 | no |
 | LI-20261123-02 | A refused retry dropped the intent of a lost create, and the user's new file became a conflict copy beside an empty one | fixed | product bug | 2026-11-23 | no |
 | LI-20261123-01 | A watch test still counted the pools' workers without their floor | fixed | test bug | 2026-11-23 | no |
-| LI-20261121-02 | The nightly report could not read a red job's log and did not say why | mitigated | test harness | 2026-11-21 | no |
+| LI-20261121-02 | The nightly report could not read a red job's log and did not say why | mitigated | test harness | 2026-11-23 | yes |
 | LI-20261121-01 | The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline | fixed | test harness | 2026-11-21 | yes |
 | LI-20261115-01 | Graph answered an ordinary folder move with 400 `Invalid request` | mitigated | graph quirk | 2026-11-15 | yes |
 | LI-20261115-02 | The stress lane's race runs of the sync tree ran past a fixed 40-minute deadline | fixed | test harness | 2026-11-15 | yes |
@@ -324,13 +324,13 @@ Fix: the test expects the three idle workers' 30ms.
 ## LI-20261121-02: The nightly report could not read a red job's log and did not say why
 
 First seen: 2026-11-21
-Last seen: 2026-11-21
+Last seen: 2026-11-23 (run 45275981385, all three red jobs; also issues #919, #951, #964)
 Area: `internal/devtool/nightly_verdict.go` (`attributeNightlyFailures`)
 Suite / test: the `nightly-report` job of the scheduled run, for the red
 `verify-full (ubuntu-latest)` job
 Classification: test harness
 Status: mitigated (the cause of the refusal is not yet known)
-Recurring: no
+Recurring: yes (every red night since at least 2026-11-15)
 Summary: the `nightly-failure` issue said of the red job "failed; its log
 could not be read". The reader kept only that the read failed and dropped
 why, so neither the issue nor the job's output named the cause.
@@ -356,6 +356,18 @@ reaches the public issue (`nightlyLogReadFailure`,
 `TestNightlyReportIssueTextHoldsOnlyJobsTestsAndTheRunURL`). The next red
 night with an unreadable log names the status; the token's permission is
 the fix to make if it is a 403.
+
+2026-11-23: the status fix showed no status: all three red jobs' reads
+failed "without an HTTP status", within two seconds, while the same reads
+from a session after the run finished returned every log. gh's own words,
+the only evidence left, were still dropped. Since 2026-11-24 the report
+prints them in its job log, one line per job, the first line of the error
+with every URL's query cut, since a log's redirect is signed
+(`nightlyLogReadDetail`,
+`TestNightlyReportPrintsWhyAJobLogCouldNotBeRead`); the issue keeps the
+report's own words. The next red night names the cause; the leading
+suspicion is that the report reads logs while its own run is still in
+progress.
 
 ## LI-20261121-01: The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline
 
