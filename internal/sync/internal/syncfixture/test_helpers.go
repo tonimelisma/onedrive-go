@@ -64,9 +64,6 @@ type EngineMockClient struct {
 	UploadCreatingFn func(ctx context.Context, parentID, name string, content io.ReaderAt, size int64, onCreated graph.CreatedFunc) (*graph.Item, error)
 }
 
-// EngineMockClient is pinned to the sync item client it stands in for.
-var _ syncdomain.ItemClient = (*EngineMockClient)(nil)
-
 func (m *EngineMockClient) Delta(ctx context.Context, driveID driveid.ID, token string) (*graph.DeltaPage, error) {
 	if m.DeltaFn != nil {
 		return m.DeltaFn(ctx, driveID, token)

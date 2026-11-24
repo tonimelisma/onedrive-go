@@ -33,7 +33,7 @@ Unified download/upload manager shared by both CLI file operations and the sync 
 
 Implements: R-6.2.3 [verified]
 
-1. Create a namespaced `.onedrive-go.<target-name>.partial` file in the target directory
+1. Create a namespaced `.onedrive-go.<target-name>.partial` file in the target directory (the naming rule is `synctree`'s, `transfer_artifact.go`: the transfer manager builds the names, and the sync content filter, the planner's delete safety and the CLI's error wording recognize them through `synctree.IsOwnedTransferArtifactName`)
 2. If that owned partial exists with content, resume via HTTP Range request
 3. Stream response body, computing QuickXorHash incrementally
 4. Verify hash and size against API metadata

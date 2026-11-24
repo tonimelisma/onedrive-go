@@ -11,12 +11,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
-// ErrSyncRootRebindHint is appended to a primary-root mismatch so the user
-// learns the one explicit way out. It is not offered for shortcut child roots,
-// whose identity is owned by the parent engine.
-const ErrSyncRootRebindHint = "if you moved or restored the sync folder on purpose, run " +
-	"'onedrive-go drive rebind-root' to sync with the folder that is there now"
-
 // ValidateExpectedSyncRootIdentity refuses a sync folder that is not the one
 // expected. hint, when not empty, is appended to the refusal (the rebind hint
 // for primary roots).

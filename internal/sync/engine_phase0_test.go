@@ -85,29 +85,29 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts(t *testing.
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 	syncfixture.ReceiveWithin(t, uploadStarted, "the bootstrap upload to start before the observers")
 	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+		return event.Type == engineDebugEventBootstrapQuiesced
 	}), "bootstrap must not quiesce while the bootstrap upload is blocked")
 	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}), "local observer must not start before bootstrap quiesces")
 
 	close(allowUpload)
 
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 
 	syncfixture.StopWatch(t, cancel, done)
 
 	recorder.RequireOrderedSubsequence(t, []func(syncdomain.EngineDebugEvent) bool{
 		func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+			return event.Type == engineDebugEventBootstrapQuiesced
 		},
 		func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+			return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 		},
 	}, "bootstrap quiescence must precede local observer startup")
 }
@@ -165,29 +165,29 @@ func TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts(t *testing
 	assert.Equal(t, int32(1), deltaCalls.Load(),
 		"remote observer must not start polling until bootstrap has drained")
 	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+		return event.Type == engineDebugEventBootstrapQuiesced
 	}), "bootstrap must not quiesce while the bootstrap download is blocked")
 	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
+		return event.Type == engineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
 	}), "remote observer must not start before bootstrap quiesces")
 
 	close(allowDownload)
 
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
+		return event.Type == engineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
 	}, "remote observer started")
 
 	syncfixture.StopWatch(t, cancel, done)
 
 	recorder.RequireOrderedSubsequence(t, []func(syncdomain.EngineDebugEvent) bool{
 		func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+			return event.Type == engineDebugEventBootstrapQuiesced
 		},
 		func(event syncdomain.EngineDebugEvent) bool {
-			return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
+			return event.Type == engineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverRemote
 		},
 	}, "bootstrap quiescence must precede remote observer startup")
 }
@@ -225,10 +225,10 @@ func TestPhase0_RunWatch_BootstrapQuiescesWithFutureHeldRetryWork(t *testing.T) 
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 
 	assert.Equal(t, int32(0), uploadCalls.Load(), "future-held retry work must not dispatch during bootstrap")
@@ -288,19 +288,19 @@ func TestPhase0_RunWatch_DueTrialDrainsDuringBootstrapBeforeObserversStart(t *te
 	syncfixture.ReceiveWithin(t, uploadStarted, "the due trial to dispatch bootstrap work before the observers start")
 
 	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+		return event.Type == engineDebugEventBootstrapQuiesced
 	}), "bootstrap must not quiesce while the due trial action is still running")
 	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}), "observers must not start before the due trial action drains")
 
 	close(allowUpload)
 
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventBootstrapQuiesced
+		return event.Type == engineDebugEventBootstrapQuiesced
 	}, "bootstrap quiesced")
 	recorder.WaitUntilSeen(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal
 	}, "local observer started")
 
 	syncfixture.StopWatch(t, cancel, done)
@@ -492,7 +492,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	}
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventTrialTimerArmed
+		return event.Type == engineDebugEventTrialTimerArmed
 	}, "trial timer re-armed after trial failure")
 	cancel()
 
@@ -573,7 +573,7 @@ func TestPhase0_OneShotEngineLoop_TrialSuccessMakesFailuresRetryableAndReinjecta
 	}
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventScopeReleased && event.ScopeKey == testThrottleScope()
+		return event.Type == engineDebugEventScopeReleased && event.ScopeKey == testThrottleScope()
 	}, "trial success released blocked scope")
 
 	retried := readReadyAction(t, rt.dispatchCh)
@@ -668,7 +668,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	}
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventScopeActivated && event.ScopeKey == testThrottleScope()
+		return event.Type == engineDebugEventScopeActivated && event.ScopeKey == testThrottleScope()
 	}, "block scope activated from action completion")
 
 	select {

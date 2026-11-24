@@ -285,7 +285,7 @@ func TestRuntimeArchitecture_WatchPathsShareAppendReadyFrontierBoundary(t *testi
 			tc.run(t, eng, rt, bl)
 
 			recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
-				return event.Type == syncdomain.EngineDebugEventReadyFrontierAppended
+				return event.Type == engineDebugEventReadyFrontierAppended
 			}, 1, "watch path should re-enter the shared appendReadyFrontier boundary exactly once")
 		})
 	}

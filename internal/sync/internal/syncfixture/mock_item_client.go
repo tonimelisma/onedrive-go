@@ -10,7 +10,6 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/namekey"
-	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 type TestMockItemClient struct {
@@ -28,9 +27,6 @@ type TestMockItemClient struct {
 	GetChildByNameFn    func(ctx context.Context, driveID driveid.ID, parentID, name string) (*graph.Item, error)
 	ListChildrenPagesFn func(ctx context.Context, driveID driveid.ID, parentID string, visit graph.ChildrenPageFunc) error
 }
-
-// TestMockItemClient is pinned to the sync item client it stands in for.
-var _ syncdomain.ItemClient = (*TestMockItemClient)(nil)
 
 // GetChildByName answers a read of one name as Graph answers it, from the
 // folder ListChildrenFn holds (ChildNamed).

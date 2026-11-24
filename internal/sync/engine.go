@@ -36,13 +36,13 @@ type Engine struct {
 	baseline        *syncstore.SyncStore
 	planner         *syncplan.Planner
 	execCfg         *syncexec.ExecutorConfig
-	fetcher         syncdomain.DeltaFetcher
-	socketIOFetcher syncdomain.SocketIOEndpointFetcher
-	itemsClient     syncdomain.ItemClient
-	driveVerifier   syncdomain.DriveVerifier      // optional (B-074)
-	folderDelta     syncdomain.FolderDeltaFetcher // optional: mount-root delta observation
-	recursiveLister syncdomain.RecursiveLister    // optional: mount-root recursive enumeration fallback
-	permHandler     *permissionHandler            // encapsulates all permission logic (6.4c)
+	fetcher         DeltaFetcher
+	socketIOFetcher SocketIOEndpointFetcher
+	itemsClient     ItemClient
+	driveVerifier   DriveVerifier      // optional (B-074)
+	folderDelta     FolderDeltaFetcher // optional: mount-root delta observation
+	recursiveLister RecursiveLister    // optional: mount-root recursive enumeration fallback
+	permHandler     *permissionHandler // encapsulates all permission logic (6.4c)
 	dataDir         string
 	syncRoot        string
 	syncTree        *synctree.Root
@@ -321,7 +321,7 @@ func syncRootRefusalHint(cfg *engineInputs) string {
 	if cfg.ExpectedSyncRootIdentity != nil {
 		return ""
 	}
-	return syncdomain.ErrSyncRootRebindHint
+	return errSyncRootRebindHint
 }
 
 // openBoundSyncTree opens the sync tree and resolves the folder identity

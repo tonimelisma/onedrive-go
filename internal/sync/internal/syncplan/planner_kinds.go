@@ -19,8 +19,8 @@ var ErrUnclassifiedPlan = errors.New("sync: planner state is outside the decisio
 // ends on it is restarted after its backoff (R-2.8.11).
 type unclassifiedPlanError struct {
 	Path           string
-	Comparison     syncdomain.ComparisonKind
-	Reconciliation syncdomain.ReconciliationKind
+	Comparison     ComparisonKind
+	Reconciliation ReconciliationKind
 	// Inputs are nil for rows handed to the planner without the engine's
 	// diagnostic read (tests, the planner model).
 	Inputs []syncdomain.PlannerDecisionInput
@@ -53,7 +53,7 @@ func (e *unclassifiedPlanError) Unwrap() error {
 	return ErrUnclassifiedPlan
 }
 
-func unclassifiedRowError(rec *syncdomain.SQLiteReconciliationRow) *unclassifiedPlanError {
+func unclassifiedRowError(rec *ReconciliationRow) *unclassifiedPlanError {
 	return &unclassifiedPlanError{
 		Path:           rec.Path,
 		Comparison:     rec.ComparisonKind,
@@ -63,7 +63,7 @@ func unclassifiedRowError(rec *syncdomain.SQLiteReconciliationRow) *unclassified
 }
 
 // FirstUnclassifiedRow returns the index of the first unclassified row, or -1.
-func FirstUnclassifiedRow(rows []syncdomain.SQLiteReconciliationRow) int {
+func FirstUnclassifiedRow(rows []ReconciliationRow) int {
 	for i := range rows {
 		if rows[i].IsUnclassified() {
 			return i
@@ -79,7 +79,7 @@ func FirstUnclassifiedRow(rows []syncdomain.SQLiteReconciliationRow) int {
 // The error names the first unclassified path (rows come ordered by path) and
 // counts the rest. Comparison rows are checked too: move composition reads
 // their kinds directly.
-func validatePlannerKinds(comparisons []syncdomain.SQLiteComparisonRow, reconciliations []syncdomain.SQLiteReconciliationRow) error {
+func validatePlannerKinds(comparisons []DecidedComparison, reconciliations []ReconciliationRow) error {
 	if first := FirstUnclassifiedRow(reconciliations); first >= 0 {
 		unclassified := unclassifiedRowError(&reconciliations[first])
 		for i := first + 1; i < len(reconciliations); i++ {
@@ -91,14 +91,14 @@ func validatePlannerKinds(comparisons []syncdomain.SQLiteComparisonRow, reconcil
 		return unclassified
 	}
 	for i := range comparisons {
-		if comparisons[i].ComparisonKind == syncdomain.ComparisonUnclassified {
+		if comparisons[i].ComparisonKind == ComparisonUnclassified {
 			// No reconciliation rule matches an unclassified comparison
 			// (the SQL tests for named kinds only), so its reconciliation
 			// is unclassified too.
 			return &unclassifiedPlanError{
 				Path:           comparisons[i].Path,
-				Comparison:     syncdomain.ComparisonUnclassified,
-				Reconciliation: syncdomain.ReconcileUnclassified,
+				Comparison:     ComparisonUnclassified,
+				Reconciliation: ReconcileUnclassified,
 			}
 		}
 	}

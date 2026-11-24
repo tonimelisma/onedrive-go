@@ -265,7 +265,7 @@ followed_local_ancestor_remote_paths AS MATERIALIZED (
 `
 	// sqlComparisonStateCTEs is the one definition of the comparison facts:
 	// the decision table's inputs for every path (syncdomain.DecisionState).
-	// The table itself is Go (syncdomain.Decide); SQL keeps what is set-valued
+	// The table itself is Go (syncplan.Decide); SQL keeps what is set-valued
 	// (the path universe, move pairing, the ancestor-move sets and the
 	// descendant probes) and the per-path flags.
 	sqlComparisonStateCTEs = sqlLocalAndRemoteMoveCTEs + `
@@ -276,7 +276,7 @@ comparison_flags AS (
 		COALESCE(r.item_id, '') AS remote_item_id,
 		-- A side's presence and the path's item type are read from the three
 		-- side types: item_type is NOT NULL and one of the enum's names in
-		-- every table this query reads (SQLiteComparisonRow).
+		-- every table this query reads (ComparisonRow).
 		COALESCE(b.item_type, '') AS baseline_item_type,
 		-- Filesystem identity is a pairing hint, never a change signal
 		-- (D-057). A folder has no content, so a new inode at its path (rm -rf
@@ -508,21 +508,21 @@ func queryComparisonRowsForTables(
 	runner sqlTxRunner,
 	localStateTable string,
 	remoteStateTable string,
-) ([]syncdomain.SQLiteComparisonRow, error) {
+) ([]syncdomain.ComparisonRow, error) {
 	return queryComparisonRows(ctx, runner, sqlQueryForStateTables(sqlQueryPlannerState, localStateTable, remoteStateTable))
 }
 
 // queryComparisonRows runs a query shaped like sqlQueryPlannerState and
 // scans its rows. An item type the enum does not know fails the scan,
 // naming the path.
-func queryComparisonRows(ctx context.Context, runner sqlTxRunner, query string) ([]syncdomain.SQLiteComparisonRow, error) {
+func queryComparisonRows(ctx context.Context, runner sqlTxRunner, query string) ([]syncdomain.ComparisonRow, error) {
 	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("syncstore: querying comparison state: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
-	var results []syncdomain.SQLiteComparisonRow
+	var results []syncdomain.ComparisonRow
 	for rows.Next() {
 		row, scanErr := scanComparisonRow(rows)
 		if scanErr != nil {
@@ -537,9 +537,9 @@ func queryComparisonRows(ctx context.Context, runner sqlTxRunner, query string) 
 	return results, nil
 }
 
-func scanComparisonRow(rows *sql.Rows) (syncdomain.SQLiteComparisonRow, error) {
+func scanComparisonRow(rows *sql.Rows) (syncdomain.ComparisonRow, error) {
 	var (
-		row                         syncdomain.SQLiteComparisonRow
+		row                         syncdomain.ComparisonRow
 		localChanged, remoteChanged int
 		currentEqual                int
 		sideTypes                   [3]string
@@ -571,12 +571,12 @@ func scanComparisonRow(rows *sql.Rows) (syncdomain.SQLiteComparisonRow, error) {
 		&row.MetadataDrift,
 	)
 	if err != nil {
-		return syncdomain.SQLiteComparisonRow{}, fmt.Errorf("syncstore: scanning comparison state row: %w", err)
+		return syncdomain.ComparisonRow{}, fmt.Errorf("syncstore: scanning comparison state row: %w", err)
 	}
 	for i, target := range []*syncdomain.SideType{&row.BaselineType, &row.LocalType, &row.RemoteType} {
 		*target, err = syncdomain.ParseSideType(sideTypes[i])
 		if err != nil {
-			return syncdomain.SQLiteComparisonRow{}, fmt.Errorf("syncstore: reading the side types of %q: %w", row.Path, err)
+			return syncdomain.ComparisonRow{}, fmt.Errorf("syncstore: reading the side types of %q: %w", row.Path, err)
 		}
 	}
 	row.LocalChanged = localChanged != 0

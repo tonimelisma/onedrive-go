@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -398,7 +400,7 @@ func TestRunOnce_PersistsLocalSnapshotAndConvergedSQLiteReconciliation(t *testin
 	reconciliationRows := reconciliationRowsForStore(t, eng.baseline)
 	require.Len(t, reconciliationRows, 2)
 
-	byPath := make(map[string]syncdomain.SQLiteReconciliationRow, len(reconciliationRows))
+	byPath := make(map[string]syncplan.ReconciliationRow, len(reconciliationRows))
 	for _, row := range reconciliationRows {
 		byPath[row.Path] = row
 	}

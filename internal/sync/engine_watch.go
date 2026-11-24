@@ -159,7 +159,7 @@ func isWatchObserverStartupStopped(ctx context.Context, err error) bool {
 // engine's limit on its database, as for classifyResult, so a drain whose
 // bound cut records short ends the watch with that store failure.
 func isWatchShutdownError(ctx context.Context, err error) bool {
-	return syncdomain.RunEnded(ctx, err) && syncdomain.IsCancellationEcho(err) && !errors.Is(err, syncdomain.ErrStoreAccessTimedOut)
+	return syncdomain.RunEnded(ctx, err) && isCancellationEcho(err) && !errors.Is(err, syncdomain.ErrStoreAccessTimedOut)
 }
 
 // watchPipeline holds watch-loop dependencies that are not already runtime-owned.
@@ -262,7 +262,7 @@ func (rt *watchRuntime) initWatchInfra(
 		rt.resources.activeObservers = 0
 		rt.resources.remoteObs = nil
 		rt.resources.localObs = nil
-		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventWatchStopped})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventWatchStopped})
 		rt.deps.logger.Info("watch mode stopped")
 	}
 
@@ -329,7 +329,7 @@ func (rt *watchRuntime) finishBootstrapWithoutActions(
 	if err := rt.transition(watchEventBootstrapSettled); err != nil {
 		return err
 	}
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventBootstrapQuiesced})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
 		return fmt.Errorf("sync: arming full remote refresh timer: %w", err)
 	}
@@ -340,7 +340,7 @@ func (rt *watchRuntime) finishBootstrapWithoutActions(
 func (rt *watchRuntime) finishBootstrapAfterActions(
 	ctx context.Context,
 ) error {
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventBootstrapQuiesced})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventBootstrapQuiesced})
 	rt.scheduleFollowUpIfSettled()
 	rt.upkeep.afterSync(ctx)
 	if err := rt.armFullRefreshTimer(ctx); err != nil {
@@ -373,11 +373,11 @@ func (rt *watchRuntime) startObservers(
 		return err
 	}
 
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverStarted, Observer: syncdomain.EngineDebugObserverRemote})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventObserverStarted, Observer: syncdomain.EngineDebugObserverRemote})
 	rt.startRemoteObserver(ctx, bl, remoteBatches, errs, opts)
 
 	rt.resources.localObs = localObs
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventObserverStarted, Observer: syncdomain.EngineDebugObserverLocal})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventObserverStarted, Observer: engineDebugObserverLocal})
 	rt.startLocalObserver(ctx, localObs, localBatches, protectedRootEvents, errs)
 
 	rt.resources.observerErrs = errs
@@ -486,7 +486,7 @@ func (rt *observation) watchLocalWithFallback(ctx context.Context, localObs *syn
 
 		interval := localObs.EffectiveSafetyScanInterval()
 		rt.deps.emit(syncdomain.EngineDebugEvent{
-			Type: syncdomain.EngineDebugEventObserverFallbackStarted, Observer: syncdomain.EngineDebugObserverLocal,
+			Type: engineDebugEventObserverFallbackStarted, Observer: engineDebugObserverLocal,
 		})
 		if cause != warnedCause {
 			warnedCause = cause
@@ -506,7 +506,7 @@ func (rt *observation) watchLocalWithFallback(ctx context.Context, localObs *syn
 
 		retryDue := rt.runPeriodicFullScan(ctx, localObs, tree, interval, retryDelay)
 		rt.deps.emit(syncdomain.EngineDebugEvent{
-			Type: syncdomain.EngineDebugEventObserverFallbackStopped, Observer: syncdomain.EngineDebugObserverLocal,
+			Type: engineDebugEventObserverFallbackStopped, Observer: engineDebugObserverLocal,
 		})
 		if !retryDue {
 			return nil // clean exit after context cancel
@@ -594,26 +594,26 @@ func (rt *observation) emitSocketIOLifecycleEvent(event syncobserve.SocketIOLife
 
 	switch event.Type {
 	case syncobserve.SocketIOLifecycleEventStarted:
-		debugEvent.Type = syncdomain.EngineDebugEventWebsocketWakeSourceStarted
+		debugEvent.Type = engineDebugEventWebsocketWakeSourceStarted
 	case syncobserve.SocketIOLifecycleEventEndpointFetchFail:
-		debugEvent.Type = syncdomain.EngineDebugEventWebsocketEndpointFetchFail
+		debugEvent.Type = engineDebugEventWebsocketEndpointFetchFail
 	case syncobserve.SocketIOLifecycleEventConnectFail:
-		debugEvent.Type = syncdomain.EngineDebugEventWebsocketConnectFail
+		debugEvent.Type = engineDebugEventWebsocketConnectFail
 	case syncobserve.SocketIOLifecycleEventConnected:
-		debugEvent.Type = syncdomain.EngineDebugEventWebsocketConnected
+		debugEvent.Type = engineDebugEventWebsocketConnected
 		if event.SID != "" {
 			debugEvent.Note = "sid=" + event.SID
 		}
 	case syncobserve.SocketIOLifecycleEventRefreshRequested:
-		debugEvent.Type = syncdomain.EngineDebugEventWebsocketRefreshRequested
+		debugEvent.Type = engineDebugEventWebsocketRefreshRequested
 	case syncobserve.SocketIOLifecycleEventConnectionDropped:
-		debugEvent.Type = syncdomain.EngineDebugEventWebsocketConnectionDropped
+		debugEvent.Type = engineDebugEventWebsocketConnectionDropped
 	case syncobserve.SocketIOLifecycleEventNotificationWake:
-		debugEvent.Type = syncdomain.EngineDebugEventWebsocketNotificationWake
+		debugEvent.Type = engineDebugEventWebsocketNotificationWake
 	case syncobserve.SocketIOLifecycleEventWakeCoalesced:
-		debugEvent.Type = syncdomain.EngineDebugEventWebsocketWakeCoalesced
+		debugEvent.Type = engineDebugEventWebsocketWakeCoalesced
 	case syncobserve.SocketIOLifecycleEventStopped:
-		debugEvent.Type = syncdomain.EngineDebugEventWebsocketWakeSourceStopped
+		debugEvent.Type = engineDebugEventWebsocketWakeSourceStopped
 	default:
 		return
 	}
@@ -701,7 +701,7 @@ func (rt *observation) runFallbackScan(
 
 	obs.TrySendFullLocalSnapshot(ctx, result)
 	rt.deps.emit(syncdomain.EngineDebugEvent{
-		Type: syncdomain.EngineDebugEventObserverFallbackScanned, Observer: syncdomain.EngineDebugObserverLocal,
+		Type: engineDebugEventObserverFallbackScanned, Observer: engineDebugObserverLocal,
 	})
 
 	return true

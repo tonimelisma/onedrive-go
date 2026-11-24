@@ -1,7 +1,9 @@
-package syncdomain
+package syncplan
 
 import (
 	"fmt"
+
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
 // kindUnclassified is the name both kind enums give their zero member.
@@ -14,7 +16,7 @@ const kindUnclassified = "unclassified"
 // The zero value is ComparisonUnclassified: a state no rule
 // covers, which planning refuses (validatePlannerKinds). Members are never
 // persisted, so their numbers may change; ComparisonDiverged stays last,
-// because AllComparisonKinds and ParseComparisonKind range up to it.
+// because the kind tests range up to it (allComparisonKinds).
 type ComparisonKind uint8
 
 const (
@@ -82,41 +84,15 @@ func (k ComparisonKind) String() string {
 	}
 }
 
-// AllComparisonKinds lists every member in declaration order, the
-// unclassified one first.
-func AllComparisonKinds() []ComparisonKind {
-	kinds := make([]ComparisonKind, 0, int(ComparisonDiverged)+1)
-	for k := ComparisonUnclassified; k <= ComparisonDiverged; k++ {
-		kinds = append(kinds, k)
-	}
-
-	return kinds
-}
-
-// ParseComparisonKind reads the comparison kind SQL returned. "unclassified"
-// parses to the zero member: it is a state outside the decision table, which
-// planning refuses with the row's inputs. Any other unknown name is the SQL
-// and the enum drifting apart.
-func ParseComparisonKind(s string) (ComparisonKind, error) {
-	for k := ComparisonUnclassified; k <= ComparisonDiverged; k++ {
-		if k.String() == s {
-			return k, nil
-		}
-	}
-
-	return ComparisonUnclassified, fmt.Errorf("sync: unknown comparison kind %q", s)
-}
-
 // ReconciliationKind is the decision the decision table takes for a path
-// (Reconcile, its second stage), which the planner maps to actions
+// (reconcile, its second stage), which the planner maps to actions
 // (buildActionsForReconciliation). It owns its names: some equal action-type
 // names (local_delete, upload, ...), but those are a persisted wire format
 // (retry_work.action_type) and coincide by choice, not by definition.
 //
 // The zero value is ReconcileUnclassified, the CASE's ELSE; ReconcileNoop is
 // the explicit "nothing to do" that the decision table states for a path.
-// ReconcileReplaceLocal stays last (AllReconciliationKinds,
-// ParseReconciliationKind).
+// ReconcileReplaceLocal stays last (allReconciliationKinds).
 type ReconciliationKind uint8
 
 const (
@@ -184,33 +160,44 @@ func (k ReconciliationKind) String() string {
 	}
 }
 
-// AllReconciliationKinds lists every member in declaration order, the
-// unclassified one first.
-func AllReconciliationKinds() []ReconciliationKind {
-	kinds := make([]ReconciliationKind, 0, int(ReconcileReplaceLocal)+1)
-	for k := ReconcileUnclassified; k <= ReconcileReplaceLocal; k++ {
-		kinds = append(kinds, k)
+// reconciliationRowOf is the reconciliation row decision makes of the
+// comparison row r. An unclassified row carries the decision table's inputs,
+// so the plan error names them (R-6.2.16).
+func reconciliationRowOf(r *syncdomain.ComparisonRow, decision Decision) ReconciliationRow {
+	rec := ReconciliationRow{
+		Path:               r.Path,
+		ItemType:           r.ItemType(),
+		ComparisonKind:     decision.Comparison,
+		ReconciliationKind: decision.Reconciliation,
+		LocalMoveTarget:    r.LocalMoveTarget,
+		LocalMoveSource:    r.LocalMoveSource,
+		RemoteMoveTarget:   r.RemoteMoveTarget,
+		RemoteMoveSource:   r.RemoteMoveSource,
+	}
+	if rec.IsUnclassified() {
+		rec.DecisionInputs = r.DecisionState().Inputs()
 	}
 
-	return kinds
+	return rec
 }
 
-// ParseReconciliationKind reads the reconciliation kind SQL returned, with
-// the same contract as ParseComparisonKind.
-func ParseReconciliationKind(s string) (ReconciliationKind, error) {
-	for k := ReconcileUnclassified; k <= ReconcileReplaceLocal; k++ {
-		if k.String() == s {
-			return k, nil
-		}
-	}
-
-	return ReconcileUnclassified, fmt.Errorf("sync: unknown reconciliation kind %q", s)
+type ReconciliationRow struct {
+	Path               string
+	ItemType           syncdomain.ItemType
+	ComparisonKind     ComparisonKind
+	ReconciliationKind ReconciliationKind
+	LocalMoveTarget    string
+	LocalMoveSource    string
+	RemoteMoveTarget   string
+	RemoteMoveSource   string
+	// DecisionInputs are the decision-table inputs of an unclassified row,
+	// for the plan error (DecisionState.Inputs); nil for every classified
+	// row.
+	DecisionInputs []syncdomain.PlannerDecisionInput
 }
 
-// PlannerDecisionInput is one input of the decision table as the plan error
-// prints it (DecisionState.Inputs).
-type PlannerDecisionInput struct {
-	Column string
-	// Value is a side's item type (empty when absent) or a flag as 0 or 1.
-	Value string
+// IsUnclassified reports a reconciliation row outside the decision table: the
+// comparison has no rule, or no reconciliation rule matched it.
+func (r *ReconciliationRow) IsUnclassified() bool {
+	return r.ComparisonKind == ComparisonUnclassified || r.ReconciliationKind == ReconcileUnclassified
 }

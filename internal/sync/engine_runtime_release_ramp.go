@@ -69,7 +69,7 @@ func (flow *engineFlow) retireAdmittedWorkBlockedBy(ctx context.Context, key syn
 	}
 
 	flow.deps.emit(syncdomain.EngineDebugEvent{
-		Type:     syncdomain.EngineDebugEventAdmittedWorkRetired,
+		Type:     engineDebugEventAdmittedWorkRetired,
 		ScopeKey: key,
 		Count:    len(taken),
 	})
@@ -152,7 +152,7 @@ func (flow *engineFlow) releaseScopeBatch(
 	if removed {
 		flow.sched.DropScope(key)
 		flow.deps.emit(syncdomain.EngineDebugEvent{
-			Type:     syncdomain.EngineDebugEventScopeReleased,
+			Type:     engineDebugEventScopeReleased,
 			ScopeKey: key,
 			Count:    len(batch),
 		})
@@ -173,7 +173,7 @@ func (flow *engineFlow) releaseScopeBatch(
 			return batch, fmt.Errorf("keep scope %s on probation: %w", key.String(), err)
 		}
 		flow.deps.emit(syncdomain.EngineDebugEvent{
-			Type:     syncdomain.EngineDebugEventScopeBatchReleased,
+			Type:     engineDebugEventScopeBatchReleased,
 			ScopeKey: key,
 			Count:    len(batch),
 		})

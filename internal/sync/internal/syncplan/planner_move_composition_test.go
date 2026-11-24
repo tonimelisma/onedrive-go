@@ -2850,11 +2850,11 @@ func TestMovedOntoAnotherItemsPath_NeedsTheIdentityAndTheSyncedContent(t *testin
 		ItemID: "item-z", ItemType: syncdomain.ItemTypeFile, LocalHash: "hash-z",
 		LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
 	}
-	gone := &syncdomain.SQLiteComparisonRow{Path: "z", BaselineType: syncdomain.SideFile}
-	cmpByPath := map[string]*syncdomain.SQLiteComparisonRow{
+	gone := &DecidedComparison{ComparisonRow: syncdomain.ComparisonRow{Path: "z", BaselineType: syncdomain.SideFile}}
+	cmpByPath := map[string]*DecidedComparison{
 		"z": gone,
-		"p": {Path: "p", BaselineItemID: "item-p", BaselineType: syncdomain.SideFolder, LocalType: syncdomain.SideFile},
-		"n": {Path: "n", LocalType: syncdomain.SideFile},
+		"p": {ComparisonRow: syncdomain.ComparisonRow{Path: "p", BaselineItemID: "item-p", BaselineType: syncdomain.SideFolder, LocalType: syncdomain.SideFile}},
+		"n": {ComparisonRow: syncdomain.ComparisonRow{Path: "n", LocalType: syncdomain.SideFile}},
 	}
 	local := func(p, hash string) []syncdomain.LocalStateRow {
 		return []syncdomain.LocalStateRow{{
@@ -2872,7 +2872,7 @@ func TestMovedOntoAnotherItemsPath_NeedsTheIdentityAndTheSyncedContent(t *testin
 	_, ok = movedOntoAnotherItemsPath(gone, entry, local("n", "hash-z"), cmpByPath)
 	assert.False(t, ok, "at a path no synced item had, SQLite pairs the move itself")
 
-	stillHere := &syncdomain.SQLiteComparisonRow{Path: "z", BaselineType: syncdomain.SideFile, RemoteType: syncdomain.SideFile}
+	stillHere := &DecidedComparison{ComparisonRow: syncdomain.ComparisonRow{Path: "z", BaselineType: syncdomain.SideFile, RemoteType: syncdomain.SideFile}}
 	_, ok = movedOntoAnotherItemsPath(stillHere, entry, local("p", "hash-z"), cmpByPath)
 	assert.False(t, ok, "OneDrive still holds the item at its path")
 }

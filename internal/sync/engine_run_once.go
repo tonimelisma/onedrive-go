@@ -466,14 +466,14 @@ func (r *oneShotRunner) executePreparedPlan(
 	// Its stop has one deadline (withRunStop), which the workers' detached
 	// store writes after the cancel share.
 	runCtx, cancelPass := context.WithCancelCause(ctx)
-	defer cancelPass(syncdomain.ErrOneShotPassEnded)
+	defer cancelPass(errOneShotPassEnded)
 	runCtx = r.withRunStop(runCtx)
 	pool.Start(runCtx, r.cfg.transferWorkers)
 
 	// Process completions until the engine-owned runtime settles. Held retry/scope
 	// actions intentionally keep graph nodes unresolved, so the dependency graph
 	// tracks only dependency satisfaction, not runtime completion.
-	failPass := func() { cancelPass(syncdomain.ErrOneShotPassFailed) }
+	failPass := func() { cancelPass(errOneShotPassFailed) }
 	drainErr := r.runResultsLoopWithInitialOutbox(runCtx, failPass, bl, pool.Completions(), initialOutbox)
 	pool.Stop()
 	if drainErr != nil {
@@ -718,3 +718,12 @@ func markOrphansForReupload(orphans []syncdomain.RemoteItem) {
 		orphans[i].ReuploadLocal = true
 	}
 }
+
+// The causes of a one-shot pass context's cancel: a completion that failed
+// the pass (which RunOnce then returns), or the pass's end.
+//
+//nolint:gosec // G101 reads "Pass" in the names as a password; these are cancel causes, not credentials
+const (
+	errOneShotPassFailed syncdomain.CancelCauseError = "sync: one-shot pass failed"
+	errOneShotPassEnded  syncdomain.CancelCauseError = "sync: one-shot pass ended"
+)

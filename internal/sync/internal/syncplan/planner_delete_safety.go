@@ -5,7 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tonimelisma/onedrive-go/internal/driveops"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -356,7 +357,7 @@ func localRowIsNotContent(rowPath string) bool {
 	if rowPath == lostAndFoundName || strings.HasPrefix(rowPath, lostAndFoundName+"/") {
 		return true
 	}
-	return driveops.IsOwnedTransferArtifactName(path.Base(rowPath))
+	return synctree.IsOwnedTransferArtifactName(path.Base(rowPath))
 }
 
 func remoteSideIsEmpty(rows []syncdomain.RemoteStateRow) bool {

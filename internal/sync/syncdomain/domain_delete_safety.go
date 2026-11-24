@@ -74,19 +74,6 @@ func DeleteSafetySideOf(action ActionType) (DeleteSafetySide, bool) {
 	}
 }
 
-// CountHeldDeletesBySide splits held deletes into the side each would remove
-// content from, for the pass report.
-func CountHeldDeletesBySide(held []HeldDelete) (local int, remote int) {
-	for i := range held {
-		if held[i].Side == DeleteSafetySideLocal {
-			local++
-			continue
-		}
-		remote++
-	}
-	return local, remote
-}
-
 // heldDeleteTokenLength is how many hex digits of the held set's digest a
 // confirmation carries: 64 bits, short enough to type and far beyond what
 // two held sets of one drive could share by chance.
@@ -145,23 +132,4 @@ func ParseHeldDeleteConfirmation(text string) (HeldDeleteConfirmation, error) {
 	}
 
 	return HeldDeleteConfirmation{Count: count, Token: strings.ToLower(token)}, nil
-}
-
-// HeldDeleteSides lists the distinct sides of held, in order of first
-// appearance.
-func HeldDeleteSides(held []HeldDelete) []DeleteSafetySide {
-	var sides []DeleteSafetySide
-	for i := range held {
-		seen := false
-		for _, side := range sides {
-			if side == held[i].Side {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			sides = append(sides, held[i].Side)
-		}
-	}
-	return sides
 }

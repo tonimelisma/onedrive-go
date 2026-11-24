@@ -489,21 +489,21 @@ func (flow *engineFlow) readPlanningSnapshot(
 	return snapshot, nil
 }
 
-// decider is the decision table this run plans with: syncdomain.Decide,
+// decider is the decision table this run plans with: syncplan.Decide,
 // unless a test replaced it (engineHooks.decideOverride).
 func (flow *engineFlow) decider() syncplan.Decider {
 	if flow.hooks.decideOverride != nil {
 		return flow.hooks.decideOverride
 	}
 
-	return syncdomain.Decide
+	return syncplan.Decide
 }
 
 // mustAssertDecisionStatesValid holds, under the engine's invariant checks,
 // every row the comparison query produced to the states it can produce
 // (syncdomain.DecisionState.Valid): the decision table's properties are
 // proven over valid states only, so a row outside them is a query bug.
-func (flow *engineFlow) mustAssertDecisionStatesValid(comparisons []syncdomain.SQLiteComparisonRow) {
+func (flow *engineFlow) mustAssertDecisionStatesValid(comparisons []syncdomain.ComparisonRow) {
 	if !flow.invariantChecksEnabled() {
 		return
 	}
@@ -560,7 +560,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	if len(approved) > 0 {
 		// The confirmation reviewed the deletes that went before it on
 		// those sides: they stop counting toward the next hold.
-		if err := flow.deps.store.ClearDeleteLedger(ctx, syncdomain.HeldDeleteSides(approved)); err != nil {
+		if err := flow.deps.store.ClearDeleteLedger(ctx, heldDeleteSides(approved)); err != nil {
 			return nil, fmt.Errorf("sync: clearing the confirmed sides of the delete ledger: %w", err)
 		}
 	}
@@ -570,7 +570,7 @@ func (flow *engineFlow) buildCurrentPlanStage(
 	counts := syncplan.CountByType(plan.Actions)
 	report := buildReportFromCounts(counts, plan.DeferredByMode, mode, opts)
 	report.LocalFolderDeletes, report.RemoteFolderDeletes = countFolderDeletes(plan.Actions)
-	report.HeldLocalDeletes, report.HeldRemoteDeletes = syncdomain.CountHeldDeletesBySide(plan.HeldDeletes)
+	report.HeldLocalDeletes, report.HeldRemoteDeletes = countHeldDeletesBySide(plan.HeldDeletes)
 
 	return &builtCurrentPlan{
 		Plan:                     plan,
@@ -758,10 +758,42 @@ func logDeleteSafetyHold(logger *slog.Logger, held []syncdomain.HeldDelete) {
 	if logger == nil || len(held) == 0 {
 		return
 	}
-	local, remote := syncdomain.CountHeldDeletesBySide(held)
+	local, remote := countHeldDeletesBySide(held)
 	logger.Info("deletes held for confirmation; run 'onedrive-go sync --confirm-deletes' to apply them",
 		slog.Int("held_local_deletes", local),
 		slog.Int("held_remote_deletes", remote),
 		slog.String("reason", string(held[0].Reason)),
 	)
+}
+
+// countHeldDeletesBySide splits held deletes into the side each would remove
+// content from, for the pass report.
+func countHeldDeletesBySide(held []syncdomain.HeldDelete) (local int, remote int) {
+	for i := range held {
+		if held[i].Side == syncdomain.DeleteSafetySideLocal {
+			local++
+			continue
+		}
+		remote++
+	}
+	return local, remote
+}
+
+// heldDeleteSides lists the distinct sides of held, in order of first
+// appearance.
+func heldDeleteSides(held []syncdomain.HeldDelete) []syncdomain.DeleteSafetySide {
+	var sides []syncdomain.DeleteSafetySide
+	for i := range held {
+		seen := false
+		for _, side := range sides {
+			if side == held[i].Side {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			sides = append(sides, held[i].Side)
+		}
+	}
+	return sides
 }

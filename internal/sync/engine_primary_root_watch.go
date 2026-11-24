@@ -89,7 +89,7 @@ func (rt *watchRuntime) warnMountRootWebsocketFallback() {
 	}
 
 	rt.deps.emit(syncdomain.EngineDebugEvent{
-		Type: syncdomain.EngineDebugEventWebsocketFallback,
+		Type: engineDebugEventWebsocketFallback,
 		Note: "mount_root",
 	})
 	// Debug: a by-design limitation with nothing for the user to do; it

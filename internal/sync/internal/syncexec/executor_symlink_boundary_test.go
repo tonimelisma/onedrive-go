@@ -394,6 +394,6 @@ func TestExecutor_Upload_PathLeavingSyncRootIsRefused(t *testing.T) {
 
 	o := f.exec.ExecuteUpload(t.Context(), action)
 	syncfixture.RequireOutcomeFailure(t, &o)
-	require.ErrorIs(t, o.Error, syncdomain.ErrPathEscapesSyncRoot)
+	require.ErrorIs(t, o.Error, errPathEscapesSyncRoot)
 	require.ErrorIs(t, o.Error, synctree.ErrUnsafePath)
 }

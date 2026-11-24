@@ -112,11 +112,11 @@ func (e *Engine) releaseLocalTree(ctx context.Context, report *Report) error {
 // would have the user remove is gone, and what could not leave is named by
 // the entries the release kept, each with its own issue. The read failure
 // leaves the store as a root read that succeeds clears it
-// (NewRemoteObservationFindingsBatch), and the issues the run left are read
+// (newRemoteObservationFindingsBatch), and the issues the run left are read
 // again without it, so it is not work the run left. The next run observes the
 // root again before it plans anything.
 func (e *Engine) forgetSharedFolderReadFailure(ctx context.Context, report *Report) error {
-	batch := syncdomain.NewRemoteObservationFindingsBatch()
+	batch := newRemoteObservationFindingsBatch()
 	if err := e.baseline.ReconcileObservationFindings(ctx, &batch); err != nil {
 		return fmt.Errorf("sync: clearing the read failure of a released shared folder: %w", err)
 	}

@@ -54,16 +54,16 @@ func newSingleOwnerEngineWith(t *testing.T, configure func(*engineInputs)) *test
 
 // Compile-time interface satisfaction checks.
 var (
-	_ syncdomain.DeltaFetcher            = (*syncfixture.EngineMockClient)(nil)
-	_ syncdomain.SocketIOEndpointFetcher = (*syncfixture.EngineMockClient)(nil)
-	_ syncdomain.ItemClient              = (*syncfixture.EngineMockClient)(nil)
-	_ driveops.Downloader                = (*syncfixture.EngineMockClient)(nil)
-	_ driveops.Uploader                  = (*syncfixture.EngineMockClient)(nil)
-	_ driveops.ItemUploader              = (*syncfixture.EngineMockClient)(nil)
-	_ syncdomain.FolderDeltaFetcher      = (*syncfixture.EngineMockClient)(nil)
-	_ syncdomain.RecursiveLister         = (*syncfixture.EngineMockClient)(nil)
-	_ syncdomain.PermissionChecker       = (*syncfixture.EngineMockClient)(nil)
-	_ syncdomain.DriveVerifier           = (*syncfixture.EngineMockClient)(nil)
+	_ DeltaFetcher            = (*syncfixture.EngineMockClient)(nil)
+	_ SocketIOEndpointFetcher = (*syncfixture.EngineMockClient)(nil)
+	_ ItemClient              = (*syncfixture.EngineMockClient)(nil)
+	_ driveops.Downloader     = (*syncfixture.EngineMockClient)(nil)
+	_ driveops.Uploader       = (*syncfixture.EngineMockClient)(nil)
+	_ driveops.ItemUploader   = (*syncfixture.EngineMockClient)(nil)
+	_ FolderDeltaFetcher      = (*syncfixture.EngineMockClient)(nil)
+	_ RecursiveLister         = (*syncfixture.EngineMockClient)(nil)
+	_ PermissionChecker       = (*syncfixture.EngineMockClient)(nil)
+	_ DriveVerifier           = (*syncfixture.EngineMockClient)(nil)
 )
 
 // The transfer manager type-asserts the capability, so losing it would fail
@@ -467,9 +467,9 @@ func isTestBlockScopeed(eng *testEngine, key syncdomain.ScopeKey) bool {
 func getTestBlockScope(eng *testEngine, key syncdomain.ScopeKey) (syncdomain.BlockScope, bool) {
 	if eng.runtime != nil {
 		if block, ok := eng.runtime.sched.Scope(key); ok {
-			row, err := syncdomain.BlockScopeRowFromActiveScope(block)
+			row, err := blockScopeRowFromActiveScope(block)
 			if err != nil {
-				panic(fmt.Sprintf("BlockScopeRowFromActiveScope: %v", err))
+				panic(fmt.Sprintf("blockScopeRowFromActiveScope: %v", err))
 			}
 			return *row, true
 		}

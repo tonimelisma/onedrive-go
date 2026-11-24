@@ -1,7 +1,6 @@
 package syncdomain
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -58,22 +57,6 @@ func ActiveScopeFromBlockScopeRow(row *BlockScope) ActiveScope {
 		NextTrialAt:        row.NextTrialAt,
 		SlowStartThreshold: row.SlowStartThreshold,
 	}
-}
-
-func BlockScopeRowFromActiveScope(scope ActiveScope) (*BlockScope, error) {
-	if DescribeScopeKey(scope.Key).IsZero() {
-		return nil, fmt.Errorf("sync: unknown scope key %q", scope.Key.String())
-	}
-	if !scope.Key.PersistsInBlockScopes() {
-		return nil, fmt.Errorf("sync: scope key %q is not a timed block scope", scope.Key.String())
-	}
-
-	return &BlockScope{
-		Key:                scope.Key,
-		TrialInterval:      scope.TrialInterval,
-		NextTrialAt:        scope.NextTrialAt,
-		SlowStartThreshold: scope.SlowStartThreshold,
-	}, nil
 }
 
 // ScopeUpdateResult describes the outcome of UpdateScope: whether a new scope

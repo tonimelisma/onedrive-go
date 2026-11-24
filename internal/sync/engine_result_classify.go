@@ -39,7 +39,7 @@ func classifyResult(r *syncdomain.ActionCompletion) syncdomain.ResultDecision {
 	// is classified like any other, and so is a store access that outlasted
 	// its own bound: its deadline is the engine's limit on its database, which
 	// the stop does not set, and the record it failed to write is lost.
-	if r.RunEnded && syncdomain.IsCancellationEcho(r.Err) && !errors.Is(r.Err, syncdomain.ErrStoreAccessTimedOut) {
+	if r.RunEnded && isCancellationEcho(r.Err) && !errors.Is(r.Err, syncdomain.ErrStoreAccessTimedOut) {
 		return withRuntimeSummary(&syncdomain.ResultDecision{
 			Class:     resultShutdown,
 			TrialHint: syncdomain.TrialHintShutdown,
@@ -230,7 +230,7 @@ func classifyLocalResult(r *syncdomain.ActionCompletion) syncdomain.ResultDecisi
 }
 
 func withRuntimeSummary(decision *syncdomain.ResultDecision) syncdomain.ResultDecision {
-	decision.ConditionKey = syncdomain.ConditionKeyForRuntimeResult(decision.Class, decision.ConditionType)
+	decision.ConditionKey = conditionKeyForRuntimeResult(decision.Class, decision.ConditionType)
 	return *decision
 }
 
@@ -429,4 +429,44 @@ func hasPermissionActionContext(r *syncdomain.ActionCompletion) bool {
 	}
 
 	return r.ActionID != 0 || r.Path != "" || !r.DriveID.IsZero()
+}
+
+// conditionKeyForRuntimeResult maps one execution-time classified result into
+// the shared condition family used by logs, watch summaries, and status. A
+// transient runtime condition (a timeout, a conflict, a locked item) is an
+// expected failure that is retried, so it has no family; it used to be filed
+// as the unexpected condition. A failure with no condition at all is the
+// unexpected condition, and a result that is not a failure has none.
+func conditionKeyForRuntimeResult(class errclass.Class, conditionType syncdomain.IssueType) syncdomain.ConditionKey {
+	if key, ok := syncdomain.ConditionKeyForIssueType(conditionType); ok {
+		return key
+	}
+	if conditionType != "" {
+		// ConditionKeyForIssueType names no family only for the transient
+		// members and the empty value.
+		return ""
+	}
+
+	switch class {
+	case errclass.ClassRetryableTransient,
+		errclass.ClassScopeBlockingTransient,
+		errclass.ClassActionable,
+		errclass.ClassFatal:
+		return syncdomain.ConditionUnexpectedCondition
+	case errclass.ClassInvalid,
+		errclass.ClassSuccess,
+		errclass.ClassShutdown,
+		errclass.ClassSuperseded:
+		return ""
+	default:
+		return ""
+	}
+}
+
+// isCancellationEcho reports whether err is what a canceled or expired
+// context hands back to the work it interrupted. A caller that already knows
+// the run has ended (RunEnded) uses it to tell that echo of the stop from a
+// separate failure that landed during it, which is still reported.
+func isCancellationEcho(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

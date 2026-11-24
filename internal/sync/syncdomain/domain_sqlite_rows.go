@@ -18,8 +18,8 @@ type PlanningSnapshot struct {
 	// remote row without a drive of its own is this drive's.
 	ContentDriveID driveid.ID
 	// Comparisons are the planner-visible paths' comparison rows in path
-	// order, with ComparisonKind unset (ComparisonUnclassified).
-	Comparisons []SQLiteComparisonRow
+	// order.
+	Comparisons []ComparisonRow
 	// Local and Remote are the planner-visible current rows: the content
 	// filter applied, and the rows below a folder the baseline knows but the
 	// side no longer has pruned.
@@ -35,7 +35,10 @@ type PlanningSnapshot struct {
 	Baseline *BaselineSnapshot
 }
 
-type SQLiteComparisonRow struct {
+// ComparisonRow is one path's comparison facts as the planning read returns
+// them: the decision table's inputs and the move pairings, never a decided
+// kind (the planner's DecidedComparison carries that).
+type ComparisonRow struct {
 	Path                    string
 	BaselineItemID          string
 	RemoteItemID            string
@@ -65,14 +68,13 @@ type SQLiteComparisonRow struct {
 	LocalSubtreeChanged                 bool
 	RemoteSubtreeChanged                bool
 	MetadataDrift                       bool
-	ComparisonKind                      ComparisonKind
 }
 
 // ItemType is the path's item type: that of the first side present of the
 // baseline, local and remote ones. Every row of the comparison query has a
 // side present, as its path comes from one; a row with none, which only a
 // test can build, is a file, the enum's zero value.
-func (r *SQLiteComparisonRow) ItemType() ItemType {
+func (r *ComparisonRow) ItemType() ItemType {
 	for _, side := range []SideType{r.BaselineType, r.LocalType, r.RemoteType} {
 		switch side {
 		case SideFile:
@@ -93,7 +95,7 @@ func (r *SQLiteComparisonRow) ItemType() ItemType {
 // DecisionState is the decision table's input this row carries. The move
 // booleans take the candidate count as the table reads it: one candidate
 // pairs, more than one pairs nothing.
-func (r *SQLiteComparisonRow) DecisionState() DecisionState {
+func (r *ComparisonRow) DecisionState() DecisionState {
 	single := r.LocalMoveCandidateCount == 1
 
 	return DecisionState{
@@ -118,46 +120,4 @@ func (r *SQLiteComparisonRow) DecisionState() DecisionState {
 		RemoteSubtreeChanged:           r.RemoteSubtreeChanged,
 		MetadataDrift:                  r.MetadataDrift,
 	}
-}
-
-// ReconciliationRow is the reconciliation row decision makes of this
-// comparison row. An unclassified row carries the decision table's inputs,
-// so the plan error names them (R-6.2.16).
-func (r *SQLiteComparisonRow) ReconciliationRow(decision Decision) SQLiteReconciliationRow {
-	rec := SQLiteReconciliationRow{
-		Path:               r.Path,
-		ItemType:           r.ItemType(),
-		ComparisonKind:     decision.Comparison,
-		ReconciliationKind: decision.Reconciliation,
-		LocalMoveTarget:    r.LocalMoveTarget,
-		LocalMoveSource:    r.LocalMoveSource,
-		RemoteMoveTarget:   r.RemoteMoveTarget,
-		RemoteMoveSource:   r.RemoteMoveSource,
-	}
-	if rec.IsUnclassified() {
-		rec.DecisionInputs = r.DecisionState().Inputs()
-	}
-
-	return rec
-}
-
-type SQLiteReconciliationRow struct {
-	Path               string
-	ItemType           ItemType
-	ComparisonKind     ComparisonKind
-	ReconciliationKind ReconciliationKind
-	LocalMoveTarget    string
-	LocalMoveSource    string
-	RemoteMoveTarget   string
-	RemoteMoveSource   string
-	// DecisionInputs are the decision-table inputs of an unclassified row,
-	// for the plan error (DecisionState.Inputs); nil for every classified
-	// row.
-	DecisionInputs []PlannerDecisionInput
-}
-
-// IsUnclassified reports a reconciliation row outside the decision table: the
-// comparison has no rule, or no reconciliation rule matched it.
-func (r *SQLiteReconciliationRow) IsUnclassified() bool {
-	return r.ComparisonKind == ComparisonUnclassified || r.ReconciliationKind == ReconcileUnclassified
 }

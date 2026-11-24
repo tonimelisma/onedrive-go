@@ -450,13 +450,13 @@ func TestClassifyResult_StalePreconditionIsSupersededWhateverStatusItCarries(t *
 func TestRuntimeConditionKey_RepresentativeMappings(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, syncdomain.ConditionInvalidFilename, syncdomain.ConditionKeyForRuntimeResult(resultSkip, syncdomain.IssueInvalidFilename))
-	assert.Equal(t, syncdomain.ConditionRateLimited, syncdomain.ConditionKeyForRuntimeResult(resultBlockScope, syncdomain.IssueRateLimited))
-	assert.Equal(t, syncdomain.ConditionRemoteWriteDenied, syncdomain.ConditionKeyForRuntimeResult(resultSkip, syncdomain.IssueRemoteWriteDenied))
-	assert.Equal(t, syncdomain.ConditionUnexpectedCondition, syncdomain.ConditionKeyForRuntimeResult(errclass.ClassFatal, "mystery"))
-	assert.Equal(t, syncdomain.ConditionUnexpectedCondition, syncdomain.ConditionKeyForRuntimeResult(errclass.ClassActionable, ""))
-	assert.Equal(t, syncdomain.ConditionKey(""), syncdomain.ConditionKeyForRuntimeResult(errclass.ClassSuccess, ""))
-	assert.Equal(t, syncdomain.ConditionKey(""), syncdomain.ConditionKeyForRuntimeResult(errclass.ClassSuperseded, ""))
+	assert.Equal(t, syncdomain.ConditionInvalidFilename, conditionKeyForRuntimeResult(resultSkip, syncdomain.IssueInvalidFilename))
+	assert.Equal(t, syncdomain.ConditionRateLimited, conditionKeyForRuntimeResult(resultBlockScope, syncdomain.IssueRateLimited))
+	assert.Equal(t, syncdomain.ConditionRemoteWriteDenied, conditionKeyForRuntimeResult(resultSkip, syncdomain.IssueRemoteWriteDenied))
+	assert.Equal(t, syncdomain.ConditionUnexpectedCondition, conditionKeyForRuntimeResult(errclass.ClassFatal, "mystery"))
+	assert.Equal(t, syncdomain.ConditionUnexpectedCondition, conditionKeyForRuntimeResult(errclass.ClassActionable, ""))
+	assert.Equal(t, syncdomain.ConditionKey(""), conditionKeyForRuntimeResult(errclass.ClassSuccess, ""))
+	assert.Equal(t, syncdomain.ConditionKey(""), conditionKeyForRuntimeResult(errclass.ClassSuperseded, ""))
 }
 
 // A transient runtime condition is an expected failure that is retried: its
@@ -469,7 +469,7 @@ func TestRuntimeConditionKey_TransientConditionsHaveNoFamily(t *testing.T) {
 	for _, condition := range []syncdomain.IssueType{
 		syncdomain.IssueRequestTimeout, syncdomain.IssueTransientConflict, syncdomain.IssueTransientNotFound, syncdomain.IssueResourceLocked, syncdomain.IssueTransferURLRejected,
 	} {
-		assert.Empty(t, syncdomain.ConditionKeyForRuntimeResult(resultRequeue, condition), "%q", condition)
+		assert.Empty(t, conditionKeyForRuntimeResult(resultRequeue, condition), "%q", condition)
 	}
 
 	// The classifier gives a 408 such a condition, so its decision carries no key.

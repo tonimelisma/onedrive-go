@@ -292,7 +292,7 @@ func TestWatchRuntime_ScopeActivationRetiresAdmittedWorkItBlocks(t *testing.T) {
 	assert.Equal(t, 3, blockedRetryRowsForTest(t, eng, key), "the retired work is persisted blocked under the scope")
 	assert.Equal(t, 3, rt.sched.InFlight(), "retiring must not complete dependency nodes")
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventAdmittedWorkRetired && event.ScopeKey == key && event.Count == 2
+		return event.Type == engineDebugEventAdmittedWorkRetired && event.ScopeKey == key && event.Count == 2
 	}, 1, "the retirement is instrumented once with its count")
 }
 

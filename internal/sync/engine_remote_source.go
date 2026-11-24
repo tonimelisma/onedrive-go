@@ -20,15 +20,15 @@ import (
 // observer goroutines and the full remote refresh reach on the remote side;
 // nothing on it is run state.
 type remoteSource struct {
-	fetcher         syncdomain.DeltaFetcher
-	items           syncdomain.ItemClient
-	folderDelta     syncdomain.FolderDeltaFetcher // optional: mount-root delta observation
-	recursiveLister syncdomain.RecursiveLister    // optional: mount-root recursive enumeration fallback
-	socketIO        syncdomain.SocketIOEndpointFetcher
+	fetcher         DeltaFetcher
+	items           ItemClient
+	folderDelta     FolderDeltaFetcher // optional: mount-root delta observation
+	recursiveLister RecursiveLister    // optional: mount-root recursive enumeration fallback
+	socketIO        SocketIOEndpointFetcher
 	// wakeSourceFactory replaces the watch-mode websocket wake source; nil
 	// builds the production one (engineHooks.socketIOWakeSourceFactory).
 	wakeSourceFactory func(
-		syncdomain.SocketIOEndpointFetcher,
+		SocketIOEndpointFetcher,
 		driveid.ID,
 		syncobserve.SocketIOWakeSourceOptions,
 	) socketIOWakeSourceRunner

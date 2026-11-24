@@ -110,9 +110,9 @@ func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
 	assert.Empty(t, snapshot.Local)
 	assert.Empty(t, snapshot.Remote)
 	assert.Empty(t, snapshot.ObservationIssues)
-	comparisons, reconciliations := syncplan.DecideComparisons(snapshot.Comparisons, syncdomain.Decide)
-	assert.Equal(t, "both_missing", syncfixture.ComparisonKindsByPath(comparisons)["hidden/file.txt"])
-	assert.Equal(t, "baseline_remove", syncfixture.ReconciliationKindsByPath(reconciliations)["hidden/file.txt"])
+	comparisons, reconciliations := syncplan.DecideComparisons(snapshot.Comparisons, syncplan.Decide)
+	assert.Equal(t, "both_missing", comparisonKindsByPath(comparisons)["hidden/file.txt"])
+	assert.Equal(t, "baseline_remove", reconciliationKindsByPath(reconciliations)["hidden/file.txt"])
 
 	rawRemote, err := eng.baseline.ListRemoteState(ctx)
 	require.NoError(t, err)
@@ -305,7 +305,7 @@ func TestRunLiveCurrentPlan_FailsClosedWhenRemoteObservationReconcileFails(t *te
 	require.NoError(t, err)
 	var closeStore sync.Once
 	attachDebugEventRecorderWithHook(eng, func(event syncdomain.EngineDebugEvent) {
-		if event.Type != syncdomain.EngineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
+		if event.Type != engineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
 			return
 		}
 		closeStore.Do(func() {
@@ -351,7 +351,7 @@ func TestBootstrapSync_FailsClosedWhenRemoteObservationReconcileFails(t *testing
 	require.NoError(t, err)
 	var closeStore sync.Once
 	attachDebugEventRecorderWithHook(eng, func(event syncdomain.EngineDebugEvent) {
-		if event.Type != syncdomain.EngineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
+		if event.Type != engineDebugEventObservationFindingsReconcileStarted || event.Note != engineDebugNoteRemoteCurrent {
 			return
 		}
 		closeStore.Do(func() {
@@ -511,10 +511,10 @@ func TestKeepCurrentPlanBuild_LeavesDurableRuntimeStateUntouched(t *testing.T) {
 // a new local file no longer has a reconciliation. It stands in for the gap
 // the next change to the table could leave, since no reachable state is
 // unclassified today.
-func decideWithoutLocalUploadRule(s syncdomain.DecisionState) syncdomain.Decision {
-	decision := syncdomain.Decide(s)
-	if decision.Comparison == syncdomain.ComparisonLocalOnlyCreate && decision.Reconciliation == syncdomain.ReconcileUpload {
-		decision.Reconciliation = syncdomain.ReconcileUnclassified
+func decideWithoutLocalUploadRule(s syncdomain.DecisionState) syncplan.Decision {
+	decision := syncplan.Decide(s)
+	if decision.Comparison == syncplan.ComparisonLocalOnlyCreate && decision.Reconciliation == syncplan.ReconcileUpload {
+		decision.Reconciliation = syncplan.ReconcileUnclassified
 	}
 
 	return decision

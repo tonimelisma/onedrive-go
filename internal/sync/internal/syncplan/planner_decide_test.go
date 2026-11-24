@@ -13,32 +13,30 @@ import (
 //
 // The store reads the inputs and the planner decides in Go: the comparison
 // and reconciliation rows of a path carry the same kinds, the decider's; an
-// unclassified row carries the inputs the plan error prints; and the rows
-// the read returned stay undecided.
+// unclassified row carries the inputs the plan error prints.
 func TestDecideComparisons_GoDecidesEveryRowOfOneRead(t *testing.T) {
 	t.Parallel()
 
-	read := []syncdomain.SQLiteComparisonRow{
+	read := []syncdomain.ComparisonRow{
 		{Path: "new.txt", LocalType: syncdomain.SideFile, LocalChanged: true},
 		{Path: "other.txt", LocalType: syncdomain.SideFile, LocalChanged: true},
 	}
 
-	comparisons, reconciliations := DecideComparisons(read, syncdomain.Decide)
+	comparisons, reconciliations := DecideComparisons(read, Decide)
 	require.Len(t, comparisons, 2)
 	require.Len(t, reconciliations, 2)
 	for i := range comparisons {
 		assert.Equal(t, read[i].Path, comparisons[i].Path)
 		assert.Equal(t, comparisons[i].Path, reconciliations[i].Path)
 		assert.Equal(t, syncdomain.ItemTypeFile, reconciliations[i].ItemType)
-		assert.Equal(t, syncdomain.ComparisonLocalOnlyCreate, comparisons[i].ComparisonKind)
-		assert.Equal(t, syncdomain.ComparisonLocalOnlyCreate, reconciliations[i].ComparisonKind)
-		assert.Equal(t, syncdomain.ReconcileUpload, reconciliations[i].ReconciliationKind)
+		assert.Equal(t, ComparisonLocalOnlyCreate, comparisons[i].ComparisonKind)
+		assert.Equal(t, ComparisonLocalOnlyCreate, reconciliations[i].ComparisonKind)
+		assert.Equal(t, ReconcileUpload, reconciliations[i].ReconciliationKind)
 		assert.Nil(t, reconciliations[i].DecisionInputs)
-		assert.Equal(t, syncdomain.ComparisonUnclassified, read[i].ComparisonKind, "the read's rows are not changed")
 	}
 
-	refuseNew := func(_ syncdomain.DecisionState) syncdomain.Decision {
-		return syncdomain.Decision{Comparison: syncdomain.ComparisonLocalOnlyCreate, Reconciliation: syncdomain.ReconcileUnclassified}
+	refuseNew := func(_ syncdomain.DecisionState) Decision {
+		return Decision{Comparison: ComparisonLocalOnlyCreate, Reconciliation: ReconcileUnclassified}
 	}
 	_, reconciliations = DecideComparisons(read, refuseNew)
 	require.NotEmpty(t, reconciliations[0].DecisionInputs)

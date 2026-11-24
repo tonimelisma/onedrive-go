@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
-	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctest"
 )
 
@@ -36,7 +35,7 @@ func TestAddWatchesRecursive_OverDescriptorBudgetFallsBackBeforeExhaustingFiles(
 
 	err := obs.AddWatchesRecursive(t.Context(), watcher, syncfixture.MustOpenSyncTree(t, root))
 
-	require.ErrorIs(t, err, syncdomain.ErrLocalWatchUnavailable)
+	require.ErrorIs(t, err, errLocalWatchUnavailable)
 	cause, ok := WatchUnavailableCauseOf(err)
 	require.True(t, ok)
 	assert.Equal(t, watchCauseDescriptorBudget, cause)

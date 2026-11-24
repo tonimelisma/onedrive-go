@@ -45,13 +45,3 @@ func NewLocalObservationFindingsBatch() ObservationFindingsBatch {
 		ManagedIssueTypes: LocalObservationManagedIssueTypes(),
 	}
 }
-
-// NewRemoteObservationFindingsBatch is the findings batch of one root
-// observation. It manages both root read issue types, so the next observation
-// replaces whichever one an earlier answer left (a "forbidden" after a "not
-// found", or the reverse) and a read that succeeds clears either.
-func NewRemoteObservationFindingsBatch() ObservationFindingsBatch {
-	return ObservationFindingsBatch{
-		ManagedIssueTypes: []IssueType{IssueRemoteReadDenied, IssueRemoteRootNotFound},
-	}
-}

@@ -70,7 +70,7 @@ const (
 )
 
 // maxCoalesceRetries caps the number of re-schedule attempts in hashAndEmit
-// when ErrFileChangedDuringHash is returned. Prevents infinite retry if a file
+// when errFileChangedDuringHash is returned. Prevents infinite retry if a file
 // is being written to continuously.
 const maxCoalesceRetries = 3
 
@@ -169,7 +169,7 @@ const (
 
 // localWatchUnavailableError carries the cause of a watch failure from the
 // observer to the watch runtime, which falls back to periodic full scans.
-// It matches ErrLocalWatchUnavailable with errors.Is.
+// It matches errLocalWatchUnavailable with errors.Is.
 type localWatchUnavailableError struct {
 	cause WatchUnavailableCause
 	err   error
@@ -177,16 +177,16 @@ type localWatchUnavailableError struct {
 
 func (e *localWatchUnavailableError) Error() string {
 	if e.err == nil {
-		return syncdomain.ErrLocalWatchUnavailable.Error()
+		return errLocalWatchUnavailable.Error()
 	}
 
-	return syncdomain.ErrLocalWatchUnavailable.Error() + ": " + e.err.Error()
+	return errLocalWatchUnavailable.Error() + ": " + e.err.Error()
 }
 
 func (e *localWatchUnavailableError) Unwrap() error { return e.err }
 
 func (e *localWatchUnavailableError) Is(target error) bool {
-	return target == syncdomain.ErrLocalWatchUnavailable
+	return target == errLocalWatchUnavailable
 }
 
 // WatchUnavailableCauseOf returns the cause carried by err, if any.
@@ -996,7 +996,7 @@ func (o *LocalObserver) cancelPendingTimers() {
 // isFatalWatchSetupError reports a watch setup that cannot go on: watching is
 // unavailable, or the watch's run is ending.
 func isFatalWatchSetupError(ctx context.Context, err error) bool {
-	return errors.Is(err, syncdomain.ErrLocalWatchUnavailable) || syncdomain.RunEnded(ctx, err)
+	return errors.Is(err, errLocalWatchUnavailable) || syncdomain.RunEnded(ctx, err)
 }
 
 func (o *LocalObserver) rollbackAddedWatches(watcher FsWatcher, session *watchAddSession) {
@@ -1045,3 +1045,9 @@ func (o *LocalObserver) AddWatchesRecursive(ctx context.Context, watcher FsWatch
 
 	return nil
 }
+
+// errLocalWatchUnavailable is matched (through localWatchUnavailableError)
+// when the operating system cannot give watch mode the watches it needs: the
+// inotify watch or instance limit, the open-file limit, kernel memory, or the
+// kqueue descriptor budget. The engine falls back to periodic full scans.
+var errLocalWatchUnavailable = errors.New("local change watching unavailable")

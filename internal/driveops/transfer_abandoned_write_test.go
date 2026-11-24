@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -73,7 +75,7 @@ func TestDownloadToFile_AnAbandonedWriteDisownsItsPartial(t *testing.T) {
 	assert.Equal(t, int64(len(content)), result.Size)
 	require.Len(t, sinks, 2)
 	assert.NotEqual(t, ownPartial, sinks[1].Name(), "the retry wrote the partial the stuck write holds")
-	assert.True(t, IsOwnedTransferArtifactName(filepath.Base(sinks[1].Name())),
+	assert.True(t, synctree.IsOwnedTransferArtifactName(filepath.Base(sinks[1].Name())),
 		"a single-use partial is still an owned one, so a leftover is cleaned up")
 	assert.NoFileExists(t, sinks[1].Name(), "the single-use partial became the file")
 

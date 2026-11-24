@@ -30,9 +30,9 @@ type sourceSite struct {
 // on, so the shape alone cannot say the run is ending.
 func contextErrorReaders() map[sourceSite]string {
 	return map[sourceSite]string{
-		{file: "syncdomain/errors.go", function: "IsCancellationEcho"}: "once the run has ended, tells the cancellation's own " +
+		{file: "engine_result_classify.go", function: "isCancellationEcho"}: "once the run has ended, tells the cancellation's own " +
 			"error from a separate failure that landed during the stop and is still reported",
-		{file: "syncdomain/errors.go", function: "cancelCauseError.Is"}: "a cancel's cause answers to context.Canceled, so the " +
+		{file: "syncdomain/errors.go", function: "CancelCauseError.Is"}: "a cancel's cause answers to context.Canceled, so the " +
 			"work it interrupts reads as canceled",
 		{file: "syncdomain/domain_graph_error.go", function: "IsRequestTimeout"}: "with the run going on, a deadline is " +
 			"a request OneDrive never answered: retry work and outage evidence",
@@ -42,7 +42,7 @@ func contextErrorReaders() map[sourceSite]string {
 }
 
 // cancellationEchoCallers are the only functions that may call
-// IsCancellationEcho, each with why its run has ended where it does: the
+// isCancellationEcho, each with why its run has ended where it does: the
 // echo only narrows within the fact that the run has ended.
 func cancellationEchoCallers() map[sourceSite]string {
 	return map[sourceSite]string{
@@ -57,7 +57,7 @@ func cancellationEchoCallers() map[sourceSite]string {
 
 // shapeRead is one place a function reads an error's shape: an errors.Is
 // against context.Canceled or context.DeadlineExceeded or a comparison with
-// either, or a call of IsCancellationEcho (echoCall).
+// either, or a call of isCancellationEcho (echoCall).
 type shapeRead struct {
 	function string
 	pos      token.Pos
@@ -108,12 +108,12 @@ func readsContextError(node ast.Node) bool {
 	}
 }
 
-// callsCancellationEcho reports a call of IsCancellationEcho, qualified by
-// its package or, in the vocabulary itself, not.
+// callsCancellationEcho reports a call of isCancellationEcho, the engine's
+// own function.
 func callsCancellationEcho(node ast.Node) bool {
 	call, ok := node.(*ast.CallExpr)
 
-	return ok && nameOf(call.Fun) == "IsCancellationEcho"
+	return ok && nameOf(call.Fun) == "isCancellationEcho"
 }
 
 // contextPackage is the name the scanned files import package context by.
@@ -142,7 +142,7 @@ func shapeReadViolations(fset *token.FileSet, path string, file *ast.File) ([]st
 		allowed, what := readers, "reads a context error off an error"
 		fix := "ask RunEnded whether the run is ending, or name the question in contextErrorReaders"
 		if read.echoCall {
-			allowed, what = callers, "calls IsCancellationEcho"
+			allowed, what = callers, "calls isCancellationEcho"
 			fix = "ask RunEnded first, and name the function in cancellationEchoCallers with why its run has ended there"
 		}
 		if _, named := allowed[site]; named {
@@ -159,7 +159,7 @@ func shapeReadViolations(fset *token.FileSet, path string, file *ast.File) ([]st
 // context (RunEnded), never read off the error: every check of an error
 // against context.Canceled or context.DeadlineExceeded in the product files
 // of the engine and the watch control plane is in a function of a file named
-// in contextErrorReaders, every call of IsCancellationEcho is in one named in
+// in contextErrorReaders, every call of isCancellationEcho is in one named in
 // cancellationEchoCallers, and each named function still holds one.
 //
 // Validates: R-6.8.29
@@ -197,7 +197,7 @@ func TestContextErrorChecks_OnlyNamedReadersReadTheShape(t *testing.T) {
 }
 
 // The scan finds both forms of a context error check and the calls of
-// IsCancellationEcho, and names the function that holds each.
+// isCancellationEcho, and names the function that holds each.
 //
 // Validates: R-6.8.29
 func TestContextErrorChecks_FindsEachFormInItsFunction(t *testing.T) {
@@ -216,7 +216,7 @@ func stopped(err error) bool {
 
 func (w *worker) timedOut(err error) bool {
 	check := func() bool { return err == context.DeadlineExceeded }
-	return check() || errors.Is(err, errOther) || IsCancellationEcho(err)
+	return check() || errors.Is(err, errOther) || isCancellationEcho(err)
 }
 `
 	fset := token.NewFileSet()
@@ -235,7 +235,7 @@ func (w *worker) timedOut(err error) bool {
 }
 
 // A site is named by its file and its function: a function of a reader's
-// name in another file fails, and so does a new caller of IsCancellationEcho,
+// name in another file fails, and so does a new caller of isCancellationEcho,
 // each with a sentence that says what to do.
 //
 // Validates: R-6.8.29
@@ -254,7 +254,7 @@ func IsRequestTimeout(err error) bool {
 }
 
 func stopOnEcho(err error) bool {
-	return IsCancellationEcho(err)
+	return isCancellationEcho(err)
 }
 `
 	fset := token.NewFileSet()
@@ -267,6 +267,6 @@ func stopOnEcho(err error) bool {
 	require.Len(t, violations, 2)
 	assert.Contains(t, violations[0], `engine_watch_loop.go:9:9 (in "IsRequestTimeout") reads a context error`)
 	assert.Contains(t, violations[0], "ask RunEnded whether the run is ending")
-	assert.Contains(t, violations[1], `engine_watch_loop.go:13:9 (in "stopOnEcho") calls IsCancellationEcho`)
+	assert.Contains(t, violations[1], `engine_watch_loop.go:13:9 (in "stopOnEcho") calls isCancellationEcho`)
 	assert.Contains(t, violations[1], "name the function in cancellationEchoCallers with why its run has ended there")
 }

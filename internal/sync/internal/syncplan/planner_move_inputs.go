@@ -37,12 +37,12 @@ type moveInputs struct {
 }
 
 func moveCompositionInputs(
-	comparisons []syncdomain.SQLiteComparisonRow,
+	comparisons []DecidedComparison,
 	views map[string]*syncdomain.PathView,
 	remoteRows []syncdomain.RemoteStateRow,
 	localRows []syncdomain.LocalStateRow,
 ) moveInputs {
-	cmpByPath := make(map[string]*syncdomain.SQLiteComparisonRow, len(comparisons))
+	cmpByPath := make(map[string]*DecidedComparison, len(comparisons))
 	for i := range comparisons {
 		cmpByPath[comparisons[i].Path] = &comparisons[i]
 	}
@@ -79,7 +79,7 @@ func moveCompositionInputs(
 		if moveNodeTouchesUnavailableTruth(&node, views) {
 			frozen[node.key] = true
 		}
-		if cmp.ComparisonKind == syncdomain.ComparisonLocalMoveSource && cmp.LocalType.Present() && cmp.LocalMoveTarget != "" {
+		if cmp.ComparisonKind == ComparisonLocalMoveSource && cmp.LocalType.Present() && cmp.LocalMoveTarget != "" {
 			recreated[node.key] = cmp.Path
 		}
 		nodes = append(nodes, node)
@@ -104,8 +104,8 @@ func moveCompositionInputs(
 // sides know and whose hash is the synced one: an edited file, or a new one
 // on a reused inode, stays new content.
 func movedOntoAnotherItemsPath(
-	cmp *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry,
-	localRows []syncdomain.LocalStateRow, cmpByPath map[string]*syncdomain.SQLiteComparisonRow,
+	cmp *DecidedComparison, entry *syncdomain.BaselineEntry,
+	localRows []syncdomain.LocalStateRow, cmpByPath map[string]*DecidedComparison,
 ) (string, bool) {
 	if entry.ItemType != syncdomain.ItemTypeFile || cmp.LocalType.Present() {
 		return "", false
@@ -147,7 +147,7 @@ func movedOntoAnotherItemsPath(
 // item's path the file may pair onto: any while OneDrive no longer holds the
 // file where it was synced, otherwise only one whose item this computer
 // moved away (pathOfAnItemMovedAwayHere).
-func takesAnotherItemsPath(at *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry, keptOnOneDrive bool) bool {
+func takesAnotherItemsPath(at *DecidedComparison, entry *syncdomain.BaselineEntry, keptOnOneDrive bool) bool {
 	return at != nil && at.BaselineType.Present() && at.BaselineItemID != entry.ItemID &&
 		(!keptOnOneDrive || pathOfAnItemMovedAwayHere(at))
 }
@@ -160,8 +160,8 @@ func takesAnotherItemsPath(at *syncdomain.SQLiteComparisonRow, entry *syncdomain
 // collision undoes the file's move; read as new content at p, the file was
 // uploaded beside OneDrive's z while p waited for good to come back to its
 // path.
-func pathOfAnItemMovedAwayHere(at *syncdomain.SQLiteComparisonRow) bool {
-	return at.ComparisonKind == syncdomain.ComparisonLocalMoveSource && at.LocalItemReplaced &&
+func pathOfAnItemMovedAwayHere(at *DecidedComparison) bool {
+	return at.ComparisonKind == ComparisonLocalMoveSource && at.LocalItemReplaced &&
 		at.RemoteItemID == at.BaselineItemID
 }
 
@@ -179,7 +179,7 @@ func pathOfAnItemMovedAwayHere(at *syncdomain.SQLiteComparisonRow) bool {
 // edited file is (R-2.17.7): the next pass uploads it as the same item, and
 // OneDrive keeps the version it replaces.
 func editedWhereOneDriveMovedIt(
-	cmp *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry,
+	cmp *DecidedComparison, entry *syncdomain.BaselineEntry,
 	localRows []syncdomain.LocalStateRow, remoteByID map[string]*syncdomain.RemoteStateRow,
 ) (string, bool) {
 	if entry.ItemType != syncdomain.ItemTypeFile || cmp.LocalType.Present() {
@@ -215,8 +215,8 @@ func editedWhereOneDriveMovedIt(
 // content beside OneDrive's copies. Folders pair on identity alone
 // (R-2.17.1), so the identity proves it is the item and its moves compose.
 func folderMovedOntoAPathItsItemLeft(
-	cmp *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry,
-	localRows []syncdomain.LocalStateRow, cmpByPath map[string]*syncdomain.SQLiteComparisonRow,
+	cmp *DecidedComparison, entry *syncdomain.BaselineEntry,
+	localRows []syncdomain.LocalStateRow, cmpByPath map[string]*DecidedComparison,
 ) (string, bool) {
 	if entry.ItemType != syncdomain.ItemTypeFolder || cmp.LocalType.Present() {
 		return "", false
@@ -247,9 +247,9 @@ func folderMovedOntoAPathItsItemLeft(
 // displacedIntoIt reports whether at, the row of the path p where this
 // computer holds the folder of entry, is another synced folder's that this
 // computer moved below p, into the folder that took its path.
-func displacedIntoIt(at *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry, p string) bool {
+func displacedIntoIt(at *DecidedComparison, entry *syncdomain.BaselineEntry, p string) bool {
 	return at != nil && at.BaselineType == syncdomain.SideFolder && at.BaselineItemID != entry.ItemID && at.LocalItemReplaced &&
-		at.ComparisonKind == syncdomain.ComparisonLocalMoveSource && strings.HasPrefix(at.LocalMoveTarget, p+"/")
+		at.ComparisonKind == ComparisonLocalMoveSource && strings.HasPrefix(at.LocalMoveTarget, p+"/")
 }
 
 // losesAnEntryHere reports whether a synced entry below folder (the moved
@@ -259,10 +259,10 @@ func displacedIntoIt(at *syncdomain.SQLiteComparisonRow, entry *syncdomain.Basel
 // on OneDrive, addressed below the folder's old path, would wait for the
 // folder's move while the move waited for it. Such a folder is left as
 // SQLite reads it, and the rotation is then taken apart by parking.
-func losesAnEntryHere(folder string, cmpByPath map[string]*syncdomain.SQLiteComparisonRow) bool {
+func losesAnEntryHere(folder string, cmpByPath map[string]*DecidedComparison) bool {
 	for p, row := range cmpByPath {
 		if strings.HasPrefix(p, folder+"/") && row.BaselineType.Present() && !row.LocalType.Present() &&
-			row.ComparisonKind != syncdomain.ComparisonLocalMoveSource {
+			row.ComparisonKind != ComparisonLocalMoveSource {
 			return true
 		}
 	}
@@ -359,8 +359,8 @@ func composedDisplacement(
 	return moveDisplaceReplace
 }
 
-func composedLocalPosition(cmp *syncdomain.SQLiteComparisonRow, view *syncdomain.PathView) string {
-	if cmp.ComparisonKind == syncdomain.ComparisonLocalMoveSource && cmp.LocalMoveTarget != "" {
+func composedLocalPosition(cmp *DecidedComparison, view *syncdomain.PathView) string {
+	if cmp.ComparisonKind == ComparisonLocalMoveSource && cmp.LocalMoveTarget != "" {
 		return cmp.LocalMoveTarget
 	}
 	if view.Local != nil && localEntryIsBaselineItem(view.Local, view.Baseline) {
@@ -388,10 +388,10 @@ func localEntryIsBaselineItem(local *syncdomain.LocalState, baseline *syncdomain
 }
 
 func composedRemotePosition(
-	cmp *syncdomain.SQLiteComparisonRow,
+	cmp *DecidedComparison,
 	entry *syncdomain.BaselineEntry,
 	remoteByID map[string]*syncdomain.RemoteStateRow,
-	cmpByPath map[string]*syncdomain.SQLiteComparisonRow,
+	cmpByPath map[string]*DecidedComparison,
 	localPosition string,
 ) string {
 	row, ok := remoteByID[entry.ItemID]
@@ -406,7 +406,7 @@ func composedRemotePosition(
 		return ""
 	}
 	switch {
-	case at.ComparisonKind == syncdomain.ComparisonRemoteMoveShadowed:
+	case at.ComparisonKind == ComparisonRemoteMoveShadowed:
 		return row.Path
 	// The move OneDrive made is shadowed by this item's local move, and a
 	// new local file took its destination here (z moved into p here and to
@@ -438,8 +438,8 @@ func composedRemotePosition(
 // too, places the item there: SQLite paired the local move onto the path,
 // or the local position was found there by the item's identity
 // (editedWhereOneDriveMovedIt).
-func heldHereWhereOneDriveHasIt(at *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry) bool {
-	return at.ComparisonKind == syncdomain.ComparisonLocalMoveDest ||
+func heldHereWhereOneDriveHasIt(at *DecidedComparison, entry *syncdomain.BaselineEntry) bool {
+	return at.ComparisonKind == ComparisonLocalMoveDest ||
 		(at.RemoteItemID == entry.ItemID && !at.BaselineType.Present())
 }
 
@@ -455,12 +455,12 @@ func heldHereWhereOneDriveHasIt(at *syncdomain.SQLiteComparisonRow, entry *syncd
 // two paths, or, where OneDrive still held the path's own item elsewhere,
 // the download waited as a removal of that item's content and sync never
 // converged (chaos seed 55).
-func sitsAtAnotherSyncedItemsPath(at *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry) bool {
+func sitsAtAnotherSyncedItemsPath(at *DecidedComparison, entry *syncdomain.BaselineEntry) bool {
 	if at.RemoteItemID != entry.ItemID {
 		return false
 	}
 
-	return at.ComparisonKind == syncdomain.ComparisonRemoteMoveSource ||
+	return at.ComparisonKind == ComparisonRemoteMoveSource ||
 		(at.BaselineType.Present() && !at.LocalType.Present())
 }
 
@@ -471,7 +471,7 @@ func sitsAtAnotherSyncedItemsPath(at *syncdomain.SQLiteComparisonRow, entry *syn
 // folders merged as one created on both sides and x's move was never read
 // as one. The item ID proves the item sits there, so its moves compose.
 func movedOntoAPathItsItemLeftOnOneDrive(
-	at *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry, remoteByID map[string]*syncdomain.RemoteStateRow,
+	at *DecidedComparison, entry *syncdomain.BaselineEntry, remoteByID map[string]*syncdomain.RemoteStateRow,
 ) bool {
 	if at.RemoteItemID != entry.ItemID || !at.BaselineType.Present() || at.BaselineItemID == entry.ItemID {
 		return false
@@ -498,7 +498,7 @@ func movedOntoAPathItsItemLeftOnOneDrive(
 // Without it the item had no remote position and was downloaded at
 // OneDrive's path while its copy here went back up as a new file.
 func unpairedRemoteMoveOf(
-	cmp, at *syncdomain.SQLiteComparisonRow, entry *syncdomain.BaselineEntry, remoteByID map[string]*syncdomain.RemoteStateRow,
+	cmp, at *DecidedComparison, entry *syncdomain.BaselineEntry, remoteByID map[string]*syncdomain.RemoteStateRow,
 ) bool {
 	if at.RemoteItemID != entry.ItemID {
 		return false
@@ -510,7 +510,7 @@ func unpairedRemoteMoveOf(
 		return true
 	}
 
-	return at.ComparisonKind == syncdomain.ComparisonRemoteOnlyCreate && !cmp.LocalType.Present() && !cmp.RemoteType.Present()
+	return at.ComparisonKind == ComparisonRemoteOnlyCreate && !cmp.LocalType.Present() && !cmp.RemoteType.Present()
 }
 
 // remoteToLocalFolderPrefixes maps each composed folder's remote path to where

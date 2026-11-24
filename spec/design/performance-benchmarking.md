@@ -689,7 +689,7 @@ itself (about 11 s per query at 100k items) is the next target.
 
 Since 2026-11-20 the benchmark times what a plan reads (then `QueryPlannerRows`; since the planning read moved into the store and the decision into the planner, `decidedComparisonRows`, the same query and loop):
 one query over the comparison chain, then the Go decision table
-(`syncdomain.Decide`) on every row. Before, the two SQL `CASE` expressions
+(`syncplan.Decide`) on every row. Before, the two SQL `CASE` expressions
 decided and the chain ran twice, once per query. Same host, one iteration
 each, both measured in the same session (the host also ran another branch's
 tests):

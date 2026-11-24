@@ -393,10 +393,10 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 	assert.Equal(t, 1, rt.sched.InFlight(), "retiring old outbox must not complete dependency nodes as success")
 	assert.Equal(t, 1, eng.collector().Snapshot().SupersededPendingReplanRetirementCount)
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventOldOutboxRetired && event.Count == 1
+		return event.Type == engineDebugEventOldOutboxRetired && event.Count == 1
 	}, 1, "pending replan should emit retired outbox count")
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventDispatchPausedForReplan &&
+		return event.Type == engineDebugEventDispatchPausedForReplan &&
 			!event.At.IsZero() &&
 			event.Count == 1 &&
 			event.Outbox == 1 &&
@@ -404,7 +404,7 @@ func TestWatchRuntime_QueuePendingReplanRetiresOldOutbox(t *testing.T) {
 			event.IdleWorkers == 4
 	}, 1, "pending replan should record queue and idle-worker counters before retiring old outbox")
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventOldOutboxRetired &&
+		return event.Type == engineDebugEventOldOutboxRetired &&
 			!event.At.IsZero() &&
 			event.Delay == 0 &&
 			event.Count == 1 &&
@@ -467,13 +467,13 @@ func TestWatchRuntime_PendingReplanRetiresDependentsReleasedByRunningAction(t *t
 	// drained.
 	assert.Equal(t, int64(3*10), eng.collector().Snapshot().ReplanIdleWaitingDrainMS)
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventWaitingForRunningActions &&
+		return event.Type == engineDebugEventWaitingForRunningActions &&
 			!event.At.IsZero() &&
 			event.Running == 1 &&
 			event.IdleWorkers == 3
 	}, 1, "pending replan should record that old running work is still draining")
 	recorder.RequireEventCount(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventOldOutboxRetired &&
+		return event.Type == engineDebugEventOldOutboxRetired &&
 			event.Note == "released_ready_frontier" &&
 			!event.At.IsZero() &&
 			event.Count == 1 &&

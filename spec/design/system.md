@@ -74,7 +74,7 @@ internal/
   sync/                       Single mounted content-root sync engine, durable SQLite sync state, and read-only inspection
   synccontrol/                JSON-over-HTTP Unix-socket protocol shared by CLI and multisync owner
   synctest/                   Shared sync-package test helpers (test-only)
-  synctree/                   Root-bound sync runtime filesystem capability
+  synctree/                   Root-bound sync runtime filesystem capability; names the client writes into a tree
   syncverify/                 Baseline-versus-local sync verification helpers
   tokenfile/                  Pure OAuth token file I/O (leaf, stdlib + oauth2 only)
 pkg/
@@ -215,7 +215,7 @@ observation_issues / retry_work / block_scopes / observation_state ────�
 3. **SQLite owns structural diff; Go decides.** `comparison_flags` computes
    the latest snapshot-vs-baseline facts from SQLite (move pairing, the
    ancestor-move sets, content changes), the Go decision table
-   (`syncdomain.Decide`) turns them into a decision per path, and Go owns
+   (`syncplan.Decide`) turns them into a decision per path, and Go owns
    actionable-set construction, durable retry/blocker reconciliation, dependency ordering, and
    final admission on the ready frontier.
 4. **Watch-primary.** `sync --watch` is the primary runtime mode. All components serve both one-shot and watch modes.

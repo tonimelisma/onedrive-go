@@ -467,7 +467,7 @@ func TestValidateExpectedSyncRootIdentity_NamesTheMarkerAndTheWayOut(t *testing.
 
 	missing := live
 	missing.Token = "recorded-token"
-	err = syncdomain.ValidateExpectedSyncRootIdentity(tree, &missing, syncdomain.ErrSyncRootRebindHint)
+	err = syncdomain.ValidateExpectedSyncRootIdentity(tree, &missing, errSyncRootRebindHint)
 	require.ErrorIs(t, err, syncdomain.ErrMountRootUnavailable)
 	assert.Contains(t, err.Error(), "has no sync folder marker")
 	assert.Contains(t, err.Error(), synctree.RootMarkAttribute)
@@ -475,7 +475,7 @@ func TestValidateExpectedSyncRootIdentity_NamesTheMarkerAndTheWayOut(t *testing.
 	assert.Contains(t, err.Error(), "drive rebind-root")
 
 	require.NoError(t, tree.SetRootMark("someone-else"))
-	err = syncdomain.ValidateExpectedSyncRootIdentity(tree, &missing, syncdomain.ErrSyncRootRebindHint)
+	err = syncdomain.ValidateExpectedSyncRootIdentity(tree, &missing, errSyncRootRebindHint)
 	assert.Contains(t, err.Error(), "different sync folder marker")
 	assert.Contains(t, err.Error(), "drive rebind-root")
 }

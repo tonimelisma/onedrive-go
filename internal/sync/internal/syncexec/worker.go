@@ -138,7 +138,7 @@ func (wp *WorkerPool) closeCompletionsWhenWorkersExit() {
 // the completions channel so the engine-owned completion loop can terminate.
 func (wp *WorkerPool) Stop() {
 	if wp.cancel != nil {
-		wp.cancel(syncdomain.ErrWorkerPoolStopped)
+		wp.cancel(ErrWorkerPoolStopped)
 	}
 
 	wp.wg.Wait()
@@ -195,7 +195,7 @@ func (wp *WorkerPool) executeAction(ctx context.Context, ta *syncdomain.TrackedA
 	// actionCtx is canceled when executeAction returns, which stops what the
 	// action started under it.
 	actionCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(syncdomain.ErrActionReturned)
+	defer cancel(ErrActionReturned)
 
 	if freshnessErr := wp.validateActionFreshness(actionCtx, ta); freshnessErr != nil {
 		wp.sendResult(ctx, ta, nil, freshnessErr)
@@ -570,3 +570,12 @@ func (wp *WorkerPool) closeCompletions() {
 		close(wp.completions)
 	})
 }
+
+// The causes of the worker contexts' cancels. Neither reaches an action while
+// its run goes on: ErrActionReturned lands after the action returned, and
+// ErrWorkerPoolStopped ends the context the workers were started under, so an
+// action it interrupts completes with RunEnded set, as a shutdown.
+const (
+	ErrActionReturned    syncdomain.CancelCauseError = "sync: action returned"
+	ErrWorkerPoolStopped syncdomain.CancelCauseError = "sync: worker pool stopped"
+)

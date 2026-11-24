@@ -84,7 +84,7 @@ func (flow *engineFlow) dropStartupScopeRow(ctx context.Context, key syncdomain.
 		return fmt.Errorf("sync: deleting startup scope %s: %w", key.String(), err)
 	}
 	flow.deps.emit(syncdomain.EngineDebugEvent{
-		Type:     syncdomain.EngineDebugEventStartupScopeNormalized,
+		Type:     engineDebugEventStartupScopeNormalized,
 		ScopeKey: key,
 		Note:     note,
 	})
@@ -100,7 +100,7 @@ func (flow *engineFlow) activateScope(ctx context.Context, block *syncdomain.Act
 	}
 
 	flow.deps.emit(syncdomain.EngineDebugEvent{
-		Type:     syncdomain.EngineDebugEventScopeActivated,
+		Type:     engineDebugEventScopeActivated,
 		ScopeKey: block.Key,
 	})
 
@@ -112,7 +112,7 @@ func (flow *engineFlow) activateScope(ctx context.Context, block *syncdomain.Act
 // persistActiveScope writes a scope's timing to both authorities, the store
 // row and the ledger, without announcing an activation.
 func (flow *engineFlow) persistActiveScope(ctx context.Context, block *syncdomain.ActiveScope) error {
-	persisted, err := syncdomain.BlockScopeRowFromActiveScope(*block)
+	persisted, err := blockScopeRowFromActiveScope(*block)
 	if err != nil {
 		return err
 	}
@@ -291,7 +291,7 @@ type blockActivation struct {
 func (flow *engineFlow) prepareBlockActivation(sr syncdomain.ScopeUpdateResult) (*blockActivation, error) {
 	interval := syncstore.ComputeTrialInterval(sr.RetryAfter)
 	block := flow.newBlockActivation(sr.ScopeKey, interval, flow.deps.now())
-	row, err := syncdomain.BlockScopeRowFromActiveScope(*block)
+	row, err := blockScopeRowFromActiveScope(*block)
 	if err != nil {
 		return nil, fmt.Errorf("sync: activating scope %s: %w", sr.ScopeKey.String(), err)
 	}
@@ -332,7 +332,7 @@ func (flow *engineFlow) applyBlockActivation(ctx context.Context, activation *bl
 	key := activation.update.ScopeKey
 	flow.sched.PutScope(activation.block)
 	flow.deps.emit(syncdomain.EngineDebugEvent{
-		Type:     syncdomain.EngineDebugEventScopeActivated,
+		Type:     engineDebugEventScopeActivated,
 		ScopeKey: key,
 	})
 	flow.mustAssertInvariants(ctx, "activate scope")
@@ -361,7 +361,7 @@ func (flow *engineFlow) transitionTrialScopeToPersistedBlock(
 	to := activation.update.ScopeKey
 	flow.sched.PutScope(activation.block)
 	flow.deps.emit(syncdomain.EngineDebugEvent{
-		Type:     syncdomain.EngineDebugEventScopeActivated,
+		Type:     engineDebugEventScopeActivated,
 		ScopeKey: to,
 	})
 	flow.handOverColdStart(to)
@@ -527,7 +527,7 @@ func (flow *engineFlow) discardScope(ctx context.Context, key syncdomain.ScopeKe
 		flow.signals.armRetryTimer()
 	}
 	flow.deps.emit(syncdomain.EngineDebugEvent{
-		Type:     syncdomain.EngineDebugEventScopeDiscarded,
+		Type:     engineDebugEventScopeDiscarded,
 		ScopeKey: key,
 	})
 
@@ -662,4 +662,20 @@ func (flow *engineFlow) drainDueHeldWorkNow(
 	}
 
 	return flow.admitReady(ctx, ready)
+}
+
+func blockScopeRowFromActiveScope(scope syncdomain.ActiveScope) (*syncdomain.BlockScope, error) {
+	if syncdomain.DescribeScopeKey(scope.Key).IsZero() {
+		return nil, fmt.Errorf("sync: unknown scope key %q", scope.Key.String())
+	}
+	if !scope.Key.PersistsInBlockScopes() {
+		return nil, fmt.Errorf("sync: scope key %q is not a timed block scope", scope.Key.String())
+	}
+
+	return &syncdomain.BlockScope{
+		Key:                scope.Key,
+		TrialInterval:      scope.TrialInterval,
+		NextTrialAt:        scope.NextTrialAt,
+		SlowStartThreshold: scope.SlowStartThreshold,
+	}, nil
 }

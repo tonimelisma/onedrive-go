@@ -61,8 +61,8 @@ func TestAddWatchesRecursive_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), watcher, syncfixture.MustOpenSyncTree(t, root))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, syncdomain.ErrLocalWatchUnavailable,
-		"expected ErrLocalWatchUnavailable, got: %v", err)
+	assert.ErrorIs(t, err, errLocalWatchUnavailable,
+		"expected errLocalWatchUnavailable, got: %v", err)
 }
 
 // Validates: R-2.1.2
@@ -78,7 +78,7 @@ func TestAddWatchesRecursive_ENOSPCRollsBackAddedWatches(t *testing.T) {
 	err := obs.AddWatchesRecursive(t.Context(), watcher, syncfixture.MustOpenSyncTree(t, root))
 
 	require.Error(t, err)
-	require.ErrorIs(t, err, syncdomain.ErrLocalWatchUnavailable)
+	require.ErrorIs(t, err, errLocalWatchUnavailable)
 	assert.Equal(t, []string{
 		filepath.Join(root, "a"),
 		root,
@@ -103,7 +103,7 @@ func TestAddWatchesRecursive_NonENOSPC_ContinuesNormally(t *testing.T) {
 	obs := NewLocalObserver(syncfixture.EmptyBaseline(), synctest.TestLogger(t), 0)
 	err := obs.AddWatchesRecursive(t.Context(), watcher, syncfixture.MustOpenSyncTree(t, root))
 
-	// Non-ENOSPC errors should NOT return ErrLocalWatchUnavailable.
+	// Non-ENOSPC errors should NOT return errLocalWatchUnavailable.
 	require.NoError(t, err) // walks continue, failures are just logged
 	assert.Empty(t, watcher.removed, "ordinary add failures should not trigger rollback")
 	assert.Contains(t, obs.watchedDirs.paths(), filepath.Clean(root), "successful watches should remain installed")
@@ -143,7 +143,7 @@ func (w *permErrWatcher) Close() error {
 }
 
 // ---------------------------------------------------------------------------
-// Watch returns ErrLocalWatchUnavailable
+// Watch returns errLocalWatchUnavailable
 // ---------------------------------------------------------------------------
 
 // Validates: R-2.8.22
@@ -165,8 +165,8 @@ func TestWatch_ENOSPC_ReturnsWatchLimitExhausted(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, syncdomain.ErrLocalWatchUnavailable,
-		"Watch should return ErrLocalWatchUnavailable, got: %v", err)
+	assert.ErrorIs(t, err, errLocalWatchUnavailable,
+		"Watch should return errLocalWatchUnavailable, got: %v", err)
 }
 
 // ---------------------------------------------------------------------------
@@ -183,8 +183,8 @@ func TestFullScan_NonexistentSyncRoot_ReturnsError(t *testing.T) {
 	_, err := obs.FullScan(t.Context(), syncfixture.MustOpenSyncTree(t, nonexistent))
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, syncdomain.ErrSyncRootMissing,
-		"FullScan should return ErrSyncRootMissing, got: %v", err)
+	assert.ErrorIs(t, err, errSyncRootMissing,
+		"FullScan should return errSyncRootMissing, got: %v", err)
 }
 
 // Validates: R-6.2.12

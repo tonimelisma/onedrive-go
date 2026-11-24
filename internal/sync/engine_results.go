@@ -52,14 +52,14 @@ func (rt *watchRuntime) armRetryTimer() {
 	}
 
 	rt.deps.emit(syncdomain.EngineDebugEvent{
-		Type:  syncdomain.EngineDebugEventRetryTimerArmed,
+		Type:  engineDebugEventRetryTimerArmed,
 		Delay: delay,
 	})
 	retryCh, emit := rt.timers.retryTimerCh, rt.deps.emit
 	rt.resetRetryTimer(rt.deps.clock.AfterFunc(delay, func() {
-		emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRetryTimerFired})
+		emit(syncdomain.EngineDebugEvent{Type: engineDebugEventRetryTimerFired})
 		if signalTimerChannel(retryCh) {
-			emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRetryKicked})
+			emit(syncdomain.EngineDebugEvent{Type: engineDebugEventRetryKicked})
 		}
 	}))
 }
@@ -79,7 +79,7 @@ func (rt *watchRuntime) stopRetryTimer() {
 // across the engine.
 func (rt *watchRuntime) kickRetryHeldReleaseNow() {
 	if signalTimerChannel(rt.timers.retryTimerCh) {
-		rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventRetryKicked})
+		rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventRetryKicked})
 	}
 }
 
@@ -275,12 +275,12 @@ func (rt *watchRuntime) armTrialTimer() {
 	// fires while a signal is pending, all due scopes are still processed
 	// on the next loop iteration.
 	rt.deps.emit(syncdomain.EngineDebugEvent{
-		Type:  syncdomain.EngineDebugEventTrialTimerArmed,
+		Type:  engineDebugEventTrialTimerArmed,
 		Delay: delay,
 	})
 	trialCh, emit := rt.timers.trialCh, rt.deps.emit
 	rt.resetTrialTimer(rt.deps.clock.AfterFunc(delay, func() {
-		emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventTrialTimerFired})
+		emit(syncdomain.EngineDebugEvent{Type: engineDebugEventTrialTimerFired})
 		signalTimerChannel(trialCh)
 	}))
 }

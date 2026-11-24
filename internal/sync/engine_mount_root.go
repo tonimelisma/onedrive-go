@@ -145,7 +145,7 @@ func convertMountRootItems(
 	remoteDriveID driveid.ID,
 	bl syncdomain.BaselineView,
 	logger *slog.Logger,
-	itemClient syncdomain.ItemClient,
+	itemClient ItemClient,
 ) []syncdomain.RemoteItem {
 	converter := syncobserve.NewPrimaryConverter(bl, remoteDriveID, logger, nil, itemClient)
 	converter.RemoteRootItemID = remoteRootItemID

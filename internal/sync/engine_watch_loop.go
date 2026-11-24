@@ -186,7 +186,7 @@ func (rt *watchRuntime) runPendingWatchReplan(
 	if !ok {
 		return false, nil
 	}
-	rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventRunningActionsDrained, "", 0, pendingStartedAt)
+	rt.emitRuntimeDebugEvent(engineDebugEventRunningActionsDrained, "", 0, pendingStartedAt)
 
 	applied, err := rt.runSteadyStateReplan(ctx, p, batch)
 	if err != nil {
@@ -285,7 +285,7 @@ func (rt *watchRuntime) handleWatchDispatch(next int) {
 	rt.loop.createAttempts.dispatched(rt.outboxEntry(next))
 	rt.loop.outbox = rt.markDispatched(rt.loop.outbox, next)
 	if postReplanDispatch {
-		rt.emitRuntimeDebugEvent(syncdomain.EngineDebugEventFirstPostReplanDispatch, "", 0, time.Time{})
+		rt.emitRuntimeDebugEvent(engineDebugEventFirstPostReplanDispatch, "", 0, time.Time{})
 	}
 }
 
@@ -429,7 +429,7 @@ func (rt *watchRuntime) appendReadyFrontier(ready []*syncdomain.TrackedAction) e
 	}
 	nextOutbox := append(rt.currentOutbox(), ready...)
 	rt.replaceOutbox(nextOutbox)
-	rt.deps.emit(syncdomain.EngineDebugEvent{Type: syncdomain.EngineDebugEventReadyFrontierAppended})
+	rt.deps.emit(syncdomain.EngineDebugEvent{Type: engineDebugEventReadyFrontierAppended})
 	return nil
 }
 

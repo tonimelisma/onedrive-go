@@ -298,7 +298,7 @@ func TestHashAndEmit_RetriesExhausted_EmitsEvent(t *testing.T) {
 	ctx := t.Context()
 
 	// Call hashAndEmit with retries at the cap. Even though the file is
-	// stable (no ErrFileChangedDuringHash), this verifies the code path
+	// stable (no errFileChangedDuringHash), this verifies the code path
 	// works correctly at the retry boundary.
 	obs.HashAndEmit(ctx, syncfixture.MustOpenSyncTree(t, dir), HashRequest{
 		FsPath:    filePath,

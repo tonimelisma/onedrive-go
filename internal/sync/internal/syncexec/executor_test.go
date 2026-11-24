@@ -27,6 +27,9 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
+// The fixture's item client is pinned to the calls the executor makes.
+var _ ItemClient = (*syncfixture.ExecutorMockItemClient)(nil)
+
 const (
 	execHelloWorldContent      = "hello world"
 	execHelloWorldQuickXorHash = "aCgDG9jwBhDc4Q1yawMZAAAAAAA="
@@ -3370,7 +3373,7 @@ func TestCreateLocalFolder_TraversalBlocked(t *testing.T) {
 
 	o := e.ExecuteFolderCreate(t.Context(), action)
 	syncfixture.RequireOutcomeFailure(t, &o)
-	assert.ErrorIs(t, o.Error, syncdomain.ErrPathEscapesSyncRoot)
+	assert.ErrorIs(t, o.Error, errPathEscapesSyncRoot)
 }
 
 // ---------------------------------------------------------------------------

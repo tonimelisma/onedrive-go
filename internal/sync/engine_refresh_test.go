@@ -878,7 +878,7 @@ func TestWatchLoop_RefreshTick_RunsPeriodicFullRemoteRefreshThroughResultHandoff
 	refreshC <- time.Now()
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventRemoteRefreshApplied
+		return event.Type == engineDebugEventRemoteRefreshApplied
 	}, "watch loop applied periodic full remote refresh result")
 
 	batch := rt.resources.dirtyBuf.FlushImmediate()
@@ -938,7 +938,7 @@ func TestRunFullRemoteRefreshAsync_ShutdownAfterCommit(t *testing.T) {
 	// refresh apply and the ctx.Err() check.
 	ctx, cancel := context.WithCancel(t.Context())
 	attachDebugEventRecorderWithHook(e, func(event syncdomain.EngineDebugEvent) {
-		if event.Type == syncdomain.EngineDebugEventRemoteRefreshCommitted {
+		if event.Type == engineDebugEventRemoteRefreshCommitted {
 			cancel()
 		}
 	})

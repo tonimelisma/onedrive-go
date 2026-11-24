@@ -44,7 +44,7 @@ func TestRunWatch_WatcherCreateEMFILEFallsBackToPeriodicScan(t *testing.T) {
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverFallbackStarted
+		return event.Type == engineDebugEventObserverFallbackStarted
 	}, "fallback started after watcher creation failed with EMFILE")
 
 	cancel()
@@ -83,18 +83,18 @@ func TestRunWatch_WatchFallbackScansAtOnceThenAtSafetyInterval(t *testing.T) {
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverFallbackStarted
+		return event.Type == engineDebugEventObserverFallbackStarted
 	}, "fallback started")
 	// Before the fix the first fallback scan came an hour later, and the
 	// hashes and recovery scan the stopped watcher had pending were lost.
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverFallbackScanned
+		return event.Type == engineDebugEventObserverFallbackScanned
 	}, "immediate fallback scan")
 
 	syncfixture.ReceiveWithin(t, tickerCreated, "fallback scans to run at the safety-scan interval, not hourly")
 	clock.Advance(syncobserve.LocalWatchHealthySafetyScanInterval)
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverFallbackScanned
+		return event.Type == engineDebugEventObserverFallbackScanned
 	}, "scan at the safety-scan interval")
 
 	syncfixture.StopWatch(t, cancel, done)
@@ -118,14 +118,14 @@ func TestRunWatch_WatchFallbackRetriesTheWatcher(t *testing.T) {
 	cancel, done := runWatchInBackground(t, eng, syncdomain.SyncUploadOnly, quietWatchOptions())
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverFallbackStarted
+		return event.Type == engineDebugEventObserverFallbackStarted
 	}, "fallback started")
 	syncfixture.ReceiveWithin(t, retryArmed, "a watcher retry to be scheduled")
 
 	// The limit was transient. Before the fix the session stayed degraded.
 	clock.Advance(syncobserve.LocalWatchRetryInitialDelay)
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverFallbackStopped
+		return event.Type == engineDebugEventObserverFallbackStopped
 	}, "fallback ends for the retry")
 	syncfixture.ReceiveWithin(t, recovered.Added(), "the retried watcher to be established")
 	assert.Equal(t, int64(2), factoryCalls.Load())

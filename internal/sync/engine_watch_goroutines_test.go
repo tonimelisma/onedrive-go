@@ -51,7 +51,7 @@ func TestStartObservers_LocalSetupFailureStartsNoObserver(t *testing.T) {
 	})
 	eng, fault := newTestEngineOnFaultStore(t, mock, nil)
 	recorder := attachDebugEventRecorderWithHook(eng, func(event syncdomain.EngineDebugEvent) {
-		if event.Type == syncdomain.EngineDebugEventBootstrapQuiesced {
+		if event.Type == engineDebugEventBootstrapQuiesced {
 			fault.Arm("FROM mount_boundaries ORDER BY path", syncfixture.ErrInjectedFault)
 		}
 	})
@@ -62,7 +62,7 @@ func TestStartObservers_LocalSetupFailureStartsNoObserver(t *testing.T) {
 	require.ErrorIs(t, err, syncfixture.ErrInjectedFault)
 	assert.Equal(t, 1, fault.Fired(), "the mount boundaries read failed")
 	assert.False(t, recorder.FindEvent(func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverStarted
+		return event.Type == engineDebugEventObserverStarted
 	}), "no observer started")
 	assert.Zero(t, observerCalls.Load(), "the remote fetcher saw no observer poll")
 }
@@ -136,7 +136,7 @@ func TestRunWatch_ObserverThatIgnoresItsContextIsNamedAfterTheBound(t *testing.T
 	cancel()
 	syncfixture.ReceiveWithin(t, stopWaiting, "the watch's stop to wait for its goroutines")
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
-		return event.Type == syncdomain.EngineDebugEventObserverExited && event.Observer == syncdomain.EngineDebugObserverLocal
+		return event.Type == engineDebugEventObserverExited && event.Observer == engineDebugObserverLocal
 	}, "the local observer, which honors its context, to exit")
 	clock.Advance(watchGoroutineStopTimeout)
 

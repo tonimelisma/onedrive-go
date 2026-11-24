@@ -27,8 +27,8 @@ var errFolderTransferPlanned = errors.New("sync: folder planned as a content tra
 // planned (validatePlannerKinds), and a built action outside the action enums
 // fails it before any rule reads one (planBuiltActions).
 func (p *Planner) PlanCurrentState(
-	comparisons []syncdomain.SQLiteComparisonRow,
-	reconciliations []syncdomain.SQLiteReconciliationRow,
+	comparisons []DecidedComparison,
+	reconciliations []ReconciliationRow,
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
 	observationIssues []syncdomain.ObservationIssueRow,
@@ -93,13 +93,13 @@ func (p *Planner) PlanCurrentState(
 // records OneDrive's folder at the path; a move of the item that left it
 // commits by item ID wherever it lands.
 func createFoldersOneDriveMadeAtAMovedSource(
-	comparisons []syncdomain.SQLiteComparisonRow, views map[string]*syncdomain.PathView,
+	comparisons []DecidedComparison, views map[string]*syncdomain.PathView,
 ) []syncdomain.Action {
 	var creates []syncdomain.Action
 	for i := range comparisons {
 		cmp := &comparisons[i]
 		view := views[cmp.Path]
-		if cmp.ComparisonKind != syncdomain.ComparisonLocalMoveSource || cmp.LocalType.Present() ||
+		if cmp.ComparisonKind != ComparisonLocalMoveSource || cmp.LocalType.Present() ||
 			cmp.RemoteType != syncdomain.SideFolder || !cmp.RemoteItemReplaced || view == nil || view.Remote == nil ||
 			plannerSuppressesUnavailableTruth(&view.TruthStatus) {
 			continue
@@ -428,7 +428,7 @@ func logMoveNotices(logger *slog.Logger, notices []moveNotice) {
 	}
 }
 
-func comparisonPaths(rows []syncdomain.SQLiteComparisonRow) []string {
+func comparisonPaths(rows []DecidedComparison) []string {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -468,12 +468,12 @@ func logActionPlanSummary(logger *slog.Logger, message string, plan *syncdomain.
 }
 
 func buildSQLitePathViews(
-	comparisons []syncdomain.SQLiteComparisonRow,
+	comparisons []DecidedComparison,
 	localRows []syncdomain.LocalStateRow,
 	remoteRows []syncdomain.RemoteStateRow,
 	baseline syncdomain.BaselineView,
 	truthStatusByPath map[string]syncdomain.PathTruthStatus,
-) (map[string]*syncdomain.PathView, map[string]*syncdomain.SQLiteComparisonRow, error) {
+) (map[string]*syncdomain.PathView, map[string]*DecidedComparison, error) {
 	localByPath := make(map[string]syncdomain.LocalStateRow, len(localRows))
 	for i := range localRows {
 		localByPath[localRows[i].Path] = localRows[i]
@@ -485,7 +485,7 @@ func buildSQLitePathViews(
 	}
 
 	views := make(map[string]*syncdomain.PathView, len(comparisons))
-	comparisonByPath := make(map[string]*syncdomain.SQLiteComparisonRow, len(comparisons))
+	comparisonByPath := make(map[string]*DecidedComparison, len(comparisons))
 
 	for i := range comparisons {
 		row := comparisons[i]
@@ -529,8 +529,8 @@ func buildSQLitePathViews(
 
 //nolint:gocyclo // One switch maps SQL reconciliation kinds to concrete action constructors.
 func buildActionsForReconciliation(
-	rec *syncdomain.SQLiteReconciliationRow,
-	cmp *syncdomain.SQLiteComparisonRow,
+	rec *ReconciliationRow,
+	cmp *DecidedComparison,
 	views map[string]*syncdomain.PathView,
 ) ([]syncdomain.Action, error) {
 	if rec == nil || cmp == nil {
@@ -546,44 +546,44 @@ func buildActionsForReconciliation(
 	}
 
 	switch rec.ReconciliationKind {
-	case syncdomain.ReconcileUnclassified:
+	case ReconcileUnclassified:
 		// PlanCurrentState refuses these rows before planning any
 		// (validatePlannerKinds); a direct caller gets the same refusal.
 		return nil, unclassifiedRowError(rec)
-	case syncdomain.ReconcileNoop:
+	case ReconcileNoop:
 		return nil, nil
-	case syncdomain.ReconcileBaselineRemove:
+	case ReconcileBaselineRemove:
 		return []syncdomain.Action{makeAction(syncdomain.ActionCleanup, view)}, nil
-	case syncdomain.ReconcileFolderCreateLocal:
+	case ReconcileFolderCreateLocal:
 		return []syncdomain.Action{makeFolderCreate(view, syncdomain.CreateLocal)}, nil
-	case syncdomain.ReconcileFolderCreateRemote:
+	case ReconcileFolderCreateRemote:
 		return []syncdomain.Action{makeFolderCreate(view, syncdomain.CreateRemote)}, nil
-	case syncdomain.ReconcileUpload:
+	case ReconcileUpload:
 		if view.Local != nil && view.Local.ItemType == syncdomain.ItemTypeFolder {
 			return nil, fmt.Errorf("%w: upload of local folder %s", errFolderTransferPlanned, rec.Path)
 		}
 		return []syncdomain.Action{makeAction(syncdomain.ActionUpload, view)}, nil
-	case syncdomain.ReconcileDownload:
+	case ReconcileDownload:
 		if view.Remote != nil && view.Remote.ItemType == syncdomain.ItemTypeFolder {
 			return nil, fmt.Errorf("%w: download of remote folder %s", errFolderTransferPlanned, rec.Path)
 		}
 		return []syncdomain.Action{makeAction(syncdomain.ActionDownload, view)}, nil
-	case syncdomain.ReconcileLocalDelete:
+	case ReconcileLocalDelete:
 		return []syncdomain.Action{makeAction(syncdomain.ActionLocalDelete, view)}, nil
-	case syncdomain.ReconcileRemoteDelete:
+	case ReconcileRemoteDelete:
 		return []syncdomain.Action{makeAction(syncdomain.ActionRemoteDelete, view)}, nil
-	case syncdomain.ReconcileBaselineUpdate:
+	case ReconcileBaselineUpdate:
 		return []syncdomain.Action{makeAction(syncdomain.ActionBaselineUpdate, view)}, nil
-	case syncdomain.ReconcileConflictEditEdit:
+	case ReconcileConflictEditEdit:
 		return []syncdomain.Action{
 			makeConflictCopyAction(view),
 			makeDownloadAfterConflictCopyAction(view),
 		}, nil
-	case syncdomain.ReconcileConflictEditDelete:
+	case ReconcileConflictEditDelete:
 		return []syncdomain.Action{
 			makeCreateUploadAction(view),
 		}, nil
-	case syncdomain.ReconcileConflictCreateCreate:
+	case ReconcileConflictCreateCreate:
 		if view.Local != nil && view.Remote != nil && view.Local.ItemType != view.Remote.ItemType {
 			return buildKeepBothActions(view), nil
 		}
@@ -591,13 +591,13 @@ func buildActionsForReconciliation(
 			makeConflictCopyAction(view),
 			makeDownloadAfterConflictCopyAction(view),
 		}, nil
-	case syncdomain.ReconcileConflictKeepBoth:
+	case ReconcileConflictKeepBoth:
 		return buildKeepBothActions(view), nil
-	case syncdomain.ReconcileReplaceRemote:
+	case ReconcileReplaceRemote:
 		return buildReplaceRemoteActions(view), nil
-	case syncdomain.ReconcileReplaceLocal:
+	case ReconcileReplaceLocal:
 		return buildReplaceLocalActions(view), nil
-	case syncdomain.ReconcileLocalMove, syncdomain.ReconcileRemoteMove:
+	case ReconcileLocalMove, ReconcileRemoteMove:
 		// Moves are composed per item (planner_move_compose.go).
 		return nil, nil
 	default:

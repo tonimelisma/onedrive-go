@@ -222,7 +222,7 @@ func (o *LocalObserver) validateFullScanRoot(tree *synctree.Root, syncRoot strin
 		// Debug: the returned error is reported once by the caller.
 		o.logger.Debug("sync root missing, aborting scan",
 			slog.String("sync_root", syncRoot))
-		return syncdomain.ErrSyncRootMissing
+		return errSyncRootMissing
 	}
 	if err := o.expectedRoot.Validate(tree); err != nil {
 		o.logger.Debug("sync root identity changed, aborting scan",
@@ -1141,7 +1141,7 @@ const sameUnicodeFormCollisionDetail = "another file here has the same name in a
 // ---------------------------------------------------------------------------
 
 // computeStableHash hashes a file and verifies it was not modified during the
-// hash operation by comparing pre/post stat results. Returns ErrFileChangedDuringHash
+// hash operation by comparing pre/post stat results. Returns errFileChangedDuringHash
 // if the file changed (B-119). Caller-specific handling: handleWrite skips
 // (Write events guarantee a follow-up), handleCreate and scanNewDirectory emit
 // with empty hash (Create events and directory scans have no guaranteed follow-up; B-203).
@@ -1178,7 +1178,7 @@ func computeStableHashWith(
 	// read leaves size and mtime equal, and the hash would describe neither
 	// version (R-2.2.4).
 	if pre.Size() != post.Size() || pre.ModTime() != post.ModTime() || syncdomain.FileChangeTime(pre) != syncdomain.FileChangeTime(post) {
-		return "", syncdomain.ErrFileChangedDuringHash
+		return "", errFileChangedDuringHash
 	}
 
 	return hash, nil
@@ -1442,3 +1442,11 @@ func BuildLocalStateRows(result ScanResult) []syncdomain.LocalStateRow {
 func oneDrivePathLength(path string) int {
 	return len(utf16.Encode([]rune(path)))
 }
+
+// errSyncRootMissing is returned when the sync root directory does not exist
+// or is not a directory.
+var errSyncRootMissing = errors.New("sync folder does not exist")
+
+// errFileChangedDuringHash is returned when a file's metadata changes between
+// pre-hash stat and post-hash stat, indicating active writing (B-119).
+var errFileChangedDuringHash = errors.New("file changed while it was being hashed")

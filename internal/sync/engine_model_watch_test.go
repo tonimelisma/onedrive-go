@@ -171,7 +171,7 @@ func (r *modelRun) watchBatch(label string, storm time.Duration) []syncfixture.M
 
 	localStarted := make(chan struct{}, 1)
 	r.eng.SetDebugEventHook(func(event syncdomain.DebugEvent) {
-		if event.Type == syncdomain.EngineDebugEventObserverStarted && event.Observer == syncdomain.EngineDebugObserverLocal {
+		if event.Type == engineDebugEventObserverStarted && event.Observer == engineDebugObserverLocal {
 			select {
 			case localStarted <- struct{}{}:
 			default:

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
-	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
@@ -16,7 +15,7 @@ import (
 // durable retry/scope mutations.
 type permissionHandler struct {
 	store            *syncstore.SyncStore
-	permChecker      syncdomain.PermissionChecker
+	permChecker      PermissionChecker
 	syncTree         *synctree.Root
 	driveID          driveid.ID
 	accountEmail     string

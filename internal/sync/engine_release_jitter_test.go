@@ -24,7 +24,7 @@ type dispatchTrace struct {
 
 //nolint:gocritic // Value semantics match SetDebugEventHook, so the hook cannot mutate engine-owned events.
 func (tr *dispatchTrace) record(event syncdomain.DebugEvent) {
-	if event.Type != syncdomain.EngineDebugEventActionDispatched {
+	if event.Type != engineDebugEventActionDispatched {
 		return
 	}
 	tr.mu.Lock()

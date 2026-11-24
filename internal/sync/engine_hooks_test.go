@@ -81,7 +81,7 @@ func TestEngineHooks_SetAfterAFlowExistsDoNotReachThatFlow(t *testing.T) {
 		return nil
 	}
 	eng.hooks.socketIOWakeSourceFactory = func(
-		syncdomain.SocketIOEndpointFetcher, driveid.ID, syncobserve.SocketIOWakeSourceOptions,
+		SocketIOEndpointFetcher, driveid.ID, syncobserve.SocketIOWakeSourceOptions,
 	) socketIOWakeSourceRunner {
 		factoryCalled = true
 		return nil
