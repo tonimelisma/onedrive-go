@@ -613,7 +613,7 @@ The file-family split inside `internal/devtool` is also worth knowing:
 | `verify_race.go`, `verify_seeds.go`, `seed_replay.go` | The race profile; the seeds profile, its nightly start seed and the seeded families' table; the reading of the model tests' `seed-replay:` lines |
 | `verify_failed.go`, `go_test_log.go` | The failed-test profile; the one reader of go test logs, raw or `-json` |
 | `nightly.go`, `nightly_verdict.go`, `nightly_report.go`, `nightly_seed_issues.go` | The nightly claims and check; the verdict rule of a scheduled run; the nightly's commit status and issue; the failing seeds' issues |
-| `verify_dod.go`, `verify_dod_ci_wait.go` | The DoD stages and their CI waits |
+| `verify_dod.go`, `verify_dod_threads.go`, `verify_dod_threads_rest.go`, `verify_dod_ci_wait.go` | The DoD stages, their review-thread sweep (GraphQL, and REST in a cloud session) and their CI waits |
 | `worktree.go`, `worktree_prune.go` | Worktree creation from a freshly fetched `origin/main` and its bootstrap; removal of the builder worktrees whose work is in `origin/main` |
 | `verify_as_user.go` | Running verify's go test steps as a non-root user when verify runs as root |
 | `bench.go`, `bench_live.go` | Benchmark scenarios, result recording, and live benchmark runs against real accounts |
