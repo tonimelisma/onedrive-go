@@ -121,12 +121,16 @@ func (flow *observation) observeMountRootRemote(
 
 // unusableMountRootCursor reports whether err says the saved change-list
 // position of a shared folder cannot be continued, and the resync it is
-// recovered as: an expired one as expired, one that is not a link as a
-// cursor this client gave up on.
+// recovered as: an expired one as expired, one that is not a link or whose
+// pages never end as a cursor this client gave up on.
 func unusableMountRootCursor(err error) (syncdomain.ResyncKind, bool) {
 	switch {
 	case errors.Is(err, graph.ErrDeltaTokenNotALink):
 		return syncdomain.ResyncKindOf(syncdomain.NewCursorUnusableError("the saved position is not a link", err)), true
+	case errors.Is(err, graph.ErrPagingNeverEnds):
+		// The graph client follows a shared folder's pages itself, so its
+		// guard, not the observer's, sees a list that leads back.
+		return syncdomain.ResyncKindOf(syncdomain.NewCursorUnusableError("the change list leads back on itself", err)), true
 	case errors.Is(err, graph.ErrGone):
 		return syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(err)), true
 	default:

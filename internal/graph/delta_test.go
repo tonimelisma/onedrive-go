@@ -69,12 +69,14 @@ func TestDeltaListings_ALoopBackFailsAsThePageCapDoes(t *testing.T) {
 			capped := newTestClient(t, pageOnServer(t, 0, &requests).URL)
 			capped.maxDeltaPages = testListPages
 			_, _, capErr := call(t.Context(), capped)
-			require.EqualError(t, capErr, fmt.Sprintf(deltaCapErrorFormat, testListPages))
+			require.ErrorContains(t, capErr, fmt.Sprintf(deltaCapErrorFormat, testListPages))
+			require.ErrorIs(t, capErr, ErrPagingNeverEnds)
 
 			looping := newTestClient(t, newLoopingListing(t, 1, 1).srv.URL)
 			looping.maxDeltaPages = testListPages
 			_, _, loopErr := call(t.Context(), looping)
 			require.ErrorContains(t, loopErr, "graph: delta enumeration looped back")
+			require.ErrorIs(t, loopErr, ErrPagingNeverEnds, "a caller holding a saved position can tell it never ends")
 
 			for _, target := range branchedOn {
 				assert.Equal(t, errors.Is(capErr, target), errors.Is(loopErr, target), "errors.Is(err, %v)", target)
@@ -512,7 +514,8 @@ func TestDeltaAll_MaxPages(t *testing.T) {
 	client.maxDeltaPages = testListPages
 
 	items, token, err := client.DeltaAll(t.Context(), driveid.New("d"), "")
-	require.EqualError(t, err, fmt.Sprintf(deltaCapErrorFormat, testListPages))
+	require.ErrorContains(t, err, fmt.Sprintf(deltaCapErrorFormat, testListPages))
+	require.ErrorIs(t, err, ErrPagingNeverEnds)
 	assert.Equal(t, int64(testListPages), requests.Load(), "no page past the cap is asked for")
 	assert.Nil(t, items)
 	assert.Empty(t, token)
@@ -815,7 +818,8 @@ func TestDeltaFolderAll_MaxPages(t *testing.T) {
 	client.maxDeltaPages = testListPages
 
 	items, token, err := client.DeltaFolderAll(t.Context(), driveid.New("d"), "folder-abc", "")
-	require.EqualError(t, err, fmt.Sprintf(deltaCapErrorFormat, testListPages))
+	require.ErrorContains(t, err, fmt.Sprintf(deltaCapErrorFormat, testListPages))
+	require.ErrorIs(t, err, ErrPagingNeverEnds)
 	assert.Equal(t, int64(testListPages), requests.Load(), "no page past the cap is asked for")
 	assert.Nil(t, items)
 	assert.Empty(t, token)

@@ -185,8 +185,12 @@ Important properties:
   `TestRunOnce_ASavedPositionThatIsNotALinkIsRecoveredByAFullEnumeration`,
   `TestRunOnce_AMountRootPositionThatIsNotALinkIsRecoveredByAFullEnumeration`).
   A shared folder's folder delta follows its pages inside the graph client,
-  whose loop error wraps no sentinel, so such a loop fails the pass and is
-  retried until the periodic full refresh; `fetchPageRetryingRejection` retries a token
+  whose paging guard ends a list that leads back, or runs past the page cap,
+  with `graph.ErrPagingNeverEnds`; the mount-root observer reads that as a
+  position that cannot be continued and enumerates the folder again from no
+  token in the same pass
+  (`TestRunOnce_AMountRootPositionWhoseChangeListLeadsBackIsRecoveredByAFullEnumeration`);
+  `fetchPageRetryingRejection` retries a token
   refused with a non-transient 4xx once and gives up on the second refusal;
   and watch mode's `cursorServerErrorTracker` gives up on a token that has
   failed with 5xx for `cursorServerErrorResetAfter` (6 h). Every other failure

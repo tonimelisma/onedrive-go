@@ -116,3 +116,61 @@ func TestRunOnce_AMountRootPositionThatIsNotALinkIsRecoveredByAFullEnumeration(t
 	require.Greater(t, len(seen), refused+1, "the refused position is followed by a fresh enumeration: %v", seen)
 	assert.Empty(t, seen[refused+1], "the folder is enumerated again from no token")
 }
+
+// A shared folder's saved position whose change list leads back on itself
+// is recovered like one that is not a link: the graph client follows the
+// folder's pages itself, its guard ends the listing, and the folder is
+// enumerated again from no token in the same pass, instead of failing every
+// poll until the periodic full refresh.
+//
+// Validates: R-2.15.2
+func TestRunOnce_AMountRootPositionWhoseChangeListLeadsBackIsRecoveredByAFullEnumeration(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	var seen []string
+	mock := &syncfixture.EngineMockClient{
+		FolderDeltaFn: func(_ context.Context, _ driveid.ID, _, token string) ([]graph.Item, string, error) {
+			seen = append(seen, token)
+			if token != "" {
+				return nil, "", fmt.Errorf("graph: delta enumeration looped back from page 2 to page 1: %w",
+					graph.ErrPagingNeverEnds)
+			}
+
+			return nil, "looping-token", nil
+		},
+	}
+
+	tmpDir := t.TempDir()
+	syncRoot := filepath.Join(tmpDir, "sync")
+	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
+	eng, err := newEngine(t.Context(), &engineInputs{
+		DBPath:                 filepath.Join(tmpDir, "test.db"),
+		SyncRoot:               syncRoot,
+		DriveID:                driveID,
+		RemoteRootItemID:       "mount-root-root",
+		RemoteRootDeltaCapable: true,
+		Fetcher:                mock,
+		Items:                  mock,
+		Downloads:              mock,
+		Uploads:                mock,
+		FolderDelta:            mock,
+		RecursiveLister:        mock,
+		PermChecker:            mock,
+		Logger:                 syncfixture.TestLogger(t),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, eng.Close(t.Context()))
+	})
+
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncDownloadOnly, RunOptions{})
+	require.NoError(t, err)
+	_, err = eng.RunOnce(t.Context(), syncdomain.SyncDownloadOnly, RunOptions{})
+	require.NoError(t, err, "the looping position is recovered in the same pass")
+
+	looped := slices.Index(seen, "looping-token")
+	require.GreaterOrEqual(t, looped, 0, "the second pass continues from the saved position: %v", seen)
+	require.Greater(t, len(seen), looped+1, "the looping position is followed by a fresh enumeration: %v", seen)
+	assert.Empty(t, seen[looped+1], "the folder is enumerated again from no token")
+}
