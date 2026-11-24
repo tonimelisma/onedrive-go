@@ -81,23 +81,20 @@ type abandonedLocalCalls struct {
 	calls map[*localIO]abandonedLocalCall
 }
 
+// noAbandonedLocalCalls is the record of a client that has none: it has no
+// room, so it never takes a call. It is never written, so sharing it is safe.
+//
+//nolint:gochecknoglobals // an immutable empty record, never written: see above
+var noAbandonedLocalCalls = newAbandonedLocalCalls(0)
+
 func newAbandonedLocalCalls(limit int) *abandonedLocalCalls {
 	return &abandonedLocalCalls{limit: limit, now: time.Now, calls: make(map[*localIO]abandonedLocalCall)}
 }
 
-// processAbandonedLocalCalls is the process's one record of abandoned local
-// calls. It is process-wide on purpose: the bound is on what the process
-// leaves behind, whatever client or drive a transfer belongs to. Tests give a
-// client its own (Client.abandonedLocal). A goroutine still in it when the
-// process exits ends with the process; its file is closed by the exit.
-//
-//nolint:gochecknoglobals // the process-wide owner of abandoned local I/O goroutines, see above
-var processAbandonedLocalCalls = newAbandonedLocalCalls(maxAbandonedLocalCalls)
-
-// AbandonedLocalCallCount reports how many stuck local file calls the
-// process has abandoned and that have not returned yet.
-func AbandonedLocalCallCount() int {
-	return processAbandonedLocalCalls.count()
+// AbandonedLocalCallCount reports how many stuck local file calls this
+// client's transfers have abandoned and that have not returned yet.
+func (c *Client) AbandonedLocalCallCount() int {
+	return c.abandonedLocalRecord().count()
 }
 
 // adopt takes owner's goroutine over, recording call, unless the bound is
@@ -134,13 +131,19 @@ func (r *abandonedLocalCalls) count() int {
 	return len(r.calls)
 }
 
-// abandonedLocal is the record a client's transfers hand stuck calls to.
+// abandonedLocalRecord is the record this client's transfers hand stuck
+// calls to. The client owns it: NewClient makes one bounded by
+// maxAbandonedLocalCalls, so a process holds at most that many per client
+// (one per account). A client built without NewClient has none, and one with
+// no room abandons nothing: its transfers wait for a stuck call as before.
+// A goroutine still in the record when the process exits ends with it; the
+// exit closes its file.
 func (c *Client) abandonedLocalRecord() *abandonedLocalCalls {
 	if c.abandonedLocal != nil {
 		return c.abandonedLocal
 	}
 
-	return processAbandonedLocalCalls
+	return noAbandonedLocalCalls
 }
 
 // localIO runs one transfer's local file calls (an upload's reads, a

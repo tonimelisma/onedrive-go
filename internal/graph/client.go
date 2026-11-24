@@ -137,8 +137,8 @@ type Client struct {
 	stallTimeout time.Duration
 
 	// abandonedLocal is the record this client's transfers hand a stuck
-	// local file call to. Nil means the process's (processAbandonedLocalCalls);
-	// tests give a client its own so their counts are theirs.
+	// local file call to (abandonedLocalRecord); NewClient makes it, and
+	// tests give a client their own so the counts are theirs.
 	abandonedLocal *abandonedLocalCalls
 
 	// clampWarned is set once a modification time before 1900 has been

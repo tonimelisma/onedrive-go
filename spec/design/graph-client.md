@@ -440,8 +440,9 @@ writes) run on one goroutine the transfer owns (`transfer_local_io.go`,
 the transfer waits for each call's result or for the stall. When the stall
 timer fires with a call still inside the file, the transfer returns at
 once with the same errors (`ErrTransferStalled`, `ErrLocalSideStalled`)
-and hands the goroutine to the process's record of abandoned local calls
-(`abandonedLocalCalls`), which owns it from then on and records its path,
+and hands the goroutine to its client's record of abandoned local calls
+(`abandonedLocalCalls`, made by `NewClient`, one per client and so one per
+account; a client built without it abandons nothing), which owns it from then on and records its path,
 side and start; when the stuck call returns, the goroutine finishes its
 file and leaves the record, and one still in it when the process exits
 ends with the process. The record is bounded (`maxAbandonedLocalCalls`,
