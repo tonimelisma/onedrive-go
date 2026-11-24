@@ -152,15 +152,16 @@ look for a stopped onedrive-go process (one suspended with Ctrl-Z, or paused
 in a debugger) and end it. A running `sync --watch` that meets the lock
 reports it and keeps running.
 
-## "cannot lock ...: its filesystem does not support file locks"
+## "... is locked by process N on HOST ..." with a `.onedrive-go.lock` file
 
 Some network and FUSE filesystems (certain NFS and sshfs mounts) refuse the
-lock that guards `config.toml` and `catalog.json`. onedrive-go then changes
-neither file, rather than risk two processes overwriting each other's change.
-Keep the config directory (`$XDG_CONFIG_HOME/onedrive-go`) and the data
-directory (`$XDG_DATA_HOME/onedrive-go`; on macOS both default to
-`~/Library/Application Support/onedrive-go`) on a local filesystem, for
-example by pointing `XDG_CONFIG_HOME` and `XDG_DATA_HOME` at local folders.
+ordinary lock that guards `config.toml` and `catalog.json`. There onedrive-go
+uses a lock file, `.onedrive-go.lock`, beside the files it changes, and removes
+it when the change is done. If another onedrive-go command holds it, the change
+waits up to 10 seconds and then names the holder. A lock file is never taken
+over automatically: if the named process is not running any more (the message
+says so when it was on this computer), remove the file it names and run the
+command again.
 
 ## The sync state database cannot be used
 

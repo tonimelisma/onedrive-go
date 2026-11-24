@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -125,19 +124,6 @@ func TestEngineStartup_LockedCatalogWarnsAndStarts(t *testing.T) {
 	t.Parallel()
 
 	assertStartupWarnsAndStartsWhenTheClearFails(t, fmt.Errorf("updating catalog: %w", config.ErrConfigLocked))
-}
-
-// A catalog on a filesystem that cannot lock at all (some NFS and FUSE
-// mounts) is not written, and the start is not failed for it either: the
-// clear is a best-effort mark, so the engine warns, keeps the stored
-// requirement and starts, as for a held lock.
-//
-// Validates: R-2.10.46, R-4.4.4
-func TestEngineStartup_CatalogWithoutLocksWarnsAndStarts(t *testing.T) {
-	t.Parallel()
-
-	assertStartupWarnsAndStartsWhenTheClearFails(t,
-		fmt.Errorf("updating catalog: cannot lock data dir: %w (%w)", config.ErrConfigLockUnsupported, syscall.ENOLCK))
 }
 
 // assertStartupWarnsAndStartsWhenTheClearFails runs a start whose proof

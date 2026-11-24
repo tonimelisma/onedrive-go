@@ -30,13 +30,11 @@ const (
 // (exit 1, it may work if run again); the daemon logs it and carries on.
 var ErrConfigLocked = errors.New("locked by another onedrive-go process")
 
-// ErrConfigLockUnsupported means the filesystem holding the config or
-// catalog directory refused the lock itself (flock answered ENOLCK,
-// EOPNOTSUPP, ENOSYS and the like: some NFS and FUSE mounts), so the change
-// was not made. A change made without the lock could lose another process's
-// change to the same file, so there is no unlocked fallback. The error that
-// carries it names the directory and flock's answer.
-var ErrConfigLockUnsupported = errors.New("its filesystem does not support file locks")
+// errFlockUnsupported marks a directory whose filesystem refused flock
+// itself (ENOLCK, EOPNOTSUPP, ENOSYS and the like: some NFS and FUSE mounts).
+// The change then takes the lock file instead (mutation_lock_file.go); it is
+// never made unlocked.
+var errFlockUnsupported = errors.New("filesystem does not support flock")
 
 // configLocker takes the advisory lock that serializes read-modify-write
 // changes of the managed files in one directory: config.toml in the config
@@ -59,6 +57,9 @@ var ErrConfigLockUnsupported = errors.New("its filesystem does not support file 
 // config lock, and nothing that holds either takes the email change lock.
 type configLocker struct {
 	flock filelock.Flock
+	// lockFile names this process in a lock file and judges whether a
+	// recorded holder still runs (mutation_lock_file.go).
+	lockFile lockFileIdentity
 	// sleep pauses between attempts for d, or returns an error wrapping
 	// ctx's as soon as ctx ends.
 	sleep        func(ctx context.Context, d time.Duration) error
@@ -68,6 +69,7 @@ type configLocker struct {
 
 func defaultConfigLocker() configLocker {
 	return configLocker{
+		lockFile:     defaultLockFileIdentity(),
 		sleep:        sleepOrDone,
 		timeout:      configLockTimeout,
 		pollInterval: configLockPollInterval,
@@ -128,7 +130,10 @@ func (l configLocker) withMutationLock(ctx context.Context, path string, createD
 
 	fd := int(lockFile.Fd())
 	if lockErr := l.acquire(ctx, fd, dir); lockErr != nil {
-		return lockErr
+		if !errors.Is(lockErr, errFlockUnsupported) {
+			return lockErr
+		}
+		return l.withLockFile(ctx, dir, fn)
 	}
 	defer func() {
 		unlockErr := filelock.Unlock(l.flock, fd)
@@ -143,8 +148,9 @@ func (l configLocker) withMutationLock(ctx context.Context, path string, createD
 // acquire polls a non-blocking exclusive flock on fd every pollInterval until
 // it is granted or timeout has been waited out. A blocking flock would hang
 // every config change, and the daemon's reload, behind a stopped or stuck
-// holder for as long as that holder lives. A filesystem that cannot lock at
-// all fails at once with ErrConfigLockUnsupported, never by running unlocked.
+// holder for as long as that holder lives. A filesystem that cannot flock at
+// all answers errFlockUnsupported at once, and the caller takes the lock file
+// instead; nothing runs unlocked.
 // A context that has ended stops the
 // wait at once, and stops it before the first attempt too: a canceled
 // command makes no change it would then report as failed.
@@ -157,9 +163,7 @@ func (l configLocker) acquire(ctx context.Context, fd int, dir string) error {
 		locked, err := filelock.TryLock(l.flock, fd)
 		switch {
 		case filelock.IsUnsupported(err):
-			return fmt.Errorf("cannot lock %s: %w (%w); onedrive-go changes the files there only under "+
-				"that lock, so two onedrive-go processes never change one at once: keep the directory on a "+
-				"local filesystem", dir, ErrConfigLockUnsupported, err)
+			return fmt.Errorf("lock %s: %w (%w)", dir, errFlockUnsupported, err)
 		case err != nil:
 			return fmt.Errorf("locking %s: %w", dir, err)
 		case locked:
