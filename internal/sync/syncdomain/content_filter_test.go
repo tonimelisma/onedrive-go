@@ -128,6 +128,7 @@ func TestContentFilter_JunkFilesDefaultVisible(t *testing.T) {
 	assert.True(t, filter.Visible("Thumbs.db", ItemTypeFile))
 	assert.True(t, filter.Visible("download.partial", ItemTypeFile))
 	assert.False(t, filter.Visible(".onedrive-go.download.partial", ItemTypeFile))
+	assert.False(t, filter.Visible("Docs/.onedrive-go.0123456789abcdef.probe", ItemTypeFile), "a rename probe a crash left")
 }
 
 // The name a temporary spelling-rename sibling was on its way to is read back

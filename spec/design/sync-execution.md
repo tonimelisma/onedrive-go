@@ -2,7 +2,7 @@
 
 GOVERNS: internal/sync/internal/syncexec/action_freshness.go, internal/sync/internal/syncexec/executor.go, internal/sync/internal/syncexec/executor_conflict.go, internal/sync/internal/syncexec/executor_delete.go, internal/sync/internal/syncexec/executor_parent_checks.go, internal/sync/internal/syncexec/executor_preconditions.go, internal/sync/internal/syncexec/executor_transfer.go, internal/sync/internal/syncexec/worker.go, internal/sync/internal/syncexec/executor_test_seams.go, internal/sync/internal/syncexec/doc.go, internal/sync/internal/syncsched/*.go
 
-Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.4.12 [verified], R-6.4.13 [verified], R-6.10.30 [verified], R-6.7.37 [verified], R-2.12.9 [verified]
+Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.4.12 [verified], R-6.4.13 [verified], R-6.10.30 [verified], R-6.7.37 [verified], R-2.12.9 [verified], R-2.12.10 [verified]
 
 ## Overview
 
@@ -704,13 +704,43 @@ Execution delegates transfer mechanics to `driveops.TransferManager`.
 
 A local folder create (`createLocalFolder`) makes the folder, and any parent
 it is missing, through the rooted sync tree, which takes no mode from it:
-`synctree.Root.MkdirAll` asks for `localpath.UserTreeDirPerm`, 0777, and the
+`synctree.Root.MkdirExact` asks for `localpath.UserTreeDirPerm`, 0777, and the
 umask applies, as for every folder the client creates in a user's tree and
 for the files downloaded into it (R-5.10.2). It was 0755 whatever the umask,
 so under a umask of 002 the downloaded files were group-writable and their
 folders were not. The sync folder itself is not created here, and an
 existing folder is never chmodded
 (`TestExecutor_CreatedFolderFollowsTheUmask`).
+
+A local folder create never adopts an entry it did not create (R-2.12.10).
+`MkdirExact` makes the parents as `MkdirAllNoFollow` does (real folders, a
+symbolic link refused) and the folder itself with `mkdir`, which fails on an
+existing name; a volume that folds case or Unicode form fails it where
+another spelling holds the name. Only then is the parent listed, and the
+entry taken for the folder is the one spelled exactly as asked (the folder a
+create that crashed before its outcome was recorded left,
+`TestExecutor_CreateLocalFolder_AdoptsTheFolderACrashedCreateLeft`), else the
+only entry of the name's NFC form (an NFD-named folder, R-2.13.2,
+`TestExecutor_CreateLocalFolder_AdoptsTheNFDSpellingOfItsName`); the folder's
+time and identity are then set and read at that spelling. Anything else at
+the name, a case variant, two entries of one NFC form, a file or a symbolic
+link, fails the create with `synctree.ErrTargetExists`, wrapped as
+`ErrActionPreconditionChanged`, so the action is superseded and the path is
+planned again from what is there, and the entry is left untouched
+(`TestExecutor_CreateLocalFolder_CaseVariantOfAnotherFolderIsNotAdopted`,
+`TestExecutor_CreateLocalFolder_FileAtTheNameIsRefused`,
+`TestRoot_MkdirExact_RefusesACaseVariantOfAnotherFolder`,
+`TestRoot_MkdirExact_RefusesAFileOrALinkAtTheName`). It used to be
+`MkdirAll`, which on a case-insensitive volume took a user's folder `x2` for
+the `X2` it was asked to make: the remote folder's baseline was bound to the
+user's folder and its content downloaded into it. The planner holds a create
+whose case variant it sees waiting (R-2.12.1), but it cannot see a folder
+made between the plan and the dispatch in watch mode, or an entry its
+filters hide, so the create itself has to refuse. On a volume that stores
+names byte for byte the NFC create beside an NFD folder succeeds and makes a
+second folder, a local collision the next observation reports (R-2.12.3),
+never an adoption. The shortcut alias folder is made by the same call
+(`sync-engine.md`, shortcut alias folders).
 
 Successful outcomes still preserve remote ancestry for later baseline writes,
 but execution no longer reloads that parent ID from `remote_state`. Outcome
@@ -805,6 +835,25 @@ that cannot make the link (`localpath.IsLinkUnsupported`) the put-back is a
 rename that replaces nothing, with the system's no-replace flag or a check that
 the name is free and a plain rename, instead of leaving the file under its
 hidden name (`TestDetachRegularFile_PutsTheFileBackWithoutHardLinks`).
+
+Known limit: on a filesystem that offers neither hard links nor the
+no-replace flag (FAT-family: FAT32, exFAT), the put-back's check and plain
+rename have a window of microseconds in which a file saved at that name is
+replaced by the set-aside version. The owner kept this behaviour over keeping
+the file under its hidden name, which the next sync would read as a delete
+(PARKED row W59-n1, `spec/history/onedrive-go-program-2026-11-10/`). The
+engine says so once, as it starts: `synctree.Root.ProbeNoReplaceSupport` makes
+an empty `.onedrive-go.<random>.probe` file in the sync folder (observation
+ignores the name, `synctree.IsProbeArtifactName`), links it and renames it
+with the flag through the same descriptor calls the renames use, removes what
+it made, and when it found neither the engine warns once, naming the sync
+folder, that a save landing during a put-back can be replaced
+(`warnAboutPutBackWindow`;
+`TestEngine_WarnsOnceAtStartWhenAPutBackCanReplaceASave`,
+`TestEngine_NoPutBackWarningWhereTheFilesystemHasHardLinks`,
+`TestRoot_ProbeNoReplaceSupport_FindsNeitherWhereTheSystemOffersNeither`,
+`TestRoot_ProbeNoReplaceSupport_FindsHardLinksAndLeavesNothing`). A probe
+that fails decides nothing and is logged at Debug.
 
 The trash side of a take-out is reached the way the sync folder is: through
 one descriptor. Before the file is opened, the folder of the trash entry's

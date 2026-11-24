@@ -332,34 +332,6 @@ func (v *memoryVolume) mkdir(name string, perm os.FileMode) error {
 	return nil
 }
 
-func (v *memoryVolume) mkdirAll(name string, perm os.FileMode) error {
-	parts, err := nameParts(name)
-	if err != nil {
-		return &os.PathError{Op: "mkdir", Path: name, Err: err}
-	}
-
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	dir := v.root
-	for _, part := range parts {
-		child := v.lookup(dir, part)
-		if child == nil {
-			created, createErr := v.newNode(part, true, perm)
-			if createErr != nil {
-				return createErr
-			}
-			dir.children[part] = created
-			child = created
-		}
-		if !child.dir {
-			return pathError("mkdir", name, syscall.ENOTDIR)
-		}
-		dir = child
-	}
-
-	return nil
-}
-
 // remove takes name off the tree as remove(3) does: a file, or a folder only
 // when it is empty.
 func (v *memoryVolume) remove(name string, folderOnly bool) error {
@@ -583,10 +555,6 @@ func (h *memoryHandle) Stat(name string) (os.FileInfo, error) { return h.vol.sta
 func (h *memoryHandle) Lstat(name string) (os.FileInfo, error) { return h.vol.stat(name, "lstat") }
 
 func (h *memoryHandle) Mkdir(name string, perm os.FileMode) error { return h.vol.mkdir(name, perm) }
-
-func (h *memoryHandle) MkdirAll(name string, perm os.FileMode) error {
-	return h.vol.mkdirAll(name, perm)
-}
 
 func (h *memoryHandle) Remove(name string) error { return h.vol.remove(name, false) }
 

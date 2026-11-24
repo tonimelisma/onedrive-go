@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
+	"github.com/tonimelisma/onedrive-go/internal/namekey"
 )
 
 // Handle is the contained filesystem surface every sync-tree operation runs
@@ -35,7 +36,6 @@ type Handle interface {
 	Stat(name string) (os.FileInfo, error)
 	Lstat(name string) (os.FileInfo, error)
 	Mkdir(name string, perm os.FileMode) error
-	MkdirAll(name string, perm os.FileMode) error
 	Remove(name string) error
 	RemoveAll(name string) error
 	Rename(oldname, newname string) error
@@ -89,11 +89,6 @@ func (h *osRootHandle) Mkdir(name string, perm os.FileMode) error {
 	return h.root.Mkdir(name, perm)
 }
 
-func (h *osRootHandle) MkdirAll(name string, perm os.FileMode) error {
-	//nolint:wrapcheck // caller adds rooted path context after containment checks.
-	return h.root.MkdirAll(name, perm)
-}
-
 func (h *osRootHandle) Remove(name string) error {
 	//nolint:wrapcheck // caller adds rooted path context after containment checks.
 	return h.root.Remove(name)
@@ -142,7 +137,6 @@ func (h *osRootHandle) Close() error {
 // outside the root by what it is.
 type rootOps struct {
 	openRoot  func(dir string) (rootHandle, error)
-	mkdirAll  func(root rootHandle, name string, perm os.FileMode) error
 	remove    func(root rootHandle, name string) error
 	rmdir     func(root rootHandle, name string) error
 	removeAll func(root rootHandle, name string) error
@@ -189,9 +183,6 @@ func defaultRootOps() rootOps {
 			}
 
 			return &osRootHandle{root: root, dir: dir}, nil
-		},
-		mkdirAll: func(root rootHandle, name string, perm os.FileMode) error {
-			return root.MkdirAll(name, perm)
 		},
 		remove: func(root rootHandle, name string) error {
 			return root.Remove(name)
@@ -812,19 +803,134 @@ func (r *Root) hashRegularFile(rel string) ([sha256.Size]byte, error) {
 	return sum, nil
 }
 
-// MkdirAll creates rel and any missing parents inside the sync root.
-// Components that resolve outside the root fail closed. Symlinks that stay
-// inside the root are ordinary content and are followed; callers that must
-// reject in-root symlinks too want MkdirAllNoFollow.
+// MkdirExact creates the folder rel inside the sync root, and any parent it
+// is missing, and returns the name the folder has on disk. It never adopts
+// an entry it did not create: the parents are made or found as
+// MkdirAllNoFollow makes them (real folders, never a symbolic link), and the
+// folder itself is made with mkdir, so a volume that folds case or Unicode
+// form answers EEXIST where another entry already holds an equivalent name.
+// Only then is the parent listed, and the entry adopted is the one spelled
+// exactly so, else the only one whose stored (NFC) form is rel's
+// (namekey.FindStored): the folder a crashed create left behind, or the NFD
+// spelling of the stored name (R-2.13.2). Anything else at the name (a case
+// variant, two entries of one stored form, a file, a symbolic link) fails
+// the create with ErrTargetExists and is left as it is (R-2.12.10).
+//
+// On a volume that stores names byte for byte, an NFD-named folder does not
+// make mkdir of the NFC name fail: the folder is then created beside it, a
+// local collision observation reports (R-2.12.3), never an adoption.
 //
 // Every folder below the sync root is a folder in the user's tree, so the
 // mode is not the caller's to choose: each new folder asks for
 // localpath.UserTreeDirPerm and gets the umask (R-5.10.2). An existing
 // folder keeps its mode.
-func (r *Root) MkdirAll(rel string) error {
-	return r.mutateWithRoot(rel, "creating directory %s", func(root rootHandle, clean string) error {
-		return r.ops.mkdirAll(root, clean, localpath.UserTreeDirPerm)
-	})
+func (r *Root) MkdirExact(rel string) (string, error) {
+	clean, err := cleanRelative(rel)
+	if err != nil {
+		return "", err
+	}
+	if clean == "." {
+		return "", unsafePathf("the sync folder itself is not a folder to create inside it")
+	}
+
+	root, err := r.openRootNoFollow()
+	if err != nil {
+		return "", err
+	}
+	defer root.Close() //nolint:errcheck // rooted handle release; mutation errors are reported by the operation itself
+
+	parent := filepath.Dir(clean)
+	if parent != "." {
+		current := ""
+		for _, component := range strings.Split(parent, string(filepath.Separator)) {
+			current = filepath.Join(current, component)
+			if err := ensureNoFollowDirectory(root, current); err != nil {
+				return "", err
+			}
+		}
+	}
+
+	mkdirErr := root.Mkdir(clean, localpath.UserTreeDirPerm)
+	if mkdirErr == nil {
+		return clean, nil
+	}
+	if !errors.Is(mkdirErr, os.ErrExist) {
+		return "", fmt.Errorf("creating directory %s: %w", clean, r.normalizeNotExist(root, clean, mkdirErr))
+	}
+
+	return adoptExistingFolder(root, clean)
+}
+
+// adoptExistingFolder is MkdirExact's answer when mkdir found the name
+// taken: the name on disk of the folder that is clean, or ErrTargetExists.
+func adoptExistingFolder(root rootHandle, clean string) (string, error) {
+	parent := filepath.Dir(clean)
+	base := filepath.Base(clean)
+	entries, err := fs.ReadDir(root.FS(), filepath.ToSlash(parent))
+	if err != nil {
+		return "", fmt.Errorf("listing %s for the folder %s: %w", parent, clean, err)
+	}
+
+	name, found := entryOfName(entries, base)
+	if !found {
+		return "", fmt.Errorf("creating directory %s: another entry holds the name: %w", clean, ErrTargetExists)
+	}
+	onDisk := name
+	if parent != "." {
+		onDisk = filepath.Join(parent, name)
+	}
+
+	info, err := root.Lstat(onDisk)
+	if err != nil {
+		return "", fmt.Errorf("checking directory %s: %w", onDisk, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", fmt.Errorf("creating directory %s: %s is not a folder: %w", clean, onDisk, ErrTargetExists)
+	}
+
+	return onDisk, nil
+}
+
+// entryOfName is the name of the entry of a folder listing that is base:
+// the one spelled exactly so, else the only one with base's stored (NFC)
+// form. A case variant is another name, and two entries of one stored form
+// are a local collision (R-2.12.3): neither is base.
+func entryOfName(entries []fs.DirEntry, base string) (string, bool) {
+	for _, entry := range entries {
+		if entry.Name() == base {
+			return base, true
+		}
+	}
+	match := namekey.FindStored(entries, namekey.Stored(base), func(entry *fs.DirEntry) string { return (*entry).Name() })
+	if !match.Found() {
+		return "", false
+	}
+
+	return entries[match.Index].Name(), true
+}
+
+// HoldsName reports whether rel's folder holds an entry that is rel's final
+// name: spelled exactly so, or the only entry of its stored (NFC) form. An
+// lstat cannot tell: on a volume that folds case it finds a case variant,
+// which is another name. A missing folder holds nothing.
+func (r *Root) HoldsName(rel string) (bool, error) {
+	clean, err := cleanRelative(rel)
+	if err != nil {
+		return false, err
+	}
+	if clean == "." {
+		return true, nil
+	}
+	entries, err := r.ReadDir(filepath.Dir(clean))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	_, found := entryOfName(entries, filepath.Base(clean))
+
+	return found, nil
 }
 
 // ValidateNoSymlinkAncestors refuses rel when any parent component is a
@@ -876,7 +982,7 @@ func (r *Root) ValidateNoSymlinkAncestors(rel string) error {
 
 // MkdirAllNoFollow creates rel and any missing parents inside the sync root,
 // refusing any component that is a symbolic link or not a folder, even one
-// that stays inside the root. Like MkdirAll, each new folder asks for
+// that stays inside the root. Like MkdirExact, each new folder asks for
 // localpath.UserTreeDirPerm (R-5.10.2) and an existing one keeps its mode.
 func (r *Root) MkdirAllNoFollow(rel string) error {
 	clean, err := cleanRelative(rel)

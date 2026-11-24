@@ -116,13 +116,13 @@ func TestRoot_MoveInNoReplace_ThroughSymlinkedAncestorFails(t *testing.T) {
 }
 
 // Validates: R-2.4.6, R-6.2
-func TestRoot_MkdirAll_ThroughSymlinkedAncestorFails(t *testing.T) {
+func TestRoot_MkdirExact_ThroughSymlinkedAncestorFails(t *testing.T) {
 	t.Parallel()
 
 	f := newEscapeFixture(t)
 
-	err := f.root.MkdirAll("alias/created")
-	require.Error(t, err, "mkdirall through a symlinked ancestor must fail closed")
+	_, err := f.root.MkdirExact("alias/created")
+	require.Error(t, err, "a folder create through a symlinked ancestor must fail closed")
 	assert.NoDirExists(t, filepath.Join(f.outside, "created"))
 }
 
@@ -232,7 +232,7 @@ func TestRoot_MutationsWithinRootStillSucceed(t *testing.T) {
 	root, err := Open(dir)
 	require.NoError(t, err)
 
-	require.NoError(t, root.MkdirAll("a/b"))
+	require.NoError(t, root.MkdirAllNoFollow("a/b"))
 	assert.DirExists(t, filepath.Join(dir, "a", "b"))
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a", "b", "f.txt"), []byte("data"), 0o600))
@@ -266,8 +266,9 @@ func TestRoot_MutationsThroughInRootSymlinkSucceed(t *testing.T) {
 	root, err := Open(dir)
 	require.NoError(t, err)
 
-	require.NoError(t, root.MkdirAll("inner/sub"))
-	assert.DirExists(t, filepath.Join(dir, "real", "sub"))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "real", "f.txt"), []byte("data"), 0o600))
+	require.NoError(t, root.Rename("inner/f.txt", "inner/g.txt"))
+	assert.FileExists(t, filepath.Join(dir, "real", "g.txt"))
 }
 
 // Validates: R-2.4.6, R-6.2

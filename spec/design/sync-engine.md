@@ -1249,11 +1249,26 @@ snapshot that could plan remote deletes.
 The alias directory sits in the parent's sync tree and mirrors a shortcut the
 user added to their OneDrive, so the parent creates it, any parent it is
 missing, and any parent a moved alias needs, as folders in the user's tree:
-`synctree.Root.MkdirAllNoFollow` takes no mode and gives each
+`synctree.Root.MkdirExact` (the alias and its parents) and
+`MkdirAllNoFollow` (a moved alias's parents) take no mode and give each
 `localpath.UserTreeDirPerm`, 0777 minus the umask (R-5.10.2). They were 0700
 whatever the umask, though the folders the child engine creates inside the
 alias were 0755. A moved alias keeps its own mode
 (`TestEngine_ShortcutRootFoldersFollowTheUmask`).
+
+The alias folder adopts no entry it did not make (R-2.12.10), as a synced
+folder's create does (`sync-execution.md`, local folder creates). Its
+observation asks `synctree.Root.HoldsName` whether the alias's folder holds
+the alias's own name, because on a volume that folds case the lstat of
+`Shared/X2` finds a user's `Shared/x2`, which is another folder: a name not
+held is no alias folder, so the materialize runs, its `MkdirExact` fails with
+`ErrTargetExists`, and the record is `blocked_path` until the name is free;
+the user's folder is untouched. A folder spelled exactly as the alias (a
+crashed materialize's) is adopted
+(`TestEngine_ShortcutAliasCreateDoesNotAdoptACaseVariantFolder`,
+`TestEngine_ShortcutAliasCreateAdoptsItsExactlySpelledFolder`,
+`TestEngine_ShortcutAliasCreateMakesItsFolder`,
+`TestRoot_HoldsName_TellsTheNameFromACaseVariant`).
 
 Shortcut placeholder rename/delete mutations are parent-engine operations by
 binding item ID. The parent engine observes the need for local alias

@@ -24,7 +24,7 @@ func memoryRoot(t *testing.T, caps Capabilities) *Root {
 func writeMemoryFile(t *testing.T, root *Root, rel, content string) {
 	t.Helper()
 
-	require.NoError(t, root.MkdirAll(filepath.Dir(rel)))
+	require.NoError(t, root.MkdirAllNoFollow(filepath.Dir(rel)))
 	file, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	require.NoError(t, err)
 	_, err = file.WriteString(content)

@@ -138,7 +138,8 @@ func (f ContentFilter) isIgnored(path string, isDir bool) bool {
 	parts := strings.Split(path, "/")
 	for _, part := range parts {
 		if driveops.IsOwnedTransferArtifactName(part) || isSpellingRenameArtifactName(part) ||
-			synctree.IsDetachArtifactName(part) || localtrash.IsRestoreArtifactName(part) {
+			synctree.IsDetachArtifactName(part) || synctree.IsProbeArtifactName(part) ||
+			localtrash.IsRestoreArtifactName(part) {
 			return true
 		}
 	}

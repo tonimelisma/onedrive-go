@@ -246,6 +246,18 @@ func (s *shortcutRoots) observeShortcutRootLocalState(record *syncshortcut.Short
 		observation.PathErr = err
 		return observation
 	}
+	if state.Exists {
+		// On a volume that folds case the lstat finds a case variant of the
+		// alias, which is another folder, never the alias's (R-2.12.10).
+		holds, holdsErr := s.syncTree.HoldsName(onDisk)
+		if holdsErr != nil {
+			observation.PathErr = holdsErr
+			return observation
+		}
+		if !holds {
+			return observation
+		}
+	}
 	observation.PathState = state
 	if !state.Exists || !state.IsDir {
 		return observation
@@ -268,9 +280,10 @@ func (s *shortcutRoots) materializeShortcutRoot(
 	}
 	// Existing parents are addressed as spelled on disk; the folder itself,
 	// new, gets the stored name. It and any parent it needs are folders in
-	// the user's tree, like any other the sync tree creates (R-5.10.2).
-	onDisk := s.shortcutRootOnDisk(relativePath)
-	createErr := s.syncTree.MkdirAllNoFollow(onDisk)
+	// the user's tree, like any other the sync tree creates (R-5.10.2). The
+	// folder adopts no entry it did not make (R-2.12.10): another entry at
+	// the name blocks the alias's path (synctree.ErrTargetExists).
+	onDisk, createErr := s.syncTree.MkdirExact(s.shortcutRootOnDisk(relativePath))
 	if createErr != nil {
 		plan := syncshortcut.PlanShortcutRootMaterializeResult(record, syncshortcut.ShortcutRootMaterializeResult{CreateErr: createErr})
 		return syncshortcut.ShortcutRootLocalPlanResult(&plan)

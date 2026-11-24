@@ -79,11 +79,12 @@ const (
 )
 
 // syncTreeFolderCreators are the functions that make every folder the sync
-// tree creates: Root.MkdirAll, and ensureNoFollowDirectory for each folder
+// tree creates: Root.MkdirExact for the folder it is asked for, and
+// ensureNoFollowDirectory for each parent it makes and each folder
 // Root.MkdirAllNoFollow makes.
 func syncTreeFolderCreators() []string {
 	return []string{
-		syncTreePackage + "." + syncTreeRoot + ".MkdirAll",
+		syncTreePackage + "." + syncTreeRoot + ".MkdirExact",
 		syncTreePackage + ".ensureNoFollowDirectory",
 	}
 }

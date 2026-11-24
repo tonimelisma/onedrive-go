@@ -28,9 +28,11 @@ func TestRoot_CreatedFoldersFollowTheUmask(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "existing"), 0o700))
 
-	require.NoError(t, root.MkdirAll(filepath.Join("a", "b")))
+	_, err = root.MkdirExact(filepath.Join("a", "b"))
+	require.NoError(t, err)
 	require.NoError(t, root.MkdirAllNoFollow(filepath.Join("c", "d")))
-	require.NoError(t, root.MkdirAll(filepath.Join("existing", "new")))
+	_, err = root.MkdirExact(filepath.Join("existing", "new"))
+	require.NoError(t, err)
 
 	modes := map[string]os.FileMode{
 		"a":            0o775,
