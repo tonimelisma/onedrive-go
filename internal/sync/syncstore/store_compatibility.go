@@ -30,7 +30,7 @@ const (
 	StateStoreIncompatibleReasonCorrupt            stateStoreIncompatibleReason = "corrupt"
 )
 
-var errStateStoreIncompatible = errors.New("sync: incompatible sync state DB")
+var errStateStoreIncompatible = errors.New("syncstore: incompatible sync state DB")
 
 type StateStoreIncompatibleError struct {
 	Reason stateStoreIncompatibleReason

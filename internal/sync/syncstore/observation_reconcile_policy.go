@@ -66,7 +66,7 @@ func requireManagedIssueTypes(batch *syncdomain.ObservationFindingsBatch) error 
 	for i := range batch.Issues {
 		issue := &batch.Issues[i]
 		if _, ok := managed[issue.IssueType]; !ok {
-			return fmt.Errorf("sync: observation findings batch reports issue type %q at %s without managing that type",
+			return fmt.Errorf("syncstore: observation findings batch reports issue type %q at %s without managing that type",
 				issue.IssueType, issue.Path)
 		}
 	}

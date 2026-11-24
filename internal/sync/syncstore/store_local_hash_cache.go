@@ -28,7 +28,7 @@ func (s *SyncStore) NewLocalHashCache(ctx context.Context) (*storeLocalHashCache
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT path, hash, size, mtime, ctime, local_device, local_inode, local_birth_time FROM local_hash_cache`)
 	if err != nil {
-		return nil, fmt.Errorf("sync: loading the local hash cache: %w", err)
+		return nil, fmt.Errorf("syncstore: loading the local hash cache: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -36,12 +36,12 @@ func (s *SyncStore) NewLocalHashCache(ctx context.Context) (*storeLocalHashCache
 	for rows.Next() {
 		var e syncdomain.LocalHashCacheEntry
 		if err := rows.Scan(&e.Path, &e.Hash, &e.Size, &e.Mtime, &e.Ctime, &e.Device, &e.Inode, &e.BirthTime); err != nil {
-			return nil, fmt.Errorf("sync: scanning the local hash cache: %w", err)
+			return nil, fmt.Errorf("syncstore: scanning the local hash cache: %w", err)
 		}
 		entries[e.Path] = e
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating the local hash cache: %w", err)
+		return nil, fmt.Errorf("syncstore: iterating the local hash cache: %w", err)
 	}
 
 	return &storeLocalHashCache{store: s, entries: entries}, nil
@@ -61,10 +61,10 @@ func (c *storeLocalHashCache) Record(ctx context.Context, entries []syncdomain.L
 	}
 	tx, err := beginPerfTx(ctx, c.store.db)
 	if err != nil {
-		return fmt.Errorf("sync: begin local hash cache transaction: %w", err)
+		return fmt.Errorf("syncstore: begin local hash cache transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback local hash cache transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback local hash cache transaction")
 	}()
 	for i := range entries {
 		e := &entries[i]
@@ -74,11 +74,11 @@ func (c *storeLocalHashCache) Record(ctx context.Context, entries []syncdomain.L
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			e.Path, e.Hash, e.Size, e.Mtime, e.Ctime, e.Device, e.Inode, e.BirthTime,
 		); err != nil {
-			return fmt.Errorf("sync: recording the hash of %s: %w", e.Path, err)
+			return fmt.Errorf("syncstore: recording the hash of %s: %w", e.Path, err)
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: commit local hash cache transaction: %w", err)
+		return fmt.Errorf("syncstore: commit local hash cache transaction: %w", err)
 	}
 
 	return nil
@@ -92,7 +92,7 @@ func pruneLocalHashCacheTx(ctx context.Context, tx sqlTxRunner) error {
 		`DELETE FROM local_hash_cache
 		 WHERE path IN (SELECT path FROM baseline)
 		    OR path NOT IN (SELECT path FROM local_state)`); err != nil {
-		return fmt.Errorf("sync: pruning the local hash cache: %w", err)
+		return fmt.Errorf("syncstore: pruning the local hash cache: %w", err)
 	}
 
 	return nil

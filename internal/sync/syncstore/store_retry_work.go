@@ -54,11 +54,11 @@ func (s *SyncStore) UpsertRetryWork(ctx context.Context, row *syncdomain.RetryWo
 
 func upsertRetryWorkTx(ctx context.Context, runner sqlTxRunner, row *syncdomain.RetryWorkRow) error {
 	if row == nil {
-		return errors.New("sync: upserting retry_work: nil row")
+		return errors.New("syncstore: upserting retry_work: nil row")
 	}
 	// Never write what scanRetryWorkRow would refuse to read.
 	if row.ConditionType != "" && !row.ConditionType.IsMember() {
-		return fmt.Errorf("sync: upserting retry_work for %s: unknown condition type %q", row.Path, row.ConditionType)
+		return fmt.Errorf("syncstore: upserting retry_work for %s: unknown condition type %q", row.Path, row.ConditionType)
 	}
 
 	_, err := runner.ExecContext(ctx, sqlUpsertRetryWork,
@@ -73,7 +73,7 @@ func upsertRetryWorkTx(ctx context.Context, runner sqlTxRunner, row *syncdomain.
 		blockedScopeKeyColumn(row),
 	)
 	if err != nil {
-		return fmt.Errorf("sync: upserting retry_work for %s: %w", row.Path, err)
+		return fmt.Errorf("syncstore: upserting retry_work for %s: %w", row.Path, err)
 	}
 
 	return nil
@@ -100,7 +100,7 @@ func deleteRetryWorkByWorkTx(ctx context.Context, runner sqlTxRunner, work syncd
 		work.OldPath,
 		work.ActionType.String(),
 	); err != nil {
-		return fmt.Errorf("sync: deleting retry_work for %s: %w", work.Path, err)
+		return fmt.Errorf("syncstore: deleting retry_work for %s: %w", work.Path, err)
 	}
 
 	return nil
@@ -115,12 +115,12 @@ func deleteBlockedRetryWorkByScopeTx(ctx context.Context, runner sqlTxRunner, sc
 		WHERE scope_key = ? AND blocked = 1
 		ORDER BY path, old_path, action_type`, scopeKey)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing blocked retry_work for scope %s: %w", scopeKey, err)
+		return nil, fmt.Errorf("syncstore: listing blocked retry_work for scope %s: %w", scopeKey, err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 	blocked, err := scanRetryWorkRows(rows)
 	if err != nil {
-		return nil, fmt.Errorf("sync: reading blocked retry_work for scope %s: %w", scopeKey, err)
+		return nil, fmt.Errorf("syncstore: reading blocked retry_work for scope %s: %w", scopeKey, err)
 	}
 	deleted := make([]syncdomain.RetryWorkKey, 0, len(blocked))
 	for i := range blocked {
@@ -129,7 +129,7 @@ func deleteBlockedRetryWorkByScopeTx(ctx context.Context, runner sqlTxRunner, sc
 	if _, err := runner.ExecContext(ctx,
 		`DELETE FROM retry_work WHERE scope_key = ? AND blocked = 1`, scopeKey,
 	); err != nil {
-		return nil, fmt.Errorf("sync: deleting blocked retry_work for scope %s: %w", scopeKey, err)
+		return nil, fmt.Errorf("syncstore: deleting blocked retry_work for scope %s: %w", scopeKey, err)
 	}
 
 	return deleted, nil
@@ -155,11 +155,11 @@ func markRetryWorkReadyTx(
 			nowNano, work[i].Path, work[i].OldPath, work[i].ActionType.String(), scopeKey,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("sync: setting retry_work ready for %s under %s: %w", work[i].Path, scopeKey, err)
+			return nil, fmt.Errorf("syncstore: setting retry_work ready for %s under %s: %w", work[i].Path, scopeKey, err)
 		}
 		changed, err := result.RowsAffected()
 		if err != nil {
-			return nil, fmt.Errorf("sync: counting retry_work set ready for %s: %w", work[i].Path, err)
+			return nil, fmt.Errorf("syncstore: counting retry_work set ready for %s: %w", work[i].Path, err)
 		}
 		if changed == 0 {
 			continue
@@ -191,11 +191,11 @@ func (s *SyncStore) ReleaseOrphanBlockedRetryWork(ctx context.Context, now time.
 		syncdomain.StoredTimeNano(now),
 	)
 	if err != nil {
-		return 0, fmt.Errorf("sync: releasing blocked retry_work without a scope: %w", err)
+		return 0, fmt.Errorf("syncstore: releasing blocked retry_work without a scope: %w", err)
 	}
 	released, err := result.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("sync: counting released retry_work: %w", err)
+		return 0, fmt.Errorf("syncstore: counting released retry_work: %w", err)
 	}
 
 	return int(released), nil
@@ -206,7 +206,7 @@ func countBlockedRetryWorkForScopeTx(ctx context.Context, runner sqlTxRunner, sc
 	if err := runner.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM retry_work WHERE scope_key = ? AND blocked = 1`, scopeKey,
 	).Scan(&count); err != nil {
-		return 0, fmt.Errorf("sync: counting blocked retry_work for %s: %w", scopeKey, err)
+		return 0, fmt.Errorf("syncstore: counting blocked retry_work for %s: %w", scopeKey, err)
 	}
 
 	return count, nil
@@ -222,24 +222,24 @@ func (s *SyncStore) RecordRetryWorkFailure(
 	delayFn func(int) time.Duration,
 ) (row *syncdomain.RetryWorkRow, err error) {
 	if failure == nil {
-		return nil, errors.New("sync: record retry_work failure: nil failure")
+		return nil, errors.New("syncstore: record retry_work failure: nil failure")
 	}
 	if failure.Work.Path == "" {
-		return nil, errors.New("sync: record retry_work failure: missing path")
+		return nil, errors.New("syncstore: record retry_work failure: missing path")
 	}
 	if _, valueErr := failure.Work.ActionType.Value(); valueErr != nil {
-		return nil, fmt.Errorf("sync: record retry_work failure for %s: invalid action type: %w", failure.Work.Path, valueErr)
+		return nil, fmt.Errorf("syncstore: record retry_work failure for %s: invalid action type: %w", failure.Work.Path, valueErr)
 	}
 	if delayFn == nil {
-		return nil, fmt.Errorf("sync: record retry_work failure for %s: retryable work requires delay function", failure.Work.Path)
+		return nil, fmt.Errorf("syncstore: record retry_work failure for %s: retryable work requires delay function", failure.Work.Path)
 	}
 
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return nil, fmt.Errorf("sync: beginning retry_work failure transaction for %s: %w", failure.Work.Path, err)
+		return nil, fmt.Errorf("syncstore: beginning retry_work failure transaction for %s: %w", failure.Work.Path, err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback retry_work failure transaction for %s", failure.Work.Path))
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("syncstore: rollback retry_work failure transaction for %s", failure.Work.Path))
 	}()
 
 	existing, found, err := loadRetryWorkByWorkTx(ctx, tx, failure.Work)
@@ -264,7 +264,7 @@ func (s *SyncStore) RecordRetryWorkFailure(
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("sync: committing retry_work failure for %s: %w", failure.Work.Path, err)
+		return nil, fmt.Errorf("syncstore: committing retry_work failure for %s: %w", failure.Work.Path, err)
 	}
 
 	return row, nil
@@ -284,25 +284,25 @@ func (s *SyncStore) RecordBlockedRetryWork(
 	activates *syncdomain.BlockScope,
 ) (row *syncdomain.RetryWorkRow, err error) {
 	if work.Path == "" {
-		return nil, errors.New("sync: record blocked retry_work: missing path")
+		return nil, errors.New("syncstore: record blocked retry_work: missing path")
 	}
 	if _, valueErr := work.ActionType.Value(); valueErr != nil {
-		return nil, fmt.Errorf("sync: record blocked retry_work for %s: invalid action type: %w", work.Path, valueErr)
+		return nil, fmt.Errorf("syncstore: record blocked retry_work for %s: invalid action type: %w", work.Path, valueErr)
 	}
 	if scopeKey.IsZero() {
-		return nil, fmt.Errorf("sync: record blocked retry_work for %s: missing scope key", work.Path)
+		return nil, fmt.Errorf("syncstore: record blocked retry_work for %s: missing scope key", work.Path)
 	}
 	if activates != nil && activates.Key != scopeKey {
-		return nil, fmt.Errorf("sync: record blocked retry_work for %s under %s: activates scope %s",
+		return nil, fmt.Errorf("syncstore: record blocked retry_work for %s under %s: activates scope %s",
 			work.Path, scopeKey.String(), activates.Key.String())
 	}
 
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return nil, fmt.Errorf("sync: beginning blocked retry_work transaction for %s: %w", work.Path, err)
+		return nil, fmt.Errorf("syncstore: beginning blocked retry_work transaction for %s: %w", work.Path, err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback blocked retry_work transaction for %s", work.Path))
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("syncstore: rollback blocked retry_work transaction for %s", work.Path))
 	}()
 
 	if activates != nil {
@@ -332,7 +332,7 @@ func (s *SyncStore) RecordBlockedRetryWork(
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("sync: committing blocked retry_work for %s: %w", work.Path, err)
+		return nil, fmt.Errorf("syncstore: committing blocked retry_work for %s: %w", work.Path, err)
 	}
 
 	return row, nil
@@ -357,7 +357,7 @@ func loadRetryWorkByWorkTx(
 	case errors.Is(scanErr, sql.ErrNoRows):
 		return nil, false, nil
 	default:
-		return nil, false, fmt.Errorf("sync: loading retry_work for %s: %w", work.Path, scanErr)
+		return nil, false, fmt.Errorf("syncstore: loading retry_work for %s: %w", work.Path, scanErr)
 	}
 }
 
@@ -367,10 +367,10 @@ func (s *SyncStore) ResolveRetryWork(
 ) (row *syncdomain.RetryWorkRow, found bool, err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return nil, false, fmt.Errorf("sync: beginning resolve retry_work for %s: %w", work.Path, err)
+		return nil, false, fmt.Errorf("syncstore: beginning resolve retry_work for %s: %w", work.Path, err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback resolve retry_work for %s", work.Path))
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("syncstore: rollback resolve retry_work for %s", work.Path))
 	}()
 
 	row, found, err = loadRetryWorkByWorkTx(ctx, tx, work)
@@ -382,7 +382,7 @@ func (s *SyncStore) ResolveRetryWork(
 	}
 
 	if err = tx.Commit(); err != nil {
-		return nil, false, fmt.Errorf("sync: committing retry_work resolution for %s: %w", work.Path, err)
+		return nil, false, fmt.Errorf("syncstore: committing retry_work resolution for %s: %w", work.Path, err)
 	}
 
 	return row, found, nil
@@ -397,10 +397,10 @@ func (s *SyncStore) ClearBlockedRetryWork(
 ) (cleared bool, err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return false, fmt.Errorf("sync: begin clear blocked retry_work tx for %s: %w", work.Path, err)
+		return false, fmt.Errorf("syncstore: begin clear blocked retry_work tx for %s: %w", work.Path, err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback clear blocked retry_work tx for %s", work.Path))
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("syncstore: rollback clear blocked retry_work tx for %s", work.Path))
 	}()
 
 	result, execErr := tx.ExecContext(ctx,
@@ -412,15 +412,15 @@ func (s *SyncStore) ClearBlockedRetryWork(
 		scopeKey.String(),
 	)
 	if execErr != nil {
-		return false, fmt.Errorf("sync: deleting blocked retry_work for %s: %w", work.Path, execErr)
+		return false, fmt.Errorf("syncstore: deleting blocked retry_work for %s: %w", work.Path, execErr)
 	}
 	deleted, countErr := result.RowsAffected()
 	if countErr != nil {
-		return false, fmt.Errorf("sync: counting deleted blocked retry_work for %s: %w", work.Path, countErr)
+		return false, fmt.Errorf("syncstore: counting deleted blocked retry_work for %s: %w", work.Path, countErr)
 	}
 
 	if err = tx.Commit(); err != nil {
-		return false, fmt.Errorf("sync: commit clear blocked retry_work for %s: %w", work.Path, err)
+		return false, fmt.Errorf("syncstore: commit clear blocked retry_work for %s: %w", work.Path, err)
 	}
 
 	return deleted > 0, nil
@@ -433,7 +433,7 @@ func (s *SyncStore) ListRetryWork(ctx context.Context) ([]syncdomain.RetryWorkRo
 func listRetryWorkWithRunner(ctx context.Context, runner sqlTxRunner) ([]syncdomain.RetryWorkRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlListRetryWork)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying retry_work: %w", err)
+		return nil, fmt.Errorf("syncstore: querying retry_work: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -484,7 +484,7 @@ func queryRetryingRetryWorkRowsWithRunner(
 func (s *SyncStore) ListBlockedRetryWork(ctx context.Context) ([]syncdomain.RetryWorkRow, error) {
 	rows, err := s.db.QueryContext(ctx, sqlListRetryWorkBlocked)
 	if err != nil {
-		return nil, fmt.Errorf("sync: querying blocked retry_work rows: %w", err)
+		return nil, fmt.Errorf("syncstore: querying blocked retry_work rows: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only cursor; iteration errors are reported by rows.Err
 
@@ -506,10 +506,10 @@ func (s *SyncStore) PruneRetryWorkToCurrentActions(
 
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return nil, fmt.Errorf("sync: beginning retry_work prune: %w", err)
+		return nil, fmt.Errorf("syncstore: beginning retry_work prune: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback retry_work prune")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback retry_work prune")
 	}()
 
 	rows, err := listRetryWorkWithRunner(ctx, tx)
@@ -528,7 +528,7 @@ func (s *SyncStore) PruneRetryWorkToCurrentActions(
 	}
 
 	if err = tx.Commit(); err != nil {
-		return nil, fmt.Errorf("sync: committing retry_work prune: %w", err)
+		return nil, fmt.Errorf("syncstore: committing retry_work prune: %w", err)
 	}
 
 	return pruned, nil
@@ -540,7 +540,7 @@ type retryWorkScanner interface {
 
 func scanRetryWorkRow(scanner retryWorkScanner, row *syncdomain.RetryWorkRow) error {
 	if row == nil {
-		return errors.New("sync: scanning retry_work row: nil destination")
+		return errors.New("syncstore: scanning retry_work row: nil destination")
 	}
 
 	var scopeKey, conditionType string
@@ -554,7 +554,7 @@ func scanRetryWorkRow(scanner retryWorkScanner, row *syncdomain.RetryWorkRow) er
 		&row.NextRetryAt,
 		&conditionType,
 	); err != nil {
-		return fmt.Errorf("sync: scanning retry_work row: %w", err)
+		return fmt.Errorf("syncstore: scanning retry_work row: %w", err)
 	}
 
 	row.ScopeKey = syncdomain.ParseScopeKey(scopeKey)
@@ -563,7 +563,7 @@ func scanRetryWorkRow(scanner retryWorkScanner, row *syncdomain.RetryWorkRow) er
 	if conditionType != "" {
 		parsed, err := syncdomain.ParseIssueType(conditionType)
 		if err != nil {
-			return fmt.Errorf("sync: scanning retry_work row %s: %w", row.Path, err)
+			return fmt.Errorf("syncstore: scanning retry_work row %s: %w", row.Path, err)
 		}
 		row.ConditionType = parsed
 	}
@@ -576,12 +576,12 @@ func scanRetryWorkRows(rows *sql.Rows) ([]syncdomain.RetryWorkRow, error) {
 	for rows.Next() {
 		var row syncdomain.RetryWorkRow
 		if err := scanRetryWorkRow(rows, &row); err != nil {
-			return nil, fmt.Errorf("sync: scanning retry_work row: %w", err)
+			return nil, fmt.Errorf("syncstore: scanning retry_work row: %w", err)
 		}
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("sync: iterating retry_work rows: %w", err)
+		return nil, fmt.Errorf("syncstore: iterating retry_work rows: %w", err)
 	}
 
 	return result, nil

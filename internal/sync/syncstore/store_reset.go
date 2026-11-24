@@ -225,11 +225,11 @@ func ForgetMountBoundary(ctx context.Context, dbPath string, path string, logger
 
 	result, err := store.db.ExecContext(ctx, `DELETE FROM mount_boundaries WHERE path = ?`, path)
 	if err != nil {
-		return false, fmt.Errorf("sync: forgetting mount boundary %s: %w", path, err)
+		return false, fmt.Errorf("syncstore: forgetting mount boundary %s: %w", path, err)
 	}
 	removed, err := result.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("sync: forgetting mount boundary %s: %w", path, err)
+		return false, fmt.Errorf("syncstore: forgetting mount boundary %s: %w", path, err)
 	}
 
 	return removed > 0, nil

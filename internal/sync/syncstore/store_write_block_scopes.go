@@ -23,19 +23,20 @@ import (
 
 func validateBlockScope(block *syncdomain.BlockScope) error {
 	if block.Key.IsZero() {
-		return errors.New("sync: upserting block scope: missing scope key")
+		return errors.New("syncstore: upserting block scope: missing scope key")
 	}
 	if syncdomain.DescribeScopeKey(block.Key).IsZero() {
-		return fmt.Errorf("sync: upserting block scope %s: unknown scope key", block.Key.String())
+		return fmt.Errorf("syncstore: upserting block scope %s: unknown scope key", block.Key.String())
 	}
 	if !block.Key.PersistsInBlockScopes() {
-		return fmt.Errorf("sync: upserting block scope %s: read boundaries belong in observation_issues, not block_scopes", block.Key.String())
+		return fmt.Errorf(
+			"syncstore: upserting block scope %s: read boundaries belong in observation_issues, not block_scopes", block.Key.String())
 	}
 	if block.TrialInterval <= 0 {
-		return fmt.Errorf("sync: upserting block scope %s: timed scope requires positive trial interval", block.Key.String())
+		return fmt.Errorf("syncstore: upserting block scope %s: timed scope requires positive trial interval", block.Key.String())
 	}
 	if block.NextTrialAt.IsZero() {
-		return fmt.Errorf("sync: upserting block scope %s: timed scope requires next_trial_at", block.Key.String())
+		return fmt.Errorf("syncstore: upserting block scope %s: timed scope requires next_trial_at", block.Key.String())
 	}
 
 	return nil
@@ -70,7 +71,7 @@ func upsertBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, block *
 		block.SlowStartThreshold,
 	)
 	if err != nil {
-		return fmt.Errorf("sync: upserting block scope %s: %w", block.Key.String(), err)
+		return fmt.Errorf("syncstore: upserting block scope %s: %w", block.Key.String(), err)
 	}
 
 	return nil
@@ -90,7 +91,7 @@ func deleteBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, key syn
 		key.String(),
 	)
 	if err != nil {
-		return fmt.Errorf("sync: deleting block scope %s: %w", key.String(), err)
+		return fmt.Errorf("syncstore: deleting block scope %s: %w", key.String(), err)
 	}
 
 	return nil
@@ -102,7 +103,7 @@ func deleteBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, key syn
 func (s *SyncStore) ListBlockScopes(ctx context.Context) ([]*syncdomain.BlockScope, error) {
 	result, err := queryBlockScopeRowsWithRunner(ctx, s.db)
 	if err != nil {
-		return nil, fmt.Errorf("sync: listing block scopes: %w", err)
+		return nil, fmt.Errorf("syncstore: listing block scopes: %w", err)
 	}
 
 	return result, nil

@@ -94,7 +94,7 @@ func RenameShortcutRootNamespaceAt(ctx context.Context, dbPath string, from stri
 // the read-only inspector.
 func shortcutRootsAt(ctx context.Context, dbPath string, logger *slog.Logger) ([]syncshortcut.ShortcutRootRecord, error) {
 	records, err := readWithInspector(dbPath, logger, func(inspector *storeInspector) ([]syncshortcut.ShortcutRootRecord, error) {
-		return queryShortcutRootRecords(ctx, inspector.db, "sync: querying shortcut_roots", "sync: iterating shortcut_roots")
+		return queryShortcutRootRecords(ctx, inspector.db, "syncstore: querying shortcut_roots", "syncstore: iterating shortcut_roots")
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s: %w", ErrShortcutRootsUnreadable, dbPath, err)
@@ -176,7 +176,7 @@ func (s *SyncStore) ShortcutChildWorkSnapshot(
 
 // ListShortcutRoots returns parent-engine-owned shortcut root state.
 func (s *SyncStore) ListShortcutRoots(ctx context.Context) ([]syncshortcut.ShortcutRootRecord, error) {
-	return queryShortcutRootRecords(ctx, s.db, "sync: querying shortcut_roots", "sync: iterating shortcut_roots")
+	return queryShortcutRootRecords(ctx, s.db, "syncstore: querying shortcut_roots", "syncstore: iterating shortcut_roots")
 }
 
 func queryShortcutRootRecords(
@@ -220,14 +220,14 @@ func queryShortcutRootRecords(
 func (s *SyncStore) ReplaceShortcutRoots(ctx context.Context, records []syncshortcut.ShortcutRootRecord) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning shortcut_roots replacement: %w", err)
+		return fmt.Errorf("syncstore: beginning shortcut_roots replacement: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback shortcut_roots replacement")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback shortcut_roots replacement")
 	}()
 
 	if _, err = tx.ExecContext(ctx, `DELETE FROM shortcut_roots`); err != nil {
-		return fmt.Errorf("sync: clearing shortcut_roots: %w", err)
+		return fmt.Errorf("syncstore: clearing shortcut_roots: %w", err)
 	}
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO shortcut_roots (
@@ -240,7 +240,7 @@ func (s *SyncStore) ReplaceShortcutRoots(ctx context.Context, records []syncshor
 			waiting_remote_is_folder
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
-		return fmt.Errorf("sync: preparing shortcut_roots upsert: %w", err)
+		return fmt.Errorf("syncstore: preparing shortcut_roots upsert: %w", err)
 	}
 	defer stmt.Close() //nolint:errcheck // statement handle release; the write itself is checked at Exec
 
@@ -248,7 +248,7 @@ func (s *SyncStore) ReplaceShortcutRoots(ctx context.Context, records []syncshor
 		record := syncshortcut.NormalizeShortcutRootRecord(&records[i])
 		protectedPaths, marshalErr := json.Marshal(record.ProtectedPaths)
 		if marshalErr != nil {
-			return fmt.Errorf("sync: encoding protected paths for shortcut root %s: %w", record.BindingItemID, marshalErr)
+			return fmt.Errorf("syncstore: encoding protected paths for shortcut root %s: %w", record.BindingItemID, marshalErr)
 		}
 		identity, hasIdentity := shortcutRootIdentitySQL(record.LocalRootIdentity)
 		waiting := record.Waiting
@@ -277,11 +277,11 @@ func (s *SyncStore) ReplaceShortcutRoots(ctx context.Context, records []syncshor
 			waiting.RemoteItemID,
 			boolInt(waiting.RemoteIsFolder),
 		); err != nil {
-			return fmt.Errorf("sync: inserting shortcut root %s: %w", record.BindingItemID, err)
+			return fmt.Errorf("syncstore: inserting shortcut root %s: %w", record.BindingItemID, err)
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing shortcut_roots replacement: %w", err)
+		return fmt.Errorf("syncstore: committing shortcut_roots replacement: %w", err)
 	}
 	return nil
 }
@@ -325,10 +325,11 @@ func scanShortcutRootRecord(row shortcutRootScanner) (syncshortcut.ShortcutRootR
 		&waiting.RemoteItemID,
 		&waitingRemoteIsFolder,
 	); err != nil {
-		return syncshortcut.ShortcutRootRecord{}, fmt.Errorf("sync: scanning shortcut_roots row: %w", err)
+		return syncshortcut.ShortcutRootRecord{}, fmt.Errorf("syncstore: scanning shortcut_roots row: %w", err)
 	}
 	if err := json.Unmarshal([]byte(protectedPathsJSON), &record.ProtectedPaths); err != nil {
-		return syncshortcut.ShortcutRootRecord{}, fmt.Errorf("sync: decoding shortcut root protected paths for %s: %w", record.BindingItemID, err)
+		return syncshortcut.ShortcutRootRecord{}, fmt.Errorf(
+			"syncstore: decoding shortcut root protected paths for %s: %w", record.BindingItemID, err)
 	}
 	record.RemoteIsFolder = remoteIsFolder != 0
 	record.State = syncshortcut.ShortcutRootState(state)

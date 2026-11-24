@@ -30,10 +30,10 @@ func (s *SyncStore) ReleaseScopeWork(
 
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return nil, false, fmt.Errorf("sync: begin release-scope tx for %s: %w", wire, err)
+		return nil, false, fmt.Errorf("syncstore: begin release-scope tx for %s: %w", wire, err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback release-scope tx for %s", wire))
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("syncstore: rollback release-scope tx for %s", wire))
 	}()
 
 	released, err = markRetryWorkReadyTx(ctx, tx, wire, work, nowNano)
@@ -51,7 +51,7 @@ func (s *SyncStore) ReleaseScopeWork(
 	}
 
 	if err = tx.Commit(); err != nil {
-		return nil, false, fmt.Errorf("sync: committing release-scope for %s: %w", wire, err)
+		return nil, false, fmt.Errorf("syncstore: committing release-scope for %s: %w", wire, err)
 	}
 
 	return released, remaining == 0, nil
@@ -68,17 +68,17 @@ func (s *SyncStore) ReleaseScopeWork(
 // the scope as evidence) keeps its attempt count and its next retry time.
 func (s *SyncStore) DiscardScope(ctx context.Context, scopeKey syncdomain.ScopeKey) (deleted []syncdomain.RetryWorkKey, err error) {
 	if scopeKey.IsZero() {
-		return nil, errors.New("sync: discard scope: missing scope key")
+		return nil, errors.New("syncstore: discard scope: missing scope key")
 	}
 
 	wire := scopeKey.String()
 
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return nil, fmt.Errorf("sync: begin discard-scope tx for %s: %w", wire, err)
+		return nil, fmt.Errorf("syncstore: begin discard-scope tx for %s: %w", wire, err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, fmt.Sprintf("sync: rollback discard-scope tx for %s", wire))
+		err = finalizeTxRollback(err, tx, fmt.Sprintf("syncstore: rollback discard-scope tx for %s", wire))
 	}()
 
 	// The blocked rows go first: they reference the scope row, and the
@@ -92,7 +92,7 @@ func (s *SyncStore) DiscardScope(ctx context.Context, scopeKey syncdomain.ScopeK
 	}
 
 	if err = tx.Commit(); err != nil {
-		return nil, fmt.Errorf("sync: committing discard-scope for %s: %w", wire, err)
+		return nil, fmt.Errorf("syncstore: committing discard-scope for %s: %w", wire, err)
 	}
 
 	return deleted, nil
@@ -104,20 +104,20 @@ func (s *SyncStore) DiscardScope(ctx context.Context, scopeKey syncdomain.ScopeK
 func (s *SyncStore) PruneBlockScopesWithoutBlockedWork(ctx context.Context) error {
 	blocks, err := s.ListBlockScopes(ctx)
 	if err != nil {
-		return fmt.Errorf("sync: listing block scopes for pruning: %w", err)
+		return fmt.Errorf("syncstore: listing block scopes for pruning: %w", err)
 	}
 
 	for _, block := range blocks {
 		hasBlockedRetryWork, keepErr := s.ScopeHasBlockedRetryWork(ctx, block.Key)
 		if keepErr != nil {
-			return fmt.Errorf("sync: pruning block scope %s: %w", block.Key.String(), keepErr)
+			return fmt.Errorf("syncstore: pruning block scope %s: %w", block.Key.String(), keepErr)
 		}
 		if shouldKeepTimedBlockScope(hasBlockedRetryWork) {
 			continue
 		}
 
 		if err := deleteBlockScopeWithRunner(ctx, s.db, block.Key); err != nil {
-			return fmt.Errorf("sync: pruning block scope %s without blocked work: %w", block.Key.String(), err)
+			return fmt.Errorf("syncstore: pruning block scope %s without blocked work: %w", block.Key.String(), err)
 		}
 	}
 

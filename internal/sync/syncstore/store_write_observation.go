@@ -53,10 +53,10 @@ func (s *SyncStore) commitObservation(
 ) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning observation transaction: %w", err)
+		return fmt.Errorf("syncstore: beginning observation transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback observation transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback observation transaction")
 	}()
 
 	adopted, commitErr := s.commitObservationTx(ctx, tx, events, newToken, driveID)
@@ -80,7 +80,7 @@ func (s *SyncStore) commitObservation(
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing observation transaction: %w", err)
+		return fmt.Errorf("syncstore: committing observation transaction: %w", err)
 	}
 	if reload.reload != nil {
 		s.applyBaselineCachePatch(reload)
@@ -261,7 +261,7 @@ func (s *SyncStore) parkMovingRemoteRowsTx(
 		}
 		parkPath := remoteParkPath(p.itemID)
 		if _, err := tx.ExecContext(ctx, `UPDATE remote_state SET path = ? WHERE item_id = ?`, parkPath, p.itemID); err != nil {
-			return nil, fmt.Errorf("sync: parking remote item %s from %s: %w", p.itemID, p.oldPath, err)
+			return nil, fmt.Errorf("syncstore: parking remote item %s from %s: %w", p.itemID, p.oldPath, err)
 		}
 		if p.itemType == syncdomain.ItemTypeFolder {
 			if err := repathSubtreeTx(ctx, tx, "remote_state", current.Path, parkPath); err != nil {
@@ -350,9 +350,9 @@ func requireNoParkedRemoteRowsTx(ctx context.Context, tx sqlTxRunner) error {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
 	case err != nil:
-		return fmt.Errorf("sync: checking for parked remote rows: %w", err)
+		return fmt.Errorf("syncstore: checking for parked remote rows: %w", err)
 	default:
-		return fmt.Errorf("sync: observation window left remote row parked at %s", parkedPath)
+		return fmt.Errorf("syncstore: observation window left remote row parked at %s", parkedPath)
 	}
 }
 
@@ -476,11 +476,11 @@ func forgetBaselineForReuploadTx(ctx context.Context, tx sqlTxRunner, item *sync
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
 	case err != nil:
-		return fmt.Errorf("sync: reading baseline of %s to re-upload: %w", item.ItemID, err)
+		return fmt.Errorf("syncstore: reading baseline of %s to re-upload: %w", item.ItemID, err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM baseline WHERE item_id = ?`, item.ItemID); err != nil {
-		return fmt.Errorf("sync: forgetting baseline of %s to re-upload: %w", basePath, err)
+		return fmt.Errorf("syncstore: forgetting baseline of %s to re-upload: %w", basePath, err)
 	}
 	if itemType != syncdomain.ItemTypeFolder.String() {
 		return nil
@@ -489,7 +489,7 @@ func forgetBaselineForReuploadTx(ctx context.Context, tx sqlTxRunner, item *sync
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM baseline WHERE substr(path, 1, length(?)) = ? COLLATE BINARY`, prefix, prefix,
 	); err != nil {
-		return fmt.Errorf("sync: forgetting baseline below %s to re-upload: %w", basePath, err)
+		return fmt.Errorf("syncstore: forgetting baseline below %s to re-upload: %w", basePath, err)
 	}
 
 	return nil
@@ -564,7 +564,7 @@ func deleteObservedRemoteState(
 		`DELETE FROM remote_state WHERE item_id = ?`,
 		item.ItemID,
 	); err != nil {
-		return fmt.Errorf("sync: deleting remote_state for %s: %w", existingPath, err)
+		return fmt.Errorf("syncstore: deleting remote_state for %s: %w", existingPath, err)
 	}
 
 	return nil
@@ -575,10 +575,10 @@ func deleteObservedRemoteState(
 func (s *SyncStore) ForgetRemoteItem(ctx context.Context, itemID string) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: beginning forget-remote-item transaction: %w", err)
+		return fmt.Errorf("syncstore: beginning forget-remote-item transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback forget-remote-item transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback forget-remote-item transaction")
 	}()
 
 	var (
@@ -591,16 +591,16 @@ func (s *SyncStore) ForgetRemoteItem(ctx context.Context, itemID string) (err er
 	case errors.Is(scanErr, sql.ErrNoRows):
 		return nil
 	case scanErr != nil:
-		return fmt.Errorf("sync: reading remote_state for %s: %w", itemID, scanErr)
+		return fmt.Errorf("syncstore: reading remote_state for %s: %w", itemID, scanErr)
 	}
 	// An item type that cannot be read fails the removal: taken for a file,
 	// a folder's subtree stayed behind.
 	parsed, err := syncdomain.ParseItemType(itemType)
 	if err != nil {
-		return fmt.Errorf("sync: reading remote_state of %s at %s: %w", itemID, path, err)
+		return fmt.Errorf("syncstore: reading remote_state of %s at %s: %w", itemID, path, err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM remote_state WHERE item_id = ?`, itemID); err != nil {
-		return fmt.Errorf("sync: deleting remote_state for %s: %w", path, err)
+		return fmt.Errorf("syncstore: deleting remote_state for %s: %w", path, err)
 	}
 	if parsed == syncdomain.ItemTypeFolder {
 		if err := deleteRemoteStateSubtreeTx(ctx, tx, path); err != nil {
@@ -609,7 +609,7 @@ func (s *SyncStore) ForgetRemoteItem(ctx context.Context, itemID string) (err er
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sync: committing forget-remote-item transaction: %w", err)
+		return fmt.Errorf("syncstore: committing forget-remote-item transaction: %w", err)
 	}
 
 	return nil
@@ -626,7 +626,7 @@ func deleteRemoteStateSubtreeTx(ctx context.Context, tx sqlTxRunner, folderPath 
 			AND substr(path, 1, length(?)) != ? COLLATE BINARY`,
 		descendantPrefix, descendantPrefix, twinPrefix, twinPrefix,
 	); err != nil {
-		return fmt.Errorf("sync: deleting remote_state below deleted folder %s: %w", folderPath, err)
+		return fmt.Errorf("syncstore: deleting remote_state below deleted folder %s: %w", folderPath, err)
 	}
 
 	return nil
@@ -666,7 +666,7 @@ func remoteStateRowByIDTx(
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, false, nil
 	case err != nil:
-		return nil, false, fmt.Errorf("sync: reading remote_state of %s: %w", itemID, err)
+		return nil, false, fmt.Errorf("syncstore: reading remote_state of %s: %w", itemID, err)
 	default:
 		return row, true, nil
 	}
@@ -681,7 +681,7 @@ func (s *SyncStore) insertRemoteState(ctx context.Context, tx sqlTxRunner, item 
 		nullString(item.ETag),
 	)
 	if err != nil {
-		return fmt.Errorf("sync: inserting remote_state for item %s at %s: %w", item.ItemID, item.Path, err)
+		return fmt.Errorf("syncstore: inserting remote_state for item %s at %s: %w", item.ItemID, item.Path, err)
 	}
 
 	return nil
@@ -700,7 +700,7 @@ func (s *SyncStore) updateRemoteStateFromObs(
 		item.ItemID,
 	)
 	if err != nil {
-		return fmt.Errorf("sync: updating remote_state for item %s to %s: %w", item.ItemID, item.Path, err)
+		return fmt.Errorf("syncstore: updating remote_state for item %s to %s: %w", item.ItemID, item.Path, err)
 	}
 
 	return nil

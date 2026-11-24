@@ -26,26 +26,26 @@ type HeldDeleteRow struct {
 func (s *SyncStore) ReplaceHeldDeletes(ctx context.Context, held []syncdomain.HeldDelete) (err error) {
 	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("sync: begin held deletes transaction: %w", err)
+		return fmt.Errorf("syncstore: begin held deletes transaction: %w", err)
 	}
 	defer func() {
-		err = finalizeTxRollback(err, tx, "sync: rollback held deletes transaction")
+		err = finalizeTxRollback(err, tx, "syncstore: rollback held deletes transaction")
 	}()
 
 	if _, err = tx.ExecContext(ctx, `DELETE FROM held_deletes`); err != nil {
-		return fmt.Errorf("sync: clearing held deletes: %w", err)
+		return fmt.Errorf("syncstore: clearing held deletes: %w", err)
 	}
 	for i := range held {
 		if _, err = tx.ExecContext(ctx,
 			`INSERT OR REPLACE INTO held_deletes (path, side, reason, item_type, item_id) VALUES (?, ?, ?, ?, ?)`,
 			held[i].Path, string(held[i].Side), string(held[i].Reason), held[i].ItemType.String(), held[i].ItemID,
 		); err != nil {
-			return fmt.Errorf("sync: recording held delete %s: %w", held[i].Path, err)
+			return fmt.Errorf("syncstore: recording held delete %s: %w", held[i].Path, err)
 		}
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("sync: commit held deletes transaction: %w", err)
+		return fmt.Errorf("syncstore: commit held deletes transaction: %w", err)
 	}
 
 	return nil
