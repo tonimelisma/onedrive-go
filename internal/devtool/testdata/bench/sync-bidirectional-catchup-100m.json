@@ -2,8 +2,8 @@
   "version": 1,
   "scenario_id": "sync-bidirectional-catchup-100m",
   "fixture_id": "sync-bidirectional-catchup-100m-v1",
-  "golden_remote_scope_path": "/benchmarks/golden/sync-bidirectional-catchup-100m-v1",
-  "work_remote_scope_path_template": "/benchmarks/work/sync-bidirectional-catchup-100m-v1/{slot}",
+  "golden_remote_scope_path": "/onedrive-go-e2e-bench/golden/sync-bidirectional-catchup-100m-v1",
+  "work_remote_scope_path_template": "/onedrive-go-e2e-bench/work/sync-bidirectional-catchup-100m-v1/{slot}",
   "groups": [
     {
       "name": "documents",

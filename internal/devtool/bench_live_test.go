@@ -54,9 +54,9 @@ func TestPrepareBenchScenarioUsesPreparedRunnerAndCleanup(t *testing.T) {
 func TestBenchScopeRootRelativePathValidatesInputs(t *testing.T) {
 	t.Parallel()
 
-	relative, err := benchScopeRootRelativePath("/benchmarks/catchup-scope")
+	relative, err := benchScopeRootRelativePath("/onedrive-go-e2e-bench/catchup-scope")
 	require.NoError(t, err)
-	assert.Equal(t, "benchmarks/catchup-scope", relative)
+	assert.Equal(t, "onedrive-go-e2e-bench/catchup-scope", relative)
 
 	_, err = benchScopeRootRelativePath("/")
 	require.Error(t, err)
@@ -107,7 +107,7 @@ func TestResetBenchRemoteScopeRetriesUntilSuccessOrNotFound(t *testing.T) {
 		retry: clock.clock(),
 	}
 
-	err := resetBenchRemoteScope(t.Context(), subject, benchLiveCommandRuntime{}, "/benchmarks/test")
+	err := resetBenchRemoteScope(t.Context(), subject, benchLiveCommandRuntime{}, "/onedrive-go-e2e-bench/test")
 	require.NoError(t, err)
 	assert.Equal(t, 2, callCount)
 	assert.Equal(t, []time.Duration{benchPollBackoff(0)}, clock.waits, "one wait between the two attempts, on the injected clock")
@@ -136,7 +136,7 @@ func TestWaitForBenchRemoteScopeVisibleRetriesTheCLIsServerProblemLine(t *testin
 		retry: clock.clock(),
 	}
 
-	err := waitForBenchRemoteScopeVisible(t.Context(), subject, benchLiveCommandRuntime{}, "/benchmarks/test")
+	err := waitForBenchRemoteScopeVisible(t.Context(), subject, benchLiveCommandRuntime{}, "/onedrive-go-e2e-bench/test")
 	require.NoError(t, err)
 	assert.Equal(t, 3, callCount, "stat and ls saw the server problem, then stat found the scope")
 	assert.Equal(t, []time.Duration{benchPollBackoff(0)}, clock.waits)
@@ -157,7 +157,7 @@ func TestWaitForBenchRemoteScopeVisibleGivesUpAtItsDeadline(t *testing.T) {
 		retry: clock.clock(),
 	}
 
-	err := waitForBenchRemoteScopeVisible(t.Context(), subject, benchLiveCommandRuntime{}, "/benchmarks/test")
+	err := waitForBenchRemoteScopeVisible(t.Context(), subject, benchLiveCommandRuntime{}, "/onedrive-go-e2e-bench/test")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timed out after "+benchLivePollTimeout.String())
 	require.NotEmpty(t, clock.waits)
@@ -225,9 +225,9 @@ func TestCLIReportsRemoteItemMissing_ReadsOnlyTheCLIErrorLine(t *testing.T) {
 // benchMissingFolderStderr is what `rm -r`, `stat` and `ls` print for a
 // folder OneDrive does not have: the error line, then, under --verbose, its
 // details.
-const benchMissingFolderStderr = "Error: /benchmarks/test was not found on OneDrive. " +
-	"Run 'onedrive-go ls /benchmarks' to see what is there.\n" +
-	`Details: resolving "/benchmarks/test": graph: HTTP 404: itemNotFound` + "\n"
+const benchMissingFolderStderr = "Error: /onedrive-go-e2e-bench/test was not found on OneDrive. " +
+	"Run 'onedrive-go ls /onedrive-go-e2e-bench' to see what is there.\n" +
+	`Details: resolving "/onedrive-go-e2e-bench/test": graph: HTTP 404: itemNotFound` + "\n"
 
 // Validates: R-6.10.14
 func TestWaitForBenchRemoteScopeVisibleRetriesTransientFailures(t *testing.T) {
@@ -239,10 +239,10 @@ func TestWaitForBenchRemoteScopeVisibleRetriesTransientFailures(t *testing.T) {
 			callSpecs = append(callSpecs, append([]string(nil), spec.Arg...))
 			switch len(callSpecs) {
 			case 1:
-				assert.Equal(t, []string{"--config", "", "--drive", "", "stat", "--json", "/benchmarks/test"}, spec.Arg)
+				assert.Equal(t, []string{"--config", "", "--drive", "", "stat", "--json", "/onedrive-go-e2e-bench/test"}, spec.Arg)
 				return benchMeasuredProcess{Stderr: []byte(benchMissingFolderStderr)}, assert.AnError
 			case 2:
-				assert.Equal(t, []string{"--config", "", "--drive", "", "ls", "/benchmarks"}, spec.Arg)
+				assert.Equal(t, []string{"--config", "", "--drive", "", "ls", "/onedrive-go-e2e-bench"}, spec.Arg)
 				return benchMeasuredProcess{Stdout: []byte("other-scope\nbenchmarks\ntest")}, nil
 			default:
 				require.Failf(t, "unexpected extra call", "spec.Arg=%v", spec.Arg)
@@ -254,7 +254,7 @@ func TestWaitForBenchRemoteScopeVisibleRetriesTransientFailures(t *testing.T) {
 	err := waitForBenchRemoteScopeVisible(t.Context(), subject, benchLiveCommandRuntime{
 		configPath: "",
 		driveID:    "",
-	}, "/benchmarks/test")
+	}, "/onedrive-go-e2e-bench/test")
 	require.NoError(t, err)
 	assert.Len(t, callSpecs, 2)
 }
@@ -270,13 +270,13 @@ func TestWaitForBenchRemoteScopeVisibleRequiresExactScopeNameMatch(t *testing.T)
 			callCount++
 			switch callCount {
 			case 1:
-				assert.Equal(t, []string{"--config", "", "--drive", "", "stat", "--json", "/benchmarks/test"}, spec.Arg)
+				assert.Equal(t, []string{"--config", "", "--drive", "", "stat", "--json", "/onedrive-go-e2e-bench/test"}, spec.Arg)
 				return benchMeasuredProcess{Stderr: []byte(benchMissingFolderStderr)}, assert.AnError
 			case 2:
-				assert.Equal(t, []string{"--config", "", "--drive", "", "ls", "/benchmarks"}, spec.Arg)
+				assert.Equal(t, []string{"--config", "", "--drive", "", "ls", "/onedrive-go-e2e-bench"}, spec.Arg)
 				return benchMeasuredProcess{Stdout: []byte("test-backup\nother-entry\n")}, nil
 			case 3:
-				assert.Equal(t, []string{"--config", "", "--drive", "", "stat", "--json", "/benchmarks/test"}, spec.Arg)
+				assert.Equal(t, []string{"--config", "", "--drive", "", "stat", "--json", "/onedrive-go-e2e-bench/test"}, spec.Arg)
 				return benchMeasuredProcess{}, nil
 			default:
 				require.Failf(t, "unexpected extra call", "spec.Arg=%v", spec.Arg)
@@ -289,7 +289,7 @@ func TestWaitForBenchRemoteScopeVisibleRequiresExactScopeNameMatch(t *testing.T)
 	err := waitForBenchRemoteScopeVisible(t.Context(), subject, benchLiveCommandRuntime{
 		configPath: "",
 		driveID:    "",
-	}, "/benchmarks/test")
+	}, "/onedrive-go-e2e-bench/test")
 	require.NoError(t, err)
 	assert.Equal(t, 3, callCount, "a sibling name should not satisfy scope visibility")
 	assert.Equal(t, []time.Duration{benchPollBackoff(0)}, clock.waits)
@@ -302,7 +302,7 @@ func TestClassifyBenchVisibilityErrorAllowsRetryableFamilies(t *testing.T) {
 	assert.NoError(t, classifyBenchVisibilityError([]byte(benchMissingFolderStderr), assert.AnError))
 	assert.NoError(t, classifyBenchVisibilityError([]byte(benchServerProblemStderr), assert.AnError))
 	assert.NoError(t, classifyBenchVisibilityError([]byte(benchServerProblemStderr+
-		`Details: resolving "/benchmarks/test": graph: HTTP 503: serviceNotAvailable`+"\n"), assert.AnError),
+		`Details: resolving "/onedrive-go-e2e-bench/test": graph: HTTP 503: serviceNotAvailable`+"\n"), assert.AnError),
 		"under --verbose the error line still comes first")
 	require.Error(t, classifyBenchVisibilityError([]byte("permission denied"), assert.AnError))
 	require.Error(t, classifyBenchVisibilityError([]byte(`level=WARN msg="`+cliServerProblemMessage+`"`+"\n"), assert.AnError),

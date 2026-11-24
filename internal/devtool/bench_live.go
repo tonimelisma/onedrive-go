@@ -323,21 +323,26 @@ func copyBenchCredentials(srcDir string, dstDir string, driveID string) error {
 		return fmt.Errorf("copy the token file of the drive %s names: %w", benchPrimaryDriveEnvVar, withoutPaths(err))
 	}
 
-	for _, prefix := range []string{"account_", "drive_"} {
-		matches, err := filepath.Glob(filepath.Join(srcDir, prefix+"*.json"))
-		if err != nil {
-			return fmt.Errorf("glob %s metadata: %w", prefix, err)
-		}
-
-		for _, match := range matches {
-			if err := copyBenchFile(match, filepath.Join(dstDir, filepath.Base(match))); err != nil {
-				return fmt.Errorf("copy metadata %s: %w", filepath.Base(match), err)
-			}
-		}
+	// The managed inventory catalog, as the live suites copy it when the
+	// bundle has one: without it the CLI discovers the drive itself.
+	catalogPath := filepath.Join(srcDir, benchCatalogFileName)
+	statErr := statPath(catalogPath)
+	if errors.Is(statErr, fs.ErrNotExist) {
+		return nil
+	}
+	if statErr != nil {
+		return fmt.Errorf("stat the inventory catalog: %w", withoutPaths(statErr))
+	}
+	if err := copyBenchFile(catalogPath, filepath.Join(dstDir, benchCatalogFileName)); err != nil {
+		return fmt.Errorf("copy the inventory catalog: %w", withoutPaths(err))
 	}
 
 	return nil
 }
+
+// benchCatalogFileName is the CLI's managed inventory catalog in its data
+// directory, which the credential bundle carries beside the token files.
+const benchCatalogFileName = "catalog.json"
 
 // benchTokenFileName is the token file of the live drive driveID. A drive it
 // cannot parse is named by its variable, not its value: the value is a test

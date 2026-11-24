@@ -372,11 +372,17 @@ func TestCIWorkflowSetsNoTestDriveInJobEnv(t *testing.T) {
 		"uploads /tmp/e2e-debug-logs, which no earlier step redacted")
 }
 
-// ciDriveExposures lists every way the workflow's live jobs could print a test
-// drive or the account allowlist in a public log or artifact.
+// ciDriveExposures lists every way the CI workflow's live jobs could print a
+// test drive or the account allowlist in a public log or artifact.
 func ciDriveExposures(workflow string) []string {
+	return workflowDriveExposures(workflow, ciLiveJobVariables())
+}
+
+// workflowDriveExposures lists every way a workflow's live jobs could print a
+// test drive or the account allowlist in a public log or artifact; expected
+// names each live job of the workflow and the variables it receives.
+func workflowDriveExposures(workflow string, expected map[string][]string) []string {
 	var problems []string
-	expected := ciLiveJobVariables()
 	live := []string{}
 	for _, job := range ciWorkflowJobs(workflow) {
 		if !slices.ContainsFunc(job.lines, func(line string) bool { return strings.Contains(line, "ONEDRIVE_") }) {

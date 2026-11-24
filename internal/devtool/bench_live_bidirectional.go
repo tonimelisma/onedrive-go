@@ -73,6 +73,13 @@ type benchBidirectionalScenarioState struct {
 	fixture     benchBidirectionalFixturePlan
 	workRoot    string
 	fixtureSlot string
+	// setupRuntime is the runtime the remote fixture was prepared through,
+	// set once the drive passed the allowlist; cleanup removes the remote
+	// folder through it, and only when it is set.
+	setupRuntime *benchBidirectionalRuntime
+	// prepareErr is why the remote fixture could not be prepared: every
+	// sample is then a fixture failure that says so.
+	prepareErr error
 }
 
 type benchBidirectionalRuntime struct {
@@ -116,7 +123,7 @@ func lookupSyncBidirectionalCatchup100MScenario() (benchScenarioDefinition, erro
 			DefaultWarmup: syncBidirectionalCatchup100MWarm,
 			Denominators:  fixture.Denominators,
 		},
-		Prepare: func(_ context.Context, req benchScenarioPrepareRequest) (preparedBenchScenario, error) {
+		Prepare: func(ctx context.Context, req benchScenarioPrepareRequest) (preparedBenchScenario, error) {
 			fixtureSlot, err := normalizeBenchFixtureSlot(req.FixtureSlot)
 			if err != nil {
 				return preparedBenchScenario{}, err
@@ -138,11 +145,15 @@ func lookupSyncBidirectionalCatchup100MScenario() (benchScenarioDefinition, erro
 				workRoot:    workRoot,
 				fixtureSlot: fixtureSlot,
 			}
+			// A fixture the run cannot prepare is the run's outcome, not an
+			// error of the command: every sample records it as a fixture
+			// failure, and the result is still written.
+			state.prepareErr = state.prepareRemoteFixture(ctx, req.Subject)
 
 			return preparedBenchScenario{
 				run: state.runSample,
 				cleanup: func() error {
-					return removeAll(workRoot)
+					return state.cleanup(ctx, req.Subject)
 				},
 				setup: &benchResultSetup{
 					FixtureID:           fixture.Manifest.FixtureID,
@@ -151,7 +162,7 @@ func lookupSyncBidirectionalCatchup100MScenario() (benchScenarioDefinition, erro
 					RemoteScopePath:     fixture.RemoteScopePath,
 					IncludedDir:         fixture.ScopeRootRelativePath,
 					FixtureControllerID: benchBidirectionalFixtureControllerID,
-					PoolStatusBeforeRun: "manual-slot",
+					PoolStatusBeforeRun: benchFixturePreparedThisRun,
 				},
 			}, nil
 		},
@@ -209,6 +220,9 @@ func loadSyncBidirectionalCatchup100MFixturePlan(slot string) (benchBidirectiona
 	}
 
 	remoteScopePath := strings.ReplaceAll(manifest.WorkRemoteScopePathTemplate, "{slot}", slot)
+	if pathErr := validateBenchRemoteFixturePaths(manifest.GoldenRemoteScopePath, remoteScopePath); pathErr != nil {
+		return benchBidirectionalFixturePlan{}, fmt.Errorf("decode %s: %w", manifestPath, pathErr)
+	}
 	scopeRootRelativePath, err := benchScopeRootRelativePath(remoteScopePath)
 	if err != nil {
 		return benchBidirectionalFixturePlan{}, fmt.Errorf("decode %s: %w", manifestPath, err)
@@ -442,6 +456,9 @@ func (s *benchBidirectionalScenarioState) runSample(
 		Phase:     phase,
 		Status:    BenchSampleSuccess,
 		Setup:     &benchSampleSetup{},
+	}
+	if s.prepareErr != nil {
+		return benchFixtureFailureSample(sample, s.prepareErr)
 	}
 
 	runtime, err := s.newSampleRuntime()
