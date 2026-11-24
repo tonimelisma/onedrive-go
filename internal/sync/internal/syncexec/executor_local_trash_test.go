@@ -100,41 +100,28 @@ func TestDeleteLocalFile_ReleaseOfASharedFolderTrashesTheFileAsReleased(t *testi
 func TestDeleteLocalFile_FileReplacedMidHashSurvives(t *testing.T) {
 	t.Parallel()
 
-	for _, withTrash := range []bool{true, false} {
-		t.Run(map[bool]string{true: "trash", false: "no trash"}[withTrash], func(t *testing.T) {
-			t.Parallel()
-
-			cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
-			var trash *localtrash.Trash
-			if withTrash {
-				trash = localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
-				cfg.trash = trash
-			}
-			target := syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", syncedContent)
-			cfg.hooks.HashReader = func(ctx context.Context, r io.Reader) (string, error) {
-				hash, err := driveops.ComputeQuickXorHashFromReaderContext(ctx, r)
-				replacement := syncfixture.WriteExecTestFile(t, syncRoot, "a.txt.save", "new edit\n")
-				require.NoError(t, os.Rename(replacement, target))
-				if err != nil {
-					return "", fmt.Errorf("hashing in test: %w", err)
-				}
-				return hash, nil
-			}
-
-			outcome := NewExecution(cfg, syncfixture.EmptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "a.txt"))
-
-			syncfixture.RequireOutcomeFailure(t, &outcome)
-			require.ErrorIs(t, outcome.Error, syncdomain.ErrActionPreconditionChanged)
-			data, err := os.ReadFile(target) //nolint:gosec // test reads its own temp tree
-			require.NoError(t, err)
-			assert.Equal(t, "new edit\n", string(data), "the new content must survive")
-			if trash != nil {
-				entries, listErr := trash.List()
-				require.NoError(t, listErr)
-				assert.Empty(t, entries)
-			}
-		})
+	cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, &syncfixture.ExecutorMockDownloader{}, &syncfixture.ExecutorMockUploader{})
+	target := syncfixture.WriteExecTestFile(t, syncRoot, "a.txt", syncedContent)
+	cfg.hooks.HashReader = func(ctx context.Context, r io.Reader) (string, error) {
+		hash, err := driveops.ComputeQuickXorHashFromReaderContext(ctx, r)
+		replacement := syncfixture.WriteExecTestFile(t, syncRoot, "a.txt.save", "new edit\n")
+		require.NoError(t, os.Rename(replacement, target))
+		if err != nil {
+			return "", fmt.Errorf("hashing in test: %w", err)
+		}
+		return hash, nil
 	}
+
+	outcome := NewExecution(cfg, syncfixture.EmptyBaseline()).ExecuteLocalDelete(t.Context(), localDeleteActionFor(t, "a.txt"))
+
+	syncfixture.RequireOutcomeFailure(t, &outcome)
+	require.ErrorIs(t, outcome.Error, syncdomain.ErrActionPreconditionChanged)
+	data, err := os.ReadFile(target) //nolint:gosec // test reads its own temp tree
+	require.NoError(t, err)
+	assert.Equal(t, "new edit\n", string(data), "the new content must survive")
+	entries, listErr := cfg.trash.List()
+	require.NoError(t, listErr)
+	assert.Empty(t, entries, "the new content is not taken to the trash either")
 }
 
 // hashRemovingTrash hashes as the executor does after removing the trash at
@@ -290,13 +277,10 @@ func TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded(t *testin
 	)
 	for _, tt := range []struct {
 		name        string
-		withTrash   bool
 		plannedHash bool
 	}{
-		{name: "planned hash, no trash", plannedHash: true},
-		{name: "planned hash, trash", plannedHash: true, withTrash: true},
-		{name: "no planned hash, no trash"},
-		{name: "no planned hash, trash", withTrash: true},
+		{name: "planned hash", plannedHash: true},
+		{name: "no planned hash"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -308,9 +292,6 @@ func TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded(t *testin
 				},
 			}
 			cfg, syncRoot := newTestExecutorConfig(t, &syncfixture.ExecutorMockItemClient{}, dl, &syncfixture.ExecutorMockUploader{})
-			if tt.withTrash {
-				cfg.trash = localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
-			}
 			target := syncfixture.WriteExecTestFile(t, syncRoot, "doc.txt", edited)
 			info, err := os.Stat(target)
 			require.NoError(t, err)
@@ -347,6 +328,9 @@ func TestExecutor_Download_LocalContentDiffersFromBaselineIsSuperseded(t *testin
 			data, err := os.ReadFile(target) //nolint:gosec // test reads its own temp tree
 			require.NoError(t, err)
 			assert.Equal(t, edited, string(data), "the unsynced local edit survives")
+			entries, err := cfg.trash.List()
+			require.NoError(t, err)
+			assert.Empty(t, entries, "a superseded download keeps nothing in the trash")
 		})
 	}
 }

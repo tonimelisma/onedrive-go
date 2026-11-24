@@ -587,10 +587,6 @@ func keepsEarlierIntent(priorIntent bool, err error, conflictJudged bool) bool {
 // can be that attempt's own (resolveCreateConflict). The store stamps intents
 // with the engine's clock, which is the executor's too.
 func (e *Executor) priorCreateIntent(ctx context.Context, action *syncdomain.Action) (bool, error) {
-	if e.pendingCreates == nil {
-		return false, nil
-	}
-
 	pending, found, err := e.pendingCreates.PendingCreateAt(ctx, action.Path)
 	if err != nil {
 		return false, fmt.Errorf("reading the pending create at %s: %w", action.Path, err)
@@ -618,10 +614,6 @@ func pendingCreateOf(action *syncdomain.Action, driveID driveid.ID, parentID str
 // be requested (R-5.6.15): the one record that survives a process dying with
 // the creating request in flight.
 func (e *Executor) recordPendingCreateIntent(ctx context.Context, action *syncdomain.Action, driveID driveid.ID, parentID string) error {
-	if e.pendingCreates == nil {
-		return nil
-	}
-
 	if err := e.pendingCreates.RecordPendingCreateIntent(ctx, pendingCreateOf(action, driveID, parentID)); err != nil {
 		return fmt.Errorf("recording the intent to create %s: %w", action.Path, err)
 	}
@@ -630,8 +622,8 @@ func (e *Executor) recordPendingCreateIntent(ctx context.Context, action *syncdo
 }
 
 // recordPendingCreate returns the hook that records a create's empty item
-// durably before its content is sent, or nil without a store (tests). It
-// sets *created when it runs, so the caller knows an item exists.
+// durably before its content is sent. It sets *created when it runs, so the
+// caller knows an item exists.
 //
 // The item exists on OneDrive from the moment the create answers, whatever
 // happens to the action after, so the record is written on a context that
@@ -644,10 +636,6 @@ func (e *Executor) recordPendingCreateIntent(ctx context.Context, action *syncdo
 func (e *Executor) recordPendingCreate(
 	ctx context.Context, action *syncdomain.Action, driveID driveid.ID, parentID string, created *bool,
 ) func(itemID, createdETag string) error {
-	if e.pendingCreates == nil {
-		return nil
-	}
-
 	return func(itemID, createdETag string) error {
 		*created = true
 		if crashErr := e.reachCrashPoint(syncdomain.CrashPointUploadCreatedUnrecorded); crashErr != nil {
@@ -692,9 +680,6 @@ func (cfg *ExecutorConfig) detachedStoreBound() time.Duration {
 // which keeps a stopping run's one deadline when it runs inside one): kept, it
 // outlived a file that was already synced.
 func (e *Executor) clearPendingCreateIntent(ctx context.Context, action *syncdomain.Action, succeeded bool) {
-	if e.pendingCreates == nil {
-		return
-	}
 	if ctx.Err() != nil && !succeeded {
 		e.logger.Debug("kept the pending create intent of a canceled attempt",
 			slog.String("path", action.Path), slog.Any("error", ctx.Err()))
@@ -716,10 +701,6 @@ func (e *Executor) clearPendingCreateIntent(ctx context.Context, action *syncdom
 // removal already happened whatever became of the action. Best effort: a record left behind ends when
 // observation sees the item's delete.
 func (e *Executor) forgetRemovedPlaceholder(ctx context.Context, action *syncdomain.Action, itemID string) {
-	if e.pendingCreates == nil {
-		return
-	}
-
 	if err := RunDetachedStoreAccess(ctx, e.detachedStoreBound(), func(forgetCtx context.Context) error {
 		return e.pendingCreates.ForgetRemovedPlaceholder(forgetCtx, action.Path, itemID)
 	}); err != nil {
@@ -761,17 +742,15 @@ func (e *Executor) resolveCreateConflict(
 	ctx context.Context, action *syncdomain.Action, driveID driveid.ID, parentID, source, localPath string,
 	conflictErr error, priorIntent bool,
 ) (result *driveops.UploadResult, keepIntent bool, err error) {
-	if e.pendingCreates != nil {
-		pending, found, readErr := e.pendingCreates.PendingCreateAt(ctx, action.Path)
-		if readErr != nil {
-			return nil, priorIntent, fmt.Errorf("resolving the refused create of %s: reading its pending create: %w",
-				action.Path, readErr)
-		}
-		if found && pending.ItemID != "" {
-			uploaded, finished, uploadErr := e.finishIntoPlaceholder(ctx, action, driveID, parentID, pending.ItemID, source, localPath)
-			if finished {
-				return uploaded, false, uploadErr
-			}
+	pending, recorded, readErr := e.pendingCreates.PendingCreateAt(ctx, action.Path)
+	if readErr != nil {
+		return nil, priorIntent, fmt.Errorf("resolving the refused create of %s: reading its pending create: %w",
+			action.Path, readErr)
+	}
+	if recorded && pending.ItemID != "" {
+		uploaded, finished, uploadErr := e.finishIntoPlaceholder(ctx, action, driveID, parentID, pending.ItemID, source, localPath)
+		if finished {
+			return uploaded, false, uploadErr
 		}
 	}
 

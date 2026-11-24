@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/localtrash"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
@@ -91,7 +93,9 @@ func newPendingCreateTestExecutorWith(
 
 // mustNewTestExecutorConfig builds an executor configuration from in,
 // filling what it leaves zero of the transfer manager (over its downloader
-// and uploader) and the clock (the wall clock).
+// and uploader), the clock (the wall clock), the trash (a fresh one in a temp
+// directory) and the pending-create and move-intent records (in memory, on
+// the clock).
 func mustNewTestExecutorConfig(t *testing.T, in *syncexec.ExecutorInputs) *syncexec.ExecutorConfig {
 	t.Helper()
 
@@ -100,6 +104,18 @@ func mustNewTestExecutorConfig(t *testing.T, in *syncexec.ExecutorInputs) *synce
 	}
 	if in.Now == nil {
 		in.Now = time.Now
+	}
+	if in.Trash == nil {
+		in.Trash = localtrash.Open(filepath.Join(t.TempDir(), "trash"), nil)
+	}
+	if in.PendingCreates == nil || in.MoveIntents == nil {
+		records := syncfixture.NewMemoryExecutorRecords(in.Now)
+		if in.PendingCreates == nil {
+			in.PendingCreates = records
+		}
+		if in.MoveIntents == nil {
+			in.MoveIntents = records
+		}
 	}
 	cfg, err := syncexec.NewExecutorConfig(in)
 	require.NoError(t, err)

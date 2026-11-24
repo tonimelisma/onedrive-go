@@ -215,8 +215,8 @@ bounds), `syncstore.Hooks` (crash points, the database driver) and
 loop callbacks, the write cooldown), which `newEngine` and
 `localSource.observer` pass through unchanged. `newEngine` builds the executor
 configuration in one call from `syncexec.ExecutorInputs` (R-6.10.30), with
-the store as its pending-create record, the trash and transfer manager it
-built and the run clock (`nowFunc`), and every worker pool from
+the store as its pending-create and local-move-intent record, the trash and
+transfer manager it built and the run clock (`nowFunc`), all required, and every worker pool from
 `syncexec.WorkerPoolInputs`; neither has a setter. Each zero value is production
 behavior (`TestEngineHooks_ZeroValueIsProduction`, and a
 `TestHooks_ZeroValueIsProduction` in each package). Production code passes a

@@ -614,14 +614,11 @@ func plannedCtimeChanged(planned *syncdomain.LocalState, info os.FileInfo) bool 
 }
 
 // validateDownloadTargetBeforeReplace runs just before a finished download is
-// renamed over its target. With a trash, an existing target is verified
-// through the descriptor of the inode that is then preserved in the trash, so
-// the version kept is exactly the version checked (D-010, R-6.4.9); the rename
-// that follows can no longer lose the content it replaces.
+// renamed over its target. An existing target is verified through the
+// descriptor of the inode that is then preserved in the trash, so the version
+// kept is exactly the version checked (D-010, R-6.4.9); the rename that
+// follows can no longer lose the content it replaces.
 func (e *Executor) validateDownloadTargetBeforeReplace(ctx context.Context, action *syncdomain.Action, target string) error {
-	if e.trash == nil {
-		return e.validateDownloadTargetPrecondition(ctx, action, target)
-	}
 	info, err := e.syncTree.Lstat(target)
 	if err != nil || !info.Mode().IsRegular() || actionClearsLocalBeforeDownload(action) {
 		return e.validateDownloadTargetPrecondition(ctx, action, target)
@@ -834,8 +831,7 @@ func (e *Executor) clearLocalMoveDestination(ctx context.Context, action *syncdo
 // its destination (D-058) by taking the file out of the sync folder the way a
 // local delete does: only while it is still exactly the version the plan saw
 // (a regular file with its observed hash, metadata and ctime), verified
-// through the descriptor of the inode that leaves, into the trash when the
-// drive has one and removed otherwise. The hash stops when ctx ends. The file
+// through the descriptor of the inode that leaves, into the trash. The hash stops when ctx ends. The file
 // is moved once, or copied through its verified descriptor when the trash is
 // on another filesystem; the move's rename then finds the name free and
 // replaces nothing. A file that takes the name between the two is kept, the

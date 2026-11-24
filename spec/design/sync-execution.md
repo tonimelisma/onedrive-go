@@ -66,10 +66,15 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 The executor configuration and each worker pool are built in one call:
 `NewExecutorConfig(ExecutorInputs)` and `NewWorkerPool(WorkerPoolInputs)`.
 The configuration's required inputs (item client, downloader, uploader,
-transfer manager, sync tree, drive, logger, clock) are refused when zero,
-naming the field (R-6.10.30, `TestNewExecutorConfig_RejectsEachMissingRequiredField`);
+transfer manager, sync tree, drive, logger, trash, pending-create record,
+local-move-intent record, clock) are refused when zero, naming the field
+(R-6.10.30, `TestNewExecutorConfig_RejectsEachMissingRequiredField`);
 nothing changes either after it is built, so no worker can see a
-configuration half set up. The engine builds the configuration once in
+configuration half set up. The trash and the two records are required
+because production always has them: an executor without one ran code
+production never runs (a permanent local delete, a create or move with no
+record), and executor tests now get a temp-directory trash and in-memory
+records (`syncfixture.MemoryExecutorRecords`) by default. The engine builds the configuration once in
 `newEngine`, and a pool per pass (one-shot) or per watch session, passing its
 perf collector and its serialize test seam into the pool's inputs.
 
@@ -413,8 +418,7 @@ A move that replaces its destination (D-058: OneDrive moved an item over a
 file it deleted, whose local copy is the synced version) makes way first by
 the local delete rule: the file at the destination leaves the sync folder
 only while it is the version the plan saw, verified through the descriptor
-of the inode that leaves, into the trash when the drive has one and removed
-otherwise. The rename then finds the name free and replaces nothing, and the
+of the inode that leaves, into the trash. The rename then finds the name free and replaces nothing, and the
 displaced file is moved once, or copied through its verified descriptor
 when the trash is on another filesystem
 (`TestExecutor_LocalMove_ReplacesOnlyTheVerifiedDestination`). A file that
@@ -983,8 +987,9 @@ the preserve reports the race
 (`TestPreserveRegularFile_LeavesAnEntryThatReplacedItsLink`). One-shot
 housekeeping and
 the watch maintenance tick (at most hourly) purge, and `onedrive-go trash
-list/restore/empty` exposes the trash. Without a trash (executor-only tests)
-the verified inode is removed with `RemoveVerifiedRegularFile` instead.
+list/restore/empty` exposes the trash. Every executor has one
+(`ExecutorInputs.Trash` is required), so a local delete never removes a
+synced file outright.
 
 An entry says why its file left the sync folder (`Reason`): `deleted` for a
 local delete of an item deleted on OneDrive, `replaced` for the version a
