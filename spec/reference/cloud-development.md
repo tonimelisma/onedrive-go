@@ -55,6 +55,29 @@ toolchain while writing its own build cache, and git, as the user, trusts the
 root-owned checkout for that go test alone (R-6.10.38). Before the first go
 test it prints what the user must be able to reach.
 
+## Environment network
+
+The onedrive-go environment's network is limited to the package registries
+and four hosts: `github.com` and `api.github.com` for git and the REST API,
+and `tuf-repo.github.com` and `tuf-repo-cdn.sigstore.dev`, the Sigstore
+trust roots `gh attestation verify` needs. The attestation bundles themselves
+live in blob storage the network does not allow, so a session verifies a
+release binary (R-6.10.41) with the bundle read over REST:
+
+```bash
+digest=$(sha256sum onedrive-go-vX.Y.Z-linux-amd64 | cut -c1-64)
+gh api "repos/tonimelisma/onedrive-go/attestations/sha256:${digest}" \
+  --jq '.attestations[0].bundle' > bundle.json
+gh attestation verify onedrive-go-vX.Y.Z-linux-amd64 --bundle bundle.json \
+  --repo tonimelisma/onedrive-go \
+  --signer-workflow tonimelisma/onedrive-go/.github/workflows/release.yml \
+  --source-ref refs/heads/main
+```
+
+`gh release download` goes through GraphQL, which the proxy refuses; a session
+downloads an asset with
+`gh api -H 'Accept: application/octet-stream' repos/tonimelisma/onedrive-go/releases/assets/<id>`.
+
 ## Environment setup script
 
 The onedrive-go cloud environment carries this script and
