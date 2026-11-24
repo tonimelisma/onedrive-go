@@ -96,6 +96,7 @@ func stressSyncRunWatchMembers() []string {
 		"TestPhase0_RunWatch_BootstrapCompletesBeforeLocalObserverStarts",
 		"TestPhase0_RunWatch_BootstrapCompletesBeforeRemoteObserverStarts",
 		"TestPhase0_RunWatch_BootstrapQuiescesWithFutureHeldRetryWork",
+		"TestRunWatchGoroutine_ReportsItsExitBetweenReturnedAndDone",
 		"TestRunWatchLoop_SteadyStateCompletionWithoutDrainingIsAnError",
 		"TestRunWatchUntilQuiescent_BootstrapCompletionStaysClean",
 		"TestRunWatch_ATimerPanicEndsTheRunAndTheActionInFlightIsAShutdown",
