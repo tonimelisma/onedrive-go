@@ -344,7 +344,39 @@ func openBoundSyncTree(
 	if err != nil {
 		return nil, syncdomain.ResolvedSyncRoot{}, err
 	}
+	warnAboutPutBackWindow(syncTree, cfg.Logger)
 	return syncTree, binding, nil
+}
+
+// putBackWindowWarning is the start-up warning of a sync folder on which a
+// put-back can replace a save.
+const putBackWindowWarning = "This sync folder's filesystem has neither hard links nor a no-replace rename " +
+	"(a FAT-family filesystem): a file saved at the very moment sync puts a file it had set aside back " +
+	"under the same name can be replaced"
+
+// warnAboutPutBackWindow warns once, as the engine starts, when the sync
+// folder's filesystem offers neither hard links nor the no-replace rename
+// flag (synctree.Root.ProbeNoReplaceSupport). There a set-aside file is put
+// back, and a rename that must not replace is made, by a check that the name
+// is free and a plain rename, and a save landing between the two is replaced:
+// a known limit (sync-execution.md, R-6.4.8), the only alternative being to
+// leave the file under a hidden name the next sync would read as a delete. A
+// probe that fails decides nothing and is only logged at Debug: the
+// operations themselves still fall back as they must.
+func warnAboutPutBackWindow(syncTree *synctree.Root, logger *slog.Logger) {
+	if logger == nil {
+		return
+	}
+	support, err := syncTree.ProbeNoReplaceSupport()
+	if err != nil {
+		logger.Debug("could not probe the sync folder's no-replace rename",
+			slog.String("path", syncTree.Path()), slog.Any("error", err))
+		return
+	}
+	if !support.PutBackCanReplace() {
+		return
+	}
+	logger.Warn(putBackWindowWarning, slog.String("path", syncTree.Path()))
 }
 
 func openSyncTree(syncRoot string) (*synctree.Root, error) {

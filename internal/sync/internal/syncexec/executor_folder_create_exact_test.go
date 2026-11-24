@@ -18,7 +18,7 @@ import (
 
 // folderCreateRemoteMtime is the remote folder time a local folder create
 // sets on the folder it makes.
-var folderCreateRemoteMtime = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+func folderCreateRemoteMtime() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 // caseInsensitiveFolderCreateExecutor is an executor whose sync tree sits on
 // the emulated case-insensitive volume, with the folder it sits on.
@@ -39,7 +39,7 @@ func localFolderCreate(path string) *syncdomain.Action {
 		CreateSide: syncdomain.CreateLocal,
 		View: &syncdomain.PathView{
 			Path:   path,
-			Remote: &syncdomain.RemoteState{ItemID: "folder-" + path, ItemType: syncdomain.ItemTypeFolder, Mtime: folderCreateRemoteMtime.UnixNano()},
+			Remote: &syncdomain.RemoteState{ItemID: "folder-" + path, ItemType: syncdomain.ItemTypeFolder, Mtime: folderCreateRemoteMtime().UnixNano()},
 		},
 	}
 }
@@ -93,7 +93,7 @@ func TestExecutor_CreateLocalFolder_AdoptsTheFolderACrashedCreateLeft(t *testing
 	assert.Equal(t, identity.Inode, o.LocalInode)
 	info, err := os.Stat(filepath.Join(syncRoot, "docs", "X2"))
 	require.NoError(t, err)
-	assert.True(t, info.ModTime().Equal(folderCreateRemoteMtime), "the adopted folder takes the remote folder's time")
+	assert.True(t, info.ModTime().Equal(folderCreateRemoteMtime()), "the adopted folder takes the remote folder's time")
 }
 
 // A folder whose name on disk is the NFD spelling of the stored NFC name is

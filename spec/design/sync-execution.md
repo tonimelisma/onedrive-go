@@ -836,6 +836,25 @@ rename that replaces nothing, with the system's no-replace flag or a check that
 the name is free and a plain rename, instead of leaving the file under its
 hidden name (`TestDetachRegularFile_PutsTheFileBackWithoutHardLinks`).
 
+Known limit: on a filesystem that offers neither hard links nor the
+no-replace flag (FAT-family: FAT32, exFAT), the put-back's check and plain
+rename have a window of microseconds in which a file saved at that name is
+replaced by the set-aside version. The owner kept this behaviour over keeping
+the file under its hidden name, which the next sync would read as a delete
+(PARKED row W59-n1, `spec/history/onedrive-go-program-2026-11-10/`). The
+engine says so once, as it starts: `synctree.Root.ProbeNoReplaceSupport` makes
+an empty `.onedrive-go.<random>.probe` file in the sync folder (observation
+ignores the name, `synctree.IsProbeArtifactName`), links it and renames it
+with the flag through the same descriptor calls the renames use, removes what
+it made, and when it found neither the engine warns once, naming the sync
+folder, that a save landing during a put-back can be replaced
+(`warnAboutPutBackWindow`;
+`TestEngine_WarnsOnceAtStartWhenAPutBackCanReplaceASave`,
+`TestEngine_NoPutBackWarningWhereTheFilesystemHasHardLinks`,
+`TestRoot_ProbeNoReplaceSupport_FindsNeitherWhereTheSystemOffersNeither`,
+`TestRoot_ProbeNoReplaceSupport_FindsHardLinksAndLeavesNothing`). A probe
+that fails decides nothing and is logged at Debug.
+
 The trash side of a take-out is reached the way the sync folder is: through
 one descriptor. Before the file is opened, the folder of the trash entry's
 `item` is opened once, as a folder and without following a symbolic link in

@@ -137,7 +137,7 @@ func TestRoot_MkdirExact_RefusesAFileOrALinkAtTheName(t *testing.T) {
 
 	require.ErrorIs(t, fileErr, synctree.ErrTargetExists)
 	require.ErrorIs(t, linkErr, synctree.ErrTargetExists)
-	content, err := os.ReadFile(filepath.Join(dir, "X2"))
+	content, err := os.ReadFile(filepath.Join(dir, "X2")) //nolint:gosec // the test reads a file it created
 	require.NoError(t, err)
 	assert.Equal(t, "keep", string(content))
 }
