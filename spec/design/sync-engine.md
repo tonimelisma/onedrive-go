@@ -1718,7 +1718,7 @@ deletes, resets or replaces a state DB family outside an engine:
 | reset, rebind | `drive reset-sync-state`, `drive rebind-root` (`changeDriveStateUnderLock`) | the drive's sync folder |
 | purge | `drive remove --purge`, `logout --purge` (`deleteStateDB`), after the config section is removed and the watch told | the drive's sync folder, none for orphaned state |
 | shortcut child cleanup | multisync `shortcutChildArtifactCleanupExecutor.purge` | none: a replacement child may sync the folder |
-| email rename | `MoveStateDBs` via `config.ReconcileAccountEmail` and `config.CompleteEmailChange` | none; every source and target store first, all or nothing |
+| email rename | `MoveStateDBs` (`engine_state_db_moves.go`) via `config.ReconcileAccountEmail` and `config.CompleteEmailChange` | none; every source and target store first, all or nothing |
 
 Read-only inspectors (`status`, the rebind's file count) take no lock: they
 open the store `mode=ro` and `query_only`, which SQLite runs beside a live
