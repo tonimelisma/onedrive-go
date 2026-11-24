@@ -63,7 +63,7 @@ permissions:
 # open while the nightly is red, and one issue labelled `seed-failure` per
 # failing model seed, open until the change that fixes the seed closes it.
 # Locally, the DoD pre-pr stage runs the `pr` profile (lint, then quick), and
-# `verify default` still runs the full unit tier.
+# `verify public` still runs the full unit tier.
 #
 # The live jobs (`integration`, `e2e`) run on pull requests, dispatch and the
 # schedule, never on push to main: their shared test accounts serialize runs,

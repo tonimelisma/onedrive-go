@@ -16,7 +16,7 @@ import (
 // constants and to the plans they resolve to, and
 // TestDeveloperOnboardingListsEveryVerifyProfile holds the onboarding guide
 // to it.
-const VerifyProfileUsage = "default|public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|race|seeds|failed-test"
+const VerifyProfileUsage = "public|pr|quick|lint|platform|e2e|e2e-full|integration|stress|race|seeds|failed-test"
 
 // verifyShard is one slice of the short unit tier, `--shard index/count`.
 // A zero value means the whole tier.
@@ -95,7 +95,7 @@ func resolveVerifyShard(plan verifyPlan, spec string) (verifyShard, error) {
 //     importers (lintChangedPackages); CI's lint job lints every package.
 //
 // The race detector runs in the race profile, the sync tree alone, which CI
-// runs on every push to main, and in default and public beside the coverage
+// runs on every push to main, and in public beside the coverage
 // gate, the compile guard and the exhaustive tests, which nightly CI runs and
 // which remain selectable locally.
 func runPRLaneVerification(

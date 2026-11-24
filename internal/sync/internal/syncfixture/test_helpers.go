@@ -966,8 +966,8 @@ func (w *enospcWatcher) Close() error {
 // SkipInShort marks an exhaustive test: a breadth, replay, randomized or
 // many-pass variant of behavior that targeted tests in this package already
 // cover. `go test -short` (the `verify quick` and `verify platform` profiles,
-// which are the per-PR CI lane) skips it; the full profiles (`verify default`
-// and `verify public`, the local gate and nightly CI) run it. Call it before
+// which are the per-PR CI lane) skips it; the full profile (`verify public`,
+// which nightly CI runs and a session can run) runs it. Call it before
 // t.Parallel so the skip costs nothing.
 func SkipInShort(tb testing.TB) {
 	tb.Helper()
@@ -978,8 +978,8 @@ func SkipInShort(tb testing.TB) {
 }
 
 // FullTier reports whether this test binary is the full unit tier's: one
-// built with coverage, which only the full verify profiles ask for
-// (`verify default` and `verify public`, which nightly CI runs; their
+// built with coverage, which only the full verify profile asks for
+// (`verify public`, which nightly CI runs; its
 // `go test -race -coverpkg=./... -coverprofile`, devtool's runUnitTests). An
 // exhaustive test whose full breadth costs more than a per-PR run can carry
 // runs all of it there and a fixed sample of it in every other non-short run:

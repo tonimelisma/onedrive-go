@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Command positions in the default verify profile. Named so that inserting a
+// Command positions in the public verify profile. Named so that inserting a
 // step is a one-line change here rather than a silent renumbering that shifts
 // every downstream assertion onto the wrong command.
 const (
@@ -45,15 +45,22 @@ const (
 	cmdTaggedVetE2E     = cmdE2EFullCompile + 1
 	cmdTaggedVetInteg   = cmdTaggedVetE2E + 1
 	cmdTaggedVetRace    = cmdTaggedVetInteg + 1
-	cmdE2EAuthPreflight = cmdTaggedVetRace + 1
-	cmdE2EFastPreflight = cmdE2EAuthPreflight + 1
-	cmdE2ESuite         = cmdE2EFastPreflight + 1
 
-	verifyDefaultCommandCount = cmdE2ESuite + 1
+	verifyPublicCommandCount = cmdTaggedVetRace + 1
+)
+
+// Command positions in the fast e2e verify profile: the two preflights, then
+// the suite.
+const (
+	cmdE2EAuthPreflight = 0
+	cmdE2EFastPreflight = 1
+	cmdE2ESuite         = 2
+
+	verifyE2ECommandCount = cmdE2ESuite + 1
 )
 
 // Validates: R-6.10.1
-func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
+func TestRunVerifyPublicRunsTheUnitTierWithCoverage(t *testing.T) {
 	t.Parallel()
 
 	repoRoot := t.TempDir()
@@ -70,7 +77,7 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:     repoRoot,
-		Profile:      VerifyDefault,
+		Profile:      VerifyPublic,
 		CoverageFile: filepath.Join(repoRoot, "cover.out"),
 		UnitTimeout:  25 * time.Minute,
 		Stdout:       stdout,
@@ -78,7 +85,7 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, verifyDefaultCommandCount)
+	require.Len(t, runner.runCommands, verifyPublicCommandCount)
 	assert.Equal(t, "gofumpt", runner.runCommands[cmdFormatGofumpt].name)
 	assert.Equal(t, []string{"-w", "."}, runner.runCommands[cmdFormatGofumpt].args)
 	assert.Equal(t, "goimports", runner.runCommands[cmdFormatGoimports].name)
@@ -112,6 +119,25 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 		strings.TrimSuffix(fullE2ECompileArtifactName, ".test"),
 	)
 	assert.Equal(t, "./e2e", runner.runCommands[cmdE2EFullCompile].args[6])
+	require.Len(t, runner.outputCommands, 1)
+	assert.Contains(t, stdout.String(), "==> coverage")
+}
+
+// Validates: R-6.10.1
+func TestRunVerifyE2ERunsThePreflightsThenTheFastSuite(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot:  t.TempDir(),
+		Profile:   VerifyE2E,
+		E2ELogDir: t.TempDir(),
+		Stdout:    &bytes.Buffer{},
+		Stderr:    &bytes.Buffer{},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, runner.runCommands, verifyE2ECommandCount)
 	assert.Equal(t,
 		[]string{"test", "-tags=e2e", "-run=" + authE2EPreflightPattern, "-count=1", "-v", "-timeout=10m", "./e2e/..."},
 		runner.runCommands[cmdE2EAuthPreflight].args,
@@ -133,8 +159,6 @@ func TestRunVerifyDefaultRunsExpectedSteps(t *testing.T) {
 	assertCommandHasEnvVar(t, runner.runCommands[cmdE2ESuite], e2eSkipSuiteScrubEnvVar+"=1")
 	assertCommandLacksEnvVar(t, runner.runCommands[cmdE2ESuite], e2eRunAuthPreflightEnvVar+"=1")
 	assertCommandLacksEnvVar(t, runner.runCommands[cmdE2ESuite], e2eRunFastFixturePreflightEnvVar+"=1")
-	require.Len(t, runner.outputCommands, 1)
-	assert.Contains(t, stdout.String(), "==> coverage")
 }
 
 // Validates: R-6.10.22

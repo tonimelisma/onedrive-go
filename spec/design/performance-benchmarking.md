@@ -68,7 +68,7 @@ The implementation should stay deliberately small:
 
 - Replacing `go test -bench` microbenchmarks for hot leaf functions. Those
   still matter for package-local CPU/allocation diagnosis.
-- Turning default `go run ./cmd/devtool verify default` into a performance
+- Turning a `go run ./cmd/devtool verify` profile into a performance
   benchmark lane.
 - Treating GitHub Actions wall-clock runtime as product benchmark truth.
 - Emitting durable benchmark history from production runtime state. Production

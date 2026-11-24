@@ -33,7 +33,7 @@ At the highest level, this repository is four things at once:
 2. A sync engine that continuously reconciles local filesystem state and
    OneDrive state.
 3. A repo-owned verification toolchain that codifies architecture, testing,
-   worktree setup, and live-test policy.
+   the Definition of Done stages, and live-test policy.
 4. A spec-led codebase where the design docs are part of the executable model,
    not optional prose on the side.
 
@@ -549,12 +549,12 @@ The full verification tier a session runs is:
 go run ./cmd/devtool verify public
 ```
 
-The per-PR gate is `go run ./cmd/devtool verify pr`. Live profiles (`default`,
-`e2e`, `e2e-full`) run only in CI, where the test accounts exist.
+The per-PR gate is `go run ./cmd/devtool verify pr`, which a plain `verify`
+runs too. The live profiles (`e2e`, `e2e-full`) run only in CI, where the test
+accounts exist.
 
 Every profile, as `go run ./cmd/devtool verify --help` lists them:
 
-- `default`: `public` plus the fast live suite; CI only
 - `public`: format, lint, build, the repository rules, the full unit tier
   under `-race` with the coverage gate and every exhaustive test; no live
   tests
@@ -600,9 +600,11 @@ mistake it for optional contributor convenience.
 `cmd/devtool` and `internal/devtool` own:
 
 - `verify`: repo-owned verification profiles
-- `worktree`: worktree creation from a freshly fetched `origin/main` and its bootstrap, and `prune-merged`, which removes builder worktrees whose work is already in `origin/main`
+- `verify --dod --stage <stage>`: the Definition of Done stages, `post-merge` ending with the read-only cleanup audit
+- `nightly`: the nightly run's claims (`check`, `release`) and its verdict (`report`)
+- `ci rerun-unstarted`: CI's rerun of a run whose only trouble is jobs no runner took
+- `worktree prune-merged`: removes the builder worktrees whose work is already in `origin/main`
 - `bench`: benchmark scenarios and result bundles
-- `cleanup-audit`: read-only git cleanup classification
 
 The file-family split inside `internal/devtool` is also worth knowing:
 
@@ -614,10 +616,10 @@ The file-family split inside `internal/devtool` is also worth knowing:
 | `verify_failed.go`, `go_test_log.go` | The failed-test profile; the one reader of go test logs, raw or `-json` |
 | `nightly.go`, `nightly_verdict.go`, `nightly_report.go`, `nightly_seed_issues.go` | The nightly claims and check; the verdict rule of a scheduled run; the nightly's commit status and issue; the failing seeds' issues |
 | `verify_dod.go`, `verify_dod_threads.go`, `verify_dod_threads_rest.go`, `verify_dod_ci_wait.go` | The DoD stages, their review-thread sweep (GraphQL, and REST in a cloud session) and their CI waits |
-| `worktree.go`, `worktree_prune.go` | Worktree creation from a freshly fetched `origin/main` and its bootstrap; removal of the builder worktrees whose work is in `origin/main` |
+| `worktree_prune.go` | Removal of the builder worktrees whose work is in `origin/main` |
 | `verify_as_user.go` | Running verify's go test steps as a non-root user when verify runs as root |
 | `bench.go`, `bench_live.go` | Benchmark scenarios, result recording, and live benchmark runs against real accounts |
-| `cleanup_audit.go` | Read-only git cleanup classification |
+| `cleanup_audit.go` | The read-only git cleanup classification `post-merge` ends with |
 | `runner.go` | Shared subprocess execution helpers for repo tooling |
 
 This means the repo owns both the product runtime and the contributor runtime.

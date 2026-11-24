@@ -196,7 +196,7 @@ func TestDODThreadReplyTemplateIncludesFixEvidence(t *testing.T) {
 		Classification: DODCommentAlreadyFixed,
 		WhatChanged:    "Unknown kind filtering already includes directory-capable paths.",
 		HowFixed:       "Verified current main has file-or-directory matching.",
-		Evidence:       []string{"TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths", "go run ./cmd/devtool verify default"},
+		Evidence:       []string{"TestContentFilter_ShouldObserveUnknownKindIncludesDirectoryCapablePaths", "go run ./cmd/devtool verify public"},
 	}, 682, "abc123")
 
 	assert.Contains(t, body, "Addressed in #682 (abc123).")
@@ -656,7 +656,7 @@ func TestDODPrePRKeepsTheFullTierSelectable(t *testing.T) {
 
 	err := RunVerify(context.Background(), runner, &VerifyOptions{
 		RepoRoot:     repoRoot,
-		Profile:      VerifyDefault,
+		Profile:      VerifyPublic,
 		CoverageFile: coverageFile,
 		DOD:          true,
 		DODStage:     DODStagePrePR,
@@ -665,7 +665,7 @@ func TestDODPrePRKeepsTheFullTierSelectable(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.runCommands, verifyDefaultCommandCount+2, "the full tier, then the rebase check")
+	require.Len(t, runner.runCommands, verifyPublicCommandCount+2, "the full tier, then the rebase check")
 	assert.Equal(t, "-race", runner.runCommands[cmdUnitTests].args[1])
 }
 

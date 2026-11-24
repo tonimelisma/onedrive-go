@@ -48,10 +48,9 @@ unit tests with the race detector and coverage gate, and the repo's
 documentation and traceability checks. Coverage is measured across packages
 (`-coverpkg=./...`), and the gate's number is written only in requirement
 R-6.10.4, which devtool reads; to change the number, change that line.
-`go run ./cmd/devtool verify default` is `public` plus the fast live E2E suite.
-The live suites need test accounts, which exist only in CI (no session or
-container ever holds `.env`, `.testdata` or token files), so `default` and the
-live suites run only there; see "E2E & Integration Tests" in
+The live suites (`verify e2e`, `verify e2e-full`) need test accounts, which
+exist only in CI (no session or container ever holds `.env`, `.testdata` or
+token files), so they run only there; see "E2E & Integration Tests" in
 [CLAUDE.md](CLAUDE.md).
 
 CI is tiered. Every pull request and every push to `main` runs the quick lane
@@ -132,7 +131,7 @@ the pull request over REST pinned to the head it checked (a pull request merged
 already is no failure), marks the branch's nightly claims fixed, restarts the
 branch from the new `origin/main` and pushes it, waits for the push-to-`main`
 CI run of the merge commit to succeed (every push to `main` runs the quick
-lane), prunes the merged builder worktrees, and runs `cleanup-audit`. Both CI waits go on
+lane), prunes the merged builder worktrees, and ends with the read-only cleanup audit. Both CI waits go on
 while any check changes state and fail after the longest timeout of the jobs
 that run for the awaited event (a pull request, or a push after merge) plus 10
 minutes without a change; a job the runner cancelled in the run of the commit

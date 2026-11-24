@@ -50,7 +50,6 @@ const (
 	// so it verified nothing.
 	verifySummaryStatusSkipped = "skipped"
 
-	VerifyDefault     VerifyProfile = "default"
 	VerifyPublic      VerifyProfile = "public"
 	VerifyPR          VerifyProfile = "pr"
 	VerifyQuick       VerifyProfile = "quick"
@@ -98,7 +97,7 @@ const (
 type VerifyOptions struct {
 	RepoRoot string
 	// Profile is the profile to run. Empty means the caller named none: a plain
-	// run then uses `default`, and the DoD pre-pr stage uses `pr`.
+	// run and the DoD pre-pr stage then use `pr`, the local pre-PR gate.
 	Profile           VerifyProfile
 	CoverageThreshold float64
 	CoverageFile      string
@@ -269,7 +268,7 @@ type verifyPlan struct {
 // takes.
 func (p *verifyPlan) setCheckFormat(checkFormat bool) error {
 	if checkFormat && !p.runPublicChecks && !p.runQuickChecks {
-		return errors.New("--check-format applies to the profiles with a format step: default, public, pr and quick")
+		return errors.New("--check-format applies to the profiles with a format step: public, pr and quick")
 	}
 	p.checkFormat = checkFormat
 
@@ -317,7 +316,7 @@ func runVerifyProfileWithEnv(
 
 	profile := opts.Profile
 	if profile == "" {
-		profile = VerifyDefault
+		profile = VerifyPR
 	}
 
 	plan, err := resolveVerifyPlan(profile)
@@ -408,7 +407,7 @@ func applyVerifyFlags(plan *verifyPlan, opts *VerifyOptions) (verifyShard, error
 		return verifyShard{}, err
 	}
 	if opts.LintPass != "" && !plan.runLint && !plan.runPublicChecks {
-		return verifyShard{}, errors.New("--lint-pass applies to the profiles that lint: default, public, pr and lint")
+		return verifyShard{}, errors.New("--lint-pass applies to the profiles that lint: public, pr and lint")
 	}
 	if plan.lintPasses, err = resolveLintPasses(opts.LintPass); err != nil {
 		return verifyShard{}, err
@@ -422,11 +421,6 @@ func applyVerifyFlags(plan *verifyPlan, opts *VerifyOptions) (verifyShard, error
 
 func resolveVerifyPlan(profile VerifyProfile) (verifyPlan, error) {
 	switch profile {
-	case VerifyDefault:
-		return verifyPlan{
-			runPublicChecks: true,
-			runE2E:          true,
-		}, nil
 	case VerifyPublic:
 		return verifyPlan{
 			runPublicChecks: true,

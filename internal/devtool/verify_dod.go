@@ -293,7 +293,7 @@ func runDODNightly(
 // named it runs `pr`, what the required PR check runs on Linux: the full race
 // tier does not fit its deadline on a small host, and the nightly run owns the
 // race, coverage and exhaustive failures that reach main (R-6.10.22). Naming
-// `default` keeps the full tier as this stage's gate.
+// `public` keeps the full tier as this stage's gate.
 func runDODPrePR(ctx context.Context, runner commandRunner, gh ghClient, opts *VerifyOptions, stdout io.Writer) error {
 	profileOpts := *opts
 	profileOpts.DOD = false
@@ -416,7 +416,7 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 	if err := PruneMergedWorktrees(ctx, runner, WorktreePruneOptions{RepoRoot: opts.RepoRoot, Stdout: stdout}); err != nil {
 		return fmt.Errorf("dod post-merge: %w", err)
 	}
-	if err := RunCleanupAudit(ctx, runner, CleanupAuditOptions{
+	if err := runCleanupAudit(ctx, runner, cleanupAuditOptions{
 		RepoRoot: opts.RepoRoot,
 		Stdout:   stdout,
 		Stderr:   stderr,

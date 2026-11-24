@@ -2,7 +2,6 @@ package devtool
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,21 +11,20 @@ import (
 	"strings"
 )
 
-type CleanupAuditOptions struct {
+type cleanupAuditOptions struct {
 	RepoRoot string
-	JSON     bool
 	Stdout   io.Writer
 	Stderr   io.Writer
 }
 
-type CleanupClassification string
+type cleanupClassification string
 
 const (
-	CleanupSafeRemove   CleanupClassification = "safe_remove"
-	CleanupKeepAttached CleanupClassification = "keep_attached"
-	CleanupKeepDirty    CleanupClassification = "keep_dirty"
-	CleanupKeepUnmerged CleanupClassification = "keep_unmerged"
-	CleanupKeepMain     CleanupClassification = "keep_main"
+	cleanupSafeRemove   cleanupClassification = "safe_remove"
+	cleanupKeepAttached cleanupClassification = "keep_attached"
+	cleanupKeepDirty    cleanupClassification = "keep_dirty"
+	cleanupKeepUnmerged cleanupClassification = "keep_unmerged"
+	cleanupKeepMain     cleanupClassification = "keep_main"
 )
 
 const (
@@ -40,27 +38,27 @@ const (
 	cleanupOriginMainBranchDetail = "origin main branch"
 )
 
-type CleanupSubject string
+type cleanupSubject string
 
 const (
-	CleanupSubjectWorktree     CleanupSubject = "worktree"
-	CleanupSubjectLocalBranch  CleanupSubject = "local_branch"
-	CleanupSubjectRemoteBranch CleanupSubject = "remote_branch"
+	cleanupSubjectWorktree     cleanupSubject = "worktree"
+	cleanupSubjectLocalBranch  cleanupSubject = "local_branch"
+	cleanupSubjectRemoteBranch cleanupSubject = "remote_branch"
 )
 
-type CleanupAuditEntry struct {
-	Subject        CleanupSubject        `json:"subject"`
-	Name           string                `json:"name,omitempty"`
-	Path           string                `json:"path,omitempty"`
-	Branch         string                `json:"branch,omitempty"`
-	Classification CleanupClassification `json:"classification"`
-	Detail         string                `json:"detail"`
+type cleanupAuditEntry struct {
+	Subject        cleanupSubject
+	Name           string
+	Path           string
+	Branch         string
+	Classification cleanupClassification
+	Detail         string
 }
 
-type CleanupAuditReport struct {
-	Worktrees      []CleanupAuditEntry `json:"worktrees"`
-	LocalBranches  []CleanupAuditEntry `json:"local_branches"`
-	RemoteBranches []CleanupAuditEntry `json:"remote_branches"`
+type cleanupAuditReport struct {
+	Worktrees      []cleanupAuditEntry
+	LocalBranches  []cleanupAuditEntry
+	RemoteBranches []cleanupAuditEntry
 }
 
 type gitWorktreeState struct {
@@ -83,7 +81,7 @@ type gitBranchState struct {
 	Dirty    bool
 }
 
-func RunCleanupAudit(ctx context.Context, runner commandRunner, opts CleanupAuditOptions) error {
+func runCleanupAudit(ctx context.Context, runner commandRunner, opts cleanupAuditOptions) error {
 	stdout := opts.Stdout
 	if stdout == nil {
 		stdout = os.Stdout
@@ -118,10 +116,6 @@ func RunCleanupAudit(ctx context.Context, runner commandRunner, opts CleanupAudi
 	report, err := classifyCleanupAudit(ctx, runner, opts.RepoRoot, worktrees, localBranches, remoteBranches)
 	if err != nil {
 		return fmt.Errorf("cleanup audit: classify repo state: %w", err)
-	}
-
-	if opts.JSON {
-		return writeCleanupAuditJSON(stdout, report)
 	}
 
 	return writeCleanupAuditText(stdout, report)
@@ -266,17 +260,17 @@ func classifyCleanupAudit(
 	worktrees []gitWorktreeState,
 	localBranches []gitBranchState,
 	remoteBranches []gitBranchState,
-) (CleanupAuditReport, error) {
-	report := CleanupAuditReport{
-		Worktrees:      make([]CleanupAuditEntry, 0, len(worktrees)),
-		LocalBranches:  make([]CleanupAuditEntry, 0, len(localBranches)),
-		RemoteBranches: make([]CleanupAuditEntry, 0, len(remoteBranches)),
+) (cleanupAuditReport, error) {
+	report := cleanupAuditReport{
+		Worktrees:      make([]cleanupAuditEntry, 0, len(worktrees)),
+		LocalBranches:  make([]cleanupAuditEntry, 0, len(localBranches)),
+		RemoteBranches: make([]cleanupAuditEntry, 0, len(remoteBranches)),
 	}
 
 	for _, worktree := range worktrees {
 		reachable, err := refReachableFromMain(ctx, runner, repoRoot, worktreeRef(worktree))
 		if err != nil {
-			return CleanupAuditReport{}, err
+			return cleanupAuditReport{}, err
 		}
 		report.Worktrees = append(report.Worktrees, classifyWorktreeEntry(worktree, reachable))
 	}
@@ -284,7 +278,7 @@ func classifyCleanupAudit(
 	for _, branch := range localBranches {
 		reachable, err := refReachableFromMain(ctx, runner, repoRoot, branch.Ref)
 		if err != nil {
-			return CleanupAuditReport{}, err
+			return cleanupAuditReport{}, err
 		}
 		report.LocalBranches = append(report.LocalBranches, classifyLocalBranchEntry(branch, reachable))
 	}
@@ -292,7 +286,7 @@ func classifyCleanupAudit(
 	for _, branch := range remoteBranches {
 		reachable, err := refReachableFromMain(ctx, runner, repoRoot, branch.Ref)
 		if err != nil {
-			return CleanupAuditReport{}, err
+			return cleanupAuditReport{}, err
 		}
 		report.RemoteBranches = append(report.RemoteBranches, classifyRemoteBranchEntry(branch, reachable))
 	}
@@ -332,93 +326,83 @@ func refReachableFromMain(ctx context.Context, runner commandRunner, repoRoot, r
 	return count == 0, nil
 }
 
-func classifyWorktreeEntry(worktree gitWorktreeState, reachableFromMain bool) CleanupAuditEntry {
-	entry := CleanupAuditEntry{
-		Subject: CleanupSubjectWorktree,
+func classifyWorktreeEntry(worktree gitWorktreeState, reachableFromMain bool) cleanupAuditEntry {
+	entry := cleanupAuditEntry{
+		Subject: cleanupSubjectWorktree,
 		Path:    worktree.Path,
 		Branch:  worktree.Branch,
 	}
 
 	switch {
 	case worktree.MainRef:
-		entry.Classification = CleanupKeepMain
+		entry.Classification = cleanupKeepMain
 		entry.Detail = cleanupRootMainWorktreeDetail
 	case worktree.Dirty:
-		entry.Classification = CleanupKeepDirty
+		entry.Classification = cleanupKeepDirty
 		entry.Detail = cleanupDirtyWorktreeDetail
 	case reachableFromMain:
-		entry.Classification = CleanupSafeRemove
+		entry.Classification = cleanupSafeRemove
 		entry.Detail = "worktree head is reachable from main and clean"
 	default:
-		entry.Classification = CleanupKeepUnmerged
+		entry.Classification = cleanupKeepUnmerged
 		entry.Detail = "worktree head has commits not reachable from main"
 	}
 
 	return entry
 }
 
-func classifyLocalBranchEntry(branch gitBranchState, reachableFromMain bool) CleanupAuditEntry {
-	entry := CleanupAuditEntry{
-		Subject: CleanupSubjectLocalBranch,
+func classifyLocalBranchEntry(branch gitBranchState, reachableFromMain bool) cleanupAuditEntry {
+	entry := cleanupAuditEntry{
+		Subject: cleanupSubjectLocalBranch,
 		Name:    branch.Name,
 	}
 
 	switch {
 	case branch.Name == mainBranchName:
-		entry.Classification = CleanupKeepMain
+		entry.Classification = cleanupKeepMain
 		entry.Detail = cleanupMainBranchDetail
 	case branch.Dirty:
-		entry.Classification = CleanupKeepDirty
+		entry.Classification = cleanupKeepDirty
 		entry.Detail = cleanupDirtyWorktreeDetail
 	case branch.Attached:
-		entry.Classification = CleanupKeepAttached
+		entry.Classification = cleanupKeepAttached
 		entry.Detail = "branch is attached to a worktree"
 	case reachableFromMain:
-		entry.Classification = CleanupSafeRemove
+		entry.Classification = cleanupSafeRemove
 		entry.Detail = "branch tip is reachable from main"
 	default:
-		entry.Classification = CleanupKeepUnmerged
+		entry.Classification = cleanupKeepUnmerged
 		entry.Detail = "branch has commits not reachable from main"
 	}
 
 	return entry
 }
 
-func classifyRemoteBranchEntry(branch gitBranchState, reachableFromMain bool) CleanupAuditEntry {
-	entry := CleanupAuditEntry{
-		Subject: CleanupSubjectRemoteBranch,
+func classifyRemoteBranchEntry(branch gitBranchState, reachableFromMain bool) cleanupAuditEntry {
+	entry := cleanupAuditEntry{
+		Subject: cleanupSubjectRemoteBranch,
 		Name:    branch.Name,
 	}
 
 	switch {
 	case branch.Name == originMainRef:
-		entry.Classification = CleanupKeepMain
+		entry.Classification = cleanupKeepMain
 		entry.Detail = cleanupOriginMainBranchDetail
 	case reachableFromMain:
-		entry.Classification = CleanupSafeRemove
+		entry.Classification = cleanupSafeRemove
 		entry.Detail = "remote branch tip is reachable from main"
 	default:
-		entry.Classification = CleanupKeepUnmerged
+		entry.Classification = cleanupKeepUnmerged
 		entry.Detail = "remote branch has commits not reachable from main"
 	}
 
 	return entry
 }
 
-func writeCleanupAuditJSON(w io.Writer, report CleanupAuditReport) error {
-	encoder := json.NewEncoder(w)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(report); err != nil {
-		return fmt.Errorf("cleanup audit: write json: %w", err)
-	}
-
-	return nil
-}
-
-func writeCleanupAuditText(w io.Writer, report CleanupAuditReport) error {
+func writeCleanupAuditText(w io.Writer, report cleanupAuditReport) error {
 	sections := []struct {
 		title   string
-		entries []CleanupAuditEntry
+		entries []cleanupAuditEntry
 	}{
 		{title: "worktrees", entries: report.Worktrees},
 		{title: "local branches", entries: report.LocalBranches},

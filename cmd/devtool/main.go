@@ -18,8 +18,6 @@ type verifyFunc func(context.Context, *devtool.VerifyOptions) error
 
 type benchFunc func(context.Context, devtool.BenchOptions) error
 
-type cleanupAuditFunc func(context.Context, devtool.CleanupAuditOptions) error
-
 type nightlyFunc func(context.Context, devtool.NightlyOptions) error
 
 type worktreePruneFunc func(context.Context, devtool.WorktreePruneOptions) error
@@ -46,13 +44,15 @@ func execute(ctx context.Context, root *cobra.Command, stderr io.Writer) int {
 func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "devtool",
-		Short: "Development tooling for verification and worktree setup",
+		Short: "Development tooling for verification, the nightly run and worktree cleanup",
+		// Nothing runs devtool from an interactive shell that would complete
+		// it, so cobra's generated completion command is left out.
+		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
 
 	cmd.AddCommand(
 		newVerifyCmd(defaultCWD, defaultVerify),
 		newBenchCmd(defaultCWD, defaultBench),
-		newCleanupAuditCmd(defaultCWD, defaultCleanupAudit),
 		newWorktreeCmd(defaultCWD, defaultPruneMergedWorktrees),
 		newNightlyCmd(defaultCWD, defaultNightly),
 		newCICmd(defaultCWD, defaultCIRerun),
@@ -242,8 +242,8 @@ func newVerifyCmd(getwd cwdLookup, runVerify verifyFunc) *cobra.Command {
 		Short: "Run repository verification profiles",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// No argument names no profile: the verifier picks `default` for
-			// a plain run and `pr` for the DoD pre-pr stage.
+			// No argument names no profile: the verifier picks `pr`, the
+			// local pre-PR gate, for a plain run and for the DoD pre-pr stage.
 			var profile devtool.VerifyProfile
 			if len(args) == 1 {
 				profile = devtool.VerifyProfile(args[0])
@@ -479,32 +479,6 @@ func newWorktreePruneMergedCmd(getwd cwdLookup, pruneMerged worktreePruneFunc) *
 	return cmd
 }
 
-func newCleanupAuditCmd(getwd cwdLookup, runCleanupAudit cleanupAuditFunc) *cobra.Command {
-	var jsonOutput bool
-
-	cmd := &cobra.Command{
-		Use:   "cleanup-audit",
-		Short: "Classify local git cleanup candidates without deleting anything",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			repoRoot, err := getwd()
-			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
-			}
-
-			return runCleanupAudit(cmd.Context(), devtool.CleanupAuditOptions{
-				RepoRoot: repoRoot,
-				JSON:     jsonOutput,
-				Stdout:   cmd.OutOrStdout(),
-				Stderr:   cmd.ErrOrStderr(),
-			})
-		},
-	}
-
-	cmd.Flags().BoolVar(&jsonOutput, "json", false, "emit JSON output")
-
-	return cmd
-}
-
 func requireFlag(cmd *cobra.Command, name string) {
 	if err := cmd.MarkFlagRequired(name); err != nil {
 		panic(err)
@@ -532,14 +506,6 @@ func defaultVerify(ctx context.Context, opts *devtool.VerifyOptions) error {
 func defaultBench(ctx context.Context, opts devtool.BenchOptions) error {
 	if err := devtool.RunBench(ctx, opts); err != nil {
 		return fmt.Errorf("run bench: %w", err)
-	}
-
-	return nil
-}
-
-func defaultCleanupAudit(ctx context.Context, opts devtool.CleanupAuditOptions) error {
-	if err := devtool.RunCleanupAudit(ctx, devtool.ExecRunner{}, opts); err != nil {
-		return fmt.Errorf("run cleanup audit: %w", err)
 	}
 
 	return nil
