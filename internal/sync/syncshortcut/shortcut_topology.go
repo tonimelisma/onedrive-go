@@ -89,28 +89,28 @@ type ShortcutChildEngineSpec struct {
 
 func ValidateShortcutChildRunCommand(command *ShortcutChildRunCommand) (string, error) {
 	if command == nil {
-		return "", errors.New("sync: shortcut child run command is incomplete")
+		return "", errors.New("syncshortcut: shortcut child run command is incomplete")
 	}
 	childMountID := command.ChildMountID
 	if childMountID == "" {
-		return "", errors.New("sync: shortcut child run command is missing a child mount ID")
+		return "", errors.New("syncshortcut: shortcut child run command is missing a child mount ID")
 	}
 	if !config.IsChildMountID(childMountID) {
-		return "", fmt.Errorf("sync: shortcut child run command has invalid child mount ID %s", childMountID)
+		return "", fmt.Errorf("syncshortcut: shortcut child run command has invalid child mount ID %s", childMountID)
 	}
 	if command.Engine.LocalRoot == "" {
-		return "", fmt.Errorf("sync: shortcut child %s is missing a local root", childMountID)
+		return "", fmt.Errorf("syncshortcut: shortcut child %s is missing a local root", childMountID)
 	}
 	if command.Engine.RemoteDriveID == "" || command.Engine.RemoteItemID == "" {
-		return "", fmt.Errorf("sync: shortcut child %s is missing remote root identity", childMountID)
+		return "", fmt.Errorf("syncshortcut: shortcut child %s is missing remote root identity", childMountID)
 	}
 	switch command.Mode {
 	case ShortcutChildRunModeNormal, ShortcutChildRunModeFinalDrain:
 	default:
-		return "", fmt.Errorf("sync: shortcut child %s has unsupported run mode %q", childMountID, command.Mode)
+		return "", fmt.Errorf("syncshortcut: shortcut child %s has unsupported run mode %q", childMountID, command.Mode)
 	}
 	if command.Mode == ShortcutChildRunModeFinalDrain && command.AckRef.IsZero() {
-		return "", fmt.Errorf("sync: shortcut final-drain child %s is missing an acknowledgement reference", childMountID)
+		return "", fmt.Errorf("syncshortcut: shortcut final-drain child %s is missing an acknowledgement reference", childMountID)
 	}
 	return childMountID, nil
 }
@@ -169,7 +169,7 @@ func (h ShortcutChildAckHandle) AcknowledgeChildFinalDrain(
 	ack ShortcutChildDrainAck,
 ) (ShortcutChildWorkSnapshot, error) {
 	if h.ackFinalDrain == nil {
-		return ShortcutChildWorkSnapshot{}, errors.New("sync: shortcut child final-drain ack requires live parent")
+		return ShortcutChildWorkSnapshot{}, errors.New("syncshortcut: shortcut child final-drain ack requires live parent")
 	}
 	return h.ackFinalDrain(ctx, ack)
 }
@@ -179,7 +179,7 @@ func (h ShortcutChildAckHandle) AcknowledgeChildArtifactsPurged(
 	ack ShortcutChildArtifactCleanupAck,
 ) (ShortcutChildWorkSnapshot, error) {
 	if h.ackArtifactsPurged == nil {
-		return ShortcutChildWorkSnapshot{}, errors.New("sync: shortcut child artifact cleanup ack requires live parent")
+		return ShortcutChildWorkSnapshot{}, errors.New("syncshortcut: shortcut child artifact cleanup ack requires live parent")
 	}
 	return h.ackArtifactsPurged(ctx, ack)
 }

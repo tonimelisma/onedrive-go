@@ -9,7 +9,7 @@ import (
 )
 
 // ErrUnclassifiedPlan is the class of every unclassifiedPlanError.
-var ErrUnclassifiedPlan = errors.New("sync: planner state is outside the decision table")
+var ErrUnclassifiedPlan = errors.New("syncplan: planner state is outside the decision table")
 
 // unclassifiedPlanError is a plan that met a row the decision table does not
 // classify (R-6.2.16). A path planned as nothing to do silently stops
@@ -112,7 +112,7 @@ func validatePlannerKinds(comparisons []DecidedComparison, reconciliations []Rec
 // Every rule after the build decides by action type, and no rule has a verdict
 // for such a value: let through, its path would silently stop syncing. Like a
 // row outside the decision table, it fails the plan instead.
-var errUnlistedActionPlanned = errors.New("sync: planned action is outside the action enums")
+var errUnlistedActionPlanned = errors.New("syncplan: planned action is outside the action enums")
 
 // validatePlannedActions refuses built actions holding a value outside the
 // action enums, naming the first. planBuiltActions runs it before any rule

@@ -85,7 +85,7 @@ func (r *ComparisonRow) ItemType() ItemType {
 			return ItemTypeRoot
 		case SideAbsent:
 		default:
-			panic(fmt.Sprintf("sync: item type of %v", side))
+			panic(fmt.Sprintf("syncdomain: item type of %v", side))
 		}
 	}
 

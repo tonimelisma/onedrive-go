@@ -17,7 +17,7 @@ import (
 // or downloaded (D-057); a row that says otherwise is a comparison bug, and
 // it fails the plan like a row outside the decision table (R-6.2.16):
 // dropped, the path would silently stop syncing.
-var errFolderTransferPlanned = errors.New("sync: folder planned as a content transfer")
+var errFolderTransferPlanned = errors.New("syncplan: folder planned as a content transfer")
 
 // PlanCurrentState builds the current actionable set from SQLite-owned
 // comparison and reconciliation rows plus the current durable snapshots. SQLite
@@ -62,7 +62,7 @@ func (p *Planner) PlanCurrentState(
 		rec := reconciliations[i]
 		cmp, ok := comparisonByPath[rec.Path]
 		if !ok {
-			return nil, fmt.Errorf("sync: missing comparison row for reconciliation path %q", rec.Path)
+			return nil, fmt.Errorf("syncplan: missing comparison row for reconciliation path %q", rec.Path)
 		}
 
 		actions, err := buildActionsForReconciliation(&rec, cmp, views)
@@ -493,7 +493,7 @@ func buildSQLitePathViews(
 
 		truthStatus, ok := truthStatusByPath[row.Path]
 		if !ok {
-			return nil, nil, fmt.Errorf("sync: missing truth status for comparison path %q", row.Path)
+			return nil, nil, fmt.Errorf("syncplan: missing truth status for comparison path %q", row.Path)
 		}
 
 		view := &syncdomain.PathView{
@@ -503,21 +503,21 @@ func buildSQLitePathViews(
 		if row.BaselineType.Present() {
 			entry, ok := baseline.GetByPath(row.Path)
 			if !ok {
-				return nil, nil, fmt.Errorf("sync: missing baseline entry for comparison path %q", row.Path)
+				return nil, nil, fmt.Errorf("syncplan: missing baseline entry for comparison path %q", row.Path)
 			}
 			view.Baseline = &entry
 		}
 		if row.LocalType.Present() {
 			localRow, ok := localByPath[row.Path]
 			if !ok {
-				return nil, nil, fmt.Errorf("sync: missing local_state row for comparison path %q", row.Path)
+				return nil, nil, fmt.Errorf("syncplan: missing local_state row for comparison path %q", row.Path)
 			}
 			view.Local = LocalStateFromSnapshotRow(&localRow)
 		}
 		if row.RemoteType.Present() {
 			remoteRow, ok := remoteByPath[row.Path]
 			if !ok {
-				return nil, nil, fmt.Errorf("sync: missing remote_state row for comparison path %q", row.Path)
+				return nil, nil, fmt.Errorf("syncplan: missing remote_state row for comparison path %q", row.Path)
 			}
 			view.Remote = remoteStateFromSnapshotRow(&remoteRow)
 		}
@@ -534,12 +534,12 @@ func buildActionsForReconciliation(
 	views map[string]*syncdomain.PathView,
 ) ([]syncdomain.Action, error) {
 	if rec == nil || cmp == nil {
-		return nil, errors.New("sync: reconciliation row requires comparison context")
+		return nil, errors.New("syncplan: reconciliation row requires comparison context")
 	}
 
 	view := views[rec.Path]
 	if view == nil {
-		return nil, fmt.Errorf("sync: missing path view for reconciliation path %q", rec.Path)
+		return nil, fmt.Errorf("syncplan: missing path view for reconciliation path %q", rec.Path)
 	}
 	if plannerSuppressesUnavailableTruth(&view.TruthStatus) {
 		return nil, nil
@@ -601,7 +601,7 @@ func buildActionsForReconciliation(
 		// Moves are composed per item (planner_move_compose.go).
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("sync: unsupported reconciliation kind %s for %s", rec.ReconciliationKind, rec.Path)
+		return nil, fmt.Errorf("syncplan: unsupported reconciliation kind %s for %s", rec.ReconciliationKind, rec.Path)
 	}
 }
 

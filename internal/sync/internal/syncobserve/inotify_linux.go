@@ -33,12 +33,12 @@ func readInotifyLimit() (int, error) {
 			return 0, nil
 		}
 
-		return 0, fmt.Errorf("sync: reading inotify limit: %w", err)
+		return 0, fmt.Errorf("syncobserve: reading inotify limit: %w", err)
 	}
 
 	limit, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
-		return 0, fmt.Errorf("sync: parsing inotify limit: %w", err)
+		return 0, fmt.Errorf("syncobserve: parsing inotify limit: %w", err)
 	}
 
 	return limit, nil

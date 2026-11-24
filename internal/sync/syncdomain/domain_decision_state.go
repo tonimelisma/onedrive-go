@@ -48,7 +48,7 @@ func SideTypeOf(itemType ItemType) SideType {
 	case ItemTypeRoot:
 		return SideRoot
 	default:
-		panic(fmt.Sprintf("sync: side type of %s", OutsideTheEnum(itemType)))
+		panic(fmt.Sprintf("syncdomain: side type of %s", OutsideTheEnum(itemType)))
 	}
 }
 
@@ -122,7 +122,7 @@ func (s DecisionState) RemoteTypeChanged() bool {
 // errInvalidDecisionState reports a state the comparison query cannot
 // produce: a fact about a side the path does not have, or one that
 // contradicts the side types.
-var errInvalidDecisionState = errors.New("sync: decision state contradicts its side types")
+var errInvalidDecisionState = errors.New("syncdomain: decision state contradicts its side types")
 
 // Valid reports whether the comparison query can produce s: each rule is one
 // line of a flag's definition there (a flag about an absent side is false; a

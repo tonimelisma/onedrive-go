@@ -26,7 +26,7 @@ const (
 	socketIOPath                    = "/socket.io/"
 )
 
-var errSocketIORefreshRequired = errors.New("sync: socket.io endpoint refresh required")
+var errSocketIORefreshRequired = errors.New("syncobserve: socket.io endpoint refresh required")
 
 type socketIOLifecycleEventType string
 

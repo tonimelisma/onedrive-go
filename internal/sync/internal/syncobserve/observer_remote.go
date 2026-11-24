@@ -900,7 +900,7 @@ func (o *RemoteObserver) fetchPage(
 			return windowPage{}, syncdomain.NewCursorUnusableError("the saved position is not a link", err)
 		}
 
-		return windowPage{}, fmt.Errorf("sync: fetching delta page %d: %w", page, err)
+		return windowPage{}, fmt.Errorf("syncobserve: fetching delta page %d: %w", page, err)
 	}
 
 	items := 0
@@ -922,7 +922,7 @@ func (o *RemoteObserver) fetchPage(
 	}
 
 	if dp.NextLink == "" {
-		return windowPage{}, fmt.Errorf("sync: delta page %d has neither NextLink nor DeltaLink", page)
+		return windowPage{}, fmt.Errorf("syncobserve: delta page %d has neither NextLink nor DeltaLink", page)
 	}
 
 	return windowPage{raw: dp.Items, items: items, next: dp.NextLink, path: dp.Path, nextPath: dp.NextPath}, nil

@@ -161,10 +161,10 @@ func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (Scan
 	)
 	if err := tree.WalkDir(walkFn); err != nil {
 		if ctx.Err() != nil {
-			return ScanResult{}, fmt.Errorf("sync: local scan canceled: %w", ctx.Err())
+			return ScanResult{}, fmt.Errorf("syncobserve: local scan canceled: %w", ctx.Err())
 		}
 
-		return ScanResult{}, fmt.Errorf("sync: walking %s: %w", syncRoot, err)
+		return ScanResult{}, fmt.Errorf("syncobserve: walking %s: %w", syncRoot, err)
 	}
 
 	// Debug: unreadable entries are recorded as skipped items, which the
@@ -363,7 +363,7 @@ func (o *LocalObserver) hashPhase(
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, nil, nil, fmt.Errorf("sync: hash phase: %w", err)
+		return nil, nil, nil, fmt.Errorf("syncobserve: hash phase: %w", err)
 	}
 
 	return events, rows, skipped, nil
@@ -413,7 +413,7 @@ func (o *LocalObserver) makeWalkFunc(
 
 		relPath, err := tree.Rel(fsPath)
 		if err != nil {
-			return fmt.Errorf("sync: computing relative path for %s: %w", fsPath, err)
+			return fmt.Errorf("syncobserve: computing relative path for %s: %w", fsPath, err)
 		}
 
 		// Normalize: forward slashes for cross-platform consistency + NFC Unicode.

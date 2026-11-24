@@ -55,7 +55,7 @@ func TestPlanCurrentState_UnclassifiedRowFailsEvenWhereTruthIsUnavailable(t *tes
 	assert.Equal(t, "docs/a.txt", unclassified.Path)
 	assert.Equal(t, ComparisonLocalOnlyCreate, unclassified.Comparison)
 	assert.Equal(t, 1, unclassified.Others)
-	assert.EqualError(t, err, `sync: planner state is outside the decision table: "docs/a.txt" `+
+	assert.EqualError(t, err, `syncplan: planner state is outside the decision table: "docs/a.txt" `+
 		`(comparison local_only_create, reconciliation unclassified) and 1 more path`)
 }
 
