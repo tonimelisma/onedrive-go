@@ -739,6 +739,24 @@ with no version to bind is downloaded afresh. Evidence:
 `TestDownloadRange_RejectsUnboundOrMisalignedAnswers`. `DownloadOptsForItem`
 builds the options from a Graph item for CLI `get`.
 
+A partial is named per file and version, not per attempt, so a write the
+graph client abandoned on a hung disk (R-6.8.20, [graph-client.md](graph-client.md)
+→ Transfers) would otherwise sit in the very partial the retry resumes or
+truncates, and land its bytes there whenever it returns. The partial is
+written through a `partialSink`, the `graph.AbandonableWriter` of the
+attempt, and an abandoned sink disowns its partial: the manager neither
+closes, removes nor keeps it, every further write to the sink is refused,
+and its name is held (`TransferManager.heldPartials`) until the stuck write
+has returned. While the name is held, the next attempt of the file writes a
+single-use partial (`partialPathFor`: the version tag plus `~a<n>`, still an
+owned name, so a leftover is a stale partial like any other), which no
+attempt resumes and which a failed attempt removes whatever the failure.
+Once the stuck write returns, its goroutine closes the file, removes the
+partial and frees the name, in that order, so the file's own partial is used
+again
+(`TestDownloadToFile_AnAbandonedWriteDisownsItsPartial`,
+`TestDownloadToFile_AFailedSingleUsePartialIsRemoved`).
+
 A download's errors name no local path of their own, so neither the target,
 which the caller names, nor the internal `.onedrive-go.<name>.partial` temp
 file; only a filesystem call on the partial that failed names it, once,

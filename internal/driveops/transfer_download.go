@@ -11,7 +11,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -286,8 +288,8 @@ func (tm *TransferManager) downloadToFile(
 		return nil, fmt.Errorf("preparing the folder: %w", err)
 	}
 
-	partialPath := DownloadPartialPath(targetPath, opts)
-	result, err := tm.downloadToVerifiedPartial(ctx, driveID, itemID, partialPath, targetPath, opts)
+	partialPath, resumable := tm.partialPathFor(targetPath, opts)
+	result, err := tm.downloadToVerifiedPartial(ctx, driveID, itemID, partialPath, targetPath, resumable, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -407,8 +409,11 @@ func (tm *TransferManager) finalizePartial(target TargetFS, partialPath, targetP
 // are rare and correctness trumps transfer savings). After the last attempt
 // only a deterministic server transform is accepted; anything else fails
 // with ErrDownloadIntegrity and leaves no partial behind.
+//
+// resumable is false for a single-use partial (partialPathFor), which no
+// attempt resumes.
 func (tm *TransferManager) downloadToVerifiedPartial(
-	ctx context.Context, driveID driveid.ID, itemID, partialPath, targetPath string, opts DownloadOpts,
+	ctx context.Context, driveID driveid.ID, itemID, partialPath, targetPath string, resumable bool, opts DownloadOpts,
 ) (*DownloadResult, error) {
 	// Go 1.22 range-over-int: `range N` iterates 0..N-1, so `range maxRetries+1`
 	// gives exactly maxRetries+1 iterations (1 initial + maxRetries retries) (B-221).
@@ -416,7 +421,7 @@ func (tm *TransferManager) downloadToVerifiedPartial(
 	mismatches := make([]downloadAttempt, 0, maxRetries+1)
 
 	for attempt := range maxRetries + 1 {
-		localHash, size, err := tm.downloadToPartial(ctx, driveID, itemID, partialPath, opts, attempt == 0)
+		localHash, size, err := tm.downloadToPartial(ctx, driveID, itemID, partialPath, opts, resumable, attempt == 0)
 		if err != nil {
 			if !errors.Is(err, graph.ErrUnexpectedDownloadBody) {
 				return nil, err
@@ -533,6 +538,134 @@ func DownloadPartialPath(targetPath string, opts DownloadOpts) string {
 	return filepath.Join(filepath.Dir(targetPath), downloadPartialName(filepath.Base(targetPath), partialVersionTag(opts)))
 }
 
+// singleUsePartialTag starts the tag of a single-use partial's name
+// (partialPathFor), after the version tag.
+const singleUsePartialTag = "~a"
+
+// partialPathFor is where a download of targetPath writes: the file's own
+// partial (DownloadPartialPath), which a later attempt resumes, unless a
+// write abandoned on a hung disk still holds it (partialSink). Then it is a
+// single-use partial of another name, which no attempt resumes; resumable
+// says which. The single-use name keeps the owned prefix and suffix, so a
+// leftover one is a stale partial like any other.
+func (tm *TransferManager) partialPathFor(targetPath string, opts DownloadOpts) (path string, resumable bool) {
+	own := DownloadPartialPath(targetPath, opts)
+
+	tm.partialsMu.Lock()
+	defer tm.partialsMu.Unlock()
+
+	if _, held := tm.heldPartials[own]; !held {
+		return own, true
+	}
+
+	for {
+		tm.singleUsePartials++
+		tag := partialVersionTag(opts) + singleUsePartialTag + strconv.FormatUint(tm.singleUsePartials, 10)
+		path = filepath.Join(filepath.Dir(targetPath), downloadPartialName(filepath.Base(targetPath), tag))
+		if _, held := tm.heldPartials[path]; !held {
+			return path, false
+		}
+	}
+}
+
+// holdPartial records that an abandoned write still holds path.
+func (tm *TransferManager) holdPartial(path string) {
+	tm.partialsMu.Lock()
+	defer tm.partialsMu.Unlock()
+
+	if tm.heldPartials == nil {
+		tm.heldPartials = make(map[string]struct{})
+	}
+	tm.heldPartials[path] = struct{}{}
+}
+
+// releasePartial records that the write that held path has returned.
+func (tm *TransferManager) releasePartial(path string) {
+	tm.partialsMu.Lock()
+	defer tm.partialsMu.Unlock()
+
+	delete(tm.heldPartials, path)
+}
+
+// errPartialDisowned is what a write to a partial returns once the partial
+// has been given up to a write stuck in it.
+var errPartialDisowned = errors.New("download: the partial file was given up to a write stuck in it")
+
+// partialSink is the local side of one download attempt: the partial file
+// it writes. The graph client abandons a write to it that hangs past the
+// stall timeout (graph.AbandonableWriter), and the stuck write then owns the
+// file.
+//
+// Invariant: no two writes ever land in one partial. The stuck write keeps
+// its descriptor and lands its bytes at its own offset whenever it returns,
+// so a retry that appended to the same partial (a resume) or truncated it (a
+// fresh start) would carry the stuck write's bytes inside its own, and for a
+// hashless item nothing would catch it. So an abandoned sink disowns its
+// partial: Abandon holds the name (TransferManager.heldPartials), the next
+// attempt writes a single-use partial of another name (partialPathFor), and
+// once the stuck write has returned its goroutine closes the file, removes
+// the partial and frees the name (AbandonedWriteReturned). The name is freed
+// last, so no attempt can take it while the file is still being finished.
+type partialSink struct {
+	w      io.Writer
+	file   *os.File
+	path   string
+	target TargetFS
+	tm     *TransferManager
+
+	abandoned atomic.Bool
+}
+
+var _ graph.AbandonableWriter = (*partialSink)(nil)
+
+func (tm *TransferManager) newPartialSink(target TargetFS, f *os.File, path string, w io.Writer) *partialSink {
+	return &partialSink{w: w, file: f, path: path, target: target, tm: tm}
+}
+
+// Write writes the partial, and refuses once the partial has been given up:
+// only the stuck write, already inside the file, may still land.
+func (s *partialSink) Write(p []byte) (int, error) {
+	if s.abandoned.Load() {
+		return 0, errPartialDisowned
+	}
+
+	return s.w.Write(p) //nolint:wrapcheck // the file's own error; the download wraps it
+}
+
+// Name names the partial, for the graph client's record of abandoned calls.
+func (s *partialSink) Name() string { return s.path }
+
+// Abandon disowns the partial: a write is stuck in it.
+func (s *partialSink) Abandon() {
+	s.abandoned.Store(true)
+	s.tm.holdPartial(s.path)
+}
+
+// AbandonedWriteReturned runs on the abandoned write's goroutine once the
+// stuck write has returned: the partial holds bytes no attempt owns, so it
+// is closed and removed, and its name is free again.
+func (s *partialSink) AbandonedWriteReturned() {
+	defer s.tm.releasePartial(s.path)
+
+	if err := s.file.Close(); err != nil {
+		s.tm.logger.Debug("closing a partial file given up to a stuck write",
+			slog.String("path", s.path), slog.Any("error", err))
+	}
+	s.tm.removePartial(s.target, s.path)
+}
+
+func (s *partialSink) isAbandoned() bool { return s.abandoned.Load() }
+
+// failure is the error an abandoned attempt returns: the download's, or,
+// should a downloader have returned none, errPartialDisowned.
+func (s *partialSink) failure(err error) error {
+	if err != nil {
+		return err
+	}
+
+	return errPartialDisowned
+}
+
 // partialVersionTagPrefix starts the version tag in a partial's name.
 const partialVersionTagPrefix = "~v"
 
@@ -605,13 +738,16 @@ func IsOwnedTransferArtifactName(name string) bool {
 // The .partial file is opened before stat to avoid a TOCTOU race where the
 // file could be deleted between stat and open (B-211). If open fails with
 // ErrNotExist, we fall through to a fresh download.
+//
+// resumable says partialPath is the file's own partial; a single-use one
+// (partialPathFor) is never resumed, and a failed attempt removes it.
 func (tm *TransferManager) downloadToPartial(
-	ctx context.Context, driveID driveid.ID, itemID, partialPath string, opts DownloadOpts, allowResume bool,
+	ctx context.Context, driveID driveid.ID, itemID, partialPath string, opts DownloadOpts, resumable, allowResume bool,
 ) (string, int64, error) {
 	version := downloadVersion(opts)
 	rd, canRange := tm.downloads.(RangeDownloader)
 
-	if allowResume && canRange && (version.QuickXorHash != "" || version.ETag != "") {
+	if resumable && allowResume && canRange && (version.QuickXorHash != "" || version.ETag != "") {
 		f, openErr := opts.target().OpenFile(partialPath, os.O_APPEND|os.O_WRONLY, downloadTempFilePerms)
 		if openErr == nil {
 			info, statErr := f.Stat()
@@ -631,7 +767,7 @@ func (tm *TransferManager) downloadToPartial(
 		}
 	}
 
-	return tm.freshDownload(ctx, driveID, itemID, partialPath, opts)
+	return tm.freshDownload(ctx, driveID, itemID, partialPath, opts, resumable)
 }
 
 // removePartialIfNotCanceled removes a .partial file unless the context was
@@ -648,9 +784,11 @@ func (tm *TransferManager) removePartialIfNotCanceled(ctx context.Context, targe
 	}
 }
 
-// freshDownload performs a full download to a new .partial file.
+// freshDownload performs a full download to a new .partial file. resumable
+// is false for a single-use partial, which a failed attempt removes: no
+// later attempt would resume it.
 func (tm *TransferManager) freshDownload(
-	ctx context.Context, driveID driveid.ID, itemID, partialPath string, opts DownloadOpts,
+	ctx context.Context, driveID driveid.ID, itemID, partialPath string, opts DownloadOpts, resumable bool,
 ) (string, int64, error) {
 	f, err := opts.target().OpenFile(partialPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, downloadTempFilePerms)
 	if err != nil {
@@ -658,9 +796,14 @@ func (tm *TransferManager) freshDownload(
 	}
 
 	h := quickxorhash.New()
-	w := io.MultiWriter(f, h)
+	sink := tm.newPartialSink(opts.target(), f, partialPath, io.MultiWriter(f, h))
 
-	size, err := tm.downloads.Download(ctx, driveID, itemID, w)
+	size, err := tm.downloads.Download(ctx, driveID, itemID, sink)
+	if sink.isAbandoned() {
+		// The stuck write owns the file and the partial now (partialSink):
+		// neither is closed, removed or kept here.
+		return "", 0, fmt.Errorf("receiving the file: %w", sink.failure(err))
+	}
 	if errors.Is(err, graph.ErrNoDownloadURL) && opts.RemoteSize == 0 {
 		// Business omits the download URL of some empty files. An empty
 		// file has nothing to fetch, so the truncated partial is the file
@@ -674,8 +817,12 @@ func (tm *TransferManager) freshDownload(
 		}
 
 		// Preserve the partial on cancellation, and on a stalled transfer,
-		// so the retry resumes from it.
-		if !errors.Is(err, graph.ErrTransferStalled) {
+		// so the retry resumes from it; a single-use partial is never
+		// resumed, so it goes whatever the failure.
+		switch {
+		case !resumable:
+			tm.removePartial(opts.target(), partialPath)
+		case !errors.Is(err, graph.ErrTransferStalled):
 			tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 		}
 
@@ -709,7 +856,12 @@ func (tm *TransferManager) resumeDownloadFromFile(
 		slog.Int64("existing_bytes", existingSize),
 	)
 
-	n, err := rd.DownloadRange(ctx, driveID, itemID, f, existingSize, downloadVersion(opts))
+	sink := tm.newPartialSink(opts.target(), f, partialPath, f)
+	n, err := rd.DownloadRange(ctx, driveID, itemID, sink, existingSize, downloadVersion(opts))
+	if sink.isAbandoned() {
+		// The stuck write owns the file and the partial now (partialSink).
+		return "", 0, fmt.Errorf("resuming the download: %w", sink.failure(err))
+	}
 
 	if closeErr := f.Close(); closeErr != nil {
 		tm.logger.Warn("failed to close partial file after range download",
@@ -717,7 +869,7 @@ func (tm *TransferManager) resumeDownloadFromFile(
 
 		tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 
-		return tm.freshDownload(ctx, driveID, itemID, partialPath, opts)
+		return tm.freshDownload(ctx, driveID, itemID, partialPath, opts, true)
 	}
 
 	if err != nil {
@@ -737,7 +889,7 @@ func (tm *TransferManager) resumeDownloadFromFile(
 
 		tm.removePartialIfNotCanceled(ctx, opts.target(), partialPath)
 
-		return tm.freshDownload(ctx, driveID, itemID, partialPath, opts)
+		return tm.freshDownload(ctx, driveID, itemID, partialPath, opts, true)
 	}
 
 	totalSize := existingSize + n
