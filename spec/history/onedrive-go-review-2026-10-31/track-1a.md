@@ -2,7 +2,7 @@
 
 Read-only adversarial trace. No tests were run; `go build`/`go vet` were not run either because the reviewer's shell was unavailable (all greps went through a read-only helper). Every claim below is anchored to a file:line read during the review. Where a claim rests on filesystem/crash semantics rather than code, it is marked PLAUSIBLE or SPECULATIVE.
 
-Production context assumed throughout: sync folder on `/srv` (RAID, ext4), data directory (state DB + local trash) on the root SSD. That makes the **cross-filesystem** trash path the normal path, not the exception.
+Production context assumed throughout: sync folder and data directory (state DB + local trash) on separate filesystems of the dev host's storage. That makes the **cross-filesystem** trash path the normal path, not the exception.
 
 ---
 
@@ -89,12 +89,12 @@ Production context assumed throughout: sync folder on `/srv` (RAID, ext4), data 
 - Enforcement points: every `FullScan` (`scanner.go:232`), every remote delete (`executor_delete.go:475`), and startup. Shortcut children get a parent-issued identity.
 - Rebind: `cli/drive_rebind_root.go` shows remembered vs present file counts, requires `REBIND` or `--yes`; `RebindSyncRoot` → `ClearSyncRootIdentity` also clears `mount_boundaries` (`store_observation_state.go:560-571`).
 - No xattr support: `SetRootMark` maps ENOTSUP/EOPNOTSUPP/EPERM and a token that does not read back to `ErrRootMarkUnsupported`; binding falls back to inode+fsid+birth time. Read failure of the xattr reads as "no token" → a recorded token mismatches → refuse (safe direction).
-- Bind mount / RAID reassembly: the token survives both; without a token, ext4's fsid is UUID-derived so device renumbering is tolerated by design. A bind mount of the same filesystem elsewhere is the same inode/fsid/token → accepted as the same folder (correct).
+- Bind mount / volume reassembly: the token survives both; without a token, ext4's fsid is UUID-derived so device renumbering is tolerated by design. A bind mount of the same filesystem elsewhere is the same inode/fsid/token → accepted as the same folder (correct).
 
 **Caveats**
-- A folder copied or restored *with* xattrs (`rsync -X`, `tar --xattrs`) carries the token and is accepted as the same folder; the hold is the backstop for whatever it lacks. By design (token alone decides) but worth knowing for a RAID rebuild from backup.
+- A folder copied or restored *with* xattrs (`rsync -X`, `tar --xattrs`) carries the token and is accepted as the same folder; the hold is the backstop for whatever it lacks. By design (token alone decides) but worth knowing for a storage rebuild from backup.
 - The shortcut-alias lifecycle consults neither `syncRootIdentity.Validate` nor the hold before deleting a shortcut placeholder (1A-2).
-- First sync into an empty mount point (RAID not mounted at first start) binds the mount-point directory on the root filesystem and downloads there. Not a delete-safety issue; operational.
+- First sync into an empty mount point (the sync volume not mounted at first start) binds the mount-point directory on the root filesystem and downloads there. Not a delete-safety issue; operational.
 
 **Tests cited**: all twenty in `sync-observation.md` exist; `TestRunOnce_SyncRootReplacedWhileEngineRunsIsRefused` (read) really replaces the root between passes and asserts `ErrMountRootUnavailable` and no remote deletes. `TestNewEngine_UnboundStateWithSyncedItemsIsRefusedUntilRebind` covers the no-record case.
 
@@ -199,10 +199,10 @@ Production context assumed throughout: sync folder on `/srv` (RAID, ext4), data 
 - **Confidence**: CONFIRMED (design).
 
 ### 1A-4 — Local trash has no size cap, no free-space check, and lives on a different disk than the data
-- **Severity**: medium (operational; with the production layout every deleted or replaced byte is copied from the RAID to the root SSD and kept 30 days; a full SSD also hosts the state DB)
+- **Severity**: medium (operational; with the production layout every deleted or replaced byte is copied from the sync filesystem to the data filesystem and kept 30 days; a full data filesystem also hosts the state DB)
 - **Where**: `internal/localtrash/localtrash.go:135-141` (`DirForStatePath`: beside the state DB, not configurable — no `trash` key in `internal/config`), `internal/synctree/detach_unix.go:368-380` (EXDEV → copy), `internal/sync/executor_preconditions.go:624-642` (every download overwrite copies the old version).
 - **Rule**: R-6.4.9 as written has no cap; R-6.2.6 `min_free_space` covers downloads only.
-- **Scenario**: the user replaces a 40 GB video or OneDrive-side edits a large archive 10 times in a month → 400 GB copied to the SSD. Or a bulk remote delete of 300 GB of photos → 300 GB copied before the files leave the RAID. When the SSD fills, deletes start failing (safe for the file; `copyVerified` → link back) and are retried on backoff forever; SQLite writes on the same full disk start failing too, which stalls everything.
+- **Scenario**: the user replaces a 40 GB video or OneDrive-side edits a large archive 10 times in a month → 400 GB copied to the SSD. Or a bulk remote delete of 300 GB of photos → 300 GB copied before the files leave the sync filesystem. When the data filesystem fills, deletes start failing (safe for the file; `copyVerified` → link back) and are retried on backoff forever; SQLite writes on the same full disk start failing too, which stalls everything.
 - **Evidence**: no `Statfs`/free-space check in `localtrash` or `detach_unix.go`; `Purge` only by age.
 - **Existing coverage**: none.
 - **Proposed regression test**: (a) config knob or documented placement of the trash on the sync folder's filesystem (e.g. `<sync_root>/../.onedrive-go-trash` or a configurable `trash_dir`) so the move is a rename; (b) a test that a copy failing with ENOSPC leaves the file in place and reports a user-actionable condition rather than a retrying failure.

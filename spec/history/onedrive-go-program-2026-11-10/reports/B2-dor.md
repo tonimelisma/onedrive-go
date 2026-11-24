@@ -43,7 +43,7 @@
    `sync_flow.go`, tests; `failure_class_test.go` one table line only),
    `e2e` helpers and the named tests, spec and docs. Must not touch beyond one
    line: `internal/cli/sync_runtime.go`, `internal/cli/failure_class.go`,
-   `main.go` (another writer). Never `~/tommi`, the installed client, `/srv`.
+   `main.go` (another writer). Never `~/sync-test-root`, the installed client, `/srv`.
 
 6. PASS **Regression plan**: new CLI tests `TestRunSyncCommand_*` (failed,
    left for next sync, still-open conditions, plan-invariant failure exit 1;

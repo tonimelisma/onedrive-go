@@ -92,11 +92,11 @@ The whole `-short` tier also ran on the tree before the last row fix (188 s, pas
 
 ## Live
 
-Test account and synthetic data only: the binary of the final tree was built into the scratchpad (not installed) and run with `x79live.py`, case `kept` (the row's main scenario). The sync folder was a new folder under `~/tommi`.
+Test account and synthetic data only: the binary of the final tree was built into the scratchpad (not installed) and run with `x79live.py`, case `kept` (the row's main scenario). The sync folder was a new folder under `~/sync-test-root`.
 - First sync: exit 0.
 - While X2 lasts: the sync exits 1, with only the collision's two warnings. On OneDrive x stays at x, f at P/f and z, each the same item.
 - After X2 is removed: one sync exits 0, both trees are equal, and f and x are the items they were. One more sync has nothing to do.
-- No dependency-cycle, error or superseded lines. The proof folder, private tree and sync folder were removed, and nothing of the run is left under `~/tommi`.
+- No dependency-cycle, error or superseded lines. The proof folder, private tree and sync folder were removed, and nothing of the run is left under `~/sync-test-root`.
 
 ## Seen, not fixed
 

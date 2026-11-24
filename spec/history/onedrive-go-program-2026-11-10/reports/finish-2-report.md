@@ -19,7 +19,7 @@ tests without `-short`, because the row's own test needs them.
 - I2: skipped, needs I1.
 - I3: skipped, needs I1.
 - G9: 168c6539. One detector, `DirNames` (on-disk names only). The baseline name index and `RecentLocalDeletes` are deleted. The rider is done: `onDiskSiblingName` and `localPathStillPresent` now use `namekey.FindStored`.
-- G10: closed without a measurement. A replan of a large unchanged tree hashes nothing today: the baseline fast path covers synced files and the local hash cache covers new files. The saving exists only per new watch-created file (O5) or per modified-but-not-uploaded file (O6), never per tree. So the row's measurement could not show a saving, and running one would also have disturbed the running watch client on `~/tommi`.
+- G10: closed without a measurement. A replan of a large unchanged tree hashes nothing today: the baseline fast path covers synced files and the local hash cache covers new files. The saving exists only per new watch-created file (O5) or per modified-but-not-uploaded file (O6), never per tree. So the row's measurement could not show a saving, and running one would also have disturbed the running watch client on `~/sync-test-root`.
 - G11: 37824821. Watch-side collision detection deleted. The agreement test passed in G9 first, then became the scan-only `TestLocalCollisions_ScanJudgesTheNamesOnDisk`.
 
 ## For the review: behaviour changes

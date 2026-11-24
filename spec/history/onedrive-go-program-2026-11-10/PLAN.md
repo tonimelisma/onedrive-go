@@ -1,7 +1,7 @@
 # onedrive-go improvement program: plan
 
 Written 2026-11-10 against onedrive-go `70301c0e` (`main`). This is the working
-plan for the ten-increment program Toni approved on 2026-11-10 ("Do all of
+plan for the ten-increment program the owner approved on 2026-11-10 ("Do all of
 this"). It is a working document: when the program closes, what is still useful
 moves to `SYSTEM.md` and `CHANGELOG.md` and this directory is deleted.
 
@@ -233,9 +233,9 @@ These hold for every PR. They repeat the standing instructions so a subagent
 brief can point here.
 
 1. **Test account only.** All testing uses `test-account@example.com` and
-   synthetic data under `~/tommi`. Never the production account, never
-   `<production sync folder>` in any mode. The production client in byobu window `0:2` is
-   never touched. The production cutover is Toni's decision and is not part of
+   synthetic data under `~/sync-test-root`. Never the production account, never
+   `<production sync folder>` in any mode. The production client in a terminal session is
+   never touched. The production cutover is the owner's decision and is not part of
    this program.
 2. **No account names or secrets in onedrive-go.** Not in commits, PR text,
    docs, test data or logs. `.testdata/` and `.env` stay git-ignored and are
@@ -260,7 +260,7 @@ brief can point here.
 
 ## 3. Decisions taken under "Do all of this"
 
-Toni asked for all of it without stopping, so open choices were taken on the
+The owner asked for all of it without stopping, so open choices were taken on the
 recommendation each analysis made. Each is reversible; all are listed in the
 final report. The ids are decision ids; the split's steps are S0 to S6.
 
@@ -331,7 +331,7 @@ not overlap:
 8. Push, PR, `verify --dod --stage pre-merge --pr N`, then
    `verify --dod --stage post-merge --pr N --worktree <path> --branch <b>`.
 9. Install, the watch client restarts on the new binary, `onedrive-go status`
-   on the test drive reads "Up to date", and a manual check on `~/tommi` where
+   on the test drive reads "Up to date", and a manual check on `~/sync-test-root` where
    the change is user-visible. Agent repo: `CLAUDE.md` commit, `CHANGELOG.md`,
    the status table above, commit and push.
 
@@ -353,7 +353,7 @@ when it belongs to a later PR of this plan (the PR is named in the release).
 ## 5. What I cannot do
 
 - Merge dependabot PR #858 (the permission layer refused a merge without
-  review; it is green and left for Toni).
+  review; it is green and left for the owner).
 - The production cutover.
 - Verify macOS behaviour other than through CI's macOS shards.
 - Make increment 10 authoritative. I1 to I3 land the identity-keyed planner in
@@ -463,7 +463,7 @@ on this host. A8 to A11 make a red nightly visible before the larger waves.
 - **Tests first**: `TestOrchestrator_MountPerfIncludesContextRecordedMetrics`
   (R-6.6.15); an engine pass asserts `Snapshot().DBTransactionCount > 0`.
 - **Validation**: `onedrive-go status --perf` against the running watch
-  client after a file change in `~/tommi`.
+  client after a file change in `~/sync-test-root`.
 
 #### A5. e2e waits check content, not names
 
@@ -841,7 +841,7 @@ B8, B9 and B10 edit small files.
 - **Tests first**: the eight tests named in `02` 1.
 - **Docs**: new R-6.3.9, `sync-control-plane.md`,
   `docs/running-as-a-service.md`.
-- **Validation**: live watch on `~/tommi`: reload with a drive paused and
+- **Validation**: live watch on `~/sync-test-root`: reload with a drive paused and
   resumed, SIGTERM during a transfer; the daemon exits inside the bound.
 
 #### B9. Panic boundaries everywhere
@@ -985,7 +985,7 @@ after it.
 | G7 | `remoteChange{Path, OldPath, ItemType}` replaces `changeEvent` on the remote side; `changeEvent`, `changeType`, `changeSource` are deleted; the content filter is built once per batch [P5] | `TestRemoteBatch_PlannerVisibleEffect_BuildsFilterOnce` | Rider (2026-11-16, from a fact check against main `ca287a32`, kept in the row's brief): `changeSource` is already gone. Building the content filter is a struct copy, so "built once per batch" has no value: that item and its named test are dropped. The row's scope is the remote side whole: the converter and the orphan finder build the stored row form and a `remoteChange` directly, no remote file names `changeEvent` (12 product files, 57 lines on main), the write-only `Type`, `CTag` and `Name` go, the return value the one caller drops goes, and the product functions only tests call (`LastActivity` of the remote observer, `observeRemoteFull`, `projectObservedItems`) go. The change list keeps exactly the entries it holds today, those with an empty item ID included, because the cursor decision reads its length. The type itself and `changeType` are deleted by W97, once the scanner no longer uses them. |
 | G8 | `namekey.Stored`/`StoredPath`; one `storedPathOf`; `nfcNormalize` deleted [P6] | `TestStoredPath_EqualsPerSegment`, `TestOf_StoredComposition_KelvinClass` | D21. `namekey.Stored` itself is added by G2 (its lookup needs it, decided 2026-11-13); G8 adds `StoredPath`, the per-segment property and the removal of `nfcNormalize`. If the per-segment property fails, joined paths are normalised per segment. |
 | G9 | `dirNames` and `localNameCollisions`: one detector for scan and watch, on-disk rivals only; the baseline name index and `RecentLocalDeletes` are deleted [P7] | `TestHashAndEmit_BaselineVariantNotOnDiskIsNotACollision`, `TestFullScan_ModifiedSyncedSiblingOfNewColliderBlocksBoth`, `…UnchangedSyncedSiblingKeepsSyncing`, `TestDirNames_ProbeCorpus`, `TestLocalCollisions_ScanAndWatchAgree` | D19. Defect C2. A followed symlink visiting one stored path twice needs a case first. F1's `baselineView` has no `GetCaseVariants` after this. Rider (2026-11-13): the local-disk matchers `onDiskSiblingName` and `localPathStillPresent` use `namekey.FindStored` here, or go with the detector they serve. |
-| G10 | A scan reuses the hash in the committed local row when size, times and identity match and the file is outside the racily-clean window [P9] | `TestFullScan_ReusesCommittedLocalHash` (counting hash function) | Only if a replan of a large synthetic tree under `~/tommi` shows the saving; otherwise closed with the measurement. |
+| G10 | A scan reuses the hash in the committed local row when size, times and identity match and the file is outside the racily-clean window [P9] | `TestFullScan_ReusesCommittedLocalHash` (counting hash function) | Only if a replan of a large synthetic tree under `~/sync-test-root` shows the saving; otherwise closed with the measurement. |
 | G11 | Watch-side collision detection (3 fields, 9 functions) deleted; R-2.12.2 reworded to "the survivor syncs on the next pass" [P10] | `TestLocalCollisions_ScanAndWatchAgree` becomes a scan-only test | After G9 has shown the scan detector complete. |
 | G12 | The single-name limit counts UTF-16 units against OneDrive's limit; the message is correct; a requirement beside R-2.11.10 [F2] | `TestValidateOneDriveName_MaxLength` | The limit lies between 300 and 400; a live probe on the test account fixes it first. |
 
@@ -1059,7 +1059,7 @@ part), 6, 9 and 11.1, 11.3, 11.5 of the report are in wave B.
 | H4 | `config.AddDrive`: config lock, then catalog lock, the config write is the commit point; both `drive add` paths use it | `TestAddDrive_*` | Item 2; R-3.3.5, R-3.3.1. After B4. **Decisions (mine, 2026-11-12)**: login is the same class and is in this change (it installs the token, runs the same transaction with the account record in the catalog step, and puts the previous token back on failure; a catalog failure is an error, not a warning); a half-done enrollment is completed and reported as completed in text and JSON; the rollback helpers, their seam and their tests are deleted; the lock and the wait bound are the ones #870 made, no second copy. Live proof is mine, in an isolated tree. Brief: `scratchpad/H4-brief.md`. **Review decisions (mine, 2026-11-12)**: no defect in the first pass (4f4e7204); accepted: one rule for both `drive add` paths (the login is checked first, so a configured shared drive without a login is an error), the collision-free `sync_dir` for shared folders, refusing a config that would not load and writing nothing when complete, `completed` in text and JSON, `Completed` = the section exists and the section, the record or the folder was lacking. Of the seven "Not fixed" entries six go into the second pass (guidance names `drive add <id>`; value kind per key; section headers round-trip; the test file named after a plan label; and the two catalog entries as one decision: **the catalog is refused whole on an ID that does not parse**, error naming file, key and recovery, the silent skips deleted) and one rides on W27 (`AppendDriveSection`). Mine in the second pass: `validate()`'s error states the fault; the spec says a failure leaves the empty sync directory; two test comments. On the rebase after W17 and W14: no path takes the catalog lock and then the config lock. **Second-pass review (mine, 2026-11-12)**: the eight items are done in a72ff6d2 and accepted, with `canonical_id` = the record's key as part of the refusal. Decided for the third pass: (a) **the encoder runs the decoder's check**, so a writer bug fails its own write and leaves the file as it was, instead of leaving a catalog every command refuses; (b) the key must be the ID's own rendering if any other spelling parses; (c) **the child-mount catalog prune step is removed** from the shortcut child purge (nothing writes such a record and the decoder refuses one; the writer checks the history for a version that wrote one and stops if it finds it); (d) one accessor per catalog reference (`OwnerAccountCanonical`, `PrimaryDriveCanonical`), the six parse sites go through it and their unreachable branches are deleted; (e) the "loading config:" wrap in `account_view_snapshot.go` names what the call loads. The dead skip branch in `email_reconcile.go` rides on W22 (W17 rewrote that file). Message: `scratchpad/H4-msg3.txt`. **Third-pass review (mine, 2026-11-12)**: the five items are done in e31337ec and accepted; no defect; my one fix (the `purge` doc comment) amended as b073989e. The exact-rendering rule only bites degenerate SharePoint spellings, which the parse accepts and the render drops: that is a `driveid` fault and rides on W13. |
 | H5 | The upload-session `UnmarshalJSON` shim and the dead code the report lists are deleted | strict-load test for a session file in the old shape | Item 4. |
 | H6 | One JSON encoder constructor; 17 own copies use it; the NDJSON path returns its marshal error; forbidigo keeps it so | golden test for escaping and empty lists | Item 5; D4. |
-| H7 | `driveops.DownloadTree` and `UploadTree` with a pool of 4; a remote child name that is not local is refused | `TestDownloadTree_*`, `TestUploadTree_*` | Item 1; D5; R-6.6.29. Live: `get -r` and `put -r` of a 200-file tree under `~/tommi`. W18 already merged the two `get` walks into `cli.downloadTree`: start from it. Rider (from W18's report): a command-level test of a shared single-file `get`, which needs a download seam for cli tests because a download URL may only name a Microsoft host (R-6.8.22). |
+| H7 | `driveops.DownloadTree` and `UploadTree` with a pool of 4; a remote child name that is not local is refused | `TestDownloadTree_*`, `TestUploadTree_*` | Item 1; D5; R-6.6.29. Live: `get -r` and `put -r` of a 200-file tree under `~/sync-test-root`. W18 already merged the two `get` walks into `cli.downloadTree`: start from it. Rider (from W18's report): a command-level test of a shared single-file `get`, which needs a download seam for cli tests because a download URL may only name a Microsoft host (R-6.8.22). |
 | H8 | The remaining silent failures the report lists; the drive-catalog fan-out is bounded; the output leftovers of Item 10 that H6 and H7 do not take (`put` folder progress, dead output plumbing in `status`) | one test per site | Items 10 and 11.4, and the 11.5 rows B5 did not take. The four "cosmetic leftovers" of `BACKLOG.md` are in the sync packages and are W41 (split 2026-11-13). **Rider (2026-11-14, from the review of W31's second pass, its note 6)**: `internal/cli/signal.go` (the recover of the signal handler) and `internal/cli/sync_runtime.go` (`failWatch`, when it is given a panic) cancel the run with a panic error as the cause. By reading only, that cause does not answer to `context.Canceled`, so a request the cancel interrupts carries it in place of `context.Canceled` and reads as a failure during the stop instead of the stop's echo. DoR: a test that shows it. Fix: the cause answers to `context.Canceled` and still to `panicguard.ErrPanic` (a type like the sync package's `cancelCauseError`), so the stop is quiet and the command still exits 1. |
 | H9 | Split from H1 (2026-11-11): the directory conflict copy (`internal/sync/executor_conflict.go`, `RenameNoReplace` on absolute paths) and `localtrash.Restore` (check, then act on absolute paths) mutate through a rooted descriptor in `synctree` | a symlink swapped in below the sync root does not redirect the rename or the restore | Item 7, table "Mutations inside the sync tree that bypass the rooted capability". Needs a no-replace rename on a rooted parent (`renameat2`, `renamex_np` on macOS). Session model. Also settle the SUSPECTED `detach_unix.go` rows. **Riders from the W14 report (2026-11-11)**: `synctree.normalizeNotExist` (`internal/synctree/synctree.go:1160`) lets a failure without an errno reach the absence check and maps ENOTDIR on a parent only when the unrooted lstat says ENOENT: give it fsroot's two-answer rule (the failure and the lstat both say not-exist or not-a-directory); the missing-name errno set is defined twice (`synctree.go:1173`, fsroot's `isMissingName`): one exported predicate in `localpath` that both use, and `internal/synctree/spelling.go:63` holds a third copy that uses it too (W14 second-pass report). |
 
@@ -1392,7 +1392,7 @@ All paths are relative to the repository root and were checked at main `05336a1a
 - **Decision (mine)**: an engine takes a second `flock`, on a lock file named for its state DB path (in the data dir's lock folder), after the sync-root lock and before it opens the store, and holds it until the store has closed. `LockDriveForOfflineChange` takes that store lock and the lock of the folder now at the sync path; the recorded-folder lock and `readRecordedSyncRoot` go (the store lock covers an engine started before the folder moved, with no device number involved). Purge: the config section is removed and the watch told to reload first (its reload retires the runner inside the stop bound), then the DB family is deleted under `LockDriveForOfflineChange`; when the lock is refused the DB is kept and the command says so and how to finish (`drive reset-sync-state` or rerun). The sync-root lock keeps its own job (two engines on one folder).
 - **Tests first**: `TestEngine_SecondEngineOnSameStoreRefused` (two sync folders, one DB path); `TestLockDriveForOfflineChange_ContendsWithAnEngineWhoseFolderMoved` (no recorded device needed); `TestDriveRemovePurge_KeepsTheStateWhileAnEngineHoldsIt` and the same for `logout --purge`; `TestDriveRemovePurge_NotifiesTheWatchBeforeDeleting`; the lock-release-after-close test extended to the store lock.
 - **Docs**: `sync-engine.md` (root lock section, offline-change lock), `sync-store.md`, `cli.md` (the two purge commands lose their [planned] mark), R-2.9.5 and R-6.3.9 text.
-- **Live**: on `~/tommi` with an isolated branch binary: `drive reset-sync-state` refused while a watch runs; a purge of a second, throwaway drive section while its watch runs ends with the runner retired and the DB gone.
+- **Live**: on `~/sync-test-root` with an isolated branch binary: `drive reset-sync-state` refused while a watch runs; a purge of a second, throwaway drive section while its watch runs ends with the runner retired and the DB gone.
 - **Order**: after B8 (it builds on `LockDriveForOfflineChange`). Cross lane (`internal/sync` and `internal/cli`); before C3 (same store-open path). Size M. No generation bump: the lock file lives beside the root locks.
 
 #### W17. An account email change survives an interruption
@@ -1694,7 +1694,7 @@ All paths are relative to the repository root and were checked at main `05336a1a
 - **Decision (mine, 2026-11-13)**: the two operations become a scenario test first. If the test passes on the tip, it is kept as a regression test, the PR says the cycle was not reproduced, and nothing in the planner changes. If it fails, the planner orders these actions (a folder create at a path a move vacated depends on that move; a move into the recreated folder depends on the create) so that no cycle forms, and the general rule is stated in the design doc; dropping a cycle stays as the last resort it is, and a dropped cycle becomes left work the run reports (check against B2's left-work rule) rather than a log line only. Stop if the fix needs a planner decision-table row: that is #865's table and I decide the row.
 - **Tests first**: `runOnceScenarios()` case: synced `docs/` with files and `photos/`; locally move `docs` to `photos/photos`, recreate `docs`, run once; locally move `photos/photos/50%.txt` to `docs/renamed-50%.txt`, run until quiet; both sides hold the same tree and no pass logs a cycle. A planner unit test of the same action set that asserts an order exists. If W37 has landed, a replay of chaos seed 3 at two batches as well.
 - **Docs**: `spec/design/sync-planning.md` (dependencies between a move and a create at the vacated path), only if the planner changes.
-- **Live proof**: only if the planner changes: the same two operations under `~/tommi` against the test account.
+- **Live proof**: only if the planner changes: the same two operations under `~/sync-test-root` against the test account.
 - **Order**: after W23 is stacked; W37 first if both are open, since a replayable seed is the cheapest reproduction. Sync lane. Size S, or M if the planner changes.
 
 #### W37. A chaos run is replayable from its seed
@@ -1744,7 +1744,7 @@ All paths are relative to the repository root and were checked at main `05336a1a
 - **Decision (mine, 2026-11-13)**: (1) a retry whose failure is already recorded as a condition the user must clear is reported by the run as that condition, in the words `status` uses, once per run, and is counted with what waits for the user, not with what failed; the exit status of such a run does not change. (2) A count names what it counts: files and folders separately where the summary already does so anywhere, otherwise "items". (3) The vanished crossed mount gets its own issue type with its own descriptor (what happened, that the content is kept and nothing is deleted on OneDrive, what clears it); the declared-set tests and the exhaustive switches hold the new member; a row an older client stored under the shared type is re-recorded by the next full scan. A new issue type is no store-generation bump unless the code says it is: if it is, stop and report. (4) The watch logs a change of conditions only when the set changed.
 - **Tests first**: one per item, each seen failing: the run's output and counts for a retried recorded condition; the summary's wording for a deleted folder beside a deleted file; the descriptor of the new issue type and the scan that records and clears it; two watch ticks with the same conditions log one line.
 - **Docs**: `spec/design/cli.md` (the sync console and the status descriptors), `spec/design/sync-engine.md` where issue types are listed; requirements cited, never invented.
-- **Live proof**: (1) and (2) on the test account when OneDrive answers (a path over the limit under `~/tommi`, synced twice; a folder deleted on OneDrive). None for (3) and (4): a mount inside the test folder is a change to this host, and the unit tests hold them.
+- **Live proof**: (1) and (2) on the test account when OneDrive answers (a path over the limit under `~/sync-test-root`, synced twice; a folder deleted on OneDrive). None for (3) and (4): a mount inside the test folder is a change to this host, and the unit tests hold them.
 - **Order**: after W38 merges (both change status descriptors and what a run's summary counts). Sync lane. Size M. When it merges, the `BACKLOG.md` entry moves to "Completed".
 - **Rider (2026-11-16)**: item (2) of this row (the summary words a deleted folder "file") is row W91's, which was written the same day from a live run before I saw the overlap. W41 keeps items (1), (3) and (4) and their tests; whichever of the two rows merges second takes the `BACKLOG.md` entry to "Completed".
 
@@ -2613,12 +2613,12 @@ I are not expected to change the schema (I's cut-over would, and is not in this
 program). The installed client refuses a store of another generation by design,
 so that install goes in this order:
 
-1. Stop the wrapper (`kill -TERM` of `onedrive-go-watch` in byobu window `0:3`).
+1. Stop the wrapper (`kill -TERM` of `onedrive-go-watch` in a terminal session).
 2. `onedrive-go-install <checkout>` (the new binary first).
 3. `onedrive-go drive reset-sync-state --drive 'personal:test-account@example.com' --yes`.
-4. Restart the wrapper (`tmux send-keys -t 0:3 "onedrive-go-watch" Enter`).
+4. Restart the wrapper (run `onedrive-go-watch` again in a terminal session).
 5. `onedrive-go status` until it reads "Up to date"; the 19 files of the test
-   drive are all present under `~/tommi`.
+   drive are all present under `~/sync-test-root`.
 
 If another PR turns out to need a bump, it follows the same order and is added
 here.
@@ -2631,7 +2631,7 @@ here.
 | The generated move of the split is too large to review | It is reviewed as a tool and a verdict: the model must report zero violations on the result, and the tool's output is reproducible from the commit before it. |
 | Two lanes collide in one file | Lanes are defined by directory; `orchestrator_watch.go` is split first; cross-lane PRs run alone; the outer lane pauses for the move. |
 | A nightly failure appears mid-program | Every start stage claims it; the PR fixes it or releases it to the plan PR that owns it. |
-| A change needs a decision only Toni can take | Taken on the analysis's recommendation, recorded in section 3, reported at the end. Nothing here touches production data. |
+| A change needs a decision only the owner can take | Taken on the analysis's recommendation, recorded in section 3, reported at the end. Nothing here touches production data. |
 | The watch client on the test drive breaks after an install | `status` after every install; a break stops the lane until fixed (the previous commit is reinstalled first). |
 | An analysis claim is wrong | Step 3 of every PR checks it against the code; a failing-first test settles it. A PR whose defect cannot be reproduced lands as the test and a note. |
 | The program outlasts one working session | The status table in section 1 is updated at every merge and is the only record needed to resume. |

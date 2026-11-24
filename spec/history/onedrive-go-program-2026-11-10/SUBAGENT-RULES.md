@@ -8,7 +8,7 @@ opens the PR. Read all of this before you start.
 ## Where you work
 
 - Only inside the worktree path your brief names. Never edit or run anything in
-  `~/src/onedrive-go` (the main checkout), `~/tommi`, `/srv`, `~/.config` or
+  `~/src/onedrive-go` (the main checkout), `~/sync-test-root`, `/srv`, `~/.config` or
   `~/.local`. Never start, stop or signal the running `onedrive-go` client.
 - Your working directory is not the worktree. Use `go -C <worktree> ...` and
   `git -C <worktree> ...`, and absolute paths for file tools.

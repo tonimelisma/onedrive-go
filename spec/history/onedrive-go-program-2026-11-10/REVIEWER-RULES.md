@@ -1,6 +1,6 @@
 # Rules for a reviewer subagent
 
-You review one commit (or one commit range) in Toni's own repository
+You review one commit (or one commit range) in the owner's own repository
 onedrive-go (Go). You read; you change nothing.
 
 ## Hard limits

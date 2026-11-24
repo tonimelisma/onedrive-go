@@ -51,7 +51,7 @@ Written 2026-11-11, before any code edit.
    `spec/design/drive-transfers.md`, `spec/reference/graph-api-quirks.md`,
    `spec/reference/live-incidents.md`. Must not be touched: `internal/sync`,
    `internal/syncstore`, shutdown code, the main checkout, the running client,
-   `~/tommi`, `/srv`. No new production file, so no `GOVERNS:` change.
+   `~/sync-test-root`, `/srv`. No new production file, so no `GOVERNS:` change.
 
 6. **Regression plan** — PASS. New graph tests beside
    `TestUpload_FailedContentStepRemovesItsEmptyItemByItsCurrentETag`

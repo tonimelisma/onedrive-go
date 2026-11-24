@@ -1385,7 +1385,7 @@ Evidence:
 - The failing nightly log showed the current product surface instead:
   `Sync dir:  (not set)`, `State:     ready`, and `No active conditions.`
   under the configured drive with no `Last sync:` line. A focused local rerun
-  at commit `307d6bf54957fe071650f588e0750f7799338104` reproduced the same
+  at the merge of #611 (pre-rewrite SHA) reproduced the same
   mismatch with
   `go test -tags='e2e e2e_full' -run '^TestE2E_RoundTrip$' -count=1 -v ./e2e/...`,
   and the updated assertion passed immediately afterward.
@@ -1979,7 +1979,7 @@ Evidence:
   `TestE2E_QuietFlag` alongside `TestE2E_FileOpsSmokeCRUD`, proving the fast
   tag set contained both the old battery and the new smoke test.
 - `git blame` traced the reintroduced block in
-  [`e2e/e2e_test.go`](../../e2e/e2e_test.go) back to merged commit `f6af69a`
+  [`e2e/e2e_test.go`](../../e2e/e2e_test.go) back to the merge of #473 (pre-rewrite SHA)
   (`refactor: finalize simplified directional sync architecture (#473)`).
 Resolution / mitigation: The fast-tagged file no longer owns those demoted live
 tests; [`e2e/fileops_full_e2e_test.go`](../../e2e/fileops_full_e2e_test.go)

@@ -131,7 +131,7 @@ GAP: the pre-authenticated download URL is never validated — finding 3-1.
 - Severity: low.
 - Where: `internal/logfile/logfile.go:16-17` (0755/0644), `internal/config/write.go:21-24` (0644/0755).
 - Rule: threat-model.md lists "local users or software reading logs and managed-state files" as a threat actor; the config carries `personal:<email>` section keys (`driveid/canonical.go:45-46`) and the log carries item names at Warn (`item_converter.go:583-587`) and, per 3-2, occasionally a credential.
-- Scenario: another local account on the dev host reads the owner's account email and file names. The host's threat model (public SSH with password auth kept on, `AllowUsers toni`) makes extra local principals unlikely today.
+- Scenario: another local account on the dev host reads the owner's account email and file names. The host's threat model makes extra local principals unlikely today.
 - Proposed test: assert `0600` after `logfile.Open` and `config.Write`.
 - Confidence: CONFIRMED.
 
