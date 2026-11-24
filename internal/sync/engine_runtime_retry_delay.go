@@ -95,6 +95,7 @@ func retryDelayForCondition(condition syncdomain.IssueType, jitter retry.JitterS
 		syncdomain.IssueRemovedFolderKept,
 		syncdomain.IssueLocalFileTooLarge,
 		syncdomain.IssueLocalBusy,
+		syncdomain.IssueLocalCallAbandoned,
 		syncdomain.IssueLocalCrossDevice,
 		syncdomain.IssueUnsupportedOperation,
 		syncdomain.IssueMalwareDetected,

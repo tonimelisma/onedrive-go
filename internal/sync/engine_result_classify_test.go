@@ -613,6 +613,28 @@ func TestClassifyResult_AStallOfTheLocalSideIsRetriedAsBusyAndIsNoServiceEvidenc
 	assert.False(t, network.ScopeEvidence.IsZero(), "a silent service is evidence for the service scope")
 }
 
+// Validates: R-6.8.20, R-6.8.32
+//
+// A local-side stall whose transfer left the stuck call behind is its own
+// condition, local_call_abandoned: retry work recorded under it from the
+// first attempt and retried on the durable curve, so `status` names the
+// file whose disk stopped answering. A stall the transfer waited out (the
+// record of abandoned calls was full) stays local_busy.
+func TestClassifyResult_ALocalCallLeftBehindIsItsOwnRetriedCondition(t *testing.T) {
+	t.Parallel()
+
+	abandoned := fmt.Errorf("upload report.pdf: %w: %w: %w: no data moved for 2m0s (context canceled)",
+		graph.ErrTransferStalled, graph.ErrLocalSideStalled, graph.ErrLocalCallAbandoned)
+	for _, actionType := range []syncdomain.ActionType{syncdomain.ActionUpload, syncdomain.ActionDownload} {
+		decision := classifyResult(&syncdomain.ActionCompletion{Err: abandoned, ActionType: actionType, Path: "docs/report.pdf"})
+		assert.Equal(t, resultSkip, decision.Class, actionType.String())
+		assert.Equal(t, syncdomain.PersistRetryWork, decision.Persistence, actionType.String())
+		assert.Equal(t, syncdomain.IssueLocalCallAbandoned, decision.ConditionType, actionType.String())
+		assert.Equal(t, syncdomain.ConditionLocalCallAbandoned, decision.ConditionKey, actionType.String())
+		assert.True(t, decision.ScopeEvidence.IsZero(), "a hung local disk is no evidence of a service outage")
+	}
+}
+
 // Validates: R-2.10.61
 func TestShouldHandleLocalPermission_IncludesReadOnlyFilesystem(t *testing.T) {
 	t.Parallel()

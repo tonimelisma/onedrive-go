@@ -175,6 +175,7 @@ func truthVerdictForIssueType(issueType IssueType) observationIssueTruthVerdict 
 		IssueRemoteFolderUnverifiable,
 		IssueLocalFileTooLarge,
 		IssueLocalBusy,
+		IssueLocalCallAbandoned,
 		IssueLocalCrossDevice,
 		IssueUnsupportedOperation,
 		IssueMalwareDetected,

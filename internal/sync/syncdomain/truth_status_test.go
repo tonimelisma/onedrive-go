@@ -111,7 +111,7 @@ func TestObservationIssueBlocksTruth_VerdictForEveryIssueType(t *testing.T) {
 				IssueLocalInterruptedRemoval, IssueRemovedFolderKept, IssueUnauthorized, IssueRemoteWriteDenied, IssueQuotaExceeded,
 				IssueRateLimited, IssueLocalWriteDenied, IssueDiskFull, IssueServiceOutage,
 				IssueFileTooLargeForSpace, IssueLocalNameTooLong, IssueLocalReadOnly, IssueDeletesHeld,
-				IssueRemoteFolderUnverifiable, IssueLocalFileTooLarge, IssueLocalBusy, IssueLocalCrossDevice,
+				IssueRemoteFolderUnverifiable, IssueLocalFileTooLarge, IssueLocalBusy, IssueLocalCallAbandoned, IssueLocalCrossDevice,
 				IssueUnsupportedOperation, IssueMalwareDetected, IssueLocalDatabaseOpen, IssueUploadVerification,
 				IssueDownloadIntegrity, IssueRequestTimeout, IssueTransientConflict, IssueTransientNotFound,
 				IssueResourceLocked, IssueTransferURLRejected,

@@ -33,6 +33,7 @@ const (
 	ConditionRemoteFolderUnverified ConditionKey = "remote_folder_delete_unverifiable"
 	ConditionLocalFileTooLarge      ConditionKey = "local_file_too_large"
 	ConditionLocalBusy              ConditionKey = "local_busy"
+	ConditionLocalCallAbandoned     ConditionKey = "local_call_abandoned"
 	ConditionLocalCrossDevice       ConditionKey = "local_cross_device"
 	ConditionUnsupportedOperation   ConditionKey = "unsupported_operation"
 	ConditionMalwareDetected        ConditionKey = "malware_detected"
@@ -90,6 +91,7 @@ func ConditionClearsAutomatically(key ConditionKey) bool {
 		ConditionRemoteFolderUnverified,
 		ConditionLocalFileTooLarge,
 		ConditionLocalBusy,
+		ConditionLocalCallAbandoned,
 		ConditionLocalCrossDevice,
 		ConditionUnsupportedOperation,
 		ConditionMalwareDetected,
@@ -171,6 +173,7 @@ func conditionKeyRank(key ConditionKey) int {
 		ConditionRemoteFolderUnverified,
 		ConditionLocalFileTooLarge,
 		ConditionLocalBusy,
+		ConditionLocalCallAbandoned,
 		ConditionLocalCrossDevice,
 		ConditionUnsupportedOperation,
 		ConditionMalwareDetected,
@@ -262,6 +265,8 @@ func ConditionKeyForIssueType(issueType IssueType) (ConditionKey, bool) {
 		return ConditionLocalFileTooLarge, true
 	case IssueLocalBusy:
 		return ConditionLocalBusy, true
+	case IssueLocalCallAbandoned:
+		return ConditionLocalCallAbandoned, true
 	case IssueLocalCrossDevice:
 		return ConditionLocalCrossDevice, true
 	case IssueUnsupportedOperation:

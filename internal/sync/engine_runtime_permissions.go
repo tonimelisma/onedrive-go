@@ -283,6 +283,7 @@ func scopeKeyForPermissionEvidence(evidence permissionEvidence) syncdomain.Scope
 		syncdomain.IssueRemovedFolderKept,
 		syncdomain.IssueLocalFileTooLarge,
 		syncdomain.IssueLocalBusy,
+		syncdomain.IssueLocalCallAbandoned,
 		syncdomain.IssueLocalCrossDevice,
 		syncdomain.IssueUnsupportedOperation,
 		syncdomain.IssueMalwareDetected,

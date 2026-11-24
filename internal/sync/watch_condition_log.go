@@ -170,6 +170,8 @@ func conditionLabelText(key syncdomain.ConditionKey) (label string, ok bool) {
 		return "too large for the local filesystem", true
 	case syncdomain.ConditionLocalBusy:
 		return "busy on this computer", true
+	case syncdomain.ConditionLocalCallAbandoned:
+		return "whose local disk stopped responding", true
 	case syncdomain.ConditionLocalCrossDevice:
 		return "that would move across a mount point", true
 	case syncdomain.ConditionUnsupportedOperation:

@@ -48,11 +48,14 @@ const (
 	localSideWrite localSide = "write"
 )
 
-// errLocalCallAbandoned is what a stuck local call returns to the transfer
-// that abandoned it. The transfer's own error is the stall's
-// (ErrTransferStalled, ErrLocalSideStalled), which explain puts in front;
-// this one is kept as its text.
-var errLocalCallAbandoned = errors.New("graph: abandoned a local file call that stopped moving")
+// ErrLocalCallAbandoned marks a transfer that returned while one of its
+// local file calls was still stuck: the call was left to the record of
+// abandoned calls, which owns it until it returns. A stuck call returns it to
+// the transfer that abandoned it, and the transfer's own error, the stall's
+// (ErrTransferStalled, ErrLocalSideStalled), carries it too (explain), so a
+// caller can tell a call left behind from a stall it waited out because the
+// record was full. Sync records it for the file, where `status` shows it.
+var ErrLocalCallAbandoned = errors.New("graph: abandoned a local file call that stopped moving")
 
 // errLocalIOEnded is what a local call returns once its transfer has ended
 // or has abandoned its I/O goroutine: nothing runs it any more.
@@ -265,7 +268,7 @@ func (l *localIO) do(call *localCall, size int, fill func([]byte), drain func([]
 		case l.turn <- struct{}{}:
 		case <-l.stalled:
 			// Another call holds the goroutine, stuck: this one cannot run.
-			return 0, errLocalCallAbandoned
+			return 0, ErrLocalCallAbandoned
 		}
 	}
 
@@ -290,7 +293,7 @@ func (l *localIO) do(call *localCall, size int, fill func([]byte), drain func([]
 	}
 
 	if l.abandon(call) {
-		return 0, errLocalCallAbandoned
+		return 0, ErrLocalCallAbandoned
 	}
 
 	return l.answered(call, <-call.reply, drain)
@@ -374,6 +377,14 @@ func (l *localIO) tryAbandon(call *localCall) (adopted, full bool) {
 // end ends the transfer's use of the goroutine: an idle one exits, one
 // that is answering a last call exits after it, and an abandoned one is
 // the record's.
+// hasAbandoned reports whether the transfer left one of its calls behind.
+func (l *localIO) hasAbandoned() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.abandoned
+}
+
 func (l *localIO) end() {
 	l.mu.Lock()
 	defer l.mu.Unlock()

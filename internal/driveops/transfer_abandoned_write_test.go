@@ -19,7 +19,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 )
 
-// Validates: R-6.8.20
+// Validates: R-6.8.20, R-6.8.32
 //
 // A download whose write the graph client abandoned on a hung disk leaves
 // its partial to the stuck write: the manager neither closes nor removes it,
@@ -45,7 +45,8 @@ func TestDownloadToFile_AnAbandonedWriteDisownsItsPartial(t *testing.T) {
 				// The next write hangs, and the graph client abandons it.
 				sink.Abandon()
 
-				return int64(n), fmt.Errorf("download: %w: %w", graph.ErrTransferStalled, graph.ErrLocalSideStalled)
+				return int64(n), fmt.Errorf("download: %w: %w: %w",
+					graph.ErrTransferStalled, graph.ErrLocalSideStalled, graph.ErrLocalCallAbandoned)
 			}
 
 			n, err := w.Write([]byte(content))
@@ -65,6 +66,7 @@ func TestDownloadToFile_AnAbandonedWriteDisownsItsPartial(t *testing.T) {
 	_, err := tm.DownloadToFile(t.Context(), driveid.New("d1"), "item1", targetPath, opts)
 	require.ErrorIs(t, err, graph.ErrTransferStalled)
 	require.ErrorIs(t, err, graph.ErrLocalSideStalled)
+	require.ErrorIs(t, err, graph.ErrLocalCallAbandoned, "sync reads the call left behind from the error")
 	require.FileExists(t, ownPartial, "the stuck write owns the partial; the manager leaves it")
 	_, err = sinks[0].Write([]byte("more"))
 	require.ErrorIs(t, err, errPartialDisowned, "nothing but the stuck write may write a disowned partial")

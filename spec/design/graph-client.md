@@ -447,7 +447,13 @@ side and start; when the stuck call returns, the goroutine finishes its
 file and leaves the record, and one still in it when the process exits
 ends with the process. The record is bounded (`maxAbandonedLocalCalls`,
 8); when it is full the transfer waits for its call as before, so a mount
-that hangs every call cannot grow the process without limit.
+that hangs every call cannot grow the process without limit. A transfer that
+left a call behind says so: its stall error also carries
+`ErrLocalCallAbandoned` (`explain`), which one it waited out does not, and
+sync records the file under `local_call_abandoned` in the state store, where
+`status` reads it from another process (R-6.8.32,
+`TestRunOnce_AnUploadWhoseLocalReadWasLeftBehindIsAConditionStatusReads`,
+`TestClassifyResult_ALocalCallLeftBehindIsItsOwnRetriedCondition`).
 `AbandonedLocalCallCount` reports how many are in it. Only a stall
 abandons a call, never a plain cancellation: a shutdown would otherwise
 disown the partial of every download that was writing, and a call that

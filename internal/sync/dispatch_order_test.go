@@ -321,6 +321,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_RenameWithMatchingBirthTimeIsStillAMove,
 		TestRunOnce_MovedAndEditedFileKeepsItsItemOnlyWhenBirthTimeProvesIt,
 		TestRunOnce_MovedAndEditedFileWithBirthTimeAndARemoteEditKeepsBoth,
+		TestRunOnce_AnUploadWhoseLocalReadWasLeftBehindIsAConditionStatusReads,
 		TestRunOnce_ThreeQuotaRefusalsActivateTheScopeAndBlockTheRows,
 		TestRunOnce_WaitsOutAShortPauseBeforeTheNextPass,
 		TestRunOnce_ReplansASupersededMoveInTheSameRun,

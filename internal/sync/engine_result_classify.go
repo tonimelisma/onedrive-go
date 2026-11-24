@@ -7,6 +7,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
+	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
@@ -205,6 +206,19 @@ func classifyLocalResult(r *syncdomain.ActionCompletion) syncdomain.ResultDecisi
 			ConditionType: conditionType,
 		})
 	case driveops.LocalErrorBusy:
+		if conditionType == syncdomain.IssueLocalCallAbandoned {
+			// A disk that hung long enough to leave a call behind does not
+			// answer the next second either: the file waits on the durable
+			// curve, recorded under its condition from the first attempt,
+			// so `status`, in any process, names it (R-6.8.32). Its next
+			// success clears the record.
+			return withRuntimeSummary(&syncdomain.ResultDecision{
+				Class:         resultSkip,
+				Persistence:   syncdomain.PersistRetryWork,
+				TrialHint:     syncdomain.TrialHintReclassify,
+				ConditionType: conditionType,
+			})
+		}
 		return withRuntimeSummary(&syncdomain.ResultDecision{
 			Class:         resultRequeue,
 			Persistence:   syncdomain.PersistRetryWork,
@@ -330,7 +344,7 @@ func issueTypeForFilesystemResult(r *syncdomain.ActionCompletion) (syncdomain.Is
 	case driveops.LocalErrorFileTooLarge:
 		return syncdomain.IssueLocalFileTooLarge, true
 	case driveops.LocalErrorBusy:
-		return syncdomain.IssueLocalBusy, true
+		return localBusyIssueType(err), true
 	case driveops.LocalErrorCrossDevice:
 		return syncdomain.IssueLocalCrossDevice, true
 	case driveops.LocalErrorNameTooLong:
@@ -469,4 +483,15 @@ func conditionKeyForRuntimeResult(class errclass.Class, conditionType syncdomain
 // separate failure that landed during it, which is still reported.
 func isCancellationEcho(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// localBusyIssueType names a busy local file: local_call_abandoned when its
+// transfer left a stuck call behind (graph.ErrLocalCallAbandoned), said
+// apart from a plain busy file so `status` names the hung disk (R-6.8.32).
+func localBusyIssueType(err error) syncdomain.IssueType {
+	if errors.Is(err, graph.ErrLocalCallAbandoned) {
+		return syncdomain.IssueLocalCallAbandoned
+	}
+
+	return syncdomain.IssueLocalBusy
 }

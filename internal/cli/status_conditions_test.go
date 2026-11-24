@@ -703,6 +703,15 @@ func descriptorLocalRuntimeCases() []descriptorCase {
 			wantReason: "The file is larger than available local disk space.",
 			wantAction: "Free up local disk space to fit this file.",
 		},
+		{
+			// Validates: R-6.8.32
+			name:      "local call abandoned",
+			key:       syncdomain.ConditionLocalCallAbandoned,
+			wantTitle: "Local file stopped responding",
+			wantReason: "Reading the file for an upload, or writing it for a download, hung for 2 minutes " +
+				"(a network mount or FUSE folder that stopped answering); the transfer gave up on that call and left it behind.",
+			wantAction: "Check the disk, mount or network share that holds the sync folder (automatic retry in progress).",
+		},
 	}
 }
 
