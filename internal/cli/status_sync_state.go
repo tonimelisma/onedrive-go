@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -16,7 +17,9 @@ import (
 // state database has an empty snapshot: it has never synced here. A state
 // database that cannot be checked or read is returned as an error, after one
 // Warn, so the caller renders the drive as unreadable rather than as a drive
-// with zero files and no issues.
+// with zero files and no issues. One another onedrive-go version wrote is
+// returned without the Warn: it is expected after an upgrade or a downgrade,
+// and status names it (storeVersionOf).
 func readDriveStatusSnapshot(
 	ctx context.Context,
 	statePath string,
@@ -33,7 +36,7 @@ func readDriveStatusSnapshot(
 		snapshot, err = syncstore.ReadDriveStatusSnapshotWithFilter(ctx, statePath, logger, filter)
 	}
 	if err != nil {
-		if logger != nil {
+		if logger != nil && storeVersionOf(err) == "" {
 			logger.Warn("cannot read the sync state for this drive; its status is unavailable",
 				slog.String("path", statePath), slog.Any("error", err))
 		}
@@ -41,6 +44,24 @@ func readDriveStatusSnapshot(
 	}
 
 	return snapshot, nil
+}
+
+// storeVersionOf is storeVersionOlder or storeVersionNewer when err says
+// another onedrive-go version wrote the state database, else "".
+func storeVersionOf(err error) string {
+	var incompatibleErr *syncstore.StateStoreIncompatibleError
+	if !errors.As(err, &incompatibleErr) {
+		return ""
+	}
+
+	switch incompatibleErr.Reason {
+	case syncstore.StateStoreIncompatibleReasonOlderVersion:
+		return storeVersionOlder
+	case syncstore.StateStoreIncompatibleReasonNewerVersion:
+		return storeVersionNewer
+	default:
+		return ""
+	}
 }
 
 func loadShortcutRootStatusSnapshots(

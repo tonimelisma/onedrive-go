@@ -67,6 +67,33 @@ func isInternalLogField(key string) bool {
 	}
 }
 
+// logFileOnlyKey marks a record the console leaves out: one whose message the
+// terminal gets another way, which the log file still needs. Only the
+// console handler reads it; the log file keeps the field, so a reader there
+// can tell the terminal printed the same failure as the command's error.
+const logFileOnlyKey = "log_file_only"
+
+// logFileOnly is the attribute that keeps a record off the console.
+func logFileOnly() slog.Attr {
+	return slog.Bool(logFileOnlyKey, true)
+}
+
+// isLogFileOnly reports a record logFileOnly marks.
+//
+//nolint:gocritic // slog.Record is passed by value throughout the slog API
+func isLogFileOnly(r slog.Record) bool {
+	fileOnly := false
+	r.Attrs(func(attr slog.Attr) bool {
+		if attr.Key == logFileOnlyKey && attr.Value.Kind() == slog.KindBool && attr.Value.Bool() {
+			fileOnly = true
+			return false
+		}
+		return true
+	})
+
+	return fileOnly
+}
+
 func newConsoleLogHandler(w io.Writer, level slog.Leveler, style consoleLogStyle) *consoleLogHandler {
 	return &consoleLogHandler{w: w, mu: &sync.Mutex{}, level: level, style: style}
 }
@@ -82,6 +109,10 @@ func (h *consoleLogHandler) Enabled(_ context.Context, level slog.Level) bool {
 
 //nolint:gocritic // slog.Handler interface requires value receiver for Record
 func (h *consoleLogHandler) Handle(_ context.Context, r slog.Record) error {
+	if isLogFileOnly(r) {
+		return nil
+	}
+
 	var b strings.Builder
 
 	switch h.style {

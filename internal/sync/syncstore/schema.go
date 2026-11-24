@@ -10,8 +10,10 @@ import (
 
 const (
 	// currentSyncStoreGeneration is the compatibility contract for existing
-	// state DBs. store_metadata owns this store-level marker; startup accepts
-	// only the current generation and requires an explicit reset otherwise.
+	// state DBs. store_metadata owns this store-level marker; engine startup
+	// rebuilds a store from an older generation and refuses one from a newer
+	// generation (R-2.5.9). Raise it with every schema change, and record the
+	// new schema's fingerprint in schema_test.go, whose test fails otherwise.
 	//
 	// Generation 17 adds local truth confidence fields to observation_state so
 	// incremental watch commits can distinguish complete local truth from a
@@ -85,6 +87,7 @@ const (
 	// the system refuses the no-replace flag) is known at the next start as
 	// the move's leftover, never uploaded as a new file (R-2.12.9).
 	currentSyncStoreGeneration = 30
+	sqlReadStoreGeneration     = `SELECT schema_generation FROM store_metadata LIMIT 1`
 	sqlEnsureStoreMetadataRow  = `INSERT INTO store_metadata (schema_generation)
 		SELECT ?
 		WHERE NOT EXISTS (SELECT 1 FROM store_metadata)`
@@ -449,7 +452,7 @@ func validateCanonicalSchema(ctx context.Context, db *sql.DB, actualTables []str
 		}
 	}
 
-	if err := validateStoreGeneration(ctx, db); err != nil {
+	if err := requireStoreGenerationMarker(ctx, db); err != nil {
 		return err
 	}
 
@@ -497,7 +500,7 @@ func refuseOtherStoreGeneration(ctx context.Context, db *sql.DB, userTables []st
 	}
 
 	var stored int
-	err = db.QueryRowContext(ctx, `SELECT schema_generation FROM store_metadata LIMIT 1`).Scan(&stored)
+	err = db.QueryRowContext(ctx, sqlReadStoreGeneration).Scan(&stored)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
@@ -521,13 +524,13 @@ func ensureStoreCompatibilityMetadata(ctx context.Context, exec interface {
 	return nil
 }
 
-func validateStoreGeneration(ctx context.Context, db *sql.DB) error {
-	metadata, err := readStoreCompatibilityMetadata(ctx, db)
-	if err != nil {
+// requireStoreGenerationMarker refuses a canonical-shaped store whose
+// store_metadata holds no row. refuseOtherStoreGeneration already compared a
+// readable marker before the shape was checked, so the marker's absence is
+// all that is left to refuse here.
+func requireStoreGenerationMarker(ctx context.Context, db *sql.DB) error {
+	if _, err := readStoreCompatibilityMetadata(ctx, db); err != nil {
 		return err
-	}
-	if metadata.SchemaGeneration != currentSyncStoreGeneration {
-		return &storeGenerationError{stored: metadata.SchemaGeneration, current: currentSyncStoreGeneration}
 	}
 
 	return nil
@@ -535,9 +538,7 @@ func validateStoreGeneration(ctx context.Context, db *sql.DB) error {
 
 func readStoreCompatibilityMetadata(ctx context.Context, db *sql.DB) (storeCompatibilityMetadata, error) {
 	metadata := storeCompatibilityMetadata{}
-	err := db.QueryRowContext(ctx,
-		`SELECT schema_generation FROM store_metadata LIMIT 1`,
-	).Scan(&metadata.SchemaGeneration)
+	err := db.QueryRowContext(ctx, sqlReadStoreGeneration).Scan(&metadata.SchemaGeneration)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return storeCompatibilityMetadata{}, fmt.Errorf("%w: sync store generation marker is missing", errIncompatibleSchema)

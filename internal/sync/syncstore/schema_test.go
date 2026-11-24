@@ -2,7 +2,9 @@ package syncstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -200,4 +202,52 @@ func TestApplySchema_CurrentGenerationWithAnotherShapeIsNotAGenerationMismatch(t
 	require.ErrorIs(t, err, errIncompatibleSchema)
 	var generationErr *storeGenerationError
 	assert.NotErrorAs(t, err, &generationErr)
+}
+
+// schemaFingerprintByGeneration returns the canonical schema each store
+// generation shipped with, from generation 30 on. An entry is never edited:
+// a schema change adds the next generation's entry and raises
+// currentSyncStoreGeneration with it. A changed schema under an old
+// generation is what let a build's store read as current to another build of
+// the same generation and be refused for a reset instead of rebuilt (R-2.5.9).
+func schemaFingerprintByGeneration() map[int]string {
+	return map[int]string{
+		30: "b4fc9a85d8878b55dc94b2548af3941ef962d87e37e7e6708502974a6c8dbfa9",
+	}
+}
+
+// schemaFingerprint is the SHA-256 of the schema with its whitespace folded,
+// so reformatting the DDL is not a schema change.
+func schemaFingerprint(ddl string) string {
+	sum := sha256.Sum256([]byte(strings.Join(strings.Fields(ddl), " ")))
+	return hex.EncodeToString(sum[:])
+}
+
+// A schema change raises the store generation. The engine rebuilds a store
+// from an older generation and refuses one from a newer generation, so the
+// generation is only a contract while every distinct schema has its own.
+//
+// Validates: R-2.5.6, R-2.5.9
+func TestCanonicalSchema_EverySchemaChangeRaisesTheGeneration(t *testing.T) {
+	t.Parallel()
+
+	fingerprints := schemaFingerprintByGeneration()
+	want, recorded := fingerprints[currentSyncStoreGeneration]
+	got := schemaFingerprint(CanonicalSchemaSQLForTest())
+	require.True(t, recorded,
+		"generation %d has no recorded schema: add %q to schemaFingerprintByGeneration",
+		currentSyncStoreGeneration, got)
+	assert.Equal(t, want, got,
+		"the canonical schema changed under generation %d: raise currentSyncStoreGeneration "+
+			"and record the new schema as the next generation's entry; never edit an existing one",
+		currentSyncStoreGeneration)
+
+	seen := make(map[string]int, len(fingerprints))
+	for generation, fingerprint := range fingerprints {
+		assert.LessOrEqual(t, generation, currentSyncStoreGeneration, "no schema is recorded ahead of the current generation")
+		if earlier, ok := seen[fingerprint]; ok {
+			assert.Failf(t, "two generations share a schema", "generations %d and %d", earlier, generation)
+		}
+		seen[fingerprint] = generation
+	}
 }

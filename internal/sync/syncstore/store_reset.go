@@ -238,7 +238,7 @@ func ForgetMountBoundary(ctx context.Context, dbPath string, path string, logger
 // ReadMountBoundaries reads, through a read-only inspector, the folders the
 // drive's sync state at dbPath records as crossed mount points.
 func ReadMountBoundaries(ctx context.Context, dbPath string, logger *slog.Logger) ([]string, error) {
-	return readWithInspector(dbPath, logger, func(inspector *storeInspector) ([]string, error) {
+	return readWithInspector(ctx, dbPath, logger, func(inspector *storeInspector) ([]string, error) {
 		return listMountBoundariesTx(ctx, inspector.db)
 	})
 }

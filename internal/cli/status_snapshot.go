@@ -34,6 +34,23 @@ const (
 	syncStateUnreadableAction = "Check that the data directory and its state database are readable, " +
 		"then run 'onedrive-go status' again."
 
+	// storeVersionOlder and storeVersionNewer are syncStateInfo.StoreVersion:
+	// which side of this version's store generation wrote the state DB
+	// (R-2.5.9).
+	storeVersionOlder = "older"
+	storeVersionNewer = "newer"
+
+	// A state DB an older version wrote is rebuilt by the next sync, so the
+	// drive is not synced yet rather than unavailable.
+	syncStateFromOlderVersionReason = "sync_state_from_older_version"
+	syncStateFromOlderVersionDetail = "The sync state was written by an older version of onedrive-go."
+	syncStateFromOlderVersionAction = "Nothing to do: the next sync rebuilds it from your files and OneDrive, " +
+		"and deletes nothing."
+	// A state DB a newer version wrote is that version's to read.
+	syncStateFromNewerVersionReason = "sync_state_from_newer_version"
+	syncStateFromNewerVersionDetail = "The sync state was written by a newer version of onedrive-go."
+	syncStateFromNewerVersionAction = "Run the newer onedrive-go that wrote it."
+
 	// driveStateLabelSyncing is the display word for an active sync, shared by
 	// status and the sync console.
 	driveStateLabelSyncing = "Syncing"
@@ -135,7 +152,11 @@ type statusDrive struct {
 type syncStateInfo struct {
 	// ReadError is set when the drive's state database could not be checked
 	// or read; the counts below are then unknown, not zero.
-	ReadError      string                `json:"read_error,omitempty"`
+	ReadError string `json:"read_error,omitempty"`
+	// StoreVersion is storeVersionOlder or storeVersionNewer when another
+	// onedrive-go version wrote the state database; the counts below are then
+	// unknown, not zero.
+	StoreVersion   string                `json:"store_version,omitempty"`
 	FileCount      int                   `json:"file_count"`
 	ConditionCount int                   `json:"issue_count,omitempty"`
 	RemoteDrift    int                   `json:"remote_changes,omitempty"`
@@ -540,8 +561,7 @@ func finalizeStatusDriveState(drive *statusDrive) {
 	if drive.SyncState == nil {
 		return
 	}
-	if drive.SyncState.ReadError != "" {
-		markStatusDriveSyncStateUnreadable(drive, drive.SyncState.ReadError)
+	if markStatusDriveSyncStateProblem(drive, "") {
 		return
 	}
 	if drive.SyncState.NeverSynced {
@@ -572,15 +592,45 @@ func finalizeStatusDriveState(drive *statusDrive) {
 	}
 }
 
-// markStatusDriveSyncStateUnreadable renders a drive whose sync state could
-// not be read as unavailable, with the plain reason and the raw error as the
-// debug detail, so an unreadable data directory never reads as "up to date".
-func markStatusDriveSyncStateUnreadable(drive *statusDrive, readError string) {
-	drive.State = driveStateUnavailable
-	drive.StateReason = syncStateUnreadableReason
-	drive.StateDetail = syncStateUnreadableDetail
-	drive.StateDebugDetail = readError
-	drive.RecoveryAction = syncStateUnreadableAction
+// markStatusDriveSyncStateProblem renders a drive whose sync state could not
+// be used and reports whether it did. A state DB another version wrote is
+// named for that version: an older one is not synced yet (the next sync
+// rebuilds it), a newer one is unavailable, and resetCommand, when set, is
+// offered after the newer version. Any other read failure is unavailable,
+// with the plain reason and the raw error as the debug detail, so an
+// unreadable data directory never reads as "up to date".
+func markStatusDriveSyncStateProblem(drive *statusDrive, resetCommand string) bool {
+	syncState := drive.SyncState
+	if syncState == nil {
+		return false
+	}
+
+	switch {
+	case syncState.StoreVersion == storeVersionOlder:
+		drive.State = driveStateNotSynced
+		drive.StateReason = syncStateFromOlderVersionReason
+		drive.StateDetail = syncStateFromOlderVersionDetail
+		drive.RecoveryAction = syncStateFromOlderVersionAction
+	case syncState.StoreVersion == storeVersionNewer:
+		drive.State = driveStateUnavailable
+		drive.StateReason = syncStateFromNewerVersionReason
+		drive.StateDetail = syncStateFromNewerVersionDetail
+		drive.RecoveryAction = syncStateFromNewerVersionAction
+		if resetCommand != "" {
+			drive.RecoveryAction += " To start this drive's sync state over with this version instead, run '" +
+				resetCommand + "'."
+		}
+	case syncState.ReadError != "":
+		drive.State = driveStateUnavailable
+		drive.StateReason = syncStateUnreadableReason
+		drive.StateDetail = syncStateUnreadableDetail
+		drive.StateDebugDetail = syncState.ReadError
+		drive.RecoveryAction = syncStateUnreadableAction
+	default:
+		return false
+	}
+
+	return true
 }
 
 func groupChildMountsByParent(
@@ -635,9 +685,7 @@ func buildConfiguredStatusDrive(
 		SyncState:  syncState,
 		MountRef:   config.MountRef(cid.String()),
 	}
-	if syncState != nil && syncState.ReadError != "" {
-		markStatusDriveSyncStateUnreadable(&status, syncState.ReadError)
-	}
+	markStatusDriveSyncStateProblem(&status, syncStateResetCommand(cid))
 
 	return status
 }
@@ -748,7 +796,9 @@ func querySyncStateWithOptions(
 ) *syncStateInfo {
 	snapshot, err := readDriveStatusSnapshot(ctx, statePath, logger, filter)
 	info := buildSyncStateInfo(&snapshot, root, verbose, examplesLimit)
-	if err != nil {
+	if version := storeVersionOf(err); version != "" {
+		info.StoreVersion = version
+	} else if err != nil {
 		info.ReadError = err.Error()
 	}
 	return &info

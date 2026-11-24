@@ -148,6 +148,7 @@ onedrive-go sync --json | jq -c 'select(.event == "activity" and (.status == "fa
 | 0 | Success, or `sync --watch` stopped normally, unless stderr refused a write | |
 | 1 | Any other failure, including network, throttling and server errors, a one-shot `sync` that left a file unsynced, a `sync` whose output could not be written in full (stdout on a full disk, an I/O error), a command that worked but could not write to stderr, or one that could not save a refreshed sign-in to its file | May work |
 | 2 | Command-line mistake: unknown command or flag, wrong arguments, conflicting flags | No |
+| 65 | A drive's saved sync state needs you: a newer onedrive-go wrote it, it is damaged, or nothing says which version wrote it (sysexits `EX_DATAERR`). State an older version wrote is rebuilt automatically and never exits 65 | No: run the newer onedrive-go, or `onedrive-go drive reset-sync-state --drive <drive>` |
 | 77 | Sign-in required: no saved login, or Microsoft rejected or revoked it (sysexits `EX_NOPERM`) | No: run `onedrive-go login` |
 | 78 | Invalid configuration: unreadable or invalid file, a `--drive` that matches nothing, no drives configured (sysexits `EX_CONFIG`) | No: fix the config |
 | 130 | A command other than `sync --watch` stopped with Ctrl-C or SIGTERM | |
@@ -169,9 +170,9 @@ ends with one line that counts them apart, such as `1 of 2 shared folders in
 copies, files a removed shared folder's local copy keeps because sync does
 not manage them, a paused drive beside one that ran, and `--dry-run` do not
 fail the run. A drive that needs a new
-sign-in or has an invalid configuration still exits 77 or 78. `sync --watch`
-exits 77 or 78 only when every drive that could not start failed for that
-same reason.
+sign-in, has an invalid configuration or has saved sync state that needs you
+still exits 77, 78 or 65. `sync --watch` exits 77, 78 or 65 only when every
+drive that could not start failed for that same reason.
 
 ## Environment variables
 

@@ -8,19 +8,26 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // Process exit statuses. They are a stable contract for scripts and service
-// managers (R-6.6.31): 77 and 78 are the sysexits.h EX_NOPERM and EX_CONFIG
-// values, and they mean "running again unchanged will fail the same way", so
-// a systemd unit can stop restarting with RestartPreventExitStatus=77 78.
-// Every other failure, transient or not, stays 1.
+// managers (R-6.6.31): 65, 77 and 78 are the sysexits.h EX_DATAERR,
+// EX_NOPERM and EX_CONFIG values, and they mean "running again unchanged will
+// fail the same way", so a systemd unit can stop restarting with
+// RestartPreventExitStatus=65 77 78. Every other failure, transient or not,
+// stays 1.
 const (
-	exitSuccess        = 0
-	exitFailure        = 1
-	exitUsage          = 2
-	exitSignInRequired = 77
-	exitConfigInvalid  = 78
+	exitSuccess = 0
+	exitFailure = 1
+	exitUsage   = 2
+	// exitStateStoreNeedsUser is a drive's saved sync state that no restart
+	// fixes: a newer version wrote it, it is damaged, or nothing says which
+	// version wrote it (syncstore.IsStateStoreIncompatible). A store an older
+	// version wrote is rebuilt at startup and never reaches it (R-2.5.9).
+	exitStateStoreNeedsUser = 65
+	exitSignInRequired      = 77
+	exitConfigInvalid       = 78
 	// exitInterrupted is the conventional status for a run stopped by SIGINT
 	// (128 + 2), so shells and service managers can tell it from a failure.
 	exitInterrupted = 130
@@ -38,7 +45,7 @@ func classifyCommandError(err error) errclass.Class {
 		return errclass.ClassFatal
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return errclass.ClassShutdown
-	case isSignInRequired(err), errors.Is(err, config.ErrInvalidConfig):
+	case isSignInRequired(err), errors.Is(err, config.ErrInvalidConfig), syncstore.IsStateStoreIncompatible(err):
 		return errclass.ClassActionable
 	default:
 		return errclass.ClassFatal
@@ -56,8 +63,8 @@ func isSignInRequired(err error) bool {
 // commandExitCode is the process exit status for a command's final error.
 // stopRequested is true when the user asked the run to stop (SIGINT or
 // SIGTERM); only then does a cancellation exit 130 rather than fail. A
-// recovered panic anywhere in err exits 1, also beside a sign-in or config
-// failure that would exit 77 or 78 alone (R-6.3.10).
+// recovered panic anywhere in err exits 1, also beside a sign-in, config or
+// state-store failure that would exit 77, 78 or 65 alone (R-6.3.10).
 func commandExitCode(err error, stopRequested bool) int {
 	if err == nil {
 		return exitSuccess
@@ -78,6 +85,8 @@ func commandExitCode(err error, stopRequested bool) int {
 		return exitSignInRequired
 	case errors.Is(err, config.ErrInvalidConfig):
 		return exitConfigInvalid
+	case syncstore.IsStateStoreIncompatible(err):
+		return exitStateStoreNeedsUser
 	default:
 		return exitFailure
 	}

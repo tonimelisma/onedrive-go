@@ -31,9 +31,10 @@ ExecReload=/bin/kill -HUP $MAINPID
 TimeoutStartSec=5min
 Restart=on-failure
 RestartSec=30s
-# 77: sign-in required, 78: invalid config. Restarting cannot fix either;
-# run `onedrive-go login` or fix config.toml, then `systemctl --user restart`.
-RestartPreventExitStatus=77 78
+# 65: a drive's saved sync state needs you (see `onedrive-go status`),
+# 77: sign-in required, 78: invalid config. Restarting cannot fix any of them;
+# act on what the error says, then `systemctl --user restart`.
+RestartPreventExitStatus=65 77 78
 # Keepalives go out at half this interval.
 WatchdogSec=2min
 

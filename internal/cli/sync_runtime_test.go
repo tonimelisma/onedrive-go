@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"context"
 	"io"
 	"log/slog"
@@ -582,7 +583,48 @@ func TestRunSyncDaemonWithFactory_WarnsWhenSomeDrivesAreSkipped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, status.String(), "pause --drive '"+cid.String()+"'")
 	assert.Contains(t, status.String(), "drive reset-sync-state --drive '"+cid.String()+"'")
-	assert.Contains(t, status.String(), "--drive selecting only other configured parent drives")
+	assert.Contains(t, status.String(), "rerun sync with --drive naming only the other drives")
+}
+
+// A watch that stops with an error leaves the reason in the log file and
+// shows it on the terminal once: main prints the presented error, so the
+// log record that carries it into the file is kept off the console.
+//
+// Validates: R-6.6.35
+func TestRunSyncDaemonWithFactory_StopErrorReachesTheLogFileAndTheTerminalOnce(t *testing.T) {
+	setTestDriveHome(t)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	cid := driveid.MustCanonicalID("personal:watch-stop@example.com")
+	syncDir := t.TempDir()
+	require.NoError(t, config.AppendDriveSection(t.Context(), cfgPath, cid, syncDir))
+	require.NoError(t, config.SetDriveKey(t.Context(), cfgPath, cid, "sync_dir", syncDir))
+	holder := loadSyncTestHolder(t, cfgPath)
+	logger, console, logPath := dualLoggerForTest(t, CLIFlags{})
+
+	watchErr := errors.New("another onedrive-go sync is already syncing this folder")
+	err := runSyncDaemonWithFactory(
+		t.Context(),
+		holder,
+		nil,
+		syncdomain.SyncBidirectional,
+		syncengine.WatchOptions{},
+		logger,
+		io.Discard,
+		"/tmp/control.sock",
+		nil,
+		nil,
+		func(_ *multisync.OrchestratorConfig) syncDaemonOrchestrator {
+			return &testSyncDaemonOrchestrator{err: watchErr}
+		},
+	)
+	require.ErrorIs(t, err, watchErr)
+
+	record := logFileRecord(t, readLogFile(t, logPath), watchStoppedWithErrorMessage)
+	assert.Equal(t, "ERROR", record["level"])
+	assert.Contains(t, record["error"], "already syncing this folder", "the log file says why")
+	assert.NotContains(t, console.String(), watchStoppedWithErrorMessage,
+		"the terminal gets the reason once, from main")
 }
 
 // A sync's identity probe and its engines use one session runtime, the

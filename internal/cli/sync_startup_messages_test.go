@@ -46,6 +46,8 @@ func TestFormatStartupResultMessage_StandaloneIncompatibleStoreUsesDriveCommands
 
 	assert.Contains(t, message, "onedrive-go pause --drive 'personal:user@example.com'")
 	assert.Contains(t, message, "onedrive-go drive reset-sync-state --drive 'personal:user@example.com'")
+	assert.Contains(t, message, "start this drive's sync state over", "a reset is named for what it does")
+	assert.NotContains(t, message, "parent drives", "a standalone drive has no parent")
 }
 
 // A store a newer onedrive-go wrote is not fixed by a reset: the guidance
@@ -93,13 +95,14 @@ func TestFormatStartupResultMessage_ChildIncompatibleStoreUsesMountStatePath(t *
 	assert.NotContains(t, message, "drive reset-sync-state")
 }
 
-// Validates: R-6.6.31
+// Validates: R-6.6.31, R-2.5.9
 func TestFormatWatchStartupError_ExitStatusFollowsSharedCause(t *testing.T) {
 	t.Parallel()
 
 	signIn := fmt.Errorf("session: %w", graph.ErrNotLoggedIn)
 	badConfig := fmt.Errorf("validate sync config: %w", config.ErrInvalidConfig)
 	transient := fmt.Errorf("list: %w", graph.ErrServerError)
+	newerStore := &syncstore.StateStoreIncompatibleError{Reason: syncstore.StateStoreIncompatibleReasonNewerVersion}
 	startupErr := func(causes ...error) error {
 		results := make([]multisync.MountStartupResult, 0, len(causes))
 		for i, cause := range causes {
@@ -125,6 +128,9 @@ func TestFormatWatchStartupError_ExitStatusFollowsSharedCause(t *testing.T) {
 		{name: "sign-in plus transient may recover", err: startupErr(signIn, transient), want: exitFailure},
 		{name: "sign-in plus config is mixed", err: startupErr(signIn, badConfig), want: exitFailure},
 		{name: "transient", err: startupErr(transient), want: exitFailure},
+		{name: "every drive's state store needs the user", err: startupErr(newerStore, newerStore), want: exitStateStoreNeedsUser},
+		{name: "state store plus transient may recover", err: startupErr(newerStore, transient), want: exitFailure},
+		{name: "state store plus sign-in is mixed", err: startupErr(newerStore, signIn), want: exitFailure},
 	}
 
 	for _, tt := range tests {

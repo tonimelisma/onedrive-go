@@ -20,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/multisync"
 	"github.com/tonimelisma/onedrive-go/internal/panicguard"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
 
 // Validates: R-6.8.16
@@ -32,6 +33,9 @@ func TestClassifyCommandError(t *testing.T) {
 	assert.Equal(t, errclass.ClassActionable, classifyCommandError(graph.ErrNotLoggedIn))
 	assert.Equal(t, errclass.ClassActionable, classifyCommandError(graph.ErrUnauthorized))
 	assert.Equal(t, errclass.ClassActionable, classifyCommandError(fmt.Errorf("load: %w", config.ErrInvalidConfig)))
+	assert.Equal(t, errclass.ClassActionable, classifyCommandError(&syncstore.StateStoreIncompatibleError{
+		Reason: syncstore.StateStoreIncompatibleReasonCorrupt,
+	}), "a state store that needs the user is actionable")
 	assert.Equal(t, errclass.ClassFatal, classifyCommandError(errors.New("boom")))
 	assert.Equal(t, errclass.ClassFatal, classifyCommandError(errors.Join(testPanicError(t), context.Canceled)),
 		"a recovered panic is fatal even beside the cancellation it caused")
@@ -63,6 +67,22 @@ func TestCommandExitCode(t *testing.T) {
 		},
 		{name: "sign-in behind presented error", err: signInPresented, want: exitSignInRequired},
 		{name: "config", err: fmt.Errorf("loading config: %w", config.ErrInvalidConfig), want: exitConfigInvalid},
+		// Validates: R-6.6.31, R-2.5.9
+		// A state store that needs a decision (a newer version wrote it, it
+		// is damaged, nothing says which version wrote it) fails the same way
+		// on every restart until someone acts.
+		{
+			name: "state store needs the user",
+			err: newPresentedError("the saved sync state for this drive can't be used",
+				&syncstore.StateStoreIncompatibleError{Reason: syncstore.StateStoreIncompatibleReasonNewerVersion}),
+			want: exitStateStoreNeedsUser,
+		},
+		{
+			name: "recovered panic beside a state store that needs the user",
+			err: errors.Join(panicguard.ErrPanic,
+				&syncstore.StateStoreIncompatibleError{Reason: syncstore.StateStoreIncompatibleReasonCorrupt}),
+			want: exitFailure,
+		},
 		{name: "login declined is retryable", err: graph.ErrLoginDeclined, want: exitFailure},
 		{name: "login code expired is retryable", err: graph.ErrLoginCodeExpired, want: exitFailure},
 		{name: "throttled is transient", err: fmt.Errorf("get: %w", graph.ErrThrottled), want: exitFailure},
@@ -89,7 +109,7 @@ func TestCommandExitCode(t *testing.T) {
 		// Validates: R-6.3.10
 		// A recovered panic exits 1, never Go's 2, also when it ended a stop
 		// the user asked for, travels with the cancellation it caused, or is
-		// joined with a failure that alone would exit 77 or 78 (a one-shot
+		// joined with a failure that alone would exit 77, 78 or 65 (a one-shot
 		// pass's drive error beside a stuck close, a helper's panic beside the
 		// command's own error).
 		{name: "recovered panic", err: fmt.Errorf("sync --watch: %w", panicguard.ErrPanic), want: exitFailure},
@@ -203,7 +223,10 @@ func TestCommandExitCode_EveryFailureClassHasAStatus(t *testing.T) {
 	}{
 		errclass.ClassSuccess:    {err: nil, want: []int{exitSuccess}},
 		errclass.ClassShutdown:   {err: context.Canceled, want: []int{exitFailure, exitInterrupted}},
-		errclass.ClassActionable: {err: graph.ErrNotLoggedIn, want: []int{exitSignInRequired, exitConfigInvalid}},
+		errclass.ClassActionable: {
+			err:  graph.ErrNotLoggedIn,
+			want: []int{exitSignInRequired, exitConfigInvalid, exitStateStoreNeedsUser},
+		},
 		errclass.ClassFatal:      {err: errors.New("boom"), want: []int{exitFailure}},
 	}
 

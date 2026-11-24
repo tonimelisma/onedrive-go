@@ -267,6 +267,7 @@ Exit codes tell a service manager or script whether to retry:
 | 0 | Success, or `sync --watch` stopped normally |
 | 1 | Other failure (network, throttling, server); running again may work |
 | 2 | Command-line mistake |
+| 65 | A drive's saved sync state needs you (a newer version wrote it, or it is damaged): see `onedrive-go status` |
 | 77 | Sign-in required: run `onedrive-go login` |
 | 78 | Invalid configuration: fix `config.toml` or `--drive` |
 | 130 | Stopped with Ctrl-C |

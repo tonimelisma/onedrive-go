@@ -93,7 +93,7 @@ func RenameShortcutRootNamespaceAt(ctx context.Context, dbPath string, from stri
 // shortcutRootsAt reads the shortcut roots of the store at dbPath through
 // the read-only inspector.
 func shortcutRootsAt(ctx context.Context, dbPath string, logger *slog.Logger) ([]syncshortcut.ShortcutRootRecord, error) {
-	records, err := readWithInspector(dbPath, logger, func(inspector *storeInspector) ([]syncshortcut.ShortcutRootRecord, error) {
+	records, err := readWithInspector(ctx, dbPath, logger, func(inspector *storeInspector) ([]syncshortcut.ShortcutRootRecord, error) {
 		return queryShortcutRootRecords(ctx, inspector.db, "syncstore: querying shortcut_roots", "syncstore: iterating shortcut_roots")
 	})
 	if err != nil {
