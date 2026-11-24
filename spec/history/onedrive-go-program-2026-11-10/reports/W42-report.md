@@ -41,7 +41,7 @@ Today's replacing move vs now: it hard-linked (or copied) the destination into t
 
 ## Live proof (for the owner)
     onedrive-go-install <this worktree>   # then let the watch wrapper restart
-    mv ~/tommi/<a synced file> ~/tommi/<a new name>
+    mv ~/sync-test-root/<a synced file> ~/sync-test-root/<a new name>
     onedrive-go sync --drive '<test drive>'   # or wait for the watch to pick it up
     onedrive-go ls /                           # the new name is there, the old one gone
     onedrive-go status --drive '<test drive>'  # nothing left unsynced, no issue

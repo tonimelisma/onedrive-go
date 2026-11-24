@@ -49,7 +49,7 @@ Written 2026-11-11.
    `internal/driveops/transfer_create_test.go`,
    `internal/sync/pending_creates_test.go`, `engine_housekeeping_test.go`;
    docs listed in item 3 plus repo `CLAUDE.md` line 186. Not touched:
-   `internal/graph`, `e2e/`, the comparison SQL, the main checkout, `~/tommi`,
+   `internal/graph`, `e2e/`, the comparison SQL, the main checkout, `~/sync-test-root`,
    `/srv`.
 
 6. **PASS — Regression plan.** Tests written first and each seen failing for

@@ -56,20 +56,43 @@ func runWorkflowLint(ctx context.Context, runner commandRunner, repoRoot string,
 		return fmt.Errorf("write status: %w", err)
 	}
 
+	pinFindings, readErr := readWorkflowPinFindings(repoRoot, files)
+	if readErr != nil {
+		return readErr
+	}
+	var pinErr error
+	if len(pinFindings) > 0 {
+		pinErr = fmt.Errorf("workflow pins: %s", strings.Join(pinFindings, "; "))
+	}
+
 	lintCtx, cancel := context.WithTimeout(ctx, workflowLintTimeout)
 	defer cancel()
 
 	args := append(actionlintArgs(), files...)
 	output, runErr := runGoTeed(lintCtx, runner, repoRoot, env, stdout, stderr, "actionlint", args...)
 	if runErr == nil {
-		return nil
+		return pinErr
 	}
 	findings := actionlintFindings(output, files)
 	if len(findings) == 0 {
-		return runErr
+		return errors.Join(pinErr, runErr)
 	}
 
-	return errors.Join(fmt.Errorf("workflow lint: %s", strings.Join(findings, "; ")), runErr)
+	return errors.Join(pinErr, fmt.Errorf("workflow lint: %s", strings.Join(findings, "; ")), runErr)
+}
+
+// readWorkflowPinFindings is workflowPinFindings over every workflow file.
+func readWorkflowPinFindings(repoRoot string, files []string) ([]string, error) {
+	var findings []string
+	for _, file := range files {
+		content, err := readFile(filepath.Join(repoRoot, file))
+		if err != nil {
+			return nil, fmt.Errorf("read workflow %s: %w", file, err)
+		}
+		findings = append(findings, workflowPinFindings(file, string(content))...)
+	}
+
+	return findings, nil
 }
 
 // workflowFiles lists the workflow files, repository-relative and in name

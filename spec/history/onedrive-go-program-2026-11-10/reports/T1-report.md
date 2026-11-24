@@ -33,4 +33,4 @@ State: **three commits on local branch `test/per-pr-speed` (head `52af46ec`), no
 
 ## Left for the resume (delete when T1 closes)
 - Detached base worktree `~/.cache/onedrive-go-tmp/t1/base` (main f2392533). Remove it with `git -C ~/src/onedrive-go worktree remove`.
-- Scratchpad scripts `T1-measure.sh` (a = `verify pr`, b = `go test -race -p 1 ./internal/sync/... ./internal/devtool/... ./testutil/...`, both with `GOFLAGS=-count=1` and the SSD TMPDIR) and `T1-series.sh` (waits for CPU busy under 40% over 20 s, rechecked inside the heavy lock, then runs before-a, after-a, before-b and after-b). Gate on CPU busy, not load average: the load here is mostly RAID I/O wait.
+- Scratchpad scripts `T1-measure.sh` (a = `verify pr`, b = `go test -race -p 1 ./internal/sync/... ./internal/devtool/... ./testutil/...`, both with `GOFLAGS=-count=1`) and `T1-series.sh` (waits for CPU busy under 40% over 20 s, rechecked inside the heavy lock, then runs before-a, after-a, before-b and after-b). Gate on CPU busy, not load average: the load here is mostly I/O wait on the dev host's storage.

@@ -37,21 +37,22 @@ An unversioned build reports version `dev` and refuses to run without
 `XDG_CONFIG_HOME` and `XDG_DATA_HOME` set, so development runs can never
 touch your real OneDrive configuration or files.
 
-The canonical local verification entrypoint is:
+The full verification tier a session runs is:
 
 ```bash
-go run ./cmd/devtool verify default
+go run ./cmd/devtool verify public
 ```
 
 It runs formatting, lint, build (including the cross-compiled platforms), the
-unit tests with the race detector and coverage gate, the repo's documentation
-and traceability checks, and the fast live E2E suite. Coverage is measured
-across packages (`-coverpkg=./...`), and the gate's number is written only in
-requirement R-6.10.4, which devtool reads; to change the number, change that
-line. The live suites need test accounts; see "E2E & Integration Tests" in
+unit tests with the race detector and coverage gate, and the repo's
+documentation and traceability checks. Coverage is measured across packages
+(`-coverpkg=./...`), and the gate's number is written only in requirement
+R-6.10.4, which devtool reads; to change the number, change that line.
+`go run ./cmd/devtool verify default` is `public` plus the fast live E2E suite.
+The live suites need test accounts, which exist only in CI (no session or
+container ever holds `.env`, `.testdata` or token files), so `default` and the
+live suites run only there; see "E2E & Integration Tests" in
 [CLAUDE.md](CLAUDE.md).
-Contributors without test accounts can run `go run ./cmd/devtool verify public`,
-which is the same without the live suite.
 
 CI is tiered. Every pull request and every push to `main` runs the quick lane
 in parallel jobs: `verify lint` (golangci-lint, then a pinned actionlint over
@@ -75,9 +76,9 @@ until the fix closes it (`Closes #N` in its pull request). A rerun on the same
 UTC day runs the same seeds; a later rerun of a night passes `--seed-start
 <n>` with the start that night printed. Before a PR,
 `go run ./cmd/devtool verify pr` (lint, then quick) is the local gate, and it
-is what the `pre-pr` stage below runs; `verify default` still runs
-everything, and takes more than an hour on a 2-core host (its race-tier
-deadline is 20 minutes, or 180 core-minutes divided by the cores on a host
+is what the `pre-pr` stage below runs; `verify public` runs the full
+offline tier, and takes more than an hour on a 2-core host (its race-tier
+deadline is 30 minutes, or 180 core-minutes divided by the cores on a host
 with fewer than 3, and `--unit-timeout` overrides it). devtool
 runs every command, and builds the benchmark's subject, with the Go toolchain
 `go.mod` pins, so a newer system Go does not change what is built, linted or
@@ -146,8 +147,8 @@ most four attempts in all.
 A release is not ready until these proof gates are current for the release
 SHA:
 
-- `go run ./cmd/devtool verify default` passes cleanly.
-- Manual live E2E is green for the release SHA; broader SharePoint and
+- The nightly `verify public` and `e2e-full` runs are green for the release
+  SHA; broader SharePoint and
   shared-library claims require matching live coverage.
 - Any public performance claim has a repo-owned benchmark artifact with
   scenario, machine, date, method, and subject-under-test context (see

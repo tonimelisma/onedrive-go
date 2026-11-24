@@ -58,7 +58,7 @@ Second pass: build, vet; full `config`, `cli`, `multisync` suites; `-run` of the
 - Leftover sidecars under an account's old email after a rename: fixed in review (deleted by the rename under the store lock).
 
 ## Unfinished
-None. Live check for the reviewer, on the test account under `~/tommi` with a binary built from this branch: (1) start `sync --watch` on the test drive, then `drive reset-sync-state --drive <test drive> --yes` must refuse; (2) add a throwaway second drive section, let the watch start its runner, run `drive remove --purge --drive <throwaway>`: expect "picked up the change", then "Purged config and state", the runner retired in the watch log, and no `state_*` family for it in the data dir.
+None. Live check for the reviewer, on the test account under `~/sync-test-root` with a binary built from this branch: (1) start `sync --watch` on the test drive, then `drive reset-sync-state --drive <test drive> --yes` must refuse; (2) add a throwaway second drive section, let the watch start its runner, run `drive remove --purge --drive <throwaway>`: expect "picked up the change", then "Purged config and state", the runner retired in the watch log, and no `state_*` family for it in the data dir.
 
 ## Packages the reviewer should test
 `internal/devtool` (repository checks), e2e (purge, logout, reset, rebind flows).

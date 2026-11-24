@@ -56,7 +56,7 @@ before any code edit.
    `CONTRIBUTING.md` and the header comment would otherwise have drifted.)
    Must not be touched: `internal/devtool/nightly.go`
    behaviour, `verify_e2e.go` bucket logic, any package outside devtool, the
-   main checkout, `~/tommi`, `/srv`.
+   main checkout, `~/sync-test-root`, `/srv`.
 
 6. **PASS — Regression plan.** Tests first, all with the package's fakes
    (`fakeRunner`, an injected `now`/`sleep` pair), none calling `gh`, `git

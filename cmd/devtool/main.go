@@ -320,23 +320,24 @@ func (f *verifyFlags) registerProfileFlags(cmd *cobra.Command) {
 		"",
 		"run one golangci-lint pass of the lint step (linux, darwin-race or freebsd); default every pass",
 	)
+	unitDeadline, shortDeadline, raceDeadline := devtool.TierDeadlineDefaults()
 	cmd.Flags().DurationVar(
 		&f.unitTimeout,
 		"unit-timeout",
 		0,
-		"go test deadline of the full race tier; default 20m, longer on hosts with fewer cores than the CI runners",
+		"go test deadline of the full race tier; default "+unitDeadline.String()+", longer on hosts with fewer cores than the CI runners",
 	)
 	cmd.Flags().DurationVar(
 		&f.shortUnitTimeout,
 		"short-unit-timeout",
 		0,
-		"go test deadline of the short unit tier; default 10m, longer on hosts with fewer cores than the CI runners",
+		"go test deadline of the short unit tier; default "+shortDeadline.String()+", longer on hosts with fewer cores than the CI runners",
 	)
 	cmd.Flags().DurationVar(
 		&f.raceTimeout,
 		"race-timeout",
 		0,
-		"go test deadline of the race profile; default 30m, longer on hosts with fewer cores than the CI runners",
+		"go test deadline of the race profile; default "+raceDeadline.String()+", longer on hosts with fewer cores than the CI runners",
 	)
 	cmd.Flags().StringVar(&f.e2eLogDir, "e2e-log-dir", "", "directory for full E2E debug logs")
 	cmd.Flags().StringVar(&f.summaryJSONPath, "summary-json", "", "write verify summary JSON to this path")

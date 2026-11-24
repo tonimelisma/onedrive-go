@@ -1,6 +1,0 @@
-level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"use fsroot, synctree, or localpath filesystem boundaries instead of raw os\\\\.\\\\* calls\", Path: \"internal/devtool/\", Linters: \"forbidigo\"]"
-level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"use explicit test synchronization instead of wall-clock sleep\", Path Except: \"_test\\\\.go\", Linters: \"forbidigo\"]"
-level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"use fsroot, synctree, or localpath filesystem boundaries instead of raw os\\\\.\\\\* calls\", Path: \"internal/(fsroot|synctree|localpath)/\", Linters: \"forbidigo\"]"
-level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Text: \"models another system and is for tests only\", Path: \"_test\\\\.go\", Linters: \"forbidigo\"]"
-level=warning msg="[runner/exclusion_rules] Skipped 0 issues by rules: [Path: \"internal/devtool/(fsutil|live_env)\\\\.go\", Linters: \"gosec\"]"
-0 issues.

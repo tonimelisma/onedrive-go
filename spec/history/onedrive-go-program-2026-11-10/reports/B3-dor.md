@@ -37,7 +37,7 @@ Worktree `~/src/onedrive-go-wt/control-socket-deadlines`, branch
    `orchestrator_run_once.go` (new call signature); `internal/cli/control_client.go`,
    `pause.go`, `status_runtime.go`, `status_snapshot.go`; tests beside them;
    the four docs above. Not touched: `internal/sync`, the main checkout,
-   `~/tommi`, `/srv`.
+   `~/sync-test-root`, `/srv`.
 6. PASS **Regression plan** (tests written first, each seen failing):
    `internal/multisync/control_socket_hardening_test.go`:
    `TestControlSocketServer_SetsReadIdleAndHeaderLimits`,
@@ -69,7 +69,7 @@ Worktree `~/src/onedrive-go-wt/control-socket-deadlines`, branch
    write. Ending the watch on a dead control server uses the existing return
    path (runners cancelled, engines closed, socket and lock released). The
    live check uses a temporary sync dir and config, never `<production sync folder>` or
-   `~/tommi`'s running client.
+   `~/sync-test-root`'s running client.
 9. PASS **Secret and credential safety**: no token, account name or drive ID
    in code, tests, docs, commit or report. The live check reads the test
    account's existing token bundle through a temporary config; its output is

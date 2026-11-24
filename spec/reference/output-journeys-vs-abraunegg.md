@@ -3,7 +3,7 @@
 Audit of what each client actually prints for each user journey, measured
 against [cli-output-guidelines.md](cli-output-guidelines.md).
 
-- **onedrive-go**: `78fdc5d`, captured 2026-10-23 on a Linux host against a personal
+- **onedrive-go**: the code at #765 (pre-rewrite SHA), captured 2026-10-23 on a Linux host against a personal
   test account with 19 files (~300 MB), in an isolated
   `XDG_CONFIG_HOME`/`XDG_DATA_HOME` (paths below shortened to `~/odgo-test`).
   stdout and stderr were captured separately; watch mode ran on a pty.
@@ -287,7 +287,7 @@ No changes detected
 
 ## 7. Failures
 
-The blocks below are the audit-time output at `78fdc5d` and are kept as
+The blocks below are the audit-time output at #765 (pre-rewrite SHA) and are kept as
 evidence; none of them is current. Today the per-attempt and final retry
 records (`request failed after all retries`, `OneDrive still unreachable,
 giving up`) are DEBUG only; a network outage prints one `Warning: can't

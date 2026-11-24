@@ -14,8 +14,8 @@ and nothing in `spec/` resolves them.
 - Do not add new `B-NNN` identifiers to code. New work is tracked in `spec/`.
 - A comment must carry its own meaning. Never write a comment whose only
   content is a pointer to one of these IDs.
-- Every `B-NNN` cited in Go code must be listed below. `go run ./cmd/devtool
-  verify default` enforces this, so a newly introduced ID fails the build.
+- Every `B-NNN` cited in Go code must be listed below. Every profile's
+  repository rules enforce this, so a newly introduced ID fails the build.
 
 ## Registry
 

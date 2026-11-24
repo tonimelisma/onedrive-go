@@ -280,10 +280,11 @@ The repo does not rely on each contributor improvising their own workflow.
 Pick a small change and do it the repo's way:
 
 - claim the work
-- run `git fetch origin`, then create a fresh worktree from `origin/main`
+- work on the session's branch, which starts at the current `origin/main`
 - write or adjust tests first when behavior changes
 - update docs in the same increment
-- run `go run ./cmd/devtool verify default`
+- run `go run ./cmd/devtool verify pr` (or `verify public` for the full
+  offline tier; live tests run only in CI)
 - produce a compliance report and checklist
 
 This step turns the onboarding material into lived context.
@@ -352,11 +353,13 @@ able to scan this table and place every top-level code area.
 | `internal/synctest` | Sync-specific shared test helpers |
 | `testutil` | Repo-wide test helpers |
 | `e2e` | Live provider coverage, fixture preflight, and CLI/sync end-to-end behavior |
-| `scripts/bootstrap-test-credentials.sh` | One-time live-test credential bootstrap that rebuilds `.testdata/` with token files, `catalog.json`, and `config.toml` |
-| `scripts/migrate-test-data-to-ci.sh` | Move local `.testdata/` tokens, `catalog.json`, `config.toml`, and fixture env into CI secrets storage |
+| `scripts/bootstrap-test-credentials.sh` | Owner's machine only, never a session: one-time live-test credential bootstrap that rebuilds `.testdata/` with token files, `catalog.json`, and `config.toml` |
+| `scripts/migrate-test-data-to-ci.sh` | Owner's machine only, never a session: move the owner's `.testdata/` tokens, `catalog.json`, `config.toml`, and fixture env into CI secrets storage |
 | `scripts/dev-env.sh` | Local development environment helper |
 
-Live-test note: `.testdata/` should contain `token_*.json`, `catalog.json`,
+Live-test note: `.testdata/` exists only on the owner's machine and in CI,
+which writes it from Key Vault; no session or container ever holds it, a
+`.env`, or a token file. It should contain `token_*.json`, `catalog.json`,
 `config.toml`, and any expected state DB fixtures from
 `bootstrap-test-credentials.sh`. The E2E isolation harness copies that
 catalog-era fixture layout directly; it does not reconstruct legacy account or
@@ -540,15 +543,18 @@ The important thing to remember:
 
 ### 10.3 Verifier-owned workflow
 
-The canonical local verification entrypoint is:
+The full verification tier a session runs is:
 
 ```bash
-go run ./cmd/devtool verify default
+go run ./cmd/devtool verify public
 ```
+
+The per-PR gate is `go run ./cmd/devtool verify pr`. Live profiles (`default`,
+`e2e`, `e2e-full`) run only in CI, where the test accounts exist.
 
 Every profile, as `go run ./cmd/devtool verify --help` lists them:
 
-- `default`: the full local tier, `public` plus the fast live suite
+- `default`: `public` plus the fast live suite; CI only
 - `public`: format, lint, build, the repository rules, the full unit tier
   under `-race` with the coverage gate and every exhaustive test; no live
   tests
@@ -700,9 +706,10 @@ use this:
 ### Week 3
 
 1. pick one small increment
-2. create a worktree
+2. work on the session's branch, started from `origin/main`
 3. make the change with tests and doc updates
-4. run `go run ./cmd/devtool verify default`
+4. run `go run ./cmd/devtool verify pr` (or `verify public` for the full
+   offline tier)
 5. open a PR and treat review comments as another learning pass through the
    ownership model
 

@@ -30,7 +30,7 @@ Runner legend: E = `runEveryVerifyStep` (verify.go:975), S = `runVerifySteps` (v
 5. PASS Code scope: internal/devtool (verify*.go, nightly_verdict.go, nightly_report.go, verify_governs.go, tests), spec/design/system.md, spec/requirements/non-functional.md, CLAUDE.md line 248. Not touched: ci.yml, product packages.
 6. PASS Regression plan: marker for one failed step and none for passing ones; two markers in order in public; reader keys a marker without a test; test key wins; package failure keyed by its step; every profile's steps named once from the closed set; step key equals its claim ref and reads back; routing text outside the rows unchecked; issue names the step.
 7. PASS Verification plan: build, vet (plain and tagged), gofumpt, devtool tests plain then -race behind the lock, the test-convention test, lint behind the lock.
-8. PASS Data safety: devtool only; no sync state, no file under /srv or ~/tommi.
+8. PASS Data safety: devtool only; no sync state, no file under /srv or ~/sync-test-root.
 9. PASS Secret safety: no tokens, .env or .testdata read; the reader keeps log text out of the issue.
 10. PASS Live/destructive: nothing against OneDrive or GitHub; no push, no history rewrite, no dependency change.
 11. ASSUMPTION **Review carryover and nightly**: the brief states the DoD start stage has already been run in this worktree; no carryover threads or nightly claims were handed to this increment.
