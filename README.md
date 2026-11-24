@@ -9,7 +9,9 @@ A OneDrive command-line client and two-way sync client for Linux and macOS.
 ## Status
 
 > [!WARNING]
-> **Pre-release.** There are no releases yet: you build it from source, and it
+> **Pre-release.** Every merge to `main` is published as a
+> [release](https://github.com/tonimelisma/onedrive-go/releases) automatically,
+> so a release is the newest work in progress, not a stable version, and it
 > has not been used outside its own testing. The data-safety model (delete
 > hold, local trash, sync-folder identity, verified transfers) is implemented
 > and tested, with the remaining limits listed in
@@ -70,6 +72,24 @@ $ onedrive-go sync --watch
 ## Install
 
 There are no Homebrew, deb, rpm, AUR or container packages yet.
+
+### Release binaries
+
+Each [release](https://github.com/tonimelisma/onedrive-go/releases) has a
+static Linux binary (`onedrive-go-vX.Y.Z-linux-amd64`), a macOS one
+(`onedrive-go-vX.Y.Z-darwin-arm64`), a `SHA256SUMS` file and a build-provenance
+attestation for each binary. Check both before installing:
+
+```bash
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify onedrive-go-vX.Y.Z-linux-amd64 --repo tonimelisma/onedrive-go \
+  --signer-workflow tonimelisma/onedrive-go/.github/workflows/release.yml \
+  --source-ref refs/heads/main
+install -m 0755 onedrive-go-vX.Y.Z-linux-amd64 ~/.local/bin/onedrive-go
+```
+
+Releases are made only by that workflow, from `main`, after every merge whose
+CI passed ([CONTRIBUTING.md](CONTRIBUTING.md#releases)).
 
 ### Building from source
 

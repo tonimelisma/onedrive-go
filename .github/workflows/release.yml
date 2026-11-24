@@ -1,0 +1,226 @@
+name: Release
+
+# Every merge to main is released (R-6.10.41). When the push-to-main CI run of
+# a commit succeeds, this workflow tags that exact commit with the next
+# vMAJOR.MINOR.PATCH, builds static binaries with the tag stamped in, smoke-
+# tests the Linux one, attests the binaries' build provenance, publishes the
+# release with generated notes, and then verifies what it published the way
+# a consumer does: the checksums and `gh attestation verify` pinned to this
+# workflow on main.
+#
+# Only this workflow, run from main, releases: its first step refuses any
+# other ref, since workflow_dispatch can run a workflow from any branch and
+# any workflow can attest in the repository's name. Consumers therefore
+# verify with --signer-workflow <this file> --source-ref refs/heads/main. No
+# workflow runs on tag pushes, and cloud sessions never tag or release by
+# hand (their GitHub proxy refuses both): the GITHUB_TOKEN here does it.
+#
+# workflow_run runs the default branch's copy of this file, never a pull
+# request's.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'A commit on main whose push CI passed; empty releases the tip of main'
+        type: string
+        default: ''
+      version:
+        description: 'vMAJOR.MINOR.PATCH higher than every release tag; empty bumps the patch'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+# One release at a time, so two merges cannot claim one version. A newer
+# merge waiting here replaces an older waiting one; the newer release then
+# contains the older commit, which is the point of releasing every merge.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Refuse any ref but main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "${REF}" != refs/heads/main ]; then
+            echo "::error::releases are made only by release.yml on refs/heads/main, not ${REF}"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve the commit
+        id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_COMMIT: ${{ inputs.commit }}
+          MAIN_SHA: ${{ github.sha }}
+        run: |
+          if [ "${EVENT}" = workflow_run ]; then
+            commit="${RUN_SHA}"
+          else
+            commit="${INPUT_COMMIT:-${MAIN_SHA}}"
+            commit="$(git rev-parse --verify "${commit}^{commit}")"
+            # A dispatch releases only a commit whose push-to-main CI passed,
+            # as the workflow_run trigger does.
+            passed="$(gh api "repos/${GH_REPO}/actions/workflows/ci.yml/runs?head_sha=${commit}&event=push&status=success" --jq '.total_count')"
+            if [ "${passed}" = 0 ]; then
+              echo "::error::${commit} has no successful push-to-main CI run"
+              exit 1
+            fi
+          fi
+          echo "sha=${commit}" >> "${GITHUB_OUTPUT}"
+
+      - name: Choose the version
+        id: version
+        env:
+          COMMIT: ${{ steps.commit.outputs.sha }}
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          bash scripts/release-version.sh refs/remotes/origin/main "${COMMIT}" "${REQUESTED}" | tee -a "${GITHUB_OUTPUT}"
+
+      - name: Check out the commit
+        if: steps.version.outputs.action != 'skip'
+        env:
+          COMMIT: ${{ steps.commit.outputs.sha }}
+        run: git checkout --detach "${COMMIT}"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.version.outputs.action != 'skip'
+        with:
+          go-version-file: go.mod
+          # A release builds from a clean module cache, never one another
+          # run wrote.
+          cache: false
+
+      - name: Build
+        if: steps.version.outputs.action != 'skip'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir dist
+          for target in linux/amd64 darwin/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            GOOS="${os}" GOARCH="${arch}" go build -trimpath \
+              -ldflags "-s -w -X github.com/tonimelisma/onedrive-go/internal/cli.version=${VERSION}" \
+              -o "dist/onedrive-go-${VERSION}-${os}-${arch}" .
+          done
+          (cd dist && sha256sum onedrive-go-"${VERSION}"-* > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Smoke-test the Linux binary
+        if: steps.version.outputs.action != 'skip'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          binary="dist/onedrive-go-${VERSION}-linux-amd64"
+          if file "${binary}" | grep -q 'dynamically linked'; then
+            echo "::error::${binary} is not a static binary"
+            exit 1
+          fi
+          bash scripts/release-smoke.sh "${binary}" "${VERSION}"
+
+      - name: Attest the binaries
+        if: steps.version.outputs.action != 'skip'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/onedrive-go-${{ steps.version.outputs.version }}-*
+
+      - name: Tag the commit
+        if: steps.version.outputs.action == 'create'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ steps.commit.outputs.sha }}
+        run: gh api "repos/${GH_REPO}/git/refs" -f "ref=refs/tags/${VERSION}" -f "sha=${COMMIT}"
+
+      - name: Publish the release
+        if: steps.version.outputs.action != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          LATEST: ${{ steps.version.outputs.latest }}
+        run: |
+          if ! gh release view "${VERSION}" --json tagName > /dev/null 2>&1; then
+            # gh uploads the assets to a draft and publishes it after, so the
+            # release is never visible without them.
+            gh release create "${VERSION}" dist/* --verify-tag --title "${VERSION}" --generate-notes "--latest=${LATEST}"
+            exit 0
+          fi
+          # A rerun finishes the release an earlier attempt left behind. A
+          # published release keeps the assets it has, since a consumer may
+          # be downloading them; only missing ones are added.
+          if [ "$(gh release view "${VERSION}" --json isDraft --jq .isDraft)" = true ]; then
+            gh release upload "${VERSION}" dist/* --clobber
+          else
+            have="$(gh release view "${VERSION}" --json assets --jq '.assets[].name')"
+            for asset in dist/*; do
+              if ! grep -qxF "$(basename "${asset}")" <<< "${have}"; then
+                gh release upload "${VERSION}" "${asset}"
+              fi
+            done
+          fi
+          gh release edit "${VERSION}" --draft=false --prerelease=false "--latest=${LATEST}"
+
+      - name: Verify the published release as a consumer does
+        if: steps.version.outputs.action != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          LATEST: ${{ steps.version.outputs.latest }}
+        run: |
+          # A rerun that finishes an older release leaves releases/latest on
+          # the newer one.
+          if [ "${LATEST}" = true ]; then
+            latest="$(gh api "repos/${GH_REPO}/releases/latest" --jq '[.tag_name, .draft, .prerelease] | @tsv')"
+            if [ "${latest}" != "$(printf '%s\tfalse\tfalse' "${VERSION}")" ]; then
+              echo "::error::releases/latest is ${latest}, not ${VERSION}"
+              exit 1
+            fi
+          fi
+          mkdir published
+          gh release download "${VERSION}" --dir published
+          cd published
+          binary="onedrive-go-${VERSION}-linux-amd64"
+          grep -E "  ${binary}\$" SHA256SUMS | sha256sum -c -
+          sha256sum -c SHA256SUMS
+          gh attestation verify "${binary}" --repo "${GH_REPO}" \
+            --signer-workflow "${GH_REPO}/.github/workflows/release.yml" \
+            --source-ref refs/heads/main
+          chmod +x "${binary}"
+          printed="$("./${binary}" --version)"
+          if [ "${printed}" != "onedrive-go version ${VERSION}" ]; then
+            echo "::error::the published binary prints ${printed}"
+            exit 1
+          fi
+          echo "${binary} $(sha256sum "${binary}" | cut -d' ' -f1)" >> "${GITHUB_STEP_SUMMARY}"

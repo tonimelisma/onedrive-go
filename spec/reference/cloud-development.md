@@ -31,6 +31,7 @@ CLAUDE.md's E2E section, which needs a browser.
 | go tests as the non-root `dev` user (`DEVTOOL_TEST_USER`, or `verify --as-user`) | as root, permission tests do not bite and the sync tests that refuse root fail |
 | every DoD stage run in the session | the stages read GitHub over REST, which the proxy serves, review threads over its REST thread routes, and the merge is a REST call too; the nightly claims are issues |
 | no `.env`, no `.testdata` | live tests run only in CI, from the Key Vault secrets; nothing credential-bearing is copied into a container |
+| no tags, releases or installs from a session | every merge to `main` is released by `.github/workflows/release.yml` once its push CI passes (R-6.10.41); the GitHub proxy refuses tag pushes and release writes, and a release only that workflow on `main` attests is the one a machine running the newest code accepts |
 
 `prune-merged` judges a builder worktree merged when every commit's patch is
 in `origin/main` (`git cherry`), or when merging the branch into

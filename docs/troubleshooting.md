@@ -98,8 +98,9 @@ show the problem as a warning.
 ## "refusing to run a development build"
 
 Your binary was built without a version, which makes it a development build
-that refuses to touch real data. Rebuild it with the `-ldflags` shown under
-[Building from source](../README.md#building-from-source).
+that refuses to touch real data. Install a
+[release binary](../README.md#release-binaries), or rebuild it with the
+`-ldflags` shown under [Building from source](../README.md#building-from-source).
 
 ## The sync folder is missing
 

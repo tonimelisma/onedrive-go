@@ -2,8 +2,10 @@
 
 ## Supported versions
 
-onedrive-go has no releases yet. Security fixes go to the `main` branch; build
-from the latest `main` to get them.
+Only the latest release is supported. Security fixes go to the `main` branch,
+and every merge to `main` is published as a new release automatically, so
+install the [latest release](https://github.com/tonimelisma/onedrive-go/releases/latest)
+or build from the latest `main` to get them.
 
 ## Reporting a vulnerability
 
