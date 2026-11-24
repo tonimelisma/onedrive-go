@@ -22,7 +22,7 @@ func TestHooks_ZeroValueIsProduction(t *testing.T) {
 	assert.Equal(t, SqliteDriverName, Hooks{}.driverName(), "the store opens through SQLite")
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	store, err := OpenEngineSyncStore(synctest.TestContext(t), dbPath, synctest.TestLogger(t), Hooks{})
+	store, err := OpenEngineSyncStore(synctest.TestContext(t), dbPath, synctest.TestLogger(t), nil, Hooks{})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close(context.WithoutCancel(t.Context()))) })
 
@@ -45,7 +45,7 @@ func TestHooks_SkipFsyncTurnsSynchronousOff(t *testing.T) {
 	t.Parallel()
 
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	store, err := OpenEngineSyncStore(synctest.TestContext(t), dbPath, synctest.TestLogger(t), Hooks{SkipFsync: true})
+	store, err := OpenEngineSyncStore(synctest.TestContext(t), dbPath, synctest.TestLogger(t), nil, Hooks{SkipFsync: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close(context.WithoutCancel(t.Context()))) })
 

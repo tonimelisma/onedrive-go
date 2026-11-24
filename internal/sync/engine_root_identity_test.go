@@ -252,7 +252,7 @@ func TestNewEngine_RootRecreatedAtSamePathIsRefusedEvenIfInodeIsReused(t *testin
 func rewriteRecordedSyncRoot(t *testing.T, paths rootSafetyPaths, edit func(*synctree.RootIdentity)) {
 	t.Helper()
 
-	store, err := syncstore.OpenSyncStoreForTest(t.Context(), paths.dbPath, syncfixture.TestLogger(t), false)
+	store, err := syncstore.OpenSyncStoreForTest(t.Context(), paths.dbPath, syncfixture.TestLogger(t), false, nil, syncstore.Hooks{})
 	require.NoError(t, err)
 	require.NoError(t, store.UpdateObservationStateForTest(t.Context(), func(state *syncdomain.ObservationState) {
 		require.NotNil(t, state.SyncRootIdentity)

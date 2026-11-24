@@ -148,34 +148,14 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	storeOwnedByEngine := false
 	defer releaseEngineLocksOnStartupFailure(cfg.Logger, locks, &storeOwnedByEngine)
 
-	bm, err := syncstore.OpenEngineSyncStore(ctx, cfg.DBPath, cfg.Logger, cfg.hooks.store)
-	if err != nil {
-		return nil, fmt.Errorf("sync: creating engine: %w", err)
-	}
-	defer closeEngineSyncStoreOnStartupFailure(ctx, cfg.Logger, bm, &storeOwnedByEngine)()
-	syncTree, syncRootBinding, err := openBoundSyncTree(ctx, bm, cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	rootIdentity := syncdomain.NewSyncRootIdentity(syncRootBinding, syncRootRefusalHint(cfg))
-	trashDir := cfg.TrashDir
-	if trashDir == "" {
-		trashDir = localtrash.DirForStatePath(cfg.DBPath)
-	}
-	trash := localtrash.Open(trashDir, nil)
-
-	// The session store is built here and the TransferManager below, once
-	// the engine exists to lend it its run clock; the TM is immutable after
-	// creation (no post-hoc field mutation). Disk space checking is
-	// configured via WithDiskCheck so every download (sync and CLI) gets
-	// automatic protection (R-6.2.6).
-	var sessionStore *driveops.SessionStore
-	if cfg.DataDir != "" {
-		sessionStore = driveops.NewSessionStore(cfg.DataDir, cfg.Logger)
-	}
+	// The engine is declared before its store opens, so the store runs on
+	// the engine's run clock from its first read: one clock, or a retry
+	// scheduled by one clock is judged due by another. The clock is read
+	// late (the method value reads the engine's hooks at each call), so a
+	// test that replaces the run clock after construction moves the store
+	// with it. The store, the sync tree, its identity and the protected roots
+	// are filled in below, before the engine leaves this function.
 	e := &Engine{
-		baseline:               bm,
 		planner:                syncplan.NewPlanner(cfg.Logger),
 		fetcher:                cfg.Fetcher,
 		socketIOFetcher:        cfg.SocketIOFetcher,
@@ -186,8 +166,6 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		accountCanonicalID:     cfg.AccountCanonicalID,
 		dataDir:                cfg.DataDir,
 		syncRoot:               cfg.SyncRoot,
-		syncTree:               syncTree,
-		syncRootIdentity:       rootIdentity,
 		locks:                  locks,
 		driveID:                cfg.DriveID,
 		driveType:              cfg.DriveType,
@@ -204,8 +182,37 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 		enableWebsocket:        cfg.EnableWebsocket,
 		wallClock:              syncdomain.NewRealClock(cfg.Logger, &syncdomain.TimerPanics{}),
 		hooks:                  cfg.hooks,
-		protectedRoots:         newProtectedRootSet(bm, cfg.ShortcutNamespaceID),
 		heldDeleteConfirms:     make(chan heldDeleteConfirmRequest),
+	}
+
+	bm, err := syncstore.OpenEngineSyncStore(ctx, cfg.DBPath, cfg.Logger, e.nowFunc, cfg.hooks.store)
+	if err != nil {
+		return nil, fmt.Errorf("sync: creating engine: %w", err)
+	}
+	defer closeEngineSyncStoreOnStartupFailure(ctx, cfg.Logger, bm, &storeOwnedByEngine)()
+	syncTree, syncRootBinding, err := openBoundSyncTree(ctx, bm, cfg)
+	if err != nil {
+		return nil, err
+	}
+	rootIdentity := syncdomain.NewSyncRootIdentity(syncRootBinding, syncRootRefusalHint(cfg))
+	e.baseline = bm
+	e.syncTree = syncTree
+	e.syncRootIdentity = rootIdentity
+	e.protectedRoots = newProtectedRootSet(bm, cfg.ShortcutNamespaceID)
+
+	trashDir := cfg.TrashDir
+	if trashDir == "" {
+		trashDir = localtrash.DirForStatePath(cfg.DBPath)
+	}
+	trash := localtrash.Open(trashDir, nil)
+
+	// The session store is built here and the TransferManager below, on the
+	// engine's run clock; the TM is immutable after creation (no post-hoc
+	// field mutation). Disk space checking is configured via WithDiskCheck so
+	// every download (sync and CLI) gets automatic protection (R-6.2.6).
+	var sessionStore *driveops.SessionStore
+	if cfg.DataDir != "" {
+		sessionStore = driveops.NewSessionStore(cfg.DataDir, cfg.Logger)
 	}
 	e.upkeep = &housekeeper{
 		syncTree:      syncTree,
@@ -222,10 +229,6 @@ func newEngine(ctx context.Context, cfg *engineInputs) (*Engine, error) {
 	}
 
 	e.permHandler = newEnginePermissionHandler(e, cfg, syncTree)
-	// One clock: the store's retry and trial schedule and the executor's
-	// timestamps read the engine clock, or a retry scheduled by one clock is
-	// judged due by another.
-	bm.SetNowFunc(e.nowFunc)
 	transfers := driveops.NewTransferManager(cfg.Downloads, cfg.Uploads, sessionStore, cfg.Logger,
 		driveops.WithDiskCheck(cfg.MinFreeSpace, driveops.DiskAvailable),
 		driveops.WithSessionScope(cfg.MountID, cfg.SyncRoot),

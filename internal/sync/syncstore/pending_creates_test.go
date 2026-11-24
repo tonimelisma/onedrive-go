@@ -332,9 +332,9 @@ func TestCommitObservation_IntentDoesNotClaimContentOrOutliveItsTTL(t *testing.T
 
 	expired := newTestStore(t)
 	base := time.Date(2026, 11, 1, 23, 0, 0, 0, time.UTC)
-	expired.SetNowFunc(func() time.Time { return base })
+	expired.nowFunc = func() time.Time { return base }
 	require.NoError(t, expired.RecordPendingCreateIntent(t.Context(), &syncdomain.PendingCreate{DriveID: driveID, Path: "doc.txt", ParentID: "root"}))
-	expired.SetNowFunc(func() time.Time { return base.Add(syncdomain.PendingCreateIntentTTL + time.Minute) })
+	expired.nowFunc = func() time.Time { return base.Add(syncdomain.PendingCreateIntentTTL + time.Minute) }
 	require.NoError(t, expired.CommitObservation(t.Context(), []syncdomain.ObservedItem{{
 		DriveID: driveID, ItemID: "late", ParentID: "root", Path: "doc.txt", ItemType: syncdomain.ItemTypeFile,
 		Hash: syncfixture.EmptyQuickXor, Size: 0, ETag: `"l,1"`,
@@ -473,7 +473,7 @@ func runCreateIntentPruneCase(t *testing.T, tc *createIntentPruneCase) {
 	store := newTestStore(t)
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.TestDriveID)
-	store.SetNowFunc(func() time.Time { return intendedAt })
+	store.nowFunc = func() time.Time { return intendedAt }
 	pending := &syncdomain.PendingCreate{DriveID: driveID, Path: tc.path, ParentID: "root"}
 	require.NoError(t, store.RecordPendingCreateIntent(ctx, pending))
 	if tc.namesItem {
@@ -498,7 +498,7 @@ func runCreateIntentPruneCase(t *testing.T, tc *createIntentPruneCase) {
 	if tc.suspect {
 		require.NoError(t, store.MarkLocalTruthSuspect(ctx, "watch overflow"))
 	}
-	store.SetNowFunc(func() time.Time { return intendedAt.Add(tc.prunedAfter) })
+	store.nowFunc = func() time.Time { return intendedAt.Add(tc.prunedAfter) }
 	observed := PassObservedRemoteThenLocal
 	if tc.localOnlyPass {
 		observed = PassRefreshedLocalOnly
@@ -641,12 +641,12 @@ func TestPendingCreate_AnIntentRecordedBefore1970KeepsItsTimeAndStaysFresh(t *te
 	ctx := t.Context()
 	driveID := driveid.New(syncfixture.TestDriveID)
 	intended := time.Date(1969, 7, 20, 20, 17, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return intended })
+	mgr.nowFunc = func() time.Time { return intended }
 	require.NoError(t, mgr.RecordPendingCreateIntent(ctx, &syncdomain.PendingCreate{
 		DriveID: driveID, Path: "moon.txt", ParentID: "root", LocalSize: 3, LocalHash: "local-hash",
 	}))
 
-	mgr.SetNowFunc(func() time.Time { return intended.Add(time.Hour) })
+	mgr.nowFunc = func() time.Time { return intended.Add(time.Hour) }
 	require.NoError(t, mgr.RecordPendingCreate(ctx, &syncdomain.PendingCreate{
 		ItemID: "placeholder", DriveID: driveID, Path: "moon.txt", ParentID: "root", CreatedETag: `"p,1"`,
 		LocalSize: 3, LocalHash: "local-hash",

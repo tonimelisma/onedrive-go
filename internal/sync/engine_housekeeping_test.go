@@ -245,7 +245,7 @@ func closedTestStore(t *testing.T) *syncstore.SyncStore {
 
 	dbPath := filepath.Join(t.TempDir(), "closed.db")
 	require.NoError(t, os.WriteFile(dbPath, syncstoretest.LoadTestStoreTemplate(t), 0o600))
-	store, err := syncstore.OpenSyncStoreForTest(synctest.TestContext(t), dbPath, synctest.TestLogger(t), false)
+	store, err := syncstore.OpenSyncStoreForTest(synctest.TestContext(t), dbPath, synctest.TestLogger(t), false, nil, syncstore.Hooks{})
 	require.NoError(t, err)
 	require.NoError(t, store.Close(t.Context()))
 

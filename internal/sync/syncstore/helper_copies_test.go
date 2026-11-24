@@ -241,7 +241,7 @@ func newTestStore(tb testing.TB) *SyncStore {
 	ctx := synctest.TestContext(tb)
 	require.NoError(tb, os.WriteFile(dbPath, loadTestStoreTemplate(tb), 0o600), "WriteFile(%q)", dbPath)
 
-	mgr, err := OpenSyncStoreForTest(ctx, dbPath, synctest.TestLogger(tb), false)
+	mgr, err := OpenSyncStoreForTest(ctx, dbPath, synctest.TestLogger(tb), false, nil, Hooks{})
 	require.NoError(tb, err, "NewSyncStore(%q)", dbPath)
 
 	tb.Cleanup(func() {

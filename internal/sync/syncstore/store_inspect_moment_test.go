@@ -26,7 +26,7 @@ func TestReadDriveStatusSnapshot_AWriteBetweenItsReadsIsNotSeenHalf(t *testing.T
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	require.NoError(t, os.WriteFile(dbPath, loadTestStoreTemplate(t), 0o600))
-	store, err := OpenSyncStoreForTest(synctest.TestContext(t), dbPath, synctest.TestLogger(t), false)
+	store, err := OpenSyncStoreForTest(synctest.TestContext(t), dbPath, synctest.TestLogger(t), false, nil, Hooks{})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close(context.Background())) })
 

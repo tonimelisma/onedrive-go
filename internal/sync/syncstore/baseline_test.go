@@ -417,7 +417,7 @@ func TestCommit_Download(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.nowFunc = func() time.Time { return fixedTime }
 
 	outcomes := []syncdomain.BaselineMutation{{
 		Action:          syncdomain.ActionDownload,
@@ -455,7 +455,7 @@ func TestCommit_Upload(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.nowFunc = func() time.Time { return fixedTime }
 
 	outcomes := []syncdomain.BaselineMutation{{
 		Action:          syncdomain.ActionUpload,
@@ -491,9 +491,9 @@ func TestCommit_FolderCreate(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time {
+	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	})
+	}
 
 	outcomes := []syncdomain.BaselineMutation{{
 		Action:   syncdomain.ActionFolderCreate,
@@ -527,7 +527,7 @@ func TestCommit_BaselineUpdate(t *testing.T) {
 
 	// First commit: create baseline entry.
 	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return t1 })
+	mgr.nowFunc = func() time.Time { return t1 }
 
 	outcomes := []syncdomain.BaselineMutation{{
 		Action:          syncdomain.ActionDownload,
@@ -550,7 +550,7 @@ func TestCommit_BaselineUpdate(t *testing.T) {
 
 	// Second commit: convergent edit updates the stored baseline tuple.
 	t2 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return t2 })
+	mgr.nowFunc = func() time.Time { return t2 }
 
 	outcomes[0].Action = syncdomain.ActionBaselineUpdate
 	outcomes[0].LocalHash = updatedHash
@@ -583,9 +583,9 @@ func TestCommit_DeleteLikeActionsRemoveBaseline(t *testing.T) {
 
 			mgr := newTestStore(t)
 			ctx := t.Context()
-			mgr.SetNowFunc(func() time.Time {
+			mgr.nowFunc = func() time.Time {
 				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-			})
+			}
 
 			create := []syncdomain.BaselineMutation{{
 				Action: syncdomain.ActionDownload, Success: true,
@@ -616,7 +616,7 @@ func TestCommit_Move(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.nowFunc = func() time.Time { return fixedTime }
 
 	// Create original entry.
 	create := []syncdomain.BaselineMutation{{
@@ -658,9 +658,9 @@ func TestCommit_SkipsFailedOutcomes(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time {
+	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	})
+	}
 
 	outcomes := []syncdomain.BaselineMutation{{
 		Action:  syncdomain.ActionDownload,
@@ -699,9 +699,9 @@ func TestCommit_DeltaTokenRoundTrip(t *testing.T) {
 
 			mgr := newTestStore(t)
 			ctx := t.Context()
-			mgr.SetNowFunc(func() time.Time {
+			mgr.nowFunc = func() time.Time {
 				return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-			})
+			}
 
 			outcomes := []syncdomain.BaselineMutation{{
 				Action: syncdomain.ActionDownload, Success: true,
@@ -732,9 +732,9 @@ func TestCommit_RefreshesCache(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time {
+	mgr.nowFunc = func() time.Time {
 		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	})
+	}
 
 	// Verify baseline is nil before first commit.
 	assert.Nil(t, mgr.cachedBaseline(), "baseline should be nil before first Load/Commit")
@@ -824,7 +824,7 @@ func TestLoad_ReturnsCachedBaseline(t *testing.T) {
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	// Seed a baseline entry.
 	outcomes := []syncdomain.BaselineMutation{{
@@ -855,7 +855,7 @@ func TestLoad_CacheInvalidatedByCommit(t *testing.T) {
 
 	mgr := newTestStore(t)
 	ctx := t.Context()
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
 
 	// Seed one entry.
 	outcomes := []syncdomain.BaselineMutation{{
@@ -927,7 +927,7 @@ func TestCommitMutation_Download(t *testing.T) {
 	ctx := t.Context()
 
 	fixedTime := time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC)
-	mgr.SetNowFunc(func() time.Time { return fixedTime })
+	mgr.nowFunc = func() time.Time { return fixedTime }
 
 	outcome := syncdomain.BaselineMutation{
 		Action:          syncdomain.ActionDownload,
@@ -963,7 +963,7 @@ func TestCommitMutation_Upload(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	outcome := syncdomain.BaselineMutation{
 		Action:          syncdomain.ActionUpload,
@@ -1023,7 +1023,7 @@ func TestCommitMutation_PersistsSideAwareFileMetadata(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC) }
 
 	outcome := syncdomain.BaselineMutation{
 		Action:          syncdomain.ActionUpload,
@@ -1137,7 +1137,7 @@ func TestCommitMutation_Delete(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	// Seed an entry first.
 	seed := syncdomain.BaselineMutation{
@@ -1193,7 +1193,7 @@ func TestCommitMutation_Move(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	// Seed original entry.
 	seed := syncdomain.BaselineMutation{
@@ -1362,7 +1362,7 @@ func TestCommitMutation_FolderCreate(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	outcome := syncdomain.BaselineMutation{
 		Action:   syncdomain.ActionFolderCreate,
@@ -1455,7 +1455,7 @@ func TestCommitObservationCursor(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-abc"))
 
@@ -1470,7 +1470,7 @@ func TestCommitObservationCursor_Update(t *testing.T) {
 	mgr := newTestStore(t)
 	ctx := t.Context()
 
-	mgr.SetNowFunc(func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) })
+	mgr.nowFunc = func() time.Time { return time.Date(2026, 2, 20, 10, 0, 0, 0, time.UTC) }
 
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-1"))
 	require.NoError(t, mgr.CommitObservationCursor(ctx, driveid.New("d"), "token-2"))

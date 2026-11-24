@@ -8,7 +8,7 @@ import (
 )
 
 func setStoreTestNow(store *SyncStore, now time.Time) {
-	store.SetNowFunc(func() time.Time { return now })
+	store.nowFunc = func() time.Time { return now }
 }
 
 func requireStoreTestExec(t *testing.T, store *SyncStore, query string, args ...any) {

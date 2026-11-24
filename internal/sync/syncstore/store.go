@@ -74,8 +74,8 @@ type SyncStore struct {
 	baseline   *baselineCache
 	baselineMu stdsync.Mutex // guards baseline cache (Load is called from multiple workers)
 	logger     *slog.Logger
-	// nowFunc is the store's clock, the engine's run clock once the engine
-	// owns the store (SetNowFunc).
+	// nowFunc is the store's clock, given when the store is opened: the
+	// engine's run clock for the engine's store, the wall clock otherwise.
 	nowFunc func() time.Time
 	// hooks are the store's test seams; the zero value is production.
 	hooks Hooks
@@ -131,12 +131,18 @@ func SqliteFileURI(path string, query url.Values) string {
 }
 
 func openSyncStore(ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool) (*SyncStore, error) {
-	return openSyncStoreWithHooks(ctx, dbPath, logger, ensureSchema, Hooks{})
+	return openSyncStoreWithHooks(ctx, dbPath, logger, ensureSchema, nil, Hooks{})
 }
 
+// openSyncStoreWithHooks opens the store at dbPath. now is the clock that
+// dates delete-ledger rows, retry timing and pending-create intents; nil is
+// the wall clock.
 func openSyncStoreWithHooks(
-	ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool, hooks Hooks,
+	ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool, now func() time.Time, hooks Hooks,
 ) (*SyncStore, error) {
+	if now == nil {
+		now = syncdomain.WallNow
+	}
 	root, _, err := fsroot.OpenPath(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("prepare sync store path: %w", err)
@@ -176,7 +182,7 @@ func openSyncStoreWithHooks(
 	store := &SyncStore{
 		db:      db,
 		logger:  logger,
-		nowFunc: syncdomain.WallNow,
+		nowFunc: now,
 		hooks:   hooks,
 	}
 
@@ -238,14 +244,6 @@ func (s *SyncStore) Checkpoint(ctx context.Context) error {
 // internals that need assertions below the typed API surface.
 func (s *SyncStore) rawDB() *sql.DB {
 	return s.db
-}
-
-// SetNowFunc overrides the store's clock, which dates delete-ledger rows,
-// retry timing and pending-create intents. Used in tests to produce
-// deterministic times without mocking the real clock; call it before the
-// writes it should date.
-func (s *SyncStore) SetNowFunc(fn func() time.Time) {
-	s.nowFunc = fn
 }
 
 // cachedBaseline returns the in-memory baseline cache populated by the most

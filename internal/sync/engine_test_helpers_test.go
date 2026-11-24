@@ -422,7 +422,6 @@ var errManualClockSkipsScopeWait = errors.New("manual clock: scope wait skipped"
 // refreshes the deps of the runtime and flow the harness already built.
 func installManualClockForTestEngine(eng *testEngine, clock *syncfixture.ManualClock) {
 	installManualClock(eng.Engine, clock)
-	eng.baseline.SetNowFunc(clock.Now)
 	// A one-shot scope wait is wall-clock time; on a manual clock it would
 	// pass without making the trial due. A test that wants the wait sets a
 	// waitFn of its own that advances its clock.

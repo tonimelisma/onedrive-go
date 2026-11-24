@@ -41,7 +41,7 @@ func TestResetStateDB_RecreatesFreshCanonicalStore(t *testing.T) {
 
 	require.NoError(t, ResetStateDB(t.Context(), dbPath, syncfixture.NewTestLogger(t)))
 
-	reopened, err := OpenSyncStoreForTest(t.Context(), dbPath, syncfixture.NewTestLogger(t), false)
+	reopened, err := OpenSyncStoreForTest(t.Context(), dbPath, syncfixture.NewTestLogger(t), false, nil, Hooks{})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, reopened.Close(context.Background()))

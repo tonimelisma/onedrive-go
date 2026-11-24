@@ -107,17 +107,13 @@ func (s *SyncStore) DropBaselineCacheForTest() {
 	s.baselineMu.Unlock()
 }
 
-// OpenSyncStoreForTest opens the store at dbPath (openSyncStore).
-func OpenSyncStoreForTest(ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool) (*SyncStore, error) {
-	return openSyncStore(ctx, dbPath, logger, ensureSchema)
-}
-
-// OpenSyncStoreWithHooksForTest opens the store at dbPath with hooks
-// (openSyncStoreWithHooks).
-func OpenSyncStoreWithHooksForTest(
-	ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool, hooks Hooks,
+// OpenSyncStoreForTest opens the store at dbPath, applying the schema only
+// when ensureSchema is set (a test copies a template database in), on the
+// clock now (nil is the wall clock) and with hooks.
+func OpenSyncStoreForTest(
+	ctx context.Context, dbPath string, logger *slog.Logger, ensureSchema bool, now func() time.Time, hooks Hooks,
 ) (*SyncStore, error) {
-	return openSyncStoreWithHooks(ctx, dbPath, logger, ensureSchema, hooks)
+	return openSyncStoreWithHooks(ctx, dbPath, logger, ensureSchema, now, hooks)
 }
 
 // UpsertBaselineRowTxForTest writes one baseline row in tx.

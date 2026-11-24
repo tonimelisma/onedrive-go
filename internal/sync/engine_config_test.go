@@ -114,7 +114,7 @@ func TestNewMountEngine_LoadsPersistedShortcutProtectedRoots(t *testing.T) {
 	mountCfg := testEngineMountConfig(syncDir)
 	mountCfg.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 
-	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger, syncstore.Hooks{})
+	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger, nil, syncstore.Hooks{})
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
 		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
@@ -154,7 +154,7 @@ func TestNewMountEngine_DoesNotProtectCleanupPendingShortcutRoot(t *testing.T) {
 	mountCfg := testEngineMountConfig(syncDir)
 	mountCfg.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 
-	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger, syncstore.Hooks{})
+	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger, nil, syncstore.Hooks{})
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
 		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
@@ -354,7 +354,7 @@ func TestRefreshProtectedRootsFromStore_ConcurrentReadersAreRaceFree(t *testing.
 	mountCfg := testEngineMountConfig(syncDir)
 	mountCfg.ShortcutNamespaceID = syncfixture.ShortcutNamespaceTestID
 
-	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger, syncstore.Hooks{})
+	store, err := syncstore.OpenEngineSyncStore(t.Context(), mountCfg.DBPath, logger, nil, syncstore.Hooks{})
 	require.NoError(t, err)
 	require.NoError(t, store.ReplaceShortcutRoots(t.Context(), []syncshortcut.ShortcutRootRecord{{
 		NamespaceID:       syncfixture.ShortcutNamespaceTestID,
