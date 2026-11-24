@@ -29,6 +29,8 @@ scope lifecycle. It performs one action and reports the concrete outcome.
 - Mutable Runtime Owner: workers own only action execution. The engine owns
   runtime quiescence, held-work timing, admission, and dependency completion
   decisions above the worker pool.
+- Graph Access: the executor declares the item calls it makes (`ItemClient`, `executor.go`: the child lookups and the conditional writes); the engine hands its wider `ItemClient` over (sync-engine.md, `engine_graph_seams.go`).
+- Cancel Causes: the worker pool declares its own (`ErrActionReturned`, `ErrWorkerPoolStopped`, `worker.go`) over `syncdomain.CancelCauseError`, so a request it interrupts still reads as canceled; the engine's tests name them, so they stay exported.
 - Error Boundary: Workers and executor helpers return concrete action outcomes and execution errors; the engine classifies those outcomes into retries, failures, scope transitions, and durable state changes.
 
 ## Verified By

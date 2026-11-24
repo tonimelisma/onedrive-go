@@ -74,7 +74,7 @@ internal/
   sync/                       Single mounted content-root sync engine, durable SQLite sync state, and read-only inspection
   synccontrol/                JSON-over-HTTP Unix-socket protocol shared by CLI and multisync owner
   synctest/                   Shared sync-package test helpers (test-only)
-  synctree/                   Root-bound sync runtime filesystem capability
+  synctree/                   Root-bound sync runtime filesystem capability; names the client writes into a tree
   syncverify/                 Baseline-versus-local sync verification helpers
   tokenfile/                  Pure OAuth token file I/O (leaf, stdlib + oauth2 only)
 pkg/

@@ -10,14 +10,51 @@ This family owns the sync domain model: the vocabulary every other sync family
 speaks. `Action` and its action types, `ScopeKey` and the scope taxonomy,
 `ItemType`, `BaselineView`, `BaselineSnapshot` and `BaselineEntry`, `RetryWorkKey`, the condition and
 issue keys, `SyncMode`, the content filter, the runtime decision vocabulary,
-the engine clock capability, and the vocabulary of the engine's debug event
-stream (`domain_debug_events.go`: the event, its kinds the observers report,
-the observer names). The engine owns the stream's sink and its own event
-kinds (sync-engine.md); the vocabulary sits here because the watch observers,
-a lower family, report the inputs they drop into the same stream.
+the engine clock capability, the decision table's input (`DecisionState`,
+the contract between the store's comparison rows and the planner's table),
+and the vocabulary of the engine's debug event stream
+(`domain_debug_events.go`: the event, its type, the kinds the observers
+report and the remote observer's name). The engine owns the stream's sink,
+its own event kinds and the local observer's name (sync-engine.md,
+`engine_debug_events.go`); the vocabulary sits here because the watch
+observers, a lower family, report the inputs they drop into the same stream.
 
 It is a leaf. It performs no I/O, holds no mutable runtime state, and depends on
 no other sync family.
+
+## What Belongs Here
+
+An identifier lives here only when two or more sync families name it, or it
+is a member of an enum they share; one family's own vocabulary is that
+family's. Since 2026-11-24 the engine holds its debug event kinds, the Graph
+seams it is configured with (`engine_graph_seams.go`), the one-shot pass's
+cancel causes, the cancellation-echo check, the runtime condition key, the
+held-delete counts, the remote findings batch, the rebind hint and the
+block-scope row conversion; each consumer declares the Graph calls it makes
+(syncobserve: `DeltaFetcher`, `SocketIOEndpointFetcher`, `ItemReader`;
+syncexec: `ItemClient`), so no seam carries a method no consumer calls; the
+executor and the observers hold their own sentinels (the worker pool's cancel
+causes over the shared `CancelCauseError`, the path-escape, sync-root and
+watch sentinels); the decision table, its output kinds and the
+reconciliation row are the planner's (sync-planning.md); and the rule that
+names a download's partial file is synctree's (`IsOwnedTransferArtifactName`),
+so this package imports nothing of `driveops`.
+
+Some identifiers stay although one family names them in production, each for
+a reason: the members of a shared enum stay with it; the encoding pairs
+(`StoredTimeNano` and `RemoteModTime`, which decodes it) stay together; a
+decision over every member of `IssueType` or `ConditionKey`
+(`IssueTypeIsRootReadFailure`, `ConditionClearsAutomatically`) stays with the
+enum and its completeness test; the two retry-work key derivations
+(`RetryWorkKeyForAction`, `RetryWorkKeyForCompletion`) must agree, so they
+share one helper here; values the tests of several families build
+(`MutationFromActionOutcome`) or the e2e suite reads (`ConflictStemExt`) stay
+where every one can import them; and the meaning of a Graph failure
+(`ServerAnswer`, `IsRequestTimeout`, `IsServiceUnreached`) is read by the
+engine, the scheduler and the completion record. A completion's
+`ServerAnswer()` is derived from its status and error on each call rather
+than stored, so a completion a test builds from a status cannot disagree with
+it.
 
 ## Why This Is A Family And Not A Bag Of Types
 
