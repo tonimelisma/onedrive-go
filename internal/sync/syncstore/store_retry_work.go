@@ -52,7 +52,7 @@ func (s *SyncStore) UpsertRetryWork(ctx context.Context, row *syncdomain.RetryWo
 	return upsertRetryWorkTx(ctx, s.db, row)
 }
 
-func upsertRetryWorkTx(ctx context.Context, runner SqlTxRunner, row *syncdomain.RetryWorkRow) error {
+func upsertRetryWorkTx(ctx context.Context, runner sqlTxRunner, row *syncdomain.RetryWorkRow) error {
 	if row == nil {
 		return errors.New("sync: upserting retry_work: nil row")
 	}
@@ -92,7 +92,7 @@ func blockedScopeKeyColumn(row *syncdomain.RetryWorkRow) sql.NullString {
 	return sql.NullString{String: row.ScopeKey.String(), Valid: true}
 }
 
-func deleteRetryWorkByWorkTx(ctx context.Context, runner SqlTxRunner, work syncdomain.RetryWorkKey) error {
+func deleteRetryWorkByWorkTx(ctx context.Context, runner sqlTxRunner, work syncdomain.RetryWorkKey) error {
 	if _, err := runner.ExecContext(
 		ctx,
 		sqlDeleteRetryWorkByPathType,
@@ -109,7 +109,7 @@ func deleteRetryWorkByWorkTx(ctx context.Context, runner SqlTxRunner, work syncd
 // deleteBlockedRetryWorkByScopeTx deletes the rows blocked under scopeKey
 // and returns their keys. It reads only those rows, so a row stored under
 // another scope never takes part.
-func deleteBlockedRetryWorkByScopeTx(ctx context.Context, runner SqlTxRunner, scopeKey string) ([]syncdomain.RetryWorkKey, error) {
+func deleteBlockedRetryWorkByScopeTx(ctx context.Context, runner sqlTxRunner, scopeKey string) ([]syncdomain.RetryWorkKey, error) {
 	rows, err := runner.QueryContext(ctx, `SELECT `+sqlSelectRetryWorkCols+`
 		FROM retry_work
 		WHERE scope_key = ? AND blocked = 1
@@ -141,7 +141,7 @@ func deleteBlockedRetryWorkByScopeTx(ctx context.Context, runner SqlTxRunner, sc
 // made ready, as they are afterwards.
 func markRetryWorkReadyTx(
 	ctx context.Context,
-	runner SqlTxRunner,
+	runner sqlTxRunner,
 	scopeKey string,
 	work []syncdomain.RetryWorkKey,
 	nowNano int64,
@@ -201,7 +201,7 @@ func (s *SyncStore) ReleaseOrphanBlockedRetryWork(ctx context.Context, now time.
 	return int(released), nil
 }
 
-func countBlockedRetryWorkForScopeTx(ctx context.Context, runner SqlTxRunner, scopeKey string) (int, error) {
+func countBlockedRetryWorkForScopeTx(ctx context.Context, runner sqlTxRunner, scopeKey string) (int, error) {
 	var count int
 	if err := runner.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM retry_work WHERE scope_key = ? AND blocked = 1`, scopeKey,
@@ -234,7 +234,7 @@ func (s *SyncStore) RecordRetryWorkFailure(
 		return nil, fmt.Errorf("sync: record retry_work failure for %s: retryable work requires delay function", failure.Work.Path)
 	}
 
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return nil, fmt.Errorf("sync: beginning retry_work failure transaction for %s: %w", failure.Work.Path, err)
 	}
@@ -297,7 +297,7 @@ func (s *SyncStore) RecordBlockedRetryWork(
 			work.Path, scopeKey.String(), activates.Key.String())
 	}
 
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return nil, fmt.Errorf("sync: beginning blocked retry_work transaction for %s: %w", work.Path, err)
 	}
@@ -340,7 +340,7 @@ func (s *SyncStore) RecordBlockedRetryWork(
 
 func loadRetryWorkByWorkTx(
 	ctx context.Context,
-	runner SqlTxRunner,
+	runner sqlTxRunner,
 	work syncdomain.RetryWorkKey,
 ) (*syncdomain.RetryWorkRow, bool, error) {
 	row := &syncdomain.RetryWorkRow{}
@@ -365,7 +365,7 @@ func (s *SyncStore) ResolveRetryWork(
 	ctx context.Context,
 	work syncdomain.RetryWorkKey,
 ) (row *syncdomain.RetryWorkRow, found bool, err error) {
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: beginning resolve retry_work for %s: %w", work.Path, err)
 	}
@@ -395,7 +395,7 @@ func (s *SyncStore) ClearBlockedRetryWork(
 	work syncdomain.RetryWorkKey,
 	scopeKey syncdomain.ScopeKey,
 ) (cleared bool, err error) {
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return false, fmt.Errorf("sync: begin clear blocked retry_work tx for %s: %w", work.Path, err)
 	}
@@ -430,7 +430,7 @@ func (s *SyncStore) ListRetryWork(ctx context.Context) ([]syncdomain.RetryWorkRo
 	return listRetryWorkWithRunner(ctx, s.db)
 }
 
-func listRetryWorkWithRunner(ctx context.Context, runner SqlTxRunner) ([]syncdomain.RetryWorkRow, error) {
+func listRetryWorkWithRunner(ctx context.Context, runner sqlTxRunner) ([]syncdomain.RetryWorkRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlListRetryWork)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying retry_work: %w", err)
@@ -442,7 +442,7 @@ func listRetryWorkWithRunner(ctx context.Context, runner SqlTxRunner) ([]syncdom
 
 func queryBlockedRetryWorkRowsWithRunner(
 	ctx context.Context,
-	runner SqlTxRunner,
+	runner sqlTxRunner,
 ) ([]syncdomain.RetryWorkRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlListRetryWorkBlocked)
 	if err != nil {
@@ -457,7 +457,7 @@ func queryBlockedRetryWorkRowsWithRunner(
 // user can clear refused (R-2.10.71), for status to show under that condition.
 func queryActionableRetryWorkRowsWithRunner(
 	ctx context.Context,
-	runner SqlTxRunner,
+	runner sqlTxRunner,
 ) ([]syncdomain.RetryWorkRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlListRetryWorkActionable)
 	if err != nil {
@@ -470,7 +470,7 @@ func queryActionableRetryWorkRowsWithRunner(
 
 func queryRetryingRetryWorkRowsWithRunner(
 	ctx context.Context,
-	runner SqlTxRunner,
+	runner sqlTxRunner,
 ) ([]syncdomain.RetryWorkRow, error) {
 	rows, err := runner.QueryContext(ctx, sqlListRetryWorkRetrying)
 	if err != nil {
@@ -504,7 +504,7 @@ func (s *SyncStore) PruneRetryWorkToCurrentActions(
 		keep[work[i]] = struct{}{}
 	}
 
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return nil, fmt.Errorf("sync: beginning retry_work prune: %w", err)
 	}

@@ -121,7 +121,7 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *syncdomain.Rem
 	)
 
 	err := db.QueryRowContext(t.Context(),
-		`SELECT `+SqlSelectRemoteStateCols+`
+		`SELECT `+sqlSelectRemoteStateCols+`
 		FROM remote_state WHERE item_id = ?`,
 		itemID,
 	).Scan(
@@ -134,7 +134,7 @@ func readRemoteStateRow(t *testing.T, db *sql.DB, itemID string) *syncdomain.Rem
 
 	require.NoError(t, err)
 
-	row.DriveID = RemoteStateDriveID(rawDriveID, driveid.ID{})
+	row.DriveID = remoteStateDriveID(rawDriveID, driveid.ID{})
 	row.Hash = hash.String
 	row.ETag = etag.String
 	if size.Valid {

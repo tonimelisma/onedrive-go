@@ -176,68 +176,25 @@ func planCurrentStateForStoreWithMode(t *testing.T, store *syncstore.SyncStore, 
 func planCurrentStateForStoreWithLogger(t *testing.T, store *syncstore.SyncStore, mode syncdomain.SyncMode, logger *slog.Logger) *syncdomain.ActionPlan {
 	t.Helper()
 
-	ctx := t.Context()
-	tx, err := syncstore.BeginPerfTx(ctx, store.RawDBForTest())
-	require.NoError(t, err)
-	defer func() { _ = tx.Rollback() }()
-
-	rawLocalRows, err := syncstore.ListLocalStateRows(ctx, tx)
-	require.NoError(t, err)
-
-	observationState, err := syncstore.ReadObservationStateFromTx(ctx, tx)
-	require.NoError(t, err)
-	contentDriveID := observationState.ContentDriveID
-	if contentDriveID.IsZero() {
-		contentDriveID = driveid.New(syncfixture.EngineTestDriveID)
-	}
-
-	rawRemoteRows, err := syncstore.QueryRemoteStateRowsWithRunner(
-		ctx,
-		tx,
-		`SELECT `+syncstore.SqlSelectRemoteStateCols+` FROM remote_state`,
-		contentDriveID,
-	)
-	require.NoError(t, err)
-
-	visibleRows, err := syncstore.ReplacePlannerVisibleStateTx(ctx, tx, rawLocalRows, rawRemoteRows, contentDriveID)
-	require.NoError(t, err)
-
-	comparisons, err := syncstore.QueryComparisonStateWithRunnerForTables(
-		ctx,
-		tx,
-		syncstore.PlannerVisibleLocalStateTable,
-		syncstore.PlannerVisibleRemoteStateTable,
-	)
-	require.NoError(t, err)
-	reconciliations, err := syncstore.QueryReconciliationStateWithRunnerForTables(
-		ctx,
-		tx,
-		syncstore.PlannerVisibleLocalStateTable,
-		syncstore.PlannerVisibleRemoteStateTable,
-	)
-	require.NoError(t, err)
-	observationIssues, err := syncstore.QueryObservationIssueRowsWithRunner(ctx, tx)
-	require.NoError(t, err)
-	for i := range comparisons {
-		require.NoError(t, comparisons[i].DecisionState().Valid(), "the decision state of %q", comparisons[i].Path)
-	}
-	bl, err := syncstore.LoadBaselineWithRunner(ctx, tx, contentDriveID)
-	require.NoError(t, err)
-
-	planner := syncplan.NewPlanner(logger)
-	plan, err := planner.PlanCurrentState(
-		comparisons,
-		reconciliations,
-		visibleRows.Local,
-		visibleRows.Remote,
-		observationIssues,
-		bl,
+	plan, err := syncplan.NewPlanner(logger).PlanSnapshot(
+		syncstoretest.ReadPlanningSnapshot(t, store),
+		syncdomain.Decide,
 		syncplan.PlannerMountContext{DriveID: driveid.New(syncfixture.EngineTestDriveID)},
 		mode,
 	)
 	require.NoError(t, err)
 
 	return plan
+}
+
+// reconciliationRowsForStore decides what store holds as a pass's planner
+// does: the reconciliation rows of the planning read's comparison rows.
+func reconciliationRowsForStore(t *testing.T, store *syncstore.SyncStore) []syncdomain.SQLiteReconciliationRow {
+	t.Helper()
+
+	_, reconciliations := syncplan.DecideComparisons(syncstoretest.ReadPlanningSnapshot(t, store).Comparisons, syncdomain.Decide)
+
+	return reconciliations
 }
 
 // newWorkerTestSetupWith builds a worker test's executor configuration, store

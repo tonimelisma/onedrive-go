@@ -56,7 +56,7 @@ func scanBlockScopeRow(scanner blockScopeRowScanner) (*syncdomain.BlockScope, er
 	}, nil
 }
 
-func queryBlockScopeRowsWithRunner(ctx context.Context, runner SqlTxRunner) ([]*syncdomain.BlockScope, error) {
+func queryBlockScopeRowsWithRunner(ctx context.Context, runner sqlTxRunner) ([]*syncdomain.BlockScope, error) {
 	rows, err := runner.QueryContext(ctx, sqlSelectBlockScopeRows)
 	if err != nil {
 		return nil, fmt.Errorf("query block scope rows: %w", err)

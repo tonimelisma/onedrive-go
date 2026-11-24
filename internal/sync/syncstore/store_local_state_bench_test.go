@@ -38,7 +38,7 @@ const sqlSubstrLocalStateSubtreeDelete = `DELETE FROM local_state
 	WHERE path = ? COLLATE BINARY
 	   OR substr(path, 1, length(?)) = ? COLLATE BINARY`
 
-func substrDeleteLocalStateSubtreeTx(ctx context.Context, tx SqlTxRunner, prefix string) error {
+func substrDeleteLocalStateSubtreeTx(ctx context.Context, tx sqlTxRunner, prefix string) error {
 	descendantPrefix := prefix + "/"
 	if _, err := tx.ExecContext(ctx, sqlSubstrLocalStateSubtreeDelete, prefix, descendantPrefix, descendantPrefix); err != nil {
 		return fmt.Errorf("substr subtree delete %s: %w", prefix, err)
@@ -51,7 +51,7 @@ func substrDeleteLocalStateSubtreeTx(ctx context.Context, tx SqlTxRunner, prefix
 func BenchmarkDeleteLocalStateSubtree(b *testing.B) {
 	forms := []struct {
 		name   string
-		delete func(context.Context, SqlTxRunner, string) error
+		delete func(context.Context, sqlTxRunner, string) error
 	}{
 		{name: "substr", delete: substrDeleteLocalStateSubtreeTx},
 		{name: "range", delete: deleteLocalStatePrefixTx},
@@ -75,7 +75,7 @@ func BenchmarkDeleteLocalStateSubtree(b *testing.B) {
 			b.Run(fmt.Sprintf("rows=%d/%s/%s", rows, form.name, shape.name), func(b *testing.B) {
 				ctx := b.Context()
 				for b.Loop() {
-					tx, err := BeginPerfTx(ctx, store.RawDBForTest())
+					tx, err := beginPerfTx(ctx, store.RawDBForTest())
 					require.NoError(b, err)
 					for _, path := range shape.paths {
 						require.NoError(b, form.delete(ctx, tx, path))

@@ -79,7 +79,7 @@ func (s *SyncStore) contentDriveIDForRead(
 	return driveid.ID{}, nil
 }
 
-func contentDriveIDForDB(ctx context.Context, runner SqlTxRunner) (driveid.ID, error) {
+func contentDriveIDForDB(ctx context.Context, runner sqlTxRunner) (driveid.ID, error) {
 	var raw string
 	if err := runner.QueryRowContext(ctx,
 		`SELECT content_drive_id FROM observation_state LIMIT 1`,
@@ -109,7 +109,7 @@ func ensureMatchingContentDriveID(expected, actual driveid.ID) error {
 }
 
 func (s *SyncStore) ReadObservationState(ctx context.Context) (*syncdomain.ObservationState, error) {
-	state, err := ReadObservationStateFromTx(ctx, s.db)
+	state, err := readObservationStateFromTx(ctx, s.db)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func (s *SyncStore) CommitObservationCursor(
 	driveID driveid.ID,
 	cursor string,
 ) (err error) {
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: beginning observation cursor transaction: %w", err)
 	}
@@ -131,7 +131,7 @@ func (s *SyncStore) CommitObservationCursor(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation cursor transaction")
 	}()
 
-	state, err := ReadObservationStateFromTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -264,7 +264,7 @@ func (s *SyncStore) markObservationRefresh(
 	commitMessage string,
 	update func(*syncdomain.ObservationState),
 ) (err error) {
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("%s: %w", beginMessage, err)
 	}
@@ -272,7 +272,7 @@ func (s *SyncStore) markObservationRefresh(
 		err = finalizeTxRollback(err, tx, rollbackMessage)
 	}()
 
-	state, err := ReadObservationStateFromTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -310,9 +310,9 @@ func (s *SyncStore) rememberContentDriveID(id driveid.ID) {
 	s.cachedContentDriveID = id
 }
 
-func ReadObservationStateFromTx(
+func readObservationStateFromTx(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 ) (*syncdomain.ObservationState, error) {
 	if _, err := tx.ExecContext(ctx, sqlEnsureObservationStateRow); err != nil {
 		return nil, fmt.Errorf("sync: ensuring observation_state row: %w", err)
@@ -361,7 +361,7 @@ func ReadObservationStateFromTx(
 
 func (s *SyncStore) ensureContentDriveIDTx(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 	driveID driveid.ID,
 	state *syncdomain.ObservationState,
 ) error {
@@ -388,7 +388,7 @@ func (s *SyncStore) ensureContentDriveIDTx(
 
 func (s *SyncStore) writeObservationStateTx(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 	state *syncdomain.ObservationState,
 ) error {
 	if err := writeObservationStateToTx(ctx, tx, state); err != nil {
@@ -404,7 +404,7 @@ func (s *SyncStore) writeObservationStateTx(
 
 func writeObservationStateToTx(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 	state *syncdomain.ObservationState,
 ) error {
 	rootIdentity := state.SyncRootIdentity
@@ -465,10 +465,10 @@ func syncRootIdentityFromColumns(bound int, device, inode, fsid, birthTime int64
 // one already recorded.
 func bindSyncRootIdentityTx(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 	identity synctree.RootIdentity,
 ) (*synctree.RootIdentity, error) {
-	state, err := ReadObservationStateFromTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +511,7 @@ func (s *SyncStore) updateObservationState(
 	ctx context.Context,
 	update func(*syncdomain.ObservationState),
 ) (err error) {
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin observation-state update tx: %w", err)
 	}
@@ -519,7 +519,7 @@ func (s *SyncStore) updateObservationState(
 		err = finalizeTxRollback(err, tx, "sync: rollback observation-state update tx")
 	}()
 
-	state, err := ReadObservationStateFromTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -536,7 +536,7 @@ func (s *SyncStore) updateObservationState(
 }
 
 func (s *SyncStore) replaceObservationState(ctx context.Context, state *syncdomain.ObservationState) (err error) {
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("sync: begin observation-state replace tx: %w", err)
 	}

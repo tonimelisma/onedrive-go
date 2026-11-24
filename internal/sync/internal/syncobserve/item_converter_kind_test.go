@@ -174,7 +174,7 @@ func TestFullDelta_NegativeSizeIsUnknown(t *testing.T) {
 
 	mgr := syncstoretest.NewTestStore(t)
 	require.NoError(t, mgr.CommitObservation(t.Context(), ProjectRemoteObservations(syncfixture.TestLogger(t), events).Observed, "t", driveID))
-	row := syncstoretest.ReadRemoteStateRow(t, mgr.RawDBForTest(), "odd")
+	row := syncstoretest.ReadRemoteStateRow(t, mgr, "odd")
 	require.NotNil(t, row)
 	assert.False(t, row.SizeKnown, "a negative size is stored as unknown, not as a size")
 }

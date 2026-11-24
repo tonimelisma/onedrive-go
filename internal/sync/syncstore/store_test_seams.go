@@ -90,7 +90,7 @@ func (s *SyncStore) BaselineSnapshotForTest(ctx context.Context) (*syncdomain.Ba
 		return nil, err
 	}
 
-	return LoadBaselineWithRunner(ctx, s.db, contentDriveID)
+	return loadBaselineWithRunner(ctx, s.db, contentDriveID)
 }
 
 // UpdateObservationStateForTest applies update to the stored observation
@@ -121,13 +121,13 @@ func OpenSyncStoreWithHooksForTest(
 }
 
 // UpsertBaselineRowTxForTest writes one baseline row in tx.
-func UpsertBaselineRowTxForTest(ctx context.Context, tx SqlTxRunner, entry *syncdomain.BaselineEntry) error {
+func UpsertBaselineRowTxForTest(ctx context.Context, tx sqlTxRunner, entry *syncdomain.BaselineEntry) error {
 	return upsertBaselineRowTx(ctx, tx, entry)
 }
 
 // ReplaceLocalStateTxForTest replaces the local_state rows in tx
 // (replaceLocalStateTx).
-func ReplaceLocalStateTxForTest(ctx context.Context, tx SqlTxRunner, rows []syncdomain.LocalStateRow) (bool, error) {
+func ReplaceLocalStateTxForTest(ctx context.Context, tx sqlTxRunner, rows []syncdomain.LocalStateRow) (bool, error) {
 	return replaceLocalStateTx(ctx, tx, rows)
 }
 

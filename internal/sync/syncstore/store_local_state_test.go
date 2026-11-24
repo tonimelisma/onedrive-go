@@ -159,7 +159,7 @@ func TestReplaceLocalState_BackfillsBaselineIdentityForUnchangedItems(t *testing
 		assert.False(t, has, "%s must not adopt an identity its content was not proven against", path)
 	}
 
-	fresh, err := LoadBaselineWithRunner(ctx, store.RawDBForTest(), driveid.ID{})
+	fresh, err := loadBaselineWithRunner(ctx, store.RawDBForTest(), driveid.ID{})
 	require.NoError(t, err)
 	folder, ok := fresh.GetByPath("folder")
 	require.True(t, ok)

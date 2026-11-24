@@ -28,7 +28,7 @@ func (s *SyncStore) ReleaseScopeWork(
 	wire := scopeKey.String()
 	nowNano := syncdomain.StoredTimeNano(now)
 
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return nil, false, fmt.Errorf("sync: begin release-scope tx for %s: %w", wire, err)
 	}
@@ -73,7 +73,7 @@ func (s *SyncStore) DiscardScope(ctx context.Context, scopeKey syncdomain.ScopeK
 
 	wire := scopeKey.String()
 
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return nil, fmt.Errorf("sync: begin discard-scope tx for %s: %w", wire, err)
 	}

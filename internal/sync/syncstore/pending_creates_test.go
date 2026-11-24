@@ -585,7 +585,7 @@ func TestCommitObservation_AdoptedHashlessPlaceholderWithMovedETagIsNotAConflict
 	touched.ETag, touched.Mtime = `"p,3"`, createdAt.Add(time.Second).UnixNano()
 	for i, observed := range []syncdomain.ObservedItem{moved, touched} {
 		require.NoError(t, mgr.CommitObservation(t.Context(), []syncdomain.ObservedItem{observed}, fmt.Sprintf("t%d", i+2), driveID))
-		rows, queryErr := mgr.QueryReconciliationState(t.Context())
+		rows, queryErr := queryReconciliationState(t.Context(), mgr)
 		require.NoError(t, queryErr)
 		assert.Equal(t, "upload", syncfixture.ReconciliationKindsByPath(rows)["doc.txt"], "observation %d is no remote edit", i)
 	}

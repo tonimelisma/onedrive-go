@@ -37,7 +37,7 @@ func (s *SyncStore) ReconcileObservationFindingsReportingChange(
 		return false, nil
 	}
 
-	tx, err := BeginPerfTx(ctx, s.db)
+	tx, err := beginPerfTx(ctx, s.db)
 	if err != nil {
 		return false, fmt.Errorf("sync: begin observation findings reconcile: %w", err)
 	}
@@ -60,7 +60,7 @@ func (s *SyncStore) ReconcileObservationFindingsReportingChange(
 // whether the persisted issue set changed.
 func (s *SyncStore) reconcileObservationFindingsTx(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 	batch *syncdomain.ObservationFindingsBatch,
 ) (bool, error) {
 	state, err := loadObservationReconcileStoreStateTx(ctx, tx)
@@ -81,7 +81,7 @@ func (s *SyncStore) reconcileObservationFindingsTx(
 
 func (s *SyncStore) applyObservationFindingsReconcilePlanTx(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 	plan observationReconcilePlan,
 ) error {
 	if err := s.upsertObservationIssuesTx(ctx, tx, plan.issueUpserts); err != nil {
@@ -96,9 +96,9 @@ func (s *SyncStore) applyObservationFindingsReconcilePlanTx(
 
 func loadObservationReconcileStoreStateTx(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 ) (observationReconcileStoreState, error) {
-	issues, err := QueryObservationIssueRowsWithRunner(ctx, tx)
+	issues, err := queryObservationIssueRowsWithRunner(ctx, tx)
 	if err != nil {
 		return observationReconcileStoreState{}, fmt.Errorf("sync: listing observation issues for observation reconcile: %w", err)
 	}
@@ -108,9 +108,9 @@ func loadObservationReconcileStoreStateTx(
 	}, nil
 }
 
-func QueryObservationIssueRowsWithRunner(
+func queryObservationIssueRowsWithRunner(
 	ctx context.Context,
-	runner SqlTxRunner,
+	runner sqlTxRunner,
 ) ([]syncdomain.ObservationIssueRow, error) {
 	contentDriveID, err := contentDriveIDForDB(ctx, runner)
 	if err != nil {
@@ -150,10 +150,10 @@ type observationIssueScanner interface {
 
 func (s *SyncStore) upsertObservationIssuesTx(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 	issues []syncdomain.ObservationIssue,
 ) error {
-	state, err := ReadObservationStateFromTx(ctx, tx)
+	state, err := readObservationStateFromTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -207,7 +207,7 @@ func (s *SyncStore) upsertObservationIssuesTx(
 
 func deleteObservationIssuesTx(
 	ctx context.Context,
-	tx SqlTxRunner,
+	tx sqlTxRunner,
 	deletes []managedObservationIssueKey,
 ) error {
 	if len(deletes) == 0 {

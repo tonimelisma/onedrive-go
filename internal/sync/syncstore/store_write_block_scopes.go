@@ -51,7 +51,7 @@ func (s *SyncStore) UpsertBlockScope(ctx context.Context, block *syncdomain.Bloc
 	return upsertBlockScopeWithRunner(ctx, s.db, block)
 }
 
-func upsertBlockScopeWithRunner(ctx context.Context, runner SqlTxRunner, block *syncdomain.BlockScope) error {
+func upsertBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, block *syncdomain.BlockScope) error {
 	if err := validateBlockScope(block); err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func (s *SyncStore) DeleteBlockScope(ctx context.Context, key syncdomain.ScopeKe
 	return deleteBlockScopeWithRunner(ctx, s.db, key)
 }
 
-func deleteBlockScopeWithRunner(ctx context.Context, runner SqlTxRunner, key syncdomain.ScopeKey) error {
+func deleteBlockScopeWithRunner(ctx context.Context, runner sqlTxRunner, key syncdomain.ScopeKey) error {
 	_, err := runner.ExecContext(ctx,
 		`DELETE FROM block_scopes WHERE scope_key = ?`,
 		key.String(),

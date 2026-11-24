@@ -54,9 +54,9 @@ func BenchmarkReplacePlannerVisibleState(b *testing.B) {
 
 			b.ResetTimer()
 			for b.Loop() {
-				tx, err := BeginPerfTx(ctx, store.RawDBForTest())
+				tx, err := beginPerfTx(ctx, store.RawDBForTest())
 				require.NoError(b, err)
-				visible, err := ReplacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows, contentDriveID)
+				visible, err := replacePlannerVisibleStateTx(ctx, tx, localRows, remoteRows, contentDriveID)
 				require.NoError(b, err)
 				require.NoError(b, tx.Rollback())
 				b.ReportMetric(float64(len(visible.Local)), "local-rows")

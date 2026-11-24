@@ -499,83 +499,23 @@ FROM comparison_flags
 ORDER BY path`
 )
 
-// Decider is the decision table: syncdomain.Decide, or a test's stand-in.
-type Decider func(syncdomain.DecisionState) syncdomain.Decision
-
-func (s *SyncStore) QueryComparisonState(ctx context.Context) ([]syncdomain.SQLiteComparisonRow, error) {
-	comparisons, _, err := QueryPlannerRows(ctx, s.db, "local_state", "remote_state", syncdomain.Decide)
-	return comparisons, err
-}
-
-func (s *SyncStore) QueryReconciliationState(ctx context.Context) ([]syncdomain.SQLiteReconciliationRow, error) {
-	_, reconciliations, err := QueryPlannerRows(ctx, s.db, "local_state", "remote_state", syncdomain.Decide)
-	return reconciliations, err
-}
-
-func QueryComparisonStateWithRunnerForTables(
+// queryComparisonRowsForTables reads every path's comparison row, the
+// decision table's inputs, over the given current-state tables in one query,
+// in path order. It decides nothing: the planner decides each row
+// (syncplan.DecideComparisons).
+func queryComparisonRowsForTables(
 	ctx context.Context,
-	runner SqlTxRunner,
+	runner sqlTxRunner,
 	localStateTable string,
 	remoteStateTable string,
 ) ([]syncdomain.SQLiteComparisonRow, error) {
-	comparisons, _, err := QueryPlannerRows(ctx, runner, localStateTable, remoteStateTable, syncdomain.Decide)
-	return comparisons, err
-}
-
-func QueryReconciliationStateWithRunnerForTables(
-	ctx context.Context,
-	runner SqlTxRunner,
-	localStateTable string,
-	remoteStateTable string,
-) ([]syncdomain.SQLiteReconciliationRow, error) {
-	_, reconciliations, err := QueryPlannerRows(ctx, runner, localStateTable, remoteStateTable, syncdomain.Decide)
-	return reconciliations, err
-}
-
-// QueryPlannerRows reads every path's decision-table inputs over the given
-// current-state tables in one query and decides each with decide: the
-// comparison rows (inputs and comparison kind) and the reconciliation rows
-// (the decision), in path order. An unclassified row carries its inputs
-// for the plan error, which planning returns (R-6.2.16).
-func QueryPlannerRows(
-	ctx context.Context,
-	runner SqlTxRunner,
-	localStateTable string,
-	remoteStateTable string,
-	decide Decider,
-) ([]syncdomain.SQLiteComparisonRow, []syncdomain.SQLiteReconciliationRow, error) {
-	comparisons, err := queryComparisonRows(ctx, runner, SqlQueryForStateTables(sqlQueryPlannerState, localStateTable, remoteStateTable))
-	if err != nil {
-		return nil, nil, err
-	}
-	reconciliations := make([]syncdomain.SQLiteReconciliationRow, len(comparisons))
-	for i := range comparisons {
-		row := &comparisons[i]
-		state := row.DecisionState()
-		decision := decide(state)
-		row.ComparisonKind = decision.Comparison
-		reconciliations[i] = syncdomain.SQLiteReconciliationRow{
-			Path:               row.Path,
-			ItemType:           row.ItemType(),
-			ComparisonKind:     decision.Comparison,
-			ReconciliationKind: decision.Reconciliation,
-			LocalMoveTarget:    row.LocalMoveTarget,
-			LocalMoveSource:    row.LocalMoveSource,
-			RemoteMoveTarget:   row.RemoteMoveTarget,
-			RemoteMoveSource:   row.RemoteMoveSource,
-		}
-		if reconciliations[i].IsUnclassified() {
-			reconciliations[i].DecisionInputs = state.Inputs()
-		}
-	}
-
-	return comparisons, reconciliations, nil
+	return queryComparisonRows(ctx, runner, sqlQueryForStateTables(sqlQueryPlannerState, localStateTable, remoteStateTable))
 }
 
 // queryComparisonRows runs a query shaped like sqlQueryPlannerState and
 // scans its rows. An item type the enum does not know fails the scan,
 // naming the path.
-func queryComparisonRows(ctx context.Context, runner SqlTxRunner, query string) ([]syncdomain.SQLiteComparisonRow, error) {
+func queryComparisonRows(ctx context.Context, runner sqlTxRunner, query string) ([]syncdomain.SQLiteComparisonRow, error) {
 	rows, err := runner.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("sync: querying comparison state: %w", err)
@@ -646,7 +586,7 @@ func scanComparisonRow(rows *sql.Rows) (syncdomain.SQLiteComparisonRow, error) {
 	return row, nil
 }
 
-func SqlQueryForStateTables(query string, localStateTable string, remoteStateTable string) string {
+func sqlQueryForStateTables(query string, localStateTable string, remoteStateTable string) string {
 	return strings.NewReplacer(
 		"local_state", localStateTable,
 		"remote_state", remoteStateTable,
