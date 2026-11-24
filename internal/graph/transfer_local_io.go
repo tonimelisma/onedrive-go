@@ -175,12 +175,15 @@ type localIO struct {
 	// touches it; during a call only the goroutine does.
 	buf []byte
 
-	// mu guards started, ended, inCall and abandoned: "is the call still
+	// mu guards started, ended, panicked, inCall and abandoned: "is the call still
 	// inside the file" and "the transfer has walked away from it" change in
 	// one step, so a call is either answered or abandoned, never both.
-	mu        sync.Mutex
-	started   bool
-	ended     bool
+	mu      sync.Mutex
+	started bool
+	ended   bool
+	// panicked is the error of a panic that ended the goroutine around the
+	// file calls; the transfer's next call returns it.
+	panicked  error
 	inCall    bool
 	abandoned bool
 }
@@ -298,6 +301,9 @@ func (l *localIO) handOver(call *localCall) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	if l.panicked != nil {
+		return l.panicked
+	}
 	if l.ended || l.abandoned {
 		return errLocalIOEnded
 	}
@@ -384,12 +390,13 @@ func (l *localIO) end() {
 func (l *localIO) run() {
 	// perform recovers a panic of the file call itself; this one is a panic
 	// of the hand-back around it, which ends the goroutine: it is logged,
-	// and the transfer's next call meets errLocalIOEnded.
+	// and the transfer's next call returns it.
 	defer func() {
 		if r := recover(); r != nil {
-			_ = panicguard.Recovered(l.logger, "in a transfer's local file goroutine", r)
+			panicErr := panicguard.Recovered(l.logger, "in a transfer's local file goroutine", r)
 			l.mu.Lock()
 			l.ended = true
+			l.panicked = panicErr
 			l.mu.Unlock()
 		}
 	}()
