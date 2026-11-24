@@ -22,7 +22,7 @@ func TestResetRemoteSlotForBaselineCopiesGoldenEverySample(t *testing.T) {
 	state := &benchBidirectionalScenarioState{
 		fixture: benchBidirectionalFixturePlan{
 			Manifest: benchBidirectionalFixtureManifest{
-				GoldenRemoteScopePath: "/benchmarks/golden/test-fixture",
+				GoldenRemoteScopePath: "/onedrive-go-e2e-bench/golden/test-fixture",
 			},
 		},
 		fixtureSlot: "slot-00",
@@ -30,7 +30,7 @@ func TestResetRemoteSlotForBaselineCopiesGoldenEverySample(t *testing.T) {
 	runtime := &benchBidirectionalRuntime{
 		configPath:      "config.toml",
 		driveID:         "personal:user@example.com",
-		remoteScopePath: "/benchmarks/work/test/slot-00",
+		remoteScopePath: "/onedrive-go-e2e-bench/work/test/slot-00",
 	}
 
 	calls := make([]string, 0, 8)
@@ -45,14 +45,14 @@ func TestResetRemoteSlotForBaselineCopiesGoldenEverySample(t *testing.T) {
 	require.NoError(t, state.resetRemoteSlotForBaseline(t.Context(), subject, runtime))
 
 	assert.Equal(t, []string{
-		"stat --json /benchmarks/golden/test-fixture",
-		"rm -r /benchmarks/work/test/slot-00",
-		"cp /benchmarks/golden/test-fixture /benchmarks/work/test/slot-00",
-		"stat --json /benchmarks/work/test/slot-00",
-		"stat --json /benchmarks/golden/test-fixture",
-		"rm -r /benchmarks/work/test/slot-00",
-		"cp /benchmarks/golden/test-fixture /benchmarks/work/test/slot-00",
-		"stat --json /benchmarks/work/test/slot-00",
+		"stat --json /onedrive-go-e2e-bench/golden/test-fixture",
+		"rm -r /onedrive-go-e2e-bench/work/test/slot-00",
+		"cp /onedrive-go-e2e-bench/golden/test-fixture /onedrive-go-e2e-bench/work/test/slot-00",
+		"stat --json /onedrive-go-e2e-bench/work/test/slot-00",
+		"stat --json /onedrive-go-e2e-bench/golden/test-fixture",
+		"rm -r /onedrive-go-e2e-bench/work/test/slot-00",
+		"cp /onedrive-go-e2e-bench/golden/test-fixture /onedrive-go-e2e-bench/work/test/slot-00",
+		"stat --json /onedrive-go-e2e-bench/work/test/slot-00",
 	}, calls)
 }
 
@@ -69,8 +69,8 @@ func TestLoadSyncBidirectionalCatchup100MFixturePlanIsDeterministicAndSized(t *t
 	assert.Equal(t, planA, planB)
 	assert.Equal(t, syncBidirectionalCatchup100MID, planA.Manifest.ScenarioID)
 	assert.Equal(t, "sync-bidirectional-catchup-100m-v1", planA.Manifest.FixtureID)
-	assert.Equal(t, "/benchmarks/work/sync-bidirectional-catchup-100m-v1/slot-00", planA.RemoteScopePath)
-	assert.Equal(t, "benchmarks/work/sync-bidirectional-catchup-100m-v1/slot-00", planA.ScopeRootRelativePath)
+	assert.Equal(t, "/onedrive-go-e2e-bench/work/sync-bidirectional-catchup-100m-v1/slot-00", planA.RemoteScopePath)
+	assert.Equal(t, "onedrive-go-e2e-bench/work/sync-bidirectional-catchup-100m-v1/slot-00", planA.ScopeRootRelativePath)
 	assert.Equal(t, 2668, planA.Denominators.FileCount)
 	assert.Equal(t, 113, planA.Denominators.DirectoryCount)
 	assert.Equal(t, int64(100<<20), sumBenchLiveFixtureBytes(planA.Files))
@@ -134,19 +134,30 @@ func TestCreateBenchBidirectionalRuntimeWritesScopedIncludedDirs(t *testing.T) {
 		workRoot,
 		credentialDir,
 		"personal:user@example.com",
-		"benchmarks/work/sync-bidirectional-catchup-100m-v1/slot-00",
-		"/benchmarks/work/sync-bidirectional-catchup-100m-v1/slot-00",
+		"onedrive-go-e2e-bench/work/sync-bidirectional-catchup-100m-v1/slot-00",
+		"/onedrive-go-e2e-bench/work/sync-bidirectional-catchup-100m-v1/slot-00",
 	)
 	require.NoError(t, err)
 
 	configBody, err := readFile(runtime.configPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(configBody), `["personal:user@example.com"]`)
-	assert.Contains(t, string(configBody), `included_dirs = ["benchmarks/work/sync-bidirectional-catchup-100m-v1/slot-00"]`)
+	assert.Contains(t, string(configBody), `included_dirs = ["onedrive-go-e2e-bench/work/sync-bidirectional-catchup-100m-v1/slot-00"]`)
 	dataDir := filepath.Join(benchRuntimeEnvValue(runtime.env, "XDG_DATA_HOME"), "onedrive-go")
 	copiedToken, err := readFile(filepath.Join(dataDir, "token_personal_user@example.com.json"))
 	require.NoError(t, err, "the sign-in file is copied into the runtime's data dir")
 	assert.JSONEq(t, `{"token":"x"}`, string(copiedToken))
+	assert.NoFileExists(t, filepath.Join(dataDir, benchCatalogFileName), "a bundle without a catalog copies none")
+
+	// A bundle with the inventory catalog copies it beside the token, as the
+	// live suites do.
+	require.NoError(t, writeFile(filepath.Join(credentialDir, benchCatalogFileName), []byte(`{"schema_version":1}`)))
+	withCatalog, err := createBenchBidirectionalRuntime(workRoot, credentialDir, "personal:user@example.com",
+		"onedrive-go-e2e-bench/work/x/slot-00", "/onedrive-go-e2e-bench/work/x/slot-00")
+	require.NoError(t, err)
+	copiedCatalog, err := readFile(filepath.Join(benchRuntimeEnvValue(withCatalog.env, "XDG_DATA_HOME"), "onedrive-go", benchCatalogFileName))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"schema_version":1}`, string(copiedCatalog))
 }
 
 // Validates: R-6.10.14
@@ -261,9 +272,9 @@ func TestRunBidirectionalSampleCommandOrderAndPerfSummary(t *testing.T) {
 	require.NotNil(t, sample.Setup)
 	assert.EqualValues(t, 42, sample.PerfSummary.DurationMS)
 	assert.Equal(t, 1, sample.Setup.DeltaProbeAttempts)
-	assert.Contains(t, script.calls[0], "stat --json /benchmarks/golden/test-fixture")
-	assert.Contains(t, script.calls[1], "rm -r /benchmarks/work/test/slot-00")
-	assert.Contains(t, script.calls[2], "cp /benchmarks/golden/test-fixture /benchmarks/work/test/slot-00")
+	assert.Contains(t, script.calls[0], "stat --json /onedrive-go-e2e-bench/golden/test-fixture")
+	assert.Contains(t, script.calls[1], "rm -r /onedrive-go-e2e-bench/work/test/slot-00")
+	assert.Contains(t, script.calls[2], "cp /onedrive-go-e2e-bench/golden/test-fixture /onedrive-go-e2e-bench/work/test/slot-00")
 	assert.Contains(t, script.calls[5], "sync --dry-run")
 	assert.Contains(t, script.calls[6], "sync]")
 }
@@ -306,10 +317,10 @@ func newScriptedBidirectionalSampleState(t *testing.T) (*benchBidirectionalScena
 		Manifest: benchBidirectionalFixtureManifest{
 			Version:               1,
 			FixtureID:             "test-fixture",
-			GoldenRemoteScopePath: "/benchmarks/golden/test-fixture",
+			GoldenRemoteScopePath: "/onedrive-go-e2e-bench/golden/test-fixture",
 		},
-		RemoteScopePath:       "/benchmarks/work/test/slot-00",
-		ScopeRootRelativePath: "benchmarks/work/test/slot-00",
+		RemoteScopePath:       "/onedrive-go-e2e-bench/work/test/slot-00",
+		ScopeRootRelativePath: "onedrive-go-e2e-bench/work/test/slot-00",
 		Files: []benchLiveFileEntry{
 			{RelativePath: "docs/a.txt", SizeBytes: 64},
 			{RelativePath: "docs/b.txt", SizeBytes: 64},
@@ -381,7 +392,7 @@ func (s *scriptedBidirectionalSampleSubject) measure(
 	switch benchCommandName(spec) {
 	case benchTestSyncCommand:
 		return s.measureSync(spec)
-	case "stat", "rm", "mkdir", "put", "cp":
+	case "stat", "rm", "mkdir", benchTestPutCommand, "cp":
 		return benchMeasuredProcess{}, nil
 	default:
 		return benchMeasuredProcess{}, nil

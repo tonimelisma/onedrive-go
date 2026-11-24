@@ -184,7 +184,9 @@ for its SHA:
   shared-library claims require matching live coverage.
 - Any public performance claim has a repo-owned benchmark artifact with
   scenario, machine, date, method, and subject-under-test context (see
-  [performance-benchmarking.md](spec/design/performance-benchmarking.md)).
+  [performance-benchmarking.md](spec/design/performance-benchmarking.md)); the
+  live benchmark runs only by dispatch of `.github/workflows/bench.yml` from
+  `main`, whose `bench-result` artifact is that artifact.
 - Side-effect expectations are current, especially dry-run and destructive
   command behavior.
 - README, user docs and spec language use only `verified`, `implemented`,

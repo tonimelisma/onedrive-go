@@ -1,0 +1,194 @@
+name: Bench
+
+# A live benchmark run on demand (R-6.10.15): `devtool bench` against the e2e
+# test drive, its result bundle uploaded as an artifact. It runs on manual
+# dispatch only, never on a push, a pull request or the schedule: benchmark
+# numbers are evidence a person asks for, not a gate.
+#
+# The credential steps are the e2e job's of ci.yml, duplicated rather than
+# shared through a composite action: TestBenchWorkflowHoldsItsContract and
+# TestCIWorkflowSetsNoTestDriveInJobEnv read a live job's steps from its
+# workflow file, and the pin rule reads only the files under
+# .github/workflows, so a step moved into .github/actions would leave both
+# checks.
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Benchmark scenario'
+        type: choice
+        options:
+          - sync-bidirectional-catchup-100m
+          - startup-empty-config
+        default: sync-bidirectional-catchup-100m
+      runs:
+        description: 'Measured samples (-1 uses the scenario default)'
+        type: string
+        default: '-1'
+      warmup:
+        description: 'Warmup samples (-1 uses the scenario default)'
+        type: string
+        default: '-1'
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    # The live scenario's default run: the remote fixture's preparation (a
+    # 100 MiB upload of 2668 files, under 30 minutes), three samples (a
+    # server-side copy, a baseline sync, 96 remote mutations, a delta wait of
+    # at most 3 minutes and the measured sync each, under 30 minutes), the
+    # remote cleanup (at most 5 minutes) and setup, with room for a slow
+    # provider day. A dispatch asking for more samples may need more.
+    timeout-minutes: 180
+    # The e2e jobs' group: the benchmark uses their test drive, and the
+    # e2e preflight scrub deletes the benchmark's folder, so the two never
+    # run at once. A queued run waits; none is canceled.
+    concurrency:
+      group: live-account-e2e
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # OIDC federation with Azure
+    if: vars.AZURE_CLIENT_ID != ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # This repository's logs are public, and GitHub prints a job-level env
+      # value in the header of every step, so the test drive and the account
+      # allowlist come into this job here only, right after the checkout:
+      # scripts/ci-mask-test-drives.sh masks every spelling of them the job or
+      # the benchmark can print, lists those spellings for the artifact
+      # redaction, and exports the values and the drive's vault secret and
+      # token file names through GITHUB_ENV, whose headers then show ***.
+      - name: Mask the test drive and the account allowlist
+        env:
+          ONEDRIVE_TEST_DRIVE: ${{ secrets.ONEDRIVE_TEST_DRIVE_E2E || vars.ONEDRIVE_TEST_DRIVE_E2E }}
+          ONEDRIVE_ALLOWED_TEST_ACCOUNTS: ${{ secrets.ONEDRIVE_ALLOWED_TEST_ACCOUNTS || vars.ONEDRIVE_ALLOWED_TEST_ACCOUNTS }}
+        run: ./scripts/ci-mask-test-drives.sh
+
+      # Live jobs disable setup-go cache restore because toolchain tar extraction
+      # conflicts during cache replay can break the job before tests start.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Azure OIDC login (attempt 1)
+        id: azure_login_bench
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        continue-on-error: true
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Azure OIDC login (retry)
+        if: steps.azure_login_bench.outcome == 'failure'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # The benchmark writes its own config for every sample; it needs the
+      # inventory catalog and the drive's token.
+      - name: Download credentials to .testdata/
+        run: |
+          set -euo pipefail
+          mkdir -p .testdata
+
+          az keyvault secret download \
+            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+            --name "onedrive-test-catalog" \
+            --file ".testdata/catalog.json" \
+            --encoding utf-8
+
+          # Download the token of this job's drive, under the secret and file
+          # names the masking script exported. This repository's logs are
+          # public: name the variable, never the drive, the secret or the
+          # token file, which all embed the account.
+          echo "Downloading the token of ONEDRIVE_TEST_DRIVE"
+          az keyvault secret download \
+            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+            --name "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" \
+            --file ".testdata/${ONEDRIVE_TEST_DRIVE_TOKEN_FILE}" \
+            --encoding utf-8
+
+          echo "=== .testdata/ holds $(find .testdata -type f | wc -l) files ==="
+
+      # The inputs reach the script through env, never spliced into it.
+      # The result bundle goes into the one directory this job redacts and
+      # uploads from.
+      - name: Run the benchmark
+        env:
+          BENCH_SCENARIO: ${{ inputs.scenario }}
+          BENCH_RUNS: ${{ inputs.runs }}
+          BENCH_WARMUP: ${{ inputs.warmup }}
+        run: |
+          set -euo pipefail
+          for count in "${BENCH_RUNS}" "${BENCH_WARMUP}"; do
+            if ! [[ "${count}" =~ ^(-1|[0-9]+)$ ]]; then
+              echo "::error::runs and warmup must be -1 or a count, got '${count}'"
+              exit 1
+            fi
+          done
+          mkdir -p /tmp/bench-results
+          go run ./cmd/devtool bench \
+            --scenario "${BENCH_SCENARIO}" \
+            --runs "${BENCH_RUNS}" \
+            --warmup "${BENCH_WARMUP}" \
+            --result-json /tmp/bench-results/result.json
+
+      # Masking covers the log, not the artifacts: every spelling the masking
+      # script listed is replaced by *** in the results directory before it
+      # is uploaded. The bundle names the remote fixture by its benchmark
+      # paths, never the drive, but a failed sample's excerpt quotes the
+      # CLI's output.
+      - name: Redact the test drive and accounts in the benchmark result
+        if: always()
+        run: |
+          set -euo pipefail
+          export MASKS="${RUNNER_TEMP}/onedrive-test-masks"
+          if [ ! -s "${MASKS}" ] || [ ! -d /tmp/bench-results ]; then
+            exit 0
+          fi
+          find /tmp/bench-results -type f -exec perl -pi -e '
+            BEGIN {
+              open(my $list, "<", $ENV{MASKS}) or die "read $ENV{MASKS}: $!";
+              my @spellings = grep { length } map { chomp; $_ } <$list>;
+              $pattern = join "|", map { quotemeta } sort { length($b) <=> length($a) } @spellings;
+            }
+            s/$pattern/***/g if length $pattern;
+          ' {} +
+
+      - name: Upload the benchmark result
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-result
+          path: /tmp/bench-results/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Save rotated token to Key Vault
+        if: always()
+        run: |
+          set -euo pipefail
+          TOKEN_PATH=".testdata/${ONEDRIVE_TEST_DRIVE_TOKEN_FILE}"
+          if [ -z "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET:-}" ] || [ ! -f "$TOKEN_PATH" ]; then
+            echo "::warning::Token file of ONEDRIVE_TEST_DRIVE missing — skipping save"
+            exit 0
+          fi
+
+          echo "Saving rotated token for ONEDRIVE_TEST_DRIVE"
+          az keyvault secret set \
+            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
+            --name "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" \
+            --file "$TOKEN_PATH" \
+            --content-type "application/json" \
+            --output none

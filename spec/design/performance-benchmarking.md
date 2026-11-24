@@ -2,7 +2,7 @@
 
 GOVERNS: README.md (Representative Performance section), cmd/devtool/main.go, internal/devtool/bench*.go
 
-Implements: R-6.1.6 [planned], R-6.1.7 [planned], R-6.1.8 [planned], R-6.1.9 [planned], R-6.1.10 [planned], R-6.10.6 [verified], R-6.10.14 [verified], R-6.10.15 [planned]
+Implements: R-6.1.6 [planned], R-6.1.7 [planned], R-6.1.8 [planned], R-6.1.9 [planned], R-6.1.10 [planned], R-6.10.6 [verified], R-6.10.14 [verified], R-6.10.15 [verified]
 
 ## Overview
 
@@ -50,6 +50,8 @@ The implementation should stay deliberately small:
 | The repo already has a machine-readable timing-summary foundation for live E2E timing windows rather than only human log output. | `TestE2ETimingRecorderWritesEventsAndAggregatedSummary`, `TestE2ETimingRecorderLoadsExistingEventsAcrossProcesses` |
 | The verifier already owns machine-readable run summaries instead of forcing downstream tooling to scrape console text. | `TestRunVerifyWritesSummaryJSONOnSuccess`, `TestRunVerifyWritesSummaryJSONOnFailure` |
 | Repo-owned benchmarking now has a subject-aware `devtool bench` entrypoint with named scenarios, JSON result bundles, and deterministic summary aggregation. | `TestNewBenchCmdRequiresScenarioFlag`, `TestNewBenchCmdDefaultsSubjectToOnedriveGo`, `TestNewBenchCmdPassesFlagsThrough`, `TestRunBenchRequiresRepoRootAndScenario`, `TestBenchRegistriesAreSortedAndIncludeBuiltins`, `TestRunBenchStartupEmptyConfigSucceeds` |
+| A live run prepares its own remote fixture outside every sample and removes it after: it deletes what an earlier run left under the benchmark's one remote folder `/onedrive-go-e2e-bench`, uploads the golden fixture, creates the work slots' folder and waits until the golden is visible, and at cleanup deletes the folder on a context of its own. A drive the allowlist does not name is never touched: the preparation fails before its first command and every sample is a fixture failure that says why. The checked-in fixture's paths stay strictly inside that folder, whose name the e2e preflight scrub deletes. | `TestBidirectionalScenarioPreparesAndRemovesItsRemoteFixture`, `TestBidirectionalScenarioOffTheAllowlistTouchesNothingRemote`, `TestBenchRemoteFixturePathsStayInsideTheBenchmarkFolder` |
+| The live benchmark lane is `.github/workflows/bench.yml`, dispatch-only, in the e2e jobs' concurrency group, with minimal token permissions, the e2e job's masked test drive, the result redacted before upload, every action pinned, and a timeout no longer than the group's longest ci.yml job. | `TestBenchWorkflowHoldsItsContract` |
 | The benchmark runner now owns one canonical live bidirectional catch-up scenario with a checked-in deterministic fixture contract, stable denominator math, scoped live config, and dry-run delta readiness checks; a measured sync that leaves the tree short of the expected fixture is an invalid sample, and a cleanup or probe reads a missing item only from the CLI's own error line for it, and a 5xx only from the CLI's server-problem line ("Error: OneDrive had a temporary server problem. Try again in a few minutes."), the one line that names it without `--verbose`, which the benchmark never passes; both sentences are held to the CLI's source. The remote reset, the visibility probe and the delta wait read their deadline from, and wait between attempts on, a clock the subject carries (`benchRetryClock`, the wall clock by default), so their tests record the waits and take no wall time. | `TestLoadSyncBidirectionalCatchup100MFixturePlanIsDeterministicAndSized`, `TestSyncBidirectionalCatchupMutationSelectionIsDisjoint`, `TestCreateBenchBidirectionalRuntimeWritesScopedIncludedDirs`, `TestWaitForBenchRemoteDeltaReadyReturnsOnceThePlanHoldsTheRemoteChanges`, `TestRunBidirectionalSampleCommandOrderAndPerfSummary`, `TestRunBidirectionalSampleIsInvalidWhenTheMeasuredSyncMissesTheRemoteChanges`, `TestCLIReportsRemoteItemMissing_ReadsOnlyTheCLIErrorLine`, `TestResetBenchRemoteScopeRetriesUntilSuccessOrNotFound`, `TestWaitForBenchRemoteScopeVisibleRetriesTheCLIsServerProblemLine`, `TestWaitForBenchRemoteScopeVisibleGivesUpAtItsDeadline`, `TestClassifyBenchVisibilityErrorAllowsRetryableFamilies`, `TestBenchCLIErrorLinesFollowTheCLIsSource` |
 
 ## Objectives
@@ -498,7 +500,7 @@ The implemented v1 representative sync scenario is
 - command under test: `onedrive-go sync`
 
 The scenario uses benchmark-owned remote fixture slots under
-`/benchmarks/work/sync-bidirectional-catchup-100m-v1/<slot>` and narrows the
+`/onedrive-go-e2e-bench/work/sync-bidirectional-catchup-100m-v1/<slot>` and narrows the
 benchmark drive with `included_dirs` to that exact subtree. The checked-in
 manifest defines four file bands totaling exactly 100 MiB:
 
@@ -541,12 +543,72 @@ the measured sync nothing to download, and the tree check in step 8 marks
 that sample invalid. The benchmark imports no product package: it drives the
 built CLI and reads only its output, the log file and the synced tree.
 
-Remote fixture preparation is intentionally separate from the measured sample
-window. The benchmark consumes a ready working slot. Slot-pool automation and
-release-artifact promotion are planned follow-up surfaces; the delivered
-scenario already records the fixture ID, fixture version, selected slot,
+Remote fixture preparation is separate from the measured sample window and
+belongs to the run (`prepareRemoteFixture`, `bench_live_fixture.go`). Every
+remote path the benchmark names is strictly inside one folder,
+`/onedrive-go-e2e-bench`, which the manifest loader enforces
+(`validateBenchRemoteFixturePaths`); nothing outside it is created, changed or
+deleted. Before the first sample, the run checks the drive against the
+test-account allowlist, deletes whatever an earlier run left in that folder,
+materializes the fixture locally, uploads it with `put` as the golden fixture
+`/onedrive-go-e2e-bench/golden/sync-bidirectional-catchup-100m-v1`, creates the
+work slots' parent folder, and waits until the golden is visible. At the end of
+the run, its cleanup deletes the folder again on a context of its own
+(`benchRemoteCleanupTimeout`), so an interrupted run still removes what it
+created. A run killed before its cleanup (a job timeout) leaves the folder
+behind, and the next e2e run's preflight scrub deletes it: the folder's name
+starts with `onedrive-go-e2e`, the prefix the live suites own. No golden
+outlives a run because the fast e2e lane's whole-drive `sync --download-only`
+would otherwise download 100 MiB on every pull request. A run that cannot
+prepare the fixture still writes its result bundle: every sample is
+`fixture_failed` with the reason. The fixture slot (`--fixture-slot`, `slot-00`
+to `slot-05`, default `slot-00`) only names the work path under the folder; with
+a fresh golden per run, no slot pool is kept (`pool_status_before_run` is
+`prepared-this-run`). The sample runtimes copy the drive's token and the
+inventory catalog (`catalog.json`) from `.testdata/`, as the live suites do.
+The result bundle records the fixture ID, fixture version, selected slot,
 remote scope path, included directory, and per-sample baseline/mutation/delta
-setup timings in the machine-readable result bundle.
+setup timings.
+
+## Running In CI
+
+The live scenario runs only in CI, on manual dispatch of
+`.github/workflows/bench.yml` (R-6.10.15): never on a push, a pull request or
+the schedule, and never in a verify profile. Its one job runs on the e2e test
+drive, so it joins the e2e jobs' concurrency group `live-account-e2e` and never
+runs beside them (cancel-in-progress off); GitHub keeps at most one waiting job
+per group, so a dispatch while an e2e job already waits replaces the waiting
+one (the DoD wait reruns a canceled e2e check). It receives the drive the way
+every live job does: the masking script first, the Azure OIDC login with one
+retry, the Key Vault downloads of the catalog and the drive's token into
+`.testdata/`, and the rotated token saved back at the end. Those steps are the
+e2e job's, duplicated with a comment rather than moved into a composite
+action, because the drive-exposure check (`TestCIWorkflowSetsNoTestDriveInJobEnv`'s
+`workflowDriveExposures`) and the pin rule read steps from the workflow files
+alone. The job runs `go run ./cmd/devtool bench --scenario <scenario> --runs
+<runs> --warmup <warmup> --result-json /tmp/bench-results/result.json`, its
+inputs passed through `env`, then replaces every masked spelling in
+`/tmp/bench-results` and uploads it as the `bench-result` artifact (30 days).
+Its permissions are `contents: read` and `id-token: write`; its 180-minute
+timeout covers the default three-sample run and is no longer than the group's
+longest ci.yml job, which the DoD wait and the nightly bound read as the
+longest a queued e2e check waits. `TestBenchWorkflowHoldsItsContract` holds the
+file to all of it.
+
+Dispatch it from `main` (inputs optional; `runs` and `warmup` take `-1` for the
+scenario default):
+
+```
+gh api -X POST repos/tonimelisma/onedrive-go/actions/workflows/bench.yml/dispatches \
+  -f ref=main -f 'inputs[scenario]=sync-bidirectional-catchup-100m' \
+  -f 'inputs[runs]=-1' -f 'inputs[warmup]=-1'
+```
+
+A successful run's log ends with the `==> bench summary` of status `success`,
+and its `bench-result` artifact holds `result.json` with `run.status` and
+`summary.status` `success`, three measured samples, and `setup.remote_scope_path`
+under `/onedrive-go-e2e-bench`; the drive's root holds no
+`onedrive-go-e2e-bench` folder afterwards.
 
 The remote-scope visibility probe treats the parent `ls` output as a set of
 exact entry names, not substring evidence. Sibling entries such as
@@ -620,11 +682,16 @@ This work is intentionally staged.
   the rest of the configured drive
 - establish an unmeasured bidirectional baseline, prove remote delta readiness
   with no-commit dry-run probes, then measure a bidirectional catch-up pass
-- keep the scenario manual-only and outside default verification
+- keep the scenario manual-only and outside default verification (since run
+  by dispatch of `.github/workflows/bench.yml`, Running In CI above)
 - reuse existing `internal/perf` summaries for explanation metrics while the
   benchmark runner records external proof metrics
 
-### Increment 4: Fixture Prepare And Ready Slot Pool
+### Increment 4: Fixture Prepare And Ready Slot Pool [partly delivered]
+
+Delivered: each run prepares its own golden fixture and removes it after
+(Benchmark Runner Ownership above). Not delivered: a ready slot pool that
+outlives a run, which the test drive's whole-drive e2e syncs make costly.
 
 - add `devtool bench prepare --scenario sync-bidirectional-catchup-100m`
 - maintain benchmark-owned golden and working remote fixture slots
@@ -642,7 +709,8 @@ This work is intentionally staged.
 
 ### Increment 6: Live And Comparative Runs
 
-- add scheduled/manual live representative benchmark lanes
+- add scheduled/manual live representative benchmark lanes (the manual lane is
+  delivered: `.github/workflows/bench.yml`)
 - add documented cross-app comparison methodology and initial comparison runs
 - implement the first comparison subject adapter for `abraunegg/onedrive`
 - implement the second comparison subject adapter for `rclone`
