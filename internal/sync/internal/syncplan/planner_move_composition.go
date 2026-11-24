@@ -2846,7 +2846,7 @@ func buildComposedMoveActions(
 		}
 		remote := viewAt(node.paths[moveCoordRemote]).Remote
 		if move.side == moveCoordLocal {
-			actions = append(actions, composedLocalMoveActions(move, &entry, remote, viewAt)...)
+			actions = append(actions, composedLocalMoveActions(move, node, &entry, remote, viewAt)...)
 			continue
 		}
 		actions = append(actions, composedRemoteMoveActions(move, &entry, remote, viewAt)...)
@@ -2919,9 +2919,11 @@ func composedMergeActions(
 
 // composedLocalMoveActions builds a remote-origin local move, preceded by the
 // conflict copy of an edited file it displaces (buildDependencies orders the
-// move after the copy at its destination).
+// move after the copy at its destination), and followed by the download of
+// OneDrive's edit of the item when the two compose (composedRemoteEditDownload).
 func composedLocalMoveActions(
-	move *composedMove, entry *syncdomain.BaselineEntry, remote *syncdomain.RemoteState, viewAt func(string) *syncdomain.PathView,
+	move *composedMove, node *moveNode, entry *syncdomain.BaselineEntry, remote *syncdomain.RemoteState,
+	viewAt func(string) *syncdomain.PathView,
 ) []syncdomain.Action {
 	view := &syncdomain.PathView{
 		Path:        move.newPath,
@@ -2958,9 +2960,47 @@ func composedLocalMoveActions(
 		emptied.DeletesUnsyncedEntry = true
 		return []syncdomain.Action{emptied, action}
 	case moveDisplaceNever:
+		if download, ok := composedRemoteEditDownload(move, node, entry, remote, viewAt); ok {
+			return []syncdomain.Action{action, download}
+		}
 	}
 
 	return []syncdomain.Action{action}
+}
+
+// composedRemoteEditDownload is the download of the edit OneDrive made to an
+// item it also moved, composed with the local move that follows it here: the
+// move puts the copy here at OneDrive's place, and the download, which waits
+// for it (work at a move's destination does), replaces it there with the
+// edit. It is planned only when the copy here is proven to hold the synced
+// content (its hash is the baseline's), so the download may replace nothing
+// else, and only for a move from the item's own place in the local snapshot
+// to the place OneDrive holds it, nothing displaced there: local_state does
+// not follow the plan's moves, so freshness reads the copy at the move's
+// source (MovedLocalPath). A copy edited here is moved alone, and the next
+// pass meets the two edits as a content conflict at the moved path.
+func composedRemoteEditDownload(
+	move *composedMove, node *moveNode, entry *syncdomain.BaselineEntry, remote *syncdomain.RemoteState,
+	viewAt func(string) *syncdomain.PathView,
+) (syncdomain.Action, bool) {
+	if node == nil || move.remotePath != "" || node.paths[moveCoordLocal] != move.oldPath {
+		return syncdomain.Action{}, false
+	}
+	local := viewAt(move.oldPath).Local
+	if local == nil || local.ItemType != syncdomain.ItemTypeFile || local.Hash == "" ||
+		local.Hash != entry.LocalHash || !syncdomain.RemoteContentDiffersFromBaseline(remote, entry) {
+		return syncdomain.Action{}, false
+	}
+	download := makeAction(syncdomain.ActionDownload, &syncdomain.PathView{
+		Path:        move.newPath,
+		Local:       local,
+		Remote:      remote,
+		Baseline:    entry,
+		TruthStatus: viewAt(move.newPath).TruthStatus,
+	})
+	download.MovedLocalPath = move.oldPath
+
+	return download, true
 }
 
 // composedRemoteMoveActions builds a local-origin remote move. A move whose
@@ -2986,16 +3026,29 @@ func composedRemoteMoveActions(
 		action.MovedLocalPath = move.localPath
 	}
 	actions := []syncdomain.Action{action}
+	if move.localPath != move.newPath {
+		return actions
+	}
 
-	if move.localPath == move.newPath && syncdomain.LocalFileDiffersFromBaseline(movedLocal, entry) {
-		uploadView := &syncdomain.PathView{
-			Path:        move.newPath,
-			Local:       movedLocal,
-			Remote:      remote,
-			Baseline:    entry,
-			TruthStatus: viewAt(move.newPath).TruthStatus,
-		}
-		actions = append(actions, makeAction(syncdomain.ActionUpload, uploadView))
+	transferView := &syncdomain.PathView{
+		Path:        move.newPath,
+		Local:       movedLocal,
+		Remote:      remote,
+		Baseline:    entry,
+		TruthStatus: viewAt(move.newPath).TruthStatus,
+	}
+	localEdited := syncdomain.LocalFileDiffersFromBaseline(movedLocal, entry)
+	switch {
+	case localEdited:
+		actions = append(actions, makeAction(syncdomain.ActionUpload, transferView))
+	case syncdomain.RemoteContentDiffersFromBaseline(remote, entry):
+		// OneDrive edited the item this computer renamed, and the copy
+		// here still holds the synced content: the move and the edit
+		// compose, and the edit comes down at the new name after the move
+		// (the download replaces only the verified synced content). With
+		// both sides edited the next pass meets them as a content conflict
+		// at the moved path.
+		actions = append(actions, makeAction(syncdomain.ActionDownload, transferView))
 	}
 
 	return actions
@@ -3219,7 +3272,9 @@ func recreatedSourceVacated(composition *moveComposition, key string, node *move
 // item has left: run, it went into the item, which still had the path, and a
 // folder made so between the new folder and the item's target held the
 // item's own landing, which the item cannot move into, so the syncs stalled
-// once the move aside failed.
+// once the move aside failed. A new item's create on OneDrive at a path onto
+// which a folder move of the plan carries another OneDrive item waits too
+// (carriedOntoByRemoteMove), with the creates below it.
 //
 // A create on OneDrive below such a path whose source here does not lie in
 // the item holding it is removed too (belowAnotherItemsFolder). Here the
@@ -3255,6 +3310,7 @@ func dropCreatesOntoComposedItems(
 	heldBy := pathsHeldByUnmovedItems(inputs, composition)
 	heldLocally := foldedHeldPaths(heldBy[moveCoordLocal])
 	vacated := pathsVacatedByPlan(actions)
+	remoteMoves := remoteMoveBoundaries(actions)
 	heldRebases := heldFolderRebases(actions, inputs, composition)
 	nodeByKey := make(map[string]*moveNode, len(inputs.nodes))
 	for i := range inputs.nodes {
@@ -3297,20 +3353,10 @@ func dropCreatesOntoComposedItems(
 			dropped = append(dropped, *action)
 			continue
 		}
-		if action.Path == syncdomain.ActionViewPath(action) {
-			kept = append(kept, *action)
-			continue
-		}
-		if rebasedCreateBlocked(action.Path, side, &inputs.occupancy, vacated[side]) {
+		if meetsAnItemARemoteMoveCarries(logger, action, side, remoteMoves, &inputs.occupancy, vacated[side]) ||
+			rebasedCreateWaits(logger, action, side, &inputs.occupancy, vacated[side], heldRebases) {
 			dropped = append(dropped, *action)
 			continue
-		}
-		if side == moveCoordLocal {
-			if folder, through := rebasedThroughHeldFolder(action, heldRebases); through {
-				logRebasedCreateHeld(logger, action, folder)
-				dropped = append(dropped, *action)
-				continue
-			}
 		}
 		kept = append(kept, *action)
 	}
@@ -3319,6 +3365,50 @@ func dropCreatesOntoComposedItems(
 	kept, ontoHeldNames = dropCreatesBelowSpelled(kept, ontoHeldNames)
 
 	return kept, append(dropped, ontoHeldNames...)
+}
+
+// meetsAnItemARemoteMoveCarries reports, logging it at Debug, a new item's
+// create on OneDrive at a path onto which a folder move of the plan carries
+// another OneDrive item (carriedOntoByRemoteMove). A create with an item ID
+// writes that item, wherever a move takes it, so it is never the case.
+func meetsAnItemARemoteMoveCarries(
+	logger *slog.Logger, action *syncdomain.Action, side moveCoord,
+	remoteMoves []graphFolderMoveBoundary, occupancy *moveOccupancy, vacated map[string]bool,
+) bool {
+	if side != moveCoordRemote || action.ItemID != "" {
+		return false
+	}
+	carried, onto := carriedOntoByRemoteMove(action.Path, remoteMoves, occupancy, vacated)
+	if onto {
+		logCreateOntoCarriedItem(logger, action, carried)
+	}
+
+	return onto
+}
+
+// rebasedCreateWaits reports a create a rebase moved off the path SQLite
+// reconciled it at that waits for the next pass: onto a path the snapshot
+// holds (rebasedCreateBlocked), or, here, through a folder whose move on
+// OneDrive waits (rebasedThroughHeldFolder, logged at Debug).
+func rebasedCreateWaits(
+	logger *slog.Logger, action *syncdomain.Action, side moveCoord,
+	occupancy *moveOccupancy, vacated map[string]bool, heldRebases []graphFolderMoveBoundary,
+) bool {
+	if action.Path == syncdomain.ActionViewPath(action) {
+		return false
+	}
+	if rebasedCreateBlocked(action.Path, side, occupancy, vacated) {
+		return true
+	}
+	if side != moveCoordLocal {
+		return false
+	}
+	folder, through := rebasedThroughHeldFolder(action, heldRebases)
+	if through {
+		logRebasedCreateHeld(logger, action, folder)
+	}
+
+	return through
 }
 
 // dropCreatesBelowSpelled removes, with the creates already dropped, every
@@ -4144,6 +4234,58 @@ func rebasedCreateBlocked(p string, side moveCoord, occupancy *moveOccupancy, va
 	}
 
 	return occupied[p] && !vacated[p]
+}
+
+// remoteMoveBoundaries maps the subtree of each OneDrive move of the plan
+// from its destination back to its source, longest destination first.
+func remoteMoveBoundaries(actions []syncdomain.Action) []graphFolderMoveBoundary {
+	var moves []graphFolderMoveBoundary
+	for i := range actions {
+		if actions[i].Type != syncdomain.ActionRemoteMove || actions[i].OldPath == "" {
+			continue
+		}
+		moves = append(moves, graphFolderMoveBoundary{oldPrefix: actions[i].Path + "/", newPrefix: actions[i].OldPath + "/"})
+	}
+	sort.Slice(moves, func(i, j int) bool { return len(moves[i].oldPrefix) > len(moves[j].oldPrefix) })
+
+	return moves
+}
+
+// carriedOntoByRemoteMove reports the snapshot path of another OneDrive item
+// that a folder move of the plan carries to p, the path of a new item's create
+// there (remoteMoves, remoteMoveBoundaries), unless the plan moves or deletes
+// that item away first. SQLite reconciles the create where the entry sits
+// here and the carried item where it sat on OneDrive, two coordinates of one
+// path: a folder renamed here with a file inside it replaced by a folder,
+// while OneDrive edited (or made anew) that file. The rename lands OneDrive's
+// file at the new folder's path, so the create met it and failed: OneDrive
+// refuses a create onto a taken name (R-5.6.14), and the uploads below the
+// refused folder found no parent. The planner model, which let the folder
+// create through, recorded the file's item as the new folder and lost
+// OneDrive's edit (planner model seeds 502 and 793). The next pass, with the
+// folder moved, reconciles the path as one (a keep-both conflict, R-2.17.10).
+func carriedOntoByRemoteMove(
+	p string, remoteMoves []graphFolderMoveBoundary, occupancy *moveOccupancy, vacated map[string]bool,
+) (string, bool) {
+	source := rebaseThroughFolderMoves(p, remoteMoves)
+	if source == p || !occupancy.remote[source] || vacated[source] {
+		return "", false
+	}
+
+	return source, true
+}
+
+// logCreateOntoCarriedItem logs, at Debug, a create on OneDrive that waits
+// because a folder move of the plan carries another item to its path
+// (carriedOntoByRemoteMove).
+func logCreateOntoCarriedItem(logger *slog.Logger, action *syncdomain.Action, carried string) {
+	if logger == nil {
+		return
+	}
+	logger.Debug("create waits for an item a folder move carries to its path",
+		slog.String("action", action.Type.String()),
+		slog.String("path", action.Path),
+		slog.String("carried_from", carried))
 }
 
 // createSide reports which side an action creates an entry on.

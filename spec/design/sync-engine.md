@@ -1,6 +1,6 @@
 # Sync Engine
 
-GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/permissions_rdonly_bsd.go, internal/sync/permissions_rdonly_linux.go, internal/sync/report_left_work.go, internal/sync/engine_shortcut_alias_mutation.go, internal/sync/syncshortcut/shortcut_root_lifecycle.go, internal/sync/syncshortcut/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go, internal/sync/engine_shadow_plan.go
+GOVERNS: internal/cli/sync_flow.go, internal/cli/sync_runtime.go, internal/sync/api_types.go, internal/sync/debug_event_sink.go, internal/sync/doc.go, internal/sync/engine*.go, internal/sync/engine_config.go, internal/sync/engine_debug_events.go, internal/sync/engine_runtime*.go, internal/sync/engine_watch*.go, internal/sync/observation_findings.go, internal/sync/permission_evidence.go, internal/sync/permission_handler.go, internal/sync/permission_probe_local.go, internal/sync/permission_probe_remote.go, internal/sync/permissions.go, internal/sync/permissions_rdonly_bsd.go, internal/sync/permissions_rdonly_linux.go, internal/sync/report_left_work.go, internal/sync/engine_shortcut_alias_mutation.go, internal/sync/syncshortcut/shortcut_root_lifecycle.go, internal/sync/syncshortcut/shortcut_root_publication.go, internal/sync/watch_condition_log.go, internal/sync/watch_summary.go
 
 Implements: R-6.2.17 [verified], R-2.1 [verified], R-2.1.7 [verified], R-2.12.8 [verified], R-2.8.21 [verified], R-2.15.3 [verified], R-2.8.3 [verified], R-2.8.5 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.8 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.8.11 [verified], R-2.10 [designed], R-2.14 [designed], R-2.16.2 [verified], R-2.16.3 [verified], R-6.3.4 [verified], R-6.3.5 [verified], R-6.6.17 [verified], R-6.6.30 [verified], R-6.8.24 [verified], R-6.8.25 [verified], R-6.3.8 [verified], R-6.3.9 [verified], R-6.3.10 [verified], R-6.10.29 [verified], R-2.4.18 [verified], R-6.10.31 [verified]
 
@@ -921,14 +921,6 @@ retirement, running-drain, local-observation, planning, new-plan, and
 first-post-replan-dispatch stages. Each event carries outbox, running, and idle
 worker counts so production/debug traces can distinguish workers waiting on
 legitimate replanning from coordinator stalls.
-Every steady-state watch replan also plans the same inputs with the
-identity-keyed shadow planner (`engine_shadow_plan.go`, sync-planning.md) and,
-when the two plans differ or the shadow planner fails, emits one
-`shadow_plan_differed` event: the number of differing paths, the first, and up
-to 20 differences with their reasons and the count no known reason covers. The
-shadow plan is never dispatched, executed or recorded
-(`TestRunSteadyStateReplan_ReportsAShadowPlanDifferenceAsADebugEvent`,
-`TestRunSteadyStateReplan_ReportsNothingWhenTheShadowPlanAgrees`).
 Refresh timer callbacks and full-refresh goroutines signal through stable
 runtime-owned channels for the lifetime of the watch session. The watch loop
 disables select cases by phase instead of mutating those channel pointers

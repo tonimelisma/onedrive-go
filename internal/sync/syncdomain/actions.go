@@ -93,7 +93,11 @@ type Action struct {
 	// is not Path: a move composed under a parent that an earlier move of the
 	// same plan puts in place (planner_move_composition.go). local_state is
 	// observation-owned and does not follow the plan's own moves, so
-	// freshness reads the moved item there.
+	// freshness reads the moved item there. On a download it is the source
+	// of the local move of the same plan that puts the copy the download
+	// replaces at Path: freshness reads View.Local there, and the overwrite
+	// check proves the target by its planned hash alone, the rename having
+	// moved its inode change time.
 	MovedLocalPath string
 	// MovedRemotePath is where remote_state holds the item of a remote-origin
 	// move (ActionLocalMove) when that is not Path: a child renamed inside a

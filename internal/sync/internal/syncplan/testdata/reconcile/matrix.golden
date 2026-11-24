@@ -80,13 +80,13 @@ local unchanged        | remote unchanged        -> (quiet)
 local unchanged        | remote moved doc2       -> local_move doc2 <- doc
 local unchanged        | remote moved doc3       -> local_move doc3 <- doc
 local unchanged        | remote edited           -> download doc
-local unchanged        | remote moved+edit doc3  -> local_move doc3 <- doc
+local unchanged        | remote moved+edit doc3  -> download doc3; local_move doc3 <- doc
 local unchanged        | remote deleted          -> local_delete doc
 local moved doc2       | remote unchanged        -> remote_move doc2 <- doc
 local moved doc2       | remote moved doc2       -> baseline_update doc2 <- doc
 local moved doc2       | remote moved doc3       -> local_move doc3 <- doc2
-local moved doc2       | remote edited           -> remote_move doc2 <- doc
-local moved doc2       | remote moved+edit doc3  -> local_move doc3 <- doc2
+local moved doc2       | remote edited           -> download doc2; remote_move doc2 <- doc
+local moved doc2       | remote moved+edit doc3  -> download doc3; local_move doc3 <- doc2
 local moved doc2       | remote deleted          -> cleanup doc; upload doc2
 local moved+edit doc2  | remote unchanged        -> remote_delete doc; upload doc2
 local moved+edit doc2  | remote moved doc2       -> baseline_update doc2 <- doc

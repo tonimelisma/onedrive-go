@@ -10,6 +10,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
@@ -437,6 +438,94 @@ func TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit(t *testing.T) {
 	assert.Equal(t, map[string]string{"b.txt": "edited online\n"}, remote.tree())
 	assert.Zero(t, remote.uploads)
 	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.3, R-2.1.7
+//
+// The rename here and OneDrive's edit of the same file compose in one pass:
+// the plan moves the item on OneDrive and downloads the edit at the new name
+// after the move, and the download is not superseded by the move's new eTag.
+func TestRunOnce_LocalRenameAndRemoteEditComposeInOnePass(t *testing.T) {
+	t.Parallel()
+
+	driveID := driveid.New(syncfixture.EngineTestDriveID)
+	remote := newMoveScenarioRemote(driveID)
+	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
+
+	eng, syncRoot := newTestEngine(t, remote.client(t))
+	runScenarioPass(t, eng)
+
+	require.NoError(t, os.Rename(filepath.Join(syncRoot, "a.txt"), filepath.Join(syncRoot, "b.txt")))
+	remote.setContent(t, "item-a", "edited online\n")
+
+	planned, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{DryRun: true})
+	require.NoError(t, err)
+	assert.Equal(t, 1, planned.Moves, "the rename goes up")
+	assert.Equal(t, 1, planned.Downloads, "the edit comes down in the same pass")
+
+	report := runScenarioPass(t, eng)
+	assert.Zero(t, report.Superseded, "the download runs after the move without going stale")
+	assert.Equal(t, 1, report.Downloads)
+
+	data, err := os.ReadFile(filepath.Join(syncRoot, "b.txt")) //nolint:gosec // test reads its own temp tree
+	require.NoError(t, err)
+	assert.Equal(t, "edited online\n", string(data))
+	assert.Equal(t, map[string]string{"b.txt": "edited online\n"}, remote.tree())
+	assert.Zero(t, remote.uploads)
+	requireScenarioQuietPlan(t, eng)
+}
+
+// Validates: R-2.17.3, R-2.17.6, R-2.1.7
+//
+// OneDrive moved and edited a file: its move and its edit compose in one
+// pass, whether the copy here stayed put or was renamed differently here
+// (OneDrive's name wins). The local copy moves to OneDrive's place and the
+// edit comes down onto it after the move; the download is not superseded by
+// the rename's new inode change time, and nothing goes up.
+func TestRunOnce_RemoteMoveAndEditComposeInOnePass(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		localAfter string
+	}{
+		{name: "kept here", localAfter: "a.txt"},
+		{name: "renamed here", localAfter: "b.txt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			driveID := driveid.New(syncfixture.EngineTestDriveID)
+			remote := newMoveScenarioRemote(driveID)
+			remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
+
+			eng, syncRoot := newTestEngine(t, remote.client(t))
+			runScenarioPass(t, eng)
+
+			if tc.localAfter != "a.txt" {
+				require.NoError(t, os.Rename(filepath.Join(syncRoot, "a.txt"), filepath.Join(syncRoot, tc.localAfter)))
+			}
+			remote.move("item-a", "root", "c.txt")
+			remote.setContent(t, "item-a", "edited online\n")
+
+			planned, err := eng.RunOnce(t.Context(), syncdomain.SyncBidirectional, RunOptions{DryRun: true})
+			require.NoError(t, err)
+			assert.Equal(t, 1, planned.Moves, "the copy here follows OneDrive's move")
+			assert.Equal(t, 1, planned.Downloads, "the edit comes down in the same pass")
+
+			report := runScenarioPass(t, eng)
+			assert.Zero(t, report.Superseded, "the download runs after the move without going stale")
+			assert.Equal(t, 1, report.Downloads)
+
+			data, err := os.ReadFile(filepath.Join(syncRoot, "c.txt")) //nolint:gosec // test reads its own temp tree
+			require.NoError(t, err)
+			assert.Equal(t, "edited online\n", string(data))
+			assert.NoFileExists(t, filepath.Join(syncRoot, tc.localAfter))
+			assert.Equal(t, map[string]string{"c.txt": "edited online\n"}, remote.tree())
+			assert.Zero(t, remote.uploads)
+			requireScenarioQuietPlan(t, eng)
+		})
+	}
 }
 
 // Validates: R-2.17.9

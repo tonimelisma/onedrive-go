@@ -89,7 +89,7 @@ func TestRunVerifySeedsSetsRotatedStart(t *testing.T) {
 			} {
 				assertCommandHasEnvVar(t, command, entry)
 			}
-			starts := "==> model seeds start=" + tc.start + " watch=4 engine and crash=12 planner=8 chaos=2\n"
+			starts := "==> model seeds start=" + tc.start + " watch=4 engine and crash=12 planner=500 chaos=2\n"
 			require.Contains(t, out, starts)
 			assert.Less(t, strings.Index(out, starts), strings.Index(out, "ok  \t"), "the start is printed before go test runs")
 		})

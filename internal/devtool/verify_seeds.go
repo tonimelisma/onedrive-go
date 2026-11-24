@@ -22,9 +22,11 @@ import (
 const (
 	nightlySeedStride = 1000
 	// The counts are the families' own default counts (the crash run reads
-	// the engine run's count).
+	// the engine run's count), except the planner model's: its seed costs
+	// about 0.07 s, a hundredth of an engine seed, so the night searches 500
+	// of them in under a minute, ten times its default.
 	seedsEngineCount  = 12
-	seedsPlannerCount = 8
+	seedsPlannerCount = 500
 	seedsChaosCount   = 2
 	seedsWatchCount   = 4
 	// seedsTimeout is go test's deadline for the seeds step, which took 11.5

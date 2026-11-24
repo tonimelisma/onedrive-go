@@ -377,31 +377,8 @@ func (r *modelRun) adoptEngine(eng *testEngine) {
 	// goroutines that run at one instant reach a shared step, and a scan's
 	// parallel hash workers are such goroutines.
 	eng.checkWorkers = 1
-	eng.hooks.shadowPlanned = r.checkShadowPlan
 	eng.hooks.dispatchOrder = order
 	eng.hooks.recordFrontier = r.recordFrontierStep
-}
-
-// checkShadowPlan is every pass's comparison with the identity-keyed shadow
-// plan: each difference is logged with its reason, and one no known reason
-// covers fails the seed. It runs on the engine's goroutine, so it reports
-// through the goroutine-safe t.Logf and assert.Failf only.
-func (r *modelRun) checkShadowPlan(comparison shadowPlanComparison) {
-	if comparison.err != nil {
-		assert.Failf(r.t, "shadow planner failed", "seed %d: the identity-keyed shadow planner failed: %v", r.seed, comparison.err)
-		return
-	}
-	lines := make([]string, 0, len(comparison.differences))
-	for i := range comparison.differences {
-		lines = append(lines, comparison.differences[i].String())
-	}
-	if len(lines) > 0 {
-		r.t.Logf("seed %d shadow plan differences:\n  %s", r.seed, strings.Join(lines, "\n  "))
-	}
-	if comparison.unexplained > 0 {
-		assert.Failf(r.t, "unexplained shadow plan differences", "seed %d: %d shadow plan differences have no known reason:\n  %s",
-			r.seed, comparison.unexplained, strings.Join(lines, "\n  "))
-	}
 }
 
 // armCrash installs a capture at a crash point the seed picks, half the time

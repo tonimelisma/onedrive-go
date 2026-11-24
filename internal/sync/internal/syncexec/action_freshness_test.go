@@ -452,6 +452,114 @@ func TestActionFreshness_PostRemoteMoveUploadRejectsRemoteContentChange(t *testi
 	assert.Contains(t, decision.Reason, "remote truth changed")
 }
 
+// Validates: R-2.8.9, R-2.17.3
+//
+// The download of OneDrive's edit composed with this computer's rename of the
+// item runs after the remote move of the same plan: the move's new eTag is no
+// change of the content the download was planned for, and a content change
+// still is.
+func TestActionFreshness_PostRemoteMoveDownloadAllowsOnlyTheMoveProducedETagChange(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		hashNow   string
+		wantFresh bool
+	}{
+		{name: "the move's eTag", hashNow: "edited-hash", wantFresh: true},
+		{name: "a later edit", hashNow: "later-hash", wantFresh: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := syncstoretest.NewTestStore(t)
+			ctx := t.Context()
+			remoteDriveID := driveid.New(syncfixture.TestDriveID)
+
+			require.NoError(t, store.CommitObservation(ctx, []syncdomain.ObservedItem{{
+				DriveID:  remoteDriveID,
+				ItemID:   "item-file",
+				Path:     "new.txt",
+				ItemType: syncdomain.ItemTypeFile,
+				Hash:     tc.hashNow,
+				Size:     10,
+				Mtime:    1,
+				ETag:     "etag-after-move",
+			}}, "delta-1", remoteDriveID))
+
+			decision, err := EvaluateActionFreshnessFromStore(ctx, store, &syncdomain.Action{
+				Type:    syncdomain.ActionDownload,
+				Path:    "new.txt",
+				ItemID:  "item-file",
+				DriveID: remoteDriveID,
+				View: &syncdomain.PathView{
+					Path: "new.txt",
+					Remote: &syncdomain.RemoteState{
+						DriveID:  remoteDriveID,
+						ItemID:   "item-file",
+						ItemType: syncdomain.ItemTypeFile,
+						Hash:     "edited-hash",
+						Size:     10,
+						Mtime:    1,
+						ETag:     "etag-before-move",
+					},
+					Baseline: &syncdomain.BaselineEntry{
+						Path:     "old.txt",
+						DriveID:  remoteDriveID,
+						ItemID:   "item-file",
+						ItemType: syncdomain.ItemTypeFile,
+					},
+				},
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantFresh, decision.Fresh, decision.Reason)
+		})
+	}
+}
+
+// Validates: R-2.8.9, R-2.17.3
+//
+// The download of OneDrive's edit onto the copy a local move of the same plan
+// puts at its path reads the copy where local_state records it, at the
+// move's source (MovedLocalPath): the planned copy there is fresh, a copy
+// edited there since planning is stale.
+func TestActionFreshness_MovedIntoPlaceDownloadReadsTheMoveSource(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		hashNow   string
+		wantFresh bool
+	}{
+		{name: "the planned copy", hashNow: "synced", wantFresh: true},
+		{name: "an edit since planning", hashNow: "edited here", wantFresh: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := syncstoretest.NewTestStore(t)
+			ctx := t.Context()
+			require.NoError(t, store.ReplaceLocalState(ctx, []syncdomain.LocalStateRow{{
+				Path: "old.txt", ItemType: syncdomain.ItemTypeFile, Hash: tc.hashNow, Size: 6,
+			}}))
+
+			decision, err := EvaluateActionFreshnessFromStore(ctx, store, &syncdomain.Action{
+				Type:           syncdomain.ActionDownload,
+				Path:           "new.txt",
+				MovedLocalPath: "old.txt",
+				View: &syncdomain.PathView{
+					Path:  "new.txt",
+					Local: &syncdomain.LocalState{ItemType: syncdomain.ItemTypeFile, Hash: "synced", Size: 6},
+				},
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantFresh, decision.Fresh, decision.Reason)
+		})
+	}
+}
+
 // Validates: R-2.8.9
 func TestActionFreshness_MissingPlannerViewFailsClosedForExecutableAction(t *testing.T) {
 	t.Parallel()

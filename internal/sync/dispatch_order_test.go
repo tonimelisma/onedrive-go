@@ -290,6 +290,8 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_LocalRenameAndDeleteWhileOneDriveSwapsThemConverges,
 		TestRunOnce_LocalRenameKeepsTheRemoteModificationTime,
 		TestRunOnce_LocalRenameWhileRemoteEditsDownloadsTheEdit,
+		TestRunOnce_LocalRenameAndRemoteEditComposeInOnePass,
+		TestRunOnce_RemoteMoveAndEditComposeInOnePass,
 		TestRunOnce_MountRootDeltaIncapableSkipsFolderDelta,
 		TestRunOnce_MountRootEnumerateStillPersistsFullReconcileCadenceWithoutToken,
 		TestRunOnce_MountRootUsesScopedDeltaAndToken,

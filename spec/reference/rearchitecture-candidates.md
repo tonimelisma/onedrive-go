@@ -77,6 +77,14 @@ existing `baseline`, `local_state` and `remote_state` rows (they already
 carry item IDs and inodes); run it in shadow mode beside the current planner
 in the model test; diff the plans and count converging seeds.
 
+**Outcome (November 2026): researched and rejected.** The planner was
+written and run in shadow mode as proposed. As the executed planner it
+failed 59 of 2000 planner-model seeds against the current planner's 2 (since fixed), and
+it cost 0.94 s and 242 MB per replan at 100k files; its one proven win, a
+move composed with an edit in one pass, was ported into the current planner
+and the experimental planner deleted (sync-planning.md, Considered And Rejected:
+An Identity-Keyed Planner).
+
 ### 2. A name model: comparison key separate from spelling
 
 **Evidence:** D-020..D-032, D-151, and the probes: OneDrive's name equality
@@ -250,6 +258,6 @@ debugging tool for the model and live tests.
 - Item 2 builds on `internal/namekey` from #804.
 - Item 7's harness landed in WS9; what remains is routing the last direct
   I/O through the seams.
-- Item 1 is the big one: do it last, in shadow mode, measured by the model
-  test.
+- Item 1 was researched last, in shadow mode, measured by the model test,
+  and rejected (see its outcome).
 - Items 6, 8, 9 and 10 are independent and medium-sized.
