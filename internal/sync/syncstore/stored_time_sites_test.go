@@ -61,15 +61,17 @@ func TestStoredTimes_EveryPlainUnixNanoIsDeclared(t *testing.T) {
 	t.Parallel()
 
 	declared := map[string]map[string]int{
-		"internal/sync/syncdomain/domain_stored_time.go":                {encodesThroughTheSaturatingEncoder: 1},
-		"internal/sync/internal/syncobserve/scanner.go":                 {encodesLocalTimeForEquality: 5, inMemoryValue: 1},
-		"internal/sync/internal/syncobserve/observer_local_handlers.go": {encodesLocalTimeForEquality: 4, inMemoryValue: 1},
-		"internal/sync/internal/syncexec/executor_preconditions.go":     {encodesLocalTimeForEquality: 3},
-		"internal/sync/internal/syncexec/executor_delete.go":            {encodesLocalTimeForEquality: 1, inMemoryValue: 2},
-		"internal/sync/internal/syncexec/executor_transfer.go":          {encodesLocalTimeForEquality: 2},
-		"internal/sync/internal/syncobserve/local_hash_reuse.go":        {encodesLocalTimeForEquality: 1},
-		"internal/sync/internal/syncobserve/scanner_hash_cache.go":      {encodesLocalTimeForEquality: 1},
-		"internal/sync/engine_shortcut_release.go":                      {encodesLocalTimeForEquality: 1},
+		"internal/sync/syncdomain/domain_stored_time.go":                  {encodesThroughTheSaturatingEncoder: 1},
+		"internal/sync/internal/syncobserve/scanner.go":                   {encodesLocalTimeForEquality: 5, inMemoryValue: 1},
+		"internal/sync/internal/syncobserve/observer_local_handlers.go":   {encodesLocalTimeForEquality: 1, inMemoryValue: 1},
+		"internal/sync/internal/syncobserve/observer_local_new_dir.go":    {encodesLocalTimeForEquality: 2},
+		"internal/sync/internal/syncobserve/observer_local_write_hash.go": {encodesLocalTimeForEquality: 1},
+		"internal/sync/internal/syncexec/executor_preconditions.go":       {encodesLocalTimeForEquality: 3},
+		"internal/sync/internal/syncexec/executor_delete.go":              {encodesLocalTimeForEquality: 1, inMemoryValue: 2},
+		"internal/sync/internal/syncexec/executor_transfer.go":            {encodesLocalTimeForEquality: 2},
+		"internal/sync/internal/syncobserve/local_hash_reuse.go":          {encodesLocalTimeForEquality: 1},
+		"internal/sync/internal/syncobserve/scanner_hash_cache.go":        {encodesLocalTimeForEquality: 1},
+		"internal/sync/engine_shortcut_release.go":                        {encodesLocalTimeForEquality: 1},
 	}
 
 	found := countProductCalls(t, isPlainUnixNano, "internal/sync")
