@@ -144,7 +144,7 @@ Project-specific consequences:
 - **Context is the cancellation backbone.** Every function that does I/O or could block takes `context.Context` as its first parameter. Respect cancellation: check `ctx.Err()` before expensive operations, and select on `ctx.Done()` in loops.
 - **Channel direction:** Always declare channel direction in function signatures (`chan<-`, `<-chan`). The sender closes, never the receiver.
 - **Mutex scope:** A mutex protects data, not code. Comment what fields it guards. Keep critical sections small — no I/O under a lock, no channel operations under a lock. Prefer `sync.Mutex` over `sync.RWMutex` unless profiling shows read contention.
-- **Worker pools have bounded concurrency.** Use semaphores (`chan struct{}`) or `errgroup.SetLimit()`. Never let fan-out scale with input size.
+- **Worker pools have bounded concurrency.** Use semaphores (`chan struct{}`) or a fixed set of workers; `errgroup` is not a dependency (depguard admits no `golang.org/x/sync`). Never let fan-out scale with input size.
 
 ### Resource Lifecycle
 

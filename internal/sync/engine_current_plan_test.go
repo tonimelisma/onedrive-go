@@ -68,7 +68,7 @@ func remoteRowsContainPath(rows []syncdomain.RemoteStateRow, path string) bool {
 }
 
 // Validates: R-2.1.3, R-2.1.4
-func TestLoadCurrentInputs_FiltersCurrentStateBeforeComparison(t *testing.T) {
+func TestReadPlanningSnapshot_FiltersCurrentStateBeforeComparison(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(syncfixture.EngineTestDriveID)

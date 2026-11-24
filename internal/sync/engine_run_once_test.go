@@ -527,7 +527,7 @@ func TestBuildDryRunCurrentActionPlan_UsesScratchCommittedSnapshots(t *testing.T
 }
 
 // Validates: R-2.1.5
-func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T) {
+func TestLoadDryRunCurrentObservation_ObservationFindingsStayScratchOnly(t *testing.T) {
 	t.Parallel()
 
 	driveID := driveid.New(syncfixture.EngineTestDriveID)
@@ -572,7 +572,7 @@ func TestLoadDryRunCurrentInputs_ObservationFindingsStayScratchOnly(t *testing.T
 }
 
 // Validates: R-2.1.5
-func TestLoadDryRunCurrentInputs_LocalObservationFindingsStayScratchOnly(t *testing.T) {
+func TestLoadDryRunCurrentObservation_LocalObservationFindingsStayScratchOnly(t *testing.T) {
 	t.Parallel()
 
 	mock := &syncfixture.EngineMockClient{
