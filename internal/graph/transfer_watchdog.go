@@ -269,6 +269,10 @@ func (w *stallWatchdog) explain(ctx context.Context, err error) error {
 		return err
 	}
 
+	if w.local != nil && w.local.hasAbandoned() {
+		cause = fmt.Errorf("%w: %w", cause, ErrLocalCallAbandoned)
+	}
+
 	return explainStall(cause, w.timeout, err)
 }
 

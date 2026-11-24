@@ -250,7 +250,8 @@ func describeStatusCondition(key syncdomain.ConditionKey) statusConditionDescrip
 		syncdomain.ConditionLocalDatabaseOpen:
 		return describeLocalRuntimeStatusCondition(key)
 	case syncdomain.ConditionUploadVerification,
-		syncdomain.ConditionDownloadIntegrity:
+		syncdomain.ConditionDownloadIntegrity,
+		syncdomain.ConditionLocalCallAbandoned:
 		return describeTransferStatusCondition(key)
 	case syncdomain.ConditionUnexpectedCondition:
 		return unexpectedStatusConditionDescriptor()
@@ -331,6 +332,7 @@ func describeRemoteStatusCondition(key syncdomain.ConditionKey) statusConditionD
 		syncdomain.ConditionLocalReadOnly,
 		syncdomain.ConditionLocalFileTooLarge,
 		syncdomain.ConditionLocalBusy,
+		syncdomain.ConditionLocalCallAbandoned,
 		syncdomain.ConditionLocalCrossDevice,
 		syncdomain.ConditionUnsupportedOperation,
 		syncdomain.ConditionMalwareDetected,
@@ -410,6 +412,7 @@ func describeFilesystemStatusCondition(key syncdomain.ConditionKey) statusCondit
 		syncdomain.ConditionLocalReadOnly,
 		syncdomain.ConditionLocalFileTooLarge,
 		syncdomain.ConditionLocalBusy,
+		syncdomain.ConditionLocalCallAbandoned,
 		syncdomain.ConditionLocalCrossDevice,
 		syncdomain.ConditionUnsupportedOperation,
 		syncdomain.ConditionMalwareDetected,
@@ -515,6 +518,7 @@ func describeLocalRuntimeStatusCondition(key syncdomain.ConditionKey) statusCond
 		syncdomain.ConditionRemoteNameTwin,
 		syncdomain.ConditionUploadVerification,
 		syncdomain.ConditionDownloadIntegrity,
+		syncdomain.ConditionLocalCallAbandoned,
 		syncdomain.ConditionDeletesHeld,
 		syncdomain.ConditionLocalUnsyncable,
 		syncdomain.ConditionLocalMountBoundary,
@@ -529,10 +533,18 @@ func describeLocalRuntimeStatusCondition(key syncdomain.ConditionKey) statusCond
 	}
 }
 
-// describeTransferStatusCondition names the transfer-integrity conditions:
-// OneDrive stored or served different content than its own facts describe.
+// describeTransferStatusCondition names the conditions of a transfer itself:
+// OneDrive stored or served different content than its own facts describe,
+// or the transfer's read or write of the local file hung and was left behind.
 func describeTransferStatusCondition(key syncdomain.ConditionKey) statusConditionDescriptor {
-	switch key { //nolint:exhaustive // only the transfer-integrity keys route here
+	switch key { //nolint:exhaustive // only the transfer keys route here
+	case syncdomain.ConditionLocalCallAbandoned:
+		return newStatusConditionDescriptor(
+			"Local file stopped responding",
+			"Reading the file for an upload, or writing it for a download, hung for 2 minutes "+
+				"(a network mount or FUSE folder that stopped answering); the transfer gave up on that call and left it behind.",
+			"Check the disk, mount or network share that holds the sync folder (automatic retry in progress).",
+		)
 	case syncdomain.ConditionDownloadIntegrity:
 		return newStatusConditionDescriptor(
 			"Download doesn't match OneDrive",

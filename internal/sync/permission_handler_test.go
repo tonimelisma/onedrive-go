@@ -281,7 +281,7 @@ func TestScopeKeyForPermissionEvidence_EveryMemberIsDecided(t *testing.T) {
 				syncdomain.IssueFileTooLargeForSpace, syncdomain.IssueLocalNameTooLong, syncdomain.IssueDeletesHeld, syncdomain.IssueLocalUnsyncableReplacement,
 				syncdomain.IssueLocalMountBoundary, syncdomain.IssueLocalMountMissing, syncdomain.IssueRemoteFolderUnverifiable, syncdomain.IssueLocalInterruptedRemoval,
 				syncdomain.IssueRemovedFolderKept, syncdomain.IssueLocalFileTooLarge,
-				syncdomain.IssueLocalBusy, syncdomain.IssueLocalCrossDevice, syncdomain.IssueUnsupportedOperation, syncdomain.IssueMalwareDetected,
+				syncdomain.IssueLocalBusy, syncdomain.IssueLocalCallAbandoned, syncdomain.IssueLocalCrossDevice, syncdomain.IssueUnsupportedOperation, syncdomain.IssueMalwareDetected,
 				syncdomain.IssueLocalDatabaseOpen, syncdomain.IssueUploadVerification, syncdomain.IssueDownloadIntegrity, syncdomain.IssueRequestTimeout,
 				syncdomain.IssueTransientConflict, syncdomain.IssueTransientNotFound, syncdomain.IssueResourceLocked, syncdomain.IssueTransferURLRejected,
 			},

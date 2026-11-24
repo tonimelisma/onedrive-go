@@ -79,7 +79,7 @@ intent; multisync receives only that child work intent.
 | The comparison facts are defined once (one shared CTE) for the comparison and reconciliation queries. Filesystem identity never signals a content change: a folder or a same-hash file with a new identity is a baseline update, and a folder is never an upload or download (R-2.2.6). A missing remote hash is unknown, not changed, and two empty files are equal (R-2.2.7). A locally deleted folder that OneDrive replaced with a new item is re-created locally, not deleted (R-2.10.49). | `TestQueryReconciliationState_IdentityChangeAtSamePathIsNotAnEdit`, `TestRunOnce_RenumberedDeviceTransfersNothing`, `TestRunOnce_FolderDeletedAndRestoredLocallyTransfersNothing`, `TestBuildActionsForReconciliation_RefusesFolderTransfers`, `TestQueryReconciliationState_MissingRemoteHashIsUnknownNotChanged`, `TestPlanCurrentState_HashlessZeroByteBothSidesIsEqual`, `TestPlanCurrentState_HashlessNonEmptyCreateIsStillAConflict`, `TestQueryReconciliationState_LocallyDeletedFolderReplacedOnlineIsRecreatedLocally` |
 | Conflict reconciliation rows expand into concrete actions for edit/edit, create/create, and edit/delete cases. | `TestPlannerPlanCurrentState_ExpandsEditEditConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_ExpandsCreateCreateConflictIntoConcreteActions`, `TestPlannerPlanCurrentState_EditDeleteRecreateUploadClearsItemID` |
 | Folder-delete descendants are reconciled by SQLite after planner-visible pruning, with parent availability preserved only when descendant work requires it. A file deleted locally that OneDrive only carried along with a renamed ancestor is neither a new remote file nor gone from both sides: both paths wait (`followed_ancestor_deletes`) until the ancestor's local move re-paths the baseline, and the delete then reaches OneDrive. The mirror case waits the same way (`followed_local_ancestor_deletes`): an item OneDrive deleted whose local copy only followed a folder the user renamed is not uploaded again, and what OneDrive created at its place waits too. | `TestRunOnce_LocalDeleteInsideFolderRenamedOnlineIsNotUndone`, `TestRunOnce_RemoteDeleteInsideFolderRenamedLocallyIsNotUndone`, `TestRunOnce_RemoteReplaceInsideFolderRenamedLocallyConverges`, `TestReplacePlannerVisibleStateTx_PrunesRemoteDescendantsWhenBaselineFolderMissingRemotely`, `TestReplacePlannerVisibleStateTx_PrunesLocalDescendantsWhenBaselineFolderMissingLocally`, `TestPlannerPlanCurrentState_RemoteParentDeletePlansDescendantLocalDeleteThroughSQLite`, `TestPlannerPlanCurrentState_RemoteParentDeleteRecreatesParentForEditedLocalChild`, `TestPlannerPlanCurrentState_LocalParentDeleteCreatesParentForChangedRemoteChild`, `TestPlannerPlanCurrentState_BothParentSidesDeletedCleansUpDescendantsThroughSQLite` |
-| Filesystem identity includes the entry's birth time where the filesystem records one: a deleted synced folder or file and an unrelated new entry holding its reused inode number (another birth time) are a delete plus a create, with the old item in the recycle bin, while a rename keeps its birth time and moves; a side without a birth time pairs on (device, inode); worker-start freshness rejects a move destination born again since planning (R-2.17.1). | `TestRunOnce_DeletedFolderAndNewFolderWithReusedInodeAreNotAMove`, `TestRunOnce_DeletedFileAndNewFileWithReusedInodeAreNotAMove`, `TestRunOnce_RenameWithMatchingBirthTimeIsStillAMove`, `TestRunOnce_WithoutBirthTimeIdentityIsDeviceAndInode`, `TestQueryReconciliationState_LocalMovePairingComparesBirthTimes`, `TestQueryReconciliationState_BirthTimeAtTheSamePath`, `TestActionFreshness_LocalOriginMoveRejectsADestinationBornAgain`, `TestSameIdentity_BirthTimeDecidesWhenBothSidesKnowIt`, `TestSQLSameLocalEntry_EveryAliasFollowsThePattern` |
+| Filesystem identity includes the entry's birth time where the filesystem records one: a deleted synced folder or file and an unrelated new entry holding its reused inode number (another birth time) are a delete plus a create, with the old item in the recycle bin, while a rename keeps its birth time and moves, a file renamed and edited too where both sides know the birth time; a side without a birth time pairs on (device, inode); worker-start freshness rejects a move destination born again since planning (R-2.17.1). | `TestRunOnce_DeletedFolderAndNewFolderWithReusedInodeAreNotAMove`, `TestRunOnce_DeletedFileAndNewFileWithReusedInodeAreNotAMove`, `TestRunOnce_RenameWithMatchingBirthTimeIsStillAMove`, `TestRunOnce_WithoutBirthTimeIdentityIsDeviceAndInode`, `TestRunOnce_MovedAndEditedFileKeepsItsItemOnlyWhenBirthTimeProvesIt`, `TestQueryReconciliationState_EditedFileMovePairsOnlyOnABirthTimeBothRowsKnow`, `TestIdentityProvesSameEntry_OnlyWithABirthTimeBothSidesKnow`, `TestQueryReconciliationState_LocalMovePairingComparesBirthTimes`, `TestQueryReconciliationState_BirthTimeAtTheSamePath`, `TestActionFreshness_LocalOriginMoveRejectsADestinationBornAgain`, `TestSameIdentity_BirthTimeDecidesWhenBothSidesKnowIt`, `TestSQLSameLocalEntry_EveryAliasFollowsThePattern` |
 | A file move needs content corroboration beyond inode identity; identity without it is delete + create, and unhashed moves carry the destination's observed truth. | `TestQueryReconciliationState_LocalFileMoveRequiresContentCorroboration`, `TestQueryReconciliationState_LocalFileMoveIdentityWithoutContentIsNotAMove`, `TestPlannerPlanCurrentState_IdentityMatchedEditedFileIsDeleteAndCreate`, `TestPlannerPlanCurrentState_UnhashedMoveCarriesDestinationTruthAndReuploads`, `TestActionFreshness_LocalOriginMoveRejectsChangedDestination` |
 | Locally deleted or unpaired moved folders are deleted on OneDrive after their descendants, never re-created locally; identity-paired folder moves are one remote move. | `TestQueryReconciliationState_FolderDecisionMatrix`, `TestPlannerPlanCurrentState_LocalFolderDeletePropagatesAfterChildDeletes`, `TestPlannerPlanCurrentState_UnpairedLocalFolderMoveDeletesSourceAfterChildMoves`, `TestRunOnce_LocalFolderDeleteDeletesRemoteFolder`, `TestRunOnce_LocalFolderMoveBecomesOneRemoteMoveWithoutResurrectingSource` |
 | A plan counts the work it leaves for the next pass (R-2.1.7): a converged plan leaves none, a folder renamed online over a local edit counts its move, a swap counts the parked item as deferred; conflict copies count as renames (the keep-both scenarios finish in one sync). | `TestPlanFollowUp_CountsWorkLeftForTheNextPass`, `TestRunOnce_OneShotUploadsLocalEditInsideFolderRenamedOnline`, `TestRunOnce_SwapOfTwoNamesConverges`, `TestRunOnce_CreateConflictLocalFileRemoteDirKeepsBoth` |
@@ -482,18 +482,30 @@ Identity stays a pairing hint, never a change signal (D-057): a new birth time
 at the same path changes nothing by itself, and the baseline learns it through
 `metadata_drift`.
 
-Identity is necessary but not sufficient for a file (R-2.17.1). After a delete
-and a create in one batch, ext4 and other filesystems may give the new file the
-freed inode, and pairing on inode alone once moved `vim.swp`'s OneDrive content
-onto an unrelated unreadable `secret.txt`. A rename preserves size, mtime and
-content; inode reuse preserves none of them (and, where the filesystem records
-one, not the birth time either, see above). So an identity pair is a file move
-only when sizes are equal and either both hashes are known and equal, or a hash
-is unknown and the mtimes are equal. Everything else (different size, different
-known hash, unknown hash with a different mtime) is delete + create. The cost is
-that a rename followed by an edit inside one observation window also becomes
-delete + create: the content is uploaded fresh and the old item goes to the
-recycle bin, which is safe. Directories pair on identity alone: a directory has
+For a file, identity is sufficient only where the birth time proves it
+(R-2.17.1): both the baseline and the destination know a birth time, and
+identity matching therefore means they agree. A reused inode number is born
+again, so that proof cannot be faked by reuse, and a file renamed and edited
+inside one observation window is the item: the rename goes up as a move and
+the edit as an upload to the same item, which keeps its sharing links and
+history. The rule is written once per language, beside the identity rule:
+`synctree.IdentityProvesSameEntry` in Go and
+`sqlBirthTimeProvesSameLocalEntryL` in the pairing CTE
+(`TestIdentityProvesSameEntry_OnlyWithABirthTimeBothSidesKnow`,
+`TestQueryReconciliationState_EditedFileMovePairsOnlyOnABirthTimeBothRowsKnow`,
+`TestRunOnce_MovedAndEditedFileKeepsItsItemOnlyWhenBirthTimeProvesIt`).
+Without that proof identity is necessary but not sufficient for a file. After
+a delete and a create in one batch, ext4 and other filesystems may give the new
+file the freed inode, and pairing on inode alone once moved `vim.swp`'s
+OneDrive content onto an unrelated unreadable `secret.txt`. A rename preserves
+size, mtime and content; inode reuse preserves none of them. So, where either
+side lacks a birth time, an identity pair is a file move only when sizes are
+equal and either both hashes are known and equal, or a hash is unknown and the
+mtimes are equal. Everything else (different size, different known hash,
+unknown hash with a different mtime) is delete + create. The cost, on a
+filesystem that records no birth time, is that a rename followed by an edit
+inside one observation window also becomes delete + create: the content is
+uploaded fresh and the old item goes to the recycle bin, which is safe. Directories pair on identity alone: a directory has
 no content of its own and its descendants pair independently. A wrong pairing
 after rmdir + mkdir reuse converges to the same tree but hands the new folder
 the old OneDrive item, which the birth time prevents wherever it is recorded. The pairing rule
@@ -503,10 +515,21 @@ reconciliation queries.
 A local folder move emits one `ActionRemoteMove` for the folder and makes
 descendant work depend on that move instead of re-uploading or
 deleting/recreating the subtree. A moved file whose hash is unknown (size and
-mtime corroborated) emits the remote move before an upload at the moved path.
+mtime corroborated), or that was edited and paired by its birth time, emits
+the remote move before an upload at the moved path, unless OneDrive edited
+the item too: then the move goes up alone and the next pass meets the two
+edits at the moved path as a content conflict, since the upload would replace
+OneDrive's edit (`composedRemoteMoveActions`,
+`TestRunOnce_MovedAndEditedFileWithBirthTimeAndARemoteEditKeepsBoth`). The
+move's outcome publishes the moved file's identity but keeps the baseline's
+local content facts when the destination's known hash differs, so the edit
+stays pending until its upload records it; recorded as synced, a remote edit
+met no local change on the next pass and came down over the edit
+(`TestExecutor_MoveOutcome_AnEditedMovedFileKeepsItsEditPending`).
 A local-origin move carries the destination's planned local truth as
 `Action.MovedLocal`: freshness rejects a destination that changed since
-planning, and the move outcome publishes exactly that truth. A remote move
+planning, and the move outcome publishes that truth (its content facts only
+once they are synced, above). A remote move
 applied locally carries the source's baseline in its view, so the precondition
 validates the source and the outcome keeps its local facts (R-2.17.3).
 Identity mismatch at the same path is never a move, and never by itself a
@@ -1385,8 +1408,13 @@ its inode change time. The reconciliation matrix records the three cells
 (`TestPlannerPlanCurrentState_LocalMoveComposesWithTheRemoteEdit`,
 `TestRunOnce_LocalRenameAndRemoteEditComposeInOnePass`,
 `TestRunOnce_RemoteMoveAndEditComposeInOnePass`). A file moved and edited
-here is not composed so: identity alone never pairs a file (R-2.17.1), so it
-stays a delete and a create unless OneDrive's move corroborates it (below).
+here pairs only where its birth time proves it (R-2.17.1, above); without
+one it stays a delete and a create unless OneDrive's move corroborates it
+(below). The reconciliation matrix plans the moved-and-edited cells both
+ways: its moves section on a filesystem that records no birth time, and a
+section of its own with birth times known on both sides, where every cell
+keeps the item (a move here, or OneDrive's move applied here) and each is run
+to convergence keeping both sides' content (`requireMovedEditConvergence`).
 
 A remote move of a locally edited file is still applied (R-2.17.7): the local
 move source must be the same item (type and identity) but its content may
@@ -1396,8 +1424,8 @@ re-paths the baseline subtree from the row's own previous path (looked up by
 item ID), not from `OldPath`, which for a local copy moved to OneDrive's name is
 a path the baseline never held.
 
-A file this computer moved and edited is no move here by itself: identity
-alone never pairs a file (R-2.17.1). Where OneDrive moved the item to the
+A file this computer moved and edited is no move here by itself where no
+birth time proves it: identity alone then never pairs a file (R-2.17.1). Where OneDrive moved the item to the
 very path where the edited file now sits, that move corroborates the
 identity, and the file is the item (`editedWhereOneDriveMovedIt`): from the
 held start, `f` moved here into the new `x` and edited while OneDrive moved
@@ -1869,6 +1897,8 @@ deleted in November 2026, on measured facts:
   ported: a move in either direction composes with OneDrive's edit (Move
   Composition, A move composed with OneDrive's edit). The other cells it
   planned differently, a file moved and edited here, it paired on filesystem
-  identity alone, which R-2.17.1 refuses: where no birth time is recorded a
-  reused inode looks like a rename, and the pairing would give an unrelated
-  file the item's sharing links and history.
+  identity alone, which R-2.17.1 refuses where no birth time is recorded: a
+  reused inode looks like a rename there, and the pairing would give an
+  unrelated file the item's sharing links and history. Where both sides know
+  the birth time those cells now keep the item too (Move Composition), the
+  edit uploaded after the move, or in the next pass after OneDrive's move.

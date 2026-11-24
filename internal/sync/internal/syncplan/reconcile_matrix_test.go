@@ -46,7 +46,10 @@ const (
 	matrixFolder matrixSide = "dir"
 )
 
-const matrixPath = "doc"
+const (
+	matrixPath                 = "doc"
+	moveMatrixLocalMovedEdited = "moved+edit doc2"
+)
 
 func (m matrixSide) content() string {
 	switch m {
@@ -186,6 +189,9 @@ func TestReconcileMatrix_Golden(t *testing.T) {
 		}
 	}
 
+	out.WriteString("\n# moves, birth time known on both sides: baseline file A at doc; where each side holds it now\n")
+	emitMovedEditBirthTimeCells(t, cell, subset, emit)
+
 	if subset {
 		golden, err := os.ReadFile(filepath.FromSlash(reconcileMatrixGolden))
 		require.NoError(t, err)
@@ -224,7 +230,7 @@ func moveMatrixLocal() []moveCase {
 	return []moveCase{
 		{name: "unchanged", apply: moveTo(matrixPath, matrixA)},
 		{name: "moved doc2", apply: moveTo("doc2", matrixA)},
-		{name: "moved+edit doc2", apply: moveTo("doc2", matrixB)},
+		{name: moveMatrixLocalMovedEdited, apply: moveTo("doc2", matrixB)},
 		{name: "deleted", apply: moveTo(matrixPath, matrixAbsent)},
 	}
 }
@@ -317,4 +323,63 @@ func requireReferenceConvergence(t *testing.T, s *pmState, plan *syncdomain.Acti
 		}
 	}
 	assert.Equal(t, referenceSurvivors(baseline, local, remote), got, "%s:\n  %s", cell, strings.Join(s.log, "\n  "))
+}
+
+// emitMovedEditBirthTimeCells plans the cells of a file this computer moved
+// and edited on a filesystem that records birth times, where the moved file
+// is the item (R-2.17.1); the moves section plans them on one that records
+// none. cell is the count of the cells before them, which the race subset
+// strides over.
+func emitMovedEditBirthTimeCells(t *testing.T, cell int, subset bool, emit func(string)) {
+	t.Helper()
+
+	var movedEdit moveCase
+	for _, local := range moveMatrixLocal() {
+		if local.name == moveMatrixLocalMovedEdited {
+			movedEdit = local
+		}
+	}
+	for _, remote := range moveMatrixRemote() {
+		cell++
+		if subset && cell%reconcileMatrixRaceStride != 0 {
+			continue
+		}
+		s := newPMState(t)
+		s.birthTimes = true
+		s.addSynced(matrixPath, false, matrixA.content())
+		movedEdit.apply(s, true)
+		remote.apply(s, false)
+		plan := s.plan()
+		emit(fmt.Sprintf("local %-16s | remote %-16s -> %s\n", movedEdit.name, remote.name, renderMatrixPlan(plan)))
+		requireMovedEditConvergence(t, s, plan, remote.name)
+	}
+}
+
+// requireMovedEditConvergence runs a cell of a file this computer moved and
+// edited (content B) to quiet and requires both sides to end with the same
+// files holding exactly the local edit and OneDrive's edit, when it made
+// one (content C): neither side's content is lost, whatever the pairing.
+func requireMovedEditConvergence(t *testing.T, s *pmState, plan *syncdomain.ActionPlan, remoteName string) {
+	t.Helper()
+
+	cell := "local " + moveMatrixLocalMovedEdited + " | remote " + remoteName
+	quiet := len(plan.Actions) == 0 && len(plan.HeldDeletes) == 0
+	for round := 0; round < plannerModelMaxRounds && !quiet; round++ {
+		s.apply(plan)
+		plan = s.plan()
+		quiet = len(plan.Actions) == 0 && len(plan.HeldDeletes) == 0
+	}
+	require.True(t, quiet, "%s: the plan never went quiet:\n  %s", cell, strings.Join(s.log, "\n  "))
+
+	localView, remoteView := pmView(s.local), pmView(s.remote)
+	require.Equal(t, remoteView, localView, "%s: sides differ:\n  %s", cell, strings.Join(s.log, "\n  "))
+	want := map[string]bool{matrixB.content(): true}
+	if strings.Contains(remoteName, "edit") {
+		want[matrixC.content()] = true
+	}
+	got := map[string]bool{}
+	for _, content := range localView {
+		got[content] = true
+	}
+	assert.Equal(t, want, got, "%s:\n  %s", cell, strings.Join(s.log, "\n  "))
 }

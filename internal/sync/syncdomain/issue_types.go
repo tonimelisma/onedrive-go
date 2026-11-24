@@ -99,9 +99,15 @@ const (
 	// to, a synced entry the local delete could not move to the trash or
 	// delete, or a change that can no longer be sent to the shared folder.
 	// It is the user's, so it is reported and kept.
-	IssueRemovedFolderKept    IssueType = "removed_folder_kept"
-	IssueLocalFileTooLarge    IssueType = "local_file_too_large"
-	IssueLocalBusy            IssueType = "local_busy"
+	IssueRemovedFolderKept IssueType = "removed_folder_kept"
+	IssueLocalFileTooLarge IssueType = "local_file_too_large"
+	IssueLocalBusy         IssueType = "local_busy"
+	// IssueLocalCallAbandoned marks a file whose last transfer gave up on a
+	// read (upload) or write (download) of the local file that stopped
+	// moving and left the stuck call behind, freeing its worker
+	// (graph.ErrLocalCallAbandoned, R-6.8.32). It is retried as
+	// IssueLocalBusy is; only what the user is told differs.
+	IssueLocalCallAbandoned   IssueType = "local_call_abandoned"
 	IssueLocalCrossDevice     IssueType = "local_cross_device"
 	IssueUnsupportedOperation IssueType = "unsupported_operation"
 	IssueMalwareDetected      IssueType = "malware_detected"
@@ -154,6 +160,7 @@ func (t IssueType) IsMember() bool {
 		IssueRemovedFolderKept,
 		IssueLocalFileTooLarge,
 		IssueLocalBusy,
+		IssueLocalCallAbandoned,
 		IssueLocalCrossDevice,
 		IssueUnsupportedOperation,
 		IssueMalwareDetected,
@@ -219,6 +226,7 @@ func IssueTypeLeavesFileUnsynced(issueType IssueType) bool {
 		IssueRemoteFolderUnverifiable,
 		IssueLocalFileTooLarge,
 		IssueLocalBusy,
+		IssueLocalCallAbandoned,
 		IssueLocalCrossDevice,
 		IssueUnsupportedOperation,
 		IssueMalwareDetected,
@@ -271,6 +279,7 @@ func IssueTypeIsRootReadFailure(issueType IssueType) bool {
 		IssueRemovedFolderKept,
 		IssueLocalFileTooLarge,
 		IssueLocalBusy,
+		IssueLocalCallAbandoned,
 		IssueLocalCrossDevice,
 		IssueUnsupportedOperation,
 		IssueMalwareDetected,

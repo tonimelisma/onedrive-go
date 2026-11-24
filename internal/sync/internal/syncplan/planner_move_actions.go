@@ -197,9 +197,11 @@ func composedRemoteEditDownload(
 }
 
 // composedRemoteMoveActions builds a local-origin remote move. A move whose
-// content could not be proven unchanged (no hash) also uploads what now sits
-// at the destination, but only when the item is already there locally: the
-// upload reads local truth at its path.
+// content could not be proven unchanged (no hash), or of a file edited here
+// that its birth time proves is the item (R-2.17.1), also uploads what now
+// sits at the destination, but only when the item is already there locally
+// (the upload reads local truth at its path) and OneDrive did not edit it
+// too.
 func composedRemoteMoveActions(
 	move *composedMove, entry *syncdomain.BaselineEntry, remote *syncdomain.RemoteState, viewAt func(string) *syncdomain.PathView,
 ) []syncdomain.Action {
@@ -231,10 +233,17 @@ func composedRemoteMoveActions(
 		TruthStatus: viewAt(move.newPath).TruthStatus,
 	}
 	localEdited := syncdomain.LocalFileDiffersFromBaseline(movedLocal, entry)
+	remoteEdited := syncdomain.RemoteContentDiffersFromBaseline(remote, entry)
 	switch {
+	case localEdited && remoteEdited:
+		// Both sides edited the item this computer moved (a file whose
+		// birth time proves it is the item, R-2.17.1): the move goes up
+		// alone, and the next pass meets the two edits at the moved path
+		// as a content conflict that keeps both. An upload here would
+		// replace OneDrive's edit.
 	case localEdited:
 		actions = append(actions, makeAction(syncdomain.ActionUpload, transferView))
-	case syncdomain.RemoteContentDiffersFromBaseline(remote, entry):
+	case remoteEdited:
 		// OneDrive edited the item this computer renamed, and the copy
 		// here still holds the synced content: the move and the edit
 		// compose, and the edit comes down at the new name after the move

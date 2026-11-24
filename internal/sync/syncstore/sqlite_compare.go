@@ -32,6 +32,12 @@ const (
 		` AND (ls.local_birth_time = 0 OR b.local_birth_time = 0 OR ls.local_birth_time = b.local_birth_time))`
 	sqlSameLocalEntrySrc = `(src.local_device = b.local_device AND src.local_inode = b.local_inode` +
 		` AND (src.local_birth_time = 0 OR b.local_birth_time = 0 OR src.local_birth_time = b.local_birth_time))`
+	// sqlBirthTimeProvesSameLocalEntryL, beside sqlSameLocalEntryL, is
+	// synctree.IdentityProvesSameEntry in SQL: both rows know a birth time,
+	// so the equal birth times sqlSameLocalEntryL demands prove one entry
+	// over time, which a reused inode cannot fake. Only then does identity
+	// alone pair a file whose content changed (R-2.17.1).
+	sqlBirthTimeProvesSameLocalEntryL = `(l.local_birth_time <> 0 AND b.local_birth_time <> 0)`
 )
 
 const (
@@ -43,7 +49,9 @@ const (
 	// Local move pairing: a baseline row and an unbaselined local_state row
 	// pair on filesystem identity (sqlSameLocalEntry*: device, inode and,
 	// where both know it, birth time; same item type). For files
-	// identity is necessary but not sufficient, see the corroboration clause.
+	// identity is sufficient only when both rows know the birth time;
+	// otherwise it is necessary but not sufficient, see the corroboration
+	// clause.
 	// Directories pair on identity alone: a directory has no content of its
 	// own, its descendants are paired independently, and a wrong pairing after
 	// rmdir + mkdir reuse converges to the same tree, but would give the new
@@ -72,13 +80,16 @@ local_move_candidates AS (
 		AND ` + sqlSameLocalEntryL + `
 		AND (
 			COALESCE(b.item_type, '') = 'folder'
+			-- A birth time both rows know and agree on proves the entry
+			-- is the item, edited or not: a reused inode is born again.
+			OR ` + sqlBirthTimeProvesSameLocalEntryL + `
 			OR (
-				-- Identity alone never proves a file move: after delete +
-				-- create in one batch the filesystem may hand the freed inode
-				-- to an unrelated file. A rename preserves size, mtime and
-				-- content, so the destination must still agree with the
-				-- baseline on size and on content (both hashes known) or,
-				-- when either hash is unknown, on mtime.
+				-- Without that proof identity never proves a file move:
+				-- after delete + create in one batch the filesystem may hand
+				-- the freed inode to an unrelated file. A rename preserves
+				-- size, mtime and content, so the destination must still
+				-- agree with the baseline on size and on content (both
+				-- hashes known) or, when either hash is unknown, on mtime.
 				b.local_size IS NOT NULL
 				AND l.size IS NOT NULL
 				AND l.size = b.local_size

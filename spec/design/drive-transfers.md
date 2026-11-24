@@ -811,7 +811,7 @@ same thing whichever call (download, mkdir, rename, conflict copy) hit it
 | `LocalErrorNoSpace` | `ErrDiskFull`, `ENOSPC`, `EDQUOT` | one `disk:local` block scope (R-2.10.60) |
 | `LocalErrorReadOnly` | `EROFS` | one `local:read-only:<path>` scope at the read-only mount (R-2.10.61) |
 | `LocalErrorFileTooLarge` | `EFBIG` | per-item `local_file_too_large` (R-2.10.62) |
-| `LocalErrorBusy` | `EBUSY`, `ETXTBSY`, `ESTALE`, `ETIMEDOUT`, `EAGAIN` | retryable `local_busy` (R-2.10.62) |
+| `LocalErrorBusy` | `EBUSY`, `ETXTBSY`, `ESTALE`, `ETIMEDOUT`, `EAGAIN`, a local-side stall | retryable `local_busy` (R-2.10.62); a stall whose call the graph client left behind (`graph.ErrLocalCallAbandoned`) is `local_call_abandoned`, kept with the retry row on the durable curve (R-6.8.32) |
 | `LocalErrorCrossDevice` | `EXDEV` | per-item `local_cross_device` (R-2.10.62) |
 | `LocalErrorNameTooLong` | `ENAMETOOLONG` | per-item `local_name_too_long` (R-2.11.8) |
 

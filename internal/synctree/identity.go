@@ -75,10 +75,22 @@ func statFieldToUint64[T ~int16 | ~uint16 | ~int32 | ~uint32 | ~int64 | ~uint64]
 // one. A side without a birth time (a filesystem that records none) falls
 // back to (device, inode), which cannot tell inode reuse from a rename. The
 // SQL comparison queries apply the same rule (the sqlSameLocalEntry* constants in
-// internal/sync).
+// internal/sync/syncstore).
 func SameIdentity(a FileIdentity, b FileIdentity) bool {
 	return a.Device == b.Device && a.Inode == b.Inode &&
 		(a.BirthTime == 0 || b.BirthTime == 0 || a.BirthTime == b.BirthTime)
+}
+
+// IdentityProvesSameEntry reports whether a and b are the same entry and
+// identity alone proves it: SameIdentity with a birth time both sides know.
+// A reused inode number is born again, so equal known birth times rule it
+// out, and such a file is the same item even when its content changed. A
+// side without a birth time cannot tell reuse from a rename, and the caller
+// needs other proof (for a file, its content; R-2.17.1). The SQL comparison
+// queries apply the same rule (sqlBirthTimeProvesSameLocalEntryL beside
+// sqlSameLocalEntryL in internal/sync/syncstore).
+func IdentityProvesSameEntry(a FileIdentity, b FileIdentity) bool {
+	return a.BirthTime != 0 && b.BirthTime != 0 && SameIdentity(a, b)
 }
 
 // SameFile reports whether a and b describe the same filesystem entry. It

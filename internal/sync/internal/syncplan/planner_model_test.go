@@ -41,6 +41,7 @@ const (
 	plannerModelFileNames    = "a.txt b.txt c.txt"
 	plannerModelFolderNames  = "d e"
 	plannerModelLocalDevice  = 1
+	pmBirthTimeBase          = int64(1_600_000_000_000_000_000)
 )
 
 // pmItem is one entry of a model side. Remote entries carry the item ID and
@@ -73,6 +74,12 @@ type pmState struct {
 	baseline map[string]pmSynced
 	seq      int
 	log      []string
+	// birthTimes makes every local entry report a birth time, as a
+	// filesystem that records one does (Linux statx, macOS st_birthtime);
+	// off, the model is a filesystem that records none. An entry's birth
+	// time follows its inode, which the model never reuses, so a rename
+	// keeps it and a new entry gets its own (R-2.17.1).
+	birthTimes bool
 }
 
 func newPMState(t *testing.T) *pmState {
@@ -98,6 +105,16 @@ func (s *pmState) addSynced(p string, folder bool, content string) {
 	s.remote[p] = pmItem{id: id, folder: folder, content: content, etag: etag}
 	s.local[p] = pmItem{folder: folder, content: content, inode: inode}
 	s.baseline[p] = pmSynced{id: id, folder: folder, localContent: content, remoteContent: content, inode: inode, etag: etag}
+}
+
+// birthTime is the birth time the local entry with inode reports: none
+// unless the model records birth times.
+func (s *pmState) birthTime(inode uint64) int64 {
+	if !s.birthTimes {
+		return 0
+	}
+
+	return pmBirthTimeBase + int64(inode)
 }
 
 func pmMtime(content string) int64 {
@@ -195,7 +212,7 @@ func (s *pmState) writeStore() {
 			RemoteSize: int64(len(row.remoteContent)), RemoteSizeKnown: true,
 			LocalMtime: pmMtime(row.localContent), RemoteMtime: pmMtime(row.remoteContent),
 			LocalCtime: pmMtime(row.localContent), LocalDevice: plannerModelLocalDevice, LocalInode: row.inode,
-			LocalHasIdentity: true, ETag: "etag-" + strconv.Itoa(row.etag),
+			LocalBirthTime: s.birthTime(row.inode), LocalHasIdentity: true, ETag: "etag-" + strconv.Itoa(row.etag),
 		}))
 	}
 
@@ -205,7 +222,8 @@ func (s *pmState) writeStore() {
 		local = append(local, syncdomain.LocalStateRow{
 			Path: p, ItemType: pmType(item.folder), Hash: s.hash(item.folder, item.content),
 			Size: int64(len(item.content)), Mtime: pmMtime(item.content), Ctime: pmMtime(item.content),
-			LocalDevice: plannerModelLocalDevice, LocalInode: item.inode, LocalHasIdentity: true,
+			LocalDevice: plannerModelLocalDevice, LocalInode: item.inode, LocalBirthTime: s.birthTime(item.inode),
+			LocalHasIdentity: true,
 		})
 	}
 	require.NoError(t, store.ReplaceLocalState(ctx, local))
@@ -670,7 +688,7 @@ func TestPlannerModel_RandomTriplesConverge(t *testing.T) {
 // `seed-replay:` line a failing seed logs (logSeedReplayOnFailure) is the one
 // command that reruns it, so the context carries no second one.
 func (r *pmRun) failureContext() string {
-	return fmt.Sprintf("seed %d:\n  %s", r.seed, strings.Join(r.log, "\n  "))
+	return fmt.Sprintf("seed %d (birth times %t):\n  %s", r.seed, r.birthTimes, strings.Join(r.log, "\n  "))
 }
 
 func runPlannerModel(t *testing.T, seed uint64) {
@@ -681,6 +699,10 @@ func runPlannerModel(t *testing.T, seed uint64) {
 		rng:     rand.New(rand.NewPCG(seed, seed^0x7f4a7c159e3779b9)), //nolint:gosec // deterministic test RNG
 		seed:    seed,
 	}
+	// Odd seeds run on a filesystem that records birth times, where a file
+	// moved and edited here is the item (R-2.17.1); even seeds on one that
+	// records none, where it is new content.
+	r.birthTimes = seed%2 == 1
 	t.Cleanup(func() {
 		if t.Failed() {
 			t.Logf("planner model %s", r.failureContext())

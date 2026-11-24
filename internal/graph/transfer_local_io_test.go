@@ -114,6 +114,7 @@ func TestUploadChunk_AStuckLocalReadIsAbandonedWhileItIsStillBlocked(t *testing.
 	require.ErrorIs(t, err, ErrTransferStalled)
 	require.ErrorIs(t, err, ErrLocalSideStalled)
 	require.NotErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, ErrLocalCallAbandoned, "the caller is told the call was left behind")
 	assert.Equal(t, []string{"/mnt/hung/a.bin"}, abandonedPaths(record),
 		"the stuck read is the record's, named after its file")
 
@@ -157,6 +158,7 @@ func TestUploadChunk_AFullRecordOfAbandonedCallsMakesTheTransferWait(t *testing.
 	close(chunk.release)
 	err := <-done
 	require.ErrorIs(t, err, ErrTransferStalled, "the read returned and the transfer failed as stalled")
+	require.NotErrorIs(t, err, ErrLocalCallAbandoned, "a call waited for was not left behind")
 	assert.Equal(t, []string{"elsewhere"}, abandonedPaths(record), "nothing more was abandoned")
 }
 
@@ -209,6 +211,7 @@ func TestDownload_AStuckLocalWriteIsAbandonedAndItsFileFinishedWhenItReturns(t *
 	require.ErrorIs(t, err, ErrTransferStalled)
 	require.ErrorIs(t, err, ErrLocalSideStalled)
 	require.NotErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, ErrLocalCallAbandoned)
 	select {
 	case <-partial.abandoned:
 	default:
@@ -249,7 +252,7 @@ func TestLocalIO_AnAbandonedReadNeverFillsTheCallersBuffer(t *testing.T) {
 
 	<-reader.entered
 	close(stalled)
-	require.ErrorIs(t, <-done, errLocalCallAbandoned)
+	require.ErrorIs(t, <-done, ErrLocalCallAbandoned)
 
 	close(reader.release)
 	<-released

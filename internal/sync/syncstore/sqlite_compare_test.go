@@ -622,6 +622,69 @@ func TestQueryReconciliationState_LocalMovePairingComparesBirthTimes(t *testing.
 	}
 }
 
+// Validates: R-2.17.1
+//
+// A file moved and edited (another size, hash and mtime) pairs as a move only
+// when both rows know the birth time and it agrees; without that proof the
+// content rule stands and the edited file is a delete plus a create.
+func TestQueryReconciliationState_EditedFileMovePairsOnlyOnABirthTimeBothRowsKnow(t *testing.T) {
+	t.Parallel()
+
+	const (
+		born   = int64(1_700_000_000_000_000_001)
+		reborn = int64(1_700_000_000_000_000_002)
+	)
+	for _, tc := range []struct {
+		name          string
+		baselineBirth int64
+		localBirth    int64
+		wantMove      bool
+	}{
+		{name: "birth time known on both rows", baselineBirth: born, localBirth: born, wantMove: true},
+		{name: "reused inode", baselineBirth: born, localBirth: reborn},
+		{name: "no birth time recorded", baselineBirth: 0, localBirth: 0},
+		{name: "birth time recorded only", baselineBirth: born, localBirth: 0},
+		{name: "birth time observed only", baselineBirth: 0, localBirth: born},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newTestStore(t)
+			ctx := t.Context()
+			_, err := store.db.ExecContext(ctx, `
+				INSERT INTO baseline (
+					item_id, path, item_type, local_hash, remote_hash,
+					local_size, remote_size, local_mtime, remote_mtime,
+					local_device, local_inode, local_birth_time, local_has_identity
+				)
+				VALUES ('item-old', 'old', 'file', 'old-hash', 'old-hash', 4, 4, 1, 1, 5, 6, ?, 1)`,
+				tc.baselineBirth)
+			require.NoError(t, err)
+			_, err = store.db.ExecContext(ctx, `
+				INSERT INTO local_state (
+					path, item_type, hash, size, mtime, local_device, local_inode, local_birth_time, local_has_identity
+				)
+				VALUES ('new', 'file', 'edited-hash', 9, 2, 5, 6, ?, 1)`, tc.localBirth)
+			require.NoError(t, err)
+			_, err = store.db.ExecContext(ctx, `
+				INSERT INTO remote_state (item_id, path, item_type, hash, size, mtime)
+				VALUES ('item-old', 'old', 'file', 'old-hash', 4, 1)`)
+			require.NoError(t, err)
+
+			reconciliationRows, err := queryReconciliationState(ctx, store)
+			require.NoError(t, err)
+			got := reconciliationKindsByPath(reconciliationRows)
+			if tc.wantMove {
+				assert.Equal(t, "local_move", got["old"])
+				assert.Equal(t, "local_move", got["new"])
+				return
+			}
+			assert.Equal(t, "remote_delete", got["old"])
+			assert.Equal(t, "upload", got["new"])
+		})
+	}
+}
+
 // Validates: R-2.17.1, R-2.2.6
 //
 // At the synced path, a reused inode with another birth time is a new entry

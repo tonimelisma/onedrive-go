@@ -480,6 +480,7 @@ func blockScopeActivationWording(key syncdomain.ScopeKey, conditionType syncdoma
 		syncdomain.IssueRemovedFolderKept,
 		syncdomain.IssueLocalFileTooLarge,
 		syncdomain.IssueLocalBusy,
+		syncdomain.IssueLocalCallAbandoned,
 		syncdomain.IssueLocalCrossDevice,
 		syncdomain.IssueUnsupportedOperation,
 		syncdomain.IssueMalwareDetected,

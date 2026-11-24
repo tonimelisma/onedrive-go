@@ -39,6 +39,36 @@ func TestSameIdentity_BirthTimeDecidesWhenBothSidesKnowIt(t *testing.T) {
 
 // Validates: R-2.17.1
 //
+// Identity proves one entry over time only where both sides know the birth
+// time: a reused inode is born again, so equal birth times rule it out,
+// while a side without one cannot tell reuse from a rename.
+func TestIdentityProvesSameEntry_OnlyWithABirthTimeBothSidesKnow(t *testing.T) {
+	t.Parallel()
+
+	const (
+		device = 7
+		inode  = 42
+		born   = int64(1_700_000_000_000_000_001)
+		reborn = int64(1_700_000_000_000_000_002)
+	)
+	for _, tc := range []struct {
+		name   string
+		a, b   FileIdentity
+		proven bool
+	}{
+		{name: "birth time known on both sides", a: FileIdentity{Device: device, Inode: inode, BirthTime: born}, b: FileIdentity{Device: device, Inode: inode, BirthTime: born}, proven: true},
+		{name: "reused inode", a: FileIdentity{Device: device, Inode: inode, BirthTime: born}, b: FileIdentity{Device: device, Inode: inode, BirthTime: reborn}},
+		{name: "no birth time on either side", a: FileIdentity{Device: device, Inode: inode}, b: FileIdentity{Device: device, Inode: inode}},
+		{name: "birth time on one side only", a: FileIdentity{Device: device, Inode: inode, BirthTime: born}, b: FileIdentity{Device: device, Inode: inode}},
+		{name: "other inode", a: FileIdentity{Device: device, Inode: inode, BirthTime: born}, b: FileIdentity{Device: device, Inode: inode + 1, BirthTime: born}},
+	} {
+		assert.Equal(t, tc.proven, IdentityProvesSameEntry(tc.a, tc.b), tc.name)
+		assert.Equal(t, tc.proven, IdentityProvesSameEntry(tc.b, tc.a), "%s, reversed", tc.name)
+	}
+}
+
+// Validates: R-2.17.1
+//
 // Every way the sync tree reads an entry (rooted Lstat and Stat, a walk, a
 // listing) and watch-mode's AttachBirthTime report one identity, birth time
 // included where this filesystem records one; a rename keeps it.

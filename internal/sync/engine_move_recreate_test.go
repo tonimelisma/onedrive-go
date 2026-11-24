@@ -22,6 +22,8 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncplan"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
+	"github.com/tonimelisma/onedrive-go/internal/synctest"
+	"github.com/tonimelisma/onedrive-go/internal/synctree"
 )
 
 // scenarioRunLimit bounds the one-shot runs runScenarioUntilDone makes.
@@ -1959,7 +1961,9 @@ func TestRunOnce_AFolderDeletedOnOneDriveStaysHereWhileAMoveOutOfItWaits(t *test
 // a1.txt at all. Once X2 is gone, one sync finishes it with no action
 // superseded: both sides hold the tree made here, f is moved once and is
 // still the item it was, P is deleted after it, and only a1.txt's old version
-// reaches the recycle bin.
+// reaches the recycle bin. The filesystem records no birth times, which is
+// what makes the edited a1.txt new content (R-2.17.1): with a birth time it
+// is the item, its edit uploaded to it, and nothing of it is deleted.
 func TestRunOnce_AFolderRenamedHereIsRenamedOnOneDriveWhileAMoveOutOfAFolderDeletedInItWaits(t *testing.T) {
 	t.Parallel()
 
@@ -1968,7 +1972,7 @@ func TestRunOnce_AFolderRenamedHereIsRenamedOnOneDriveWhileAMoveOutOfAFolderDele
 	remote.addFolder("item-P", "item-A", "P")
 	remote.move("item-f", "item-P", "f")
 	remote.addFile(t, "item-a1", "item-A", "a1.txt", "a1\n")
-	eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
+	eng, syncRoot, logs := newRecreateScenarioEngineWithoutBirthTimes(t, remote)
 	local := scenarioLocalPath(syncRoot)
 	require.NoError(t, os.Rename(local("A"), local("B")))
 	require.NoError(t, os.WriteFile(local("B/a1.txt"), []byte("a1 edited\n"), 0o600))
@@ -2762,7 +2766,9 @@ func TestRunOnce_AFileMovedUpOntoItsDeletedFoldersPathStaysOnOneDriveUntilItsUpl
 // copy lands at f's new path. Held instead, the upload landed on that copy
 // and was superseded, and a second pass wrote it. One sync finishes it with no
 // action superseded: both sides hold the tree made here, with the edit on
-// OneDrive.
+// OneDrive. That is on a filesystem that records no birth times; where the
+// filesystem records one, f is the item (R-2.17.1): it moves with S, its
+// edit is uploaded to it, and nothing is deleted.
 func TestRunOnce_AFileEditedInASubfolderMovedWithItsRenamedFolderIsUploadedOnce(t *testing.T) {
 	t.Parallel()
 
@@ -2780,33 +2786,50 @@ func TestRunOnce_AFileEditedInASubfolderMovedWithItsRenamedFolderIsUploadedOnce(
 			want: map[string]string{"Q": "/", "R": "/", "R/S": "/", "R/S/f": "edited\n"},
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+		for _, birthTimes := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/birth times recorded %t", tc.name, birthTimes), func(t *testing.T) {
+				t.Parallel()
 
-			remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
-			remote.addFolder("item-P", "root", "P")
-			remote.addFolder("item-S", "item-P", "S")
-			remote.addFile(t, "item-f", "item-S", "f", "f\n")
-			if _, inR := tc.want["R"]; inR {
-				remote.addFolder("item-R", "root", "R")
-			}
-			eng, syncRoot, logs := newRecreateScenarioEngine(t, remote)
-			local := scenarioLocalPath(syncRoot)
-			require.NoError(t, os.Rename(local("P"), local("Q")))
-			require.NoError(t, os.Rename(local("Q/S"), local(tc.at)))
-			require.NoError(t, os.WriteFile(local(tc.at+"/f"), []byte("edited\n"), 0o600))
+				remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+				remote.addFolder("item-P", "root", "P")
+				remote.addFolder("item-S", "item-P", "S")
+				remote.addFile(t, "item-f", "item-S", "f", "f\n")
+				if _, inR := tc.want["R"]; inR {
+					remote.addFolder("item-R", "root", "R")
+				}
+				var (
+					eng      *testEngine
+					syncRoot string
+					logs     *syncfixture.SyncLockedBuffer
+				)
+				if birthTimes {
+					eng, syncRoot, logs = newRecreateScenarioEngine(t, remote)
+					skipUnlessBirthTimesRecorded(t, syncRoot, "P/S/f")
+				} else {
+					eng, syncRoot, logs = newRecreateScenarioEngineWithoutBirthTimes(t, remote)
+				}
+				local := scenarioLocalPath(syncRoot)
+				require.NoError(t, os.Rename(local("P"), local("Q")))
+				require.NoError(t, os.Rename(local("Q/S"), local(tc.at)))
+				require.NoError(t, os.WriteFile(local(tc.at+"/f"), []byte("edited\n"), 0o600))
 
-			runs, superseded := runScenarioUntilDone(t, eng)
-			assert.Equal(t, 1, runs, "one sync finishes it")
-			assert.Zero(t, superseded)
-			assert.Equal(t, tc.want, remote.tree(), "OneDrive")
-			assert.Equal(t, tc.want, harnessLocalTree(t, syncRoot), "this computer")
-			assert.ElementsMatch(t, tc.moves, remote.moves)
-			assert.Equal(t, []string{"item-f"}, remote.deletes, "the old copy is deleted")
-			assert.Equal(t, 1, remote.uploads, "the edit is uploaded once")
-			assert.NotContains(t, logs.String(), "dependency cycle")
-			requireScenarioQuietPlan(t, eng)
-		})
+				runs, superseded := runScenarioUntilDone(t, eng)
+				assert.Equal(t, 1, runs, "one sync finishes it")
+				assert.Zero(t, superseded)
+				assert.Equal(t, tc.want, remote.tree(), "OneDrive")
+				assert.Equal(t, tc.want, harnessLocalTree(t, syncRoot), "this computer")
+				assert.ElementsMatch(t, tc.moves, remote.moves)
+				if birthTimes {
+					assert.Empty(t, remote.deletes, "f is the item, moved with S")
+					assert.Equal(t, tc.at+"/f", remote.pathOf("item-f"), "the edit is uploaded to the item")
+				} else {
+					assert.Equal(t, []string{"item-f"}, remote.deletes, "the old copy is deleted")
+				}
+				assert.Equal(t, 1, remote.uploads, "the edit is uploaded once")
+				assert.NotContains(t, logs.String(), "dependency cycle")
+				requireScenarioQuietPlan(t, eng)
+			})
+		}
 	}
 }
 
@@ -3419,6 +3442,44 @@ func newRecreateScenarioEngine(t *testing.T, remote *moveScenarioRemote) (*testE
 	runScenarioPass(t, eng)
 
 	return eng, syncRoot, logs
+}
+
+// newRecreateScenarioEngineWithoutBirthTimes is newRecreateScenarioEngine on
+// a filesystem that records no birth times (ext2/3, FAT, NFS): identity is
+// (device, inode), and a file moved and edited is new content (R-2.17.1).
+func newRecreateScenarioEngineWithoutBirthTimes(
+	t *testing.T, remote *moveScenarioRemote,
+) (*testEngine, string, *syncfixture.SyncLockedBuffer) {
+	t.Helper()
+
+	logs := &syncfixture.SyncLockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelError}))
+	shim := synctest.NewIdentityShimWithoutBirthTimes()
+	interpose := shim.Wrap
+	if volume := registeredScenarioVolume(t); volume != nil {
+		interpose = func(h synctree.Handle) synctree.Handle { return shim.Wrap(volume(h)) }
+	}
+	eng, syncRoot := newTestEngineInDirWith(t, t.Context(), remote.client(t), t.TempDir(), func(inputs *engineInputs) {
+		inputs.Logger = logger
+		inputs.hooks.interposeSyncTree = interpose
+	})
+	runScenarioPass(t, eng)
+
+	return eng, syncRoot, logs
+}
+
+// skipUnlessBirthTimesRecorded skips a test that needs the filesystem under
+// syncRoot to record birth times, read for rel through the sync tree.
+func skipUnlessBirthTimesRecorded(t *testing.T, syncRoot, rel string) {
+	t.Helper()
+
+	root, err := synctree.Open(syncRoot)
+	require.NoError(t, err)
+	info, err := root.Lstat(rel)
+	require.NoError(t, err)
+	if identity, ok := synctree.IdentityFromFileInfo(info); !ok || identity.BirthTime == 0 {
+		t.Skip("the test filesystem records no birth times")
+	}
 }
 
 // runScenarioUntilDone syncs until a run leaves no work, at most

@@ -148,7 +148,11 @@ resolution so an already-applied move needs nothing else.
 Move outcomes publish only what was observed or proven (R-2.17.3).
 `ActionRemoteMove` (a local-origin move) takes its local half from
 `Action.MovedLocal` and keeps an unknown destination hash unknown instead of
-inheriting the source baseline's. `ActionLocalMove` (a remote move applied
+inheriting the source baseline's; a destination whose known hash differs from
+the baseline's, a file edited and paired by its birth time (R-2.17.1), keeps
+the baseline's local content facts beside its new identity, so the edit stays
+pending until its upload records it
+(`TestExecutor_MoveOutcome_AnEditedMovedFileKeepsItsEditPending`). `ActionLocalMove` (a remote move applied
 locally) takes its local half from the source baseline its view carries: the
 precondition proved the source still matched it and a rename preserves content,
 size, mtime and identity. The one fact a rename changes is a file's inode
