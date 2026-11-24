@@ -10,6 +10,13 @@ import (
 // engine reads these from the completions channel, classifies them, and calls
 // DepGraph.Complete. Failed items become retry_work, block_scopes, or other
 // engine-owned durable control state through the persistence flow.
+//
+// Production builds every completion in one place
+// (syncexec.CompletionFromTrackedAction), which reads the Graph facts --
+// HTTPStatus, RetryAfter, ServerAnswer -- from Err once; no one changes Err
+// after that, so the recorded answer cannot disagree with the error it was
+// read from. Tests build theirs through syncexec.CompletionForTest, which
+// reads them the same way.
 type ActionCompletion struct {
 	Path       string
 	OldPath    string
@@ -21,7 +28,7 @@ type ActionCompletion struct {
 	ItemType          ItemType
 	Success           bool
 	ErrMsg            string
-	HTTPStatus        int // from graph.GraphError, 0 if not a Graph API error
+	HTTPStatus        int // the Graph answer's status, 0 if Err carries none
 	FailurePath       string
 	FailureCapability PermissionCapability
 
@@ -32,6 +39,10 @@ type ActionCompletion struct {
 	// Err is the full error for classification (os.ErrPermission, a Graph
 	// answer, a timed-out request and so on).
 	Err error
+
+	// ServerAnswer is what Err's Graph failure means (ServerAnswerNone when
+	// it carries none), read once when the completion is built.
+	ServerAnswer ServerAnswer
 
 	// RunEnded is whether the run the action ran under had ended when it
 	// returned (RunEnded): the one fact that makes a failure a shutdown. Set
@@ -59,17 +70,6 @@ type ActionCompletion struct {
 	ActionID int64
 }
 
-// ServerAnswer is what this completion's Graph failure means (see
-// classifyServerAnswer). It is derived, not stored, so it can never disagree
-// with HTTPStatus and Err.
-func (r *ActionCompletion) ServerAnswer() ServerAnswer {
-	if r == nil {
-		return ServerAnswerNone
-	}
-
-	return classifyServerAnswer(r.HTTPStatus, r.Err)
-}
-
 // ThrottleTargetKey returns the narrowest remote boundary that can be blocked
 // after a 429 for this action completion.
 func (r *ActionCompletion) ThrottleTargetKey() string {
@@ -80,69 +80,4 @@ func (r *ActionCompletion) ThrottleTargetKey() string {
 		return ""
 	}
 	return throttleDriveParam(r.DriveID)
-}
-
-// ActionCompletionFromTrackedAction builds the shared runtime result shape for
-// one exact tracked action. Workers and the engine-owned publication-drain stage both
-// use this helper so classification/persistence sees one consistent exact
-// action identity.
-func ActionCompletionFromTrackedAction(
-	ta *TrackedAction,
-	outcome *ActionOutcome,
-	actionErr error,
-) ActionCompletion {
-	driveID := ta.Action.DriveID
-	if outcome != nil && !outcome.DriveID.IsZero() {
-		driveID = outcome.DriveID
-	}
-
-	r := ActionCompletion{
-		Path:                 ta.Action.Path,
-		OldPath:              ta.Action.OldPath,
-		ItemID:               ta.Action.ItemID,
-		DriveID:              driveID,
-		ActionType:           ta.Action.Type,
-		ItemType:             ResolveItemType(ta.Action.View),
-		Err:                  actionErr,
-		ErrMsg:               "",
-		HTTPStatus:           ExtractHTTPStatus(actionErr),
-		RetryAfter:           extractRetryAfter(actionErr),
-		IsTrial:              ta.IsTrial,
-		TrialScopeKey:        ta.TrialScopeKey,
-		TrialScopeGeneration: ta.TrialScopeGeneration,
-		ActionID:             ta.ID,
-	}
-
-	if outcome != nil {
-		r.Success = outcome.Success
-		r.FailurePath = outcome.FailurePath
-		r.FailureCapability = outcome.FailureCapability
-		r.Size, r.SizeKnown = outcomeDisplaySize(outcome)
-		if outcome.Error != nil {
-			r.ErrMsg = outcome.Error.Error()
-			r.Err = outcome.Error
-			r.HTTPStatus = ExtractHTTPStatus(outcome.Error)
-			r.RetryAfter = extractRetryAfter(outcome.Error)
-		}
-	} else if actionErr != nil {
-		r.ErrMsg = actionErr.Error()
-	}
-
-	return r
-}
-
-// outcomeDisplaySize picks the size a user would associate with the action:
-// what arrived for a download, what was sent for an upload.
-func outcomeDisplaySize(outcome *ActionOutcome) (int64, bool) {
-	switch outcome.Action {
-	case ActionDownload:
-		return outcome.RemoteSize, outcome.RemoteSizeKnown
-	case ActionUpload:
-		return outcome.LocalSize, outcome.LocalSizeKnown
-	case ActionLocalDelete, ActionRemoteDelete, ActionLocalMove, ActionRemoteMove,
-		ActionFolderCreate, ActionConflictCopy, ActionBaselineUpdate, ActionCleanup:
-		return 0, false
-	default:
-		panic(OutsideTheEnum(outcome.Action))
-	}
 }

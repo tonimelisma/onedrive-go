@@ -679,6 +679,7 @@ func TestExecutorActionTypeDecisions_PanicOnATypeOutsideTheEnum(t *testing.T) {
 	decisions := map[string]func(){
 		"evaluateMoveEndpointFreshness": func() { evaluateMoveEndpointFreshness(outside(), actionFreshnessInputs{}) },
 		"movePeerPath":                  func() { movePeerPath(outside()) },
+		"outcomeDisplaySize":            func() { outcomeDisplaySize(&syncdomain.ActionOutcome{Action: unlisted}) },
 	}
 	for name, decide := range decisions {
 		assert.PanicsWithValue(t, syncdomain.OutsideTheEnum(unlisted), decide, name)

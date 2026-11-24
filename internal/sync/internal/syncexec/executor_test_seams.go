@@ -102,3 +102,23 @@ func (wp *WorkerPool) ExecuteActionForTest(ctx context.Context, ta *syncdomain.T
 func (wp *WorkerPool) DispatchActionForTest(ctx context.Context, exec *Executor, ta *syncdomain.TrackedAction) syncdomain.ActionOutcome {
 	return wp.dispatchAction(ctx, exec, ta)
 }
+
+// CompletionForTest is the one way a test builds a completion by hand: it
+// fills in, on c, what the worker reads from the error when it builds a
+// completion (CompletionFromTrackedAction), so a hand-built completion carries
+// the server answer production would record, and returns c. The status is the
+// one the test names, or else the one Err's Graph answer carries; the
+// Retry-After is Err's unless the test names one.
+func CompletionForTest(c *syncdomain.ActionCompletion) *syncdomain.ActionCompletion {
+	status := c.HTTPStatus
+	if status == 0 {
+		status = ExtractHTTPStatus(c.Err)
+	}
+	retryAfter := c.RetryAfter
+	recordServerAnswer(c, status)
+	if retryAfter != 0 {
+		c.RetryAfter = retryAfter
+	}
+
+	return c
+}

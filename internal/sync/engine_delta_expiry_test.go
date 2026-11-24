@@ -12,6 +12,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/graph"
 	"github.com/tonimelisma/onedrive-go/internal/localpath"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 )
 
@@ -140,12 +141,15 @@ func TestMountRootEvents_ResyncFlavorDecidesWhatAnOrphanMeans(t *testing.T) {
 func TestNewDeltaExpiredError_ParsesTheResyncFlavor(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, syncdomain.ResyncKindApplyDifferences, syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(syncfixture.DeltaGone("resyncChangesApplyDifferences"))))
-	assert.Equal(t, syncdomain.ResyncKindUploadDifferences, syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(syncfixture.DeltaGone("resyncChangesUploadDifferences"))))
-	assert.Equal(t, syncdomain.ResyncKindUnknown, syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(syncfixture.DeltaGone(""))))
-	assert.Equal(t, syncdomain.ResyncKindUnknown, syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(graph.ErrGone)))
+	expired := func(cause error) error {
+		return syncdomain.NewDeltaExpiredError(syncobserve.ResyncKindOfGone(cause), cause)
+	}
+	assert.Equal(t, syncdomain.ResyncKindApplyDifferences, syncdomain.ResyncKindOf(expired(syncfixture.DeltaGone("resyncChangesApplyDifferences"))))
+	assert.Equal(t, syncdomain.ResyncKindUploadDifferences, syncdomain.ResyncKindOf(expired(syncfixture.DeltaGone("resyncChangesUploadDifferences"))))
+	assert.Equal(t, syncdomain.ResyncKindUnknown, syncdomain.ResyncKindOf(expired(syncfixture.DeltaGone(""))))
+	assert.Equal(t, syncdomain.ResyncKindUnknown, syncdomain.ResyncKindOf(expired(graph.ErrGone)))
 
-	err := syncdomain.NewDeltaExpiredError(syncfixture.DeltaGone("resyncChangesApplyDifferences"))
+	err := expired(syncfixture.DeltaGone("resyncChangesApplyDifferences"))
 	require.ErrorIs(t, err, syncdomain.ErrDeltaExpired)
 	require.ErrorIs(t, err, graph.ErrGone)
 }

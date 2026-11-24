@@ -18,6 +18,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncstoretest"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -428,7 +429,7 @@ func TestFailureKeptForRetry_TheFeedAndThePassCountAgree(t *testing.T) {
 	} {
 		flow.resetResultStats()
 		activities = nil
-		completion := &syncdomain.ActionCompletion{ActionType: syncdomain.ActionUpload, Path: "a.txt", Err: errors.New("refused")}
+		completion := syncexec.CompletionForTest(&syncdomain.ActionCompletion{ActionType: syncdomain.ActionUpload, Path: "a.txt", Err: errors.New("refused")})
 
 		decision := &syncdomain.ResultDecision{Class: class}
 		eng.emitActivity(completion, decision, true)

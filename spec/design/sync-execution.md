@@ -1,6 +1,6 @@
 # Sync Execution
 
-GOVERNS: internal/sync/internal/syncexec/action_freshness.go, internal/sync/internal/syncexec/executor.go, internal/sync/internal/syncexec/executor_move.go, internal/sync/internal/syncexec/executor_outcome.go, internal/sync/internal/syncexec/executor_conflict.go, internal/sync/internal/syncexec/executor_delete.go, internal/sync/internal/syncexec/executor_parent_checks.go, internal/sync/internal/syncexec/executor_preconditions.go, internal/sync/internal/syncexec/executor_transfer.go, internal/sync/internal/syncexec/worker.go, internal/sync/internal/syncexec/executor_test_seams.go, internal/sync/internal/syncexec/doc.go, internal/sync/internal/syncsched/*.go
+GOVERNS: internal/sync/internal/syncexec/action_freshness.go, internal/sync/internal/syncexec/executor.go, internal/sync/internal/syncexec/executor_move.go, internal/sync/internal/syncexec/executor_outcome.go, internal/sync/internal/syncexec/executor_conflict.go, internal/sync/internal/syncexec/executor_delete.go, internal/sync/internal/syncexec/executor_parent_checks.go, internal/sync/internal/syncexec/executor_preconditions.go, internal/sync/internal/syncexec/executor_transfer.go, internal/sync/internal/syncexec/worker.go, internal/sync/internal/syncexec/completion.go, internal/sync/internal/syncexec/executor_test_seams.go, internal/sync/internal/syncexec/doc.go, internal/sync/internal/syncsched/*.go
 
 Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.2 [verified], R-2.4.6 [verified], R-2.8.6 [verified], R-2.8.7 [verified], R-2.8.9 [verified], R-2.8.10 [verified], R-2.14.2 [verified], R-6.2.3 [verified], R-6.2.4 [verified], R-6.4.4 [verified], R-6.6.17 [verified], R-6.8.7 [verified], R-6.8.8 [verified], R-6.8.9 [verified], R-6.4.9 [verified], R-6.4.12 [verified], R-6.4.13 [verified], R-6.10.30 [verified], R-6.7.37 [verified], R-2.12.9 [verified], R-2.12.10 [verified]
 
@@ -8,7 +8,17 @@ Implements: R-2.2.5 [verified], R-2.3.1 [verified], R-2.13.2 [verified], R-5.10.
 
 Execution takes a runtime plan, dispatches concrete side-effecting
 work through a dependency graph, runs workers, and reports one
-`ActionCompletion` per finished action. That runtime-plan handoff is
+`ActionCompletion` per finished action, built in one place
+(`CompletionFromTrackedAction`, `completion.go`): the worker, and the engine's
+admission and publication-drain stages, all build theirs there. It is where a
+Graph failure becomes the facts a completion records -- the status, the
+server's Retry-After and the server's answer (`classifyServerAnswer`, the one
+table from status, Graph code and message to `syncdomain.ServerAnswer`) --
+read once from the error the completion carries; the request-timeout and
+unreached families the engine's classifier reads (`IsRequestTimeout`,
+`IsServiceUnreached`) live beside it, because the executor is the package that
+reads Graph's errors (`TestCompletionFromTrackedAction_RecordsTheServerAnswer`).
+That runtime-plan handoff is
 assembled on the engine side by the shared pipeline in
 `engine_current_plan.go`, then admitted through `engine_runtime_start.go`
 before execution begins. Publication-only planner actions are not executor

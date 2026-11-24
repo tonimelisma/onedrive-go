@@ -478,7 +478,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 	}, 99, nil)
 	require.NotNil(t, ta)
 
-	results <- syncdomain.ActionCompletion{
+	results <- *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:      99,
 		Path:          "trial.txt",
 		ActionType:    syncdomain.ActionDownload,
@@ -489,7 +489,7 @@ func TestPhase0_OneShotEngineLoop_TrialFailureKeepsBlockedScopeIsolated(t *testi
 		ErrMsg:        "trial failure",
 		IsTrial:       true,
 		TrialScopeKey: syncdomain.SKService(),
-	}
+	})
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
 		return event.Type == engineDebugEventTrialTimerArmed
@@ -655,7 +655,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 	rt.dispatchCh <- parent
 	readReady(t, rt.dispatchCh)
 
-	results <- syncdomain.ActionCompletion{
+	results <- *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:   1,
 		Path:       "parent.txt",
 		ActionType: syncdomain.ActionUpload,
@@ -665,7 +665,7 @@ func TestPhase0_BlockScopeFailureDoesNotReadmitDependentEarly(t *testing.T) {
 		RetryAfter: 25 * time.Millisecond,
 		Err:        graph.ErrThrottled,
 		ErrMsg:     "rate limited",
-	}
+	})
 
 	recorder.WaitForEvent(t, func(event syncdomain.EngineDebugEvent) bool {
 		return event.Type == engineDebugEventScopeActivated && event.ScopeKey == testThrottleScope()

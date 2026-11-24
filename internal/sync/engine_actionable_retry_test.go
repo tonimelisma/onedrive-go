@@ -20,6 +20,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/driveops"
 	"github.com/tonimelisma/onedrive-go/internal/errclass"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
@@ -277,7 +278,7 @@ func TestFailureAwaitsUser_TheFeedAndThePassCountAgree(t *testing.T) {
 		flow.resetResultStats()
 		activities = nil
 		// The zero action is ActionDownload.
-		completion := &syncdomain.ActionCompletion{ActionType: tc.action, Path: "a.txt", HTTPStatus: tc.httpStatus, Err: tc.err}
+		completion := syncexec.CompletionForTest(&syncdomain.ActionCompletion{ActionType: tc.action, Path: "a.txt", HTTPStatus: tc.httpStatus, Err: tc.err})
 		require.Equal(t, tc.httpStatus == http.StatusForbidden, shouldHandleRemote403Permission(completion), tc.name)
 
 		eng.emitActivity(completion, &tc.decision, true)

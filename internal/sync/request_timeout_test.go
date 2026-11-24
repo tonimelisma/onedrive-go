@@ -53,12 +53,12 @@ func TestClassifyResult_TransportTimeoutIsARequestTimeoutUntilTheRunEnds(t *test
 			err := stalledGraphRequestError(t, kind)
 			require.ErrorIs(t, err, context.DeadlineExceeded, "the transport's timeout has the shape of a deadline")
 
-			live := classifyResult(&syncdomain.ActionCompletion{Err: err, HTTPStatus: syncdomain.ExtractHTTPStatus(err)})
+			live := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: err, HTTPStatus: syncexec.ExtractHTTPStatus(err)}))
 			assert.Equal(t, resultRequeue, live.Class, "%v", err)
 			assert.Equal(t, syncdomain.PersistRetryWork, live.Persistence)
 			assert.Equal(t, syncdomain.IssueRequestTimeout, live.ConditionType)
 
-			ended := classifyResult(&syncdomain.ActionCompletion{Err: err, HTTPStatus: syncdomain.ExtractHTTPStatus(err), RunEnded: true})
+			ended := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: err, HTTPStatus: syncexec.ExtractHTTPStatus(err), RunEnded: true}))
 			assert.Equal(t, resultShutdown, ended.Class)
 		})
 	}

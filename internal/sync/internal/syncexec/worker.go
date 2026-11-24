@@ -523,7 +523,7 @@ func (wp *WorkerPool) Completions() <-chan syncdomain.ActionCompletion {
 // once the context has ended, and drop completions the stopping run's drain
 // still reads.
 func (wp *WorkerPool) sendResult(ctx context.Context, ta *syncdomain.TrackedAction, outcome *syncdomain.ActionOutcome, actionErr error) {
-	r := syncdomain.ActionCompletionFromTrackedAction(ta, outcome, actionErr)
+	r := CompletionFromTrackedAction(ta, outcome, actionErr)
 	r.RunEnded = syncdomain.RunEnded(ctx, r.Err)
 	wp.recordLivePreconditionSuperseded(&r, outcome)
 

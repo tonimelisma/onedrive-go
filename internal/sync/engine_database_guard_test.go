@@ -45,7 +45,7 @@ func TestExecutor_Download_RefusesToReplaceDatabaseWithLiveWAL(t *testing.T) {
 			data, err := localpath.ReadFile(filepath.Join(syncRoot, "app.db"))
 			require.NoError(t, err)
 			assert.Equal(t, "old", string(data))
-			assert.Equal(t, syncdomain.IssueLocalDatabaseOpen, classifyResult(&syncdomain.ActionCompletion{Err: o.Error}).ConditionType)
+			assert.Equal(t, syncdomain.IssueLocalDatabaseOpen, classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: o.Error})).ConditionType)
 		})
 	}
 }

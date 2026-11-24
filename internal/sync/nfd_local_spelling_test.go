@@ -268,11 +268,11 @@ func TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder(t *testing.T)
 			return absDir == mount || strings.HasPrefix(absDir, mount+string(filepath.Separator))
 		})
 
-		evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
+		evidence := ph.handleLocalPermission(t.Context(), syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:       syncfixture.NfcCafe + "/photos/a.jpg",
 			ActionType: syncdomain.ActionDownload,
 			Err:        &os.PathError{Op: "open", Path: "a.jpg", Err: syscall.EROFS},
-		})
+		}))
 
 		assert.Equal(t, permissionEvidenceBoundaryDenied, evidence.Kind)
 		assert.Equal(t, syncfixture.NfcCafe, evidence.BoundaryPath)

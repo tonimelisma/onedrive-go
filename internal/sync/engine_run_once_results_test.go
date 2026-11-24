@@ -14,6 +14,7 @@ import (
 	"github.com/tonimelisma/onedrive-go/internal/config"
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
@@ -36,22 +37,22 @@ func TestOneShotEngineLoop_ClosedResultsStillProcessBufferedRetryWork(t *testing
 	}
 
 	results := make(chan syncdomain.ActionCompletion, 3)
-	results <- syncdomain.ActionCompletion{
+	results <- *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:   1,
 		Path:       "a.txt",
 		ActionType: syncdomain.ActionUpload,
 		HTTPStatus: http.StatusBadGateway,
 		Err:        graph.ErrServerError,
 		ErrMsg:     "fail-1",
-	}
-	results <- syncdomain.ActionCompletion{
+	})
+	results <- *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:   2,
 		Path:       "b.txt",
 		ActionType: syncdomain.ActionUpload,
 		HTTPStatus: http.StatusBadGateway,
 		Err:        graph.ErrServerError,
 		ErrMsg:     "fail-2",
-	}
+	})
 	results <- syncdomain.ActionCompletion{
 		ActionID:   3,
 		Path:       "c.txt",
@@ -102,14 +103,14 @@ func TestOneShotEngineLoop_UnauthorizedTerminatesAndDrainsQueuedReady(t *testing
 		ActionType: syncdomain.ActionUpload,
 		Success:    true,
 	}
-	results <- syncdomain.ActionCompletion{
+	results <- *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:   3,
 		Path:       "auth.txt",
 		ActionType: syncdomain.ActionDownload,
 		HTTPStatus: http.StatusUnauthorized,
 		Err:        graph.ErrUnauthorized,
 		ErrMsg:     "unauthorized",
-	}
+	})
 	close(results)
 
 	err := syncfixture.RunWithin(t, t.Context(), "the results loop to stop on the unauthorized completion", func(ctx context.Context) error {
@@ -217,13 +218,13 @@ func TestOneShotEngineLoop_SupersededCompletionRetiresDependentsWithoutSuccessOr
 		nil,
 		nil,
 		nil,
-		&syncdomain.ActionCompletion{
+		syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			ActionID:   1,
 			Path:       "root.txt",
 			ActionType: syncdomain.ActionUpload,
 			Err:        syncdomain.ErrActionPreconditionChanged,
 			ErrMsg:     "source changed",
-		},
+		}),
 	)
 
 	require.NoError(t, err)

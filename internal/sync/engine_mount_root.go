@@ -132,7 +132,7 @@ func unusableMountRootCursor(err error) (syncdomain.ResyncKind, bool) {
 		// guard, not the observer's, sees a list that leads back.
 		return syncdomain.ResyncKindOf(syncdomain.NewCursorUnusableError("the change list leads back on itself", err)), true
 	case errors.Is(err, graph.ErrGone):
-		return syncdomain.ResyncKindOf(syncdomain.NewDeltaExpiredError(err)), true
+		return syncobserve.ResyncKindOfGone(err), true
 	default:
 		return syncdomain.ResyncKindApplyDifferences, false
 	}

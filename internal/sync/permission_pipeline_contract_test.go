@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncdomain"
 	"github.com/tonimelisma/onedrive-go/internal/sync/syncstore"
 )
@@ -39,13 +40,13 @@ func TestPermissionProbe_HandleLocalPermission_DoesNotPersistDurableState(t *tes
 	ph, syncRoot := newTestPermHandler(t, nil)
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "accessible"), 0o750))
 
-	evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
+	evidence := ph.handleLocalPermission(t.Context(), syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path:              "accessible/file.txt",
 		ActionType:        syncdomain.ActionDownload,
 		Err:               os.ErrPermission,
 		ErrMsg:            "permission denied",
 		FailureCapability: syncdomain.PermissionCapabilityLocalRead,
-	})
+	}))
 
 	require.NotEqual(t, permissionEvidenceNone, evidence.Kind)
 	assert.Equal(t, permissionEvidenceFileDenied, evidence.Kind)

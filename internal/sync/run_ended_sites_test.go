@@ -34,7 +34,7 @@ func contextErrorReaders() map[sourceSite]string {
 			"error from a separate failure that landed during the stop and is still reported",
 		{file: "syncdomain/errors.go", function: "CancelCauseError.Is"}: "a cancel's cause answers to context.Canceled, so the " +
 			"work it interrupts reads as canceled",
-		{file: "syncdomain/domain_graph_error.go", function: "IsRequestTimeout"}: "with the run going on, a deadline is " +
+		{file: "internal/syncexec/completion.go", function: "IsRequestTimeout"}: "with the run going on, a deadline is " +
 			"a request OneDrive never answered: retry work and outage evidence",
 		{file: "engine_result_classify.go", function: "isLiveRunCancel"}: "with the run going on, a cancel came " +
 			"from something narrower than the run",

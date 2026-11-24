@@ -55,9 +55,9 @@ func classifyResult(r *syncdomain.ActionCompletion) syncdomain.ResultDecision {
 	// a connection refused, unroutable or reset is the outage itself. One that
 	// lands once the run has ended is retry work but no evidence, whatever its
 	// shape: a stop is never read as the service's silence.
-	if syncdomain.IsServiceUnreached(r.Err) {
+	if syncexec.IsServiceUnreached(r.Err) {
 		conditionType := syncdomain.IssueServiceOutage
-		if syncdomain.IsRequestTimeout(r.Err) {
+		if syncexec.IsRequestTimeout(r.Err) {
 			conditionType = syncdomain.IssueRequestTimeout
 		}
 		if r.RunEnded {
@@ -126,7 +126,7 @@ func isLiveRunCancel(r *syncdomain.ActionCompletion) bool {
 }
 
 func classifyHTTPResult(r *syncdomain.ActionCompletion) (syncdomain.ResultDecision, bool) {
-	answer := r.ServerAnswer()
+	answer := r.ServerAnswer
 	scopeEvidence := deriveScopeKey(r)
 	conditionType := issueTypeForResult(r)
 
@@ -253,7 +253,7 @@ func withRuntimeSummary(decision *syncdomain.ResultDecision) syncdomain.ResultDe
 // key. Returns the zero-value ScopeKey for answers that are not scope
 // evidence.
 func deriveScopeKey(r *syncdomain.ActionCompletion) syncdomain.ScopeKey {
-	return syncdomain.ScopeKeyForResult(r.ServerAnswer(), r.DriveID)
+	return syncdomain.ScopeKeyForResult(r.ServerAnswer, r.DriveID)
 }
 
 func issueTypeForResult(r *syncdomain.ActionCompletion) syncdomain.IssueType {
@@ -272,7 +272,7 @@ func issueTypeForHTTPResult(r *syncdomain.ActionCompletion) (syncdomain.IssueTyp
 		return "", false
 	}
 
-	answer := r.ServerAnswer()
+	answer := r.ServerAnswer
 	if answer == syncdomain.ServerAnswerForbidden {
 		return issueTypeForForbiddenResult(r), true
 	}

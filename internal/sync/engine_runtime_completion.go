@@ -550,7 +550,7 @@ func (flow *engineFlow) failPublicationDrainAction(
 	current *syncdomain.TrackedAction,
 	cause error,
 ) ([]*syncdomain.TrackedAction, error) {
-	completion := syncdomain.ActionCompletionFromTrackedAction(current, nil, cause)
+	completion := syncexec.CompletionFromTrackedAction(current, nil, cause)
 	// The engine runs publication-only actions itself, under the run's
 	// context, so it is the one to say whether that run had ended.
 	completion.RunEnded = syncdomain.RunEnded(ctx, cause)

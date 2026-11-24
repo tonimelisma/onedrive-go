@@ -880,7 +880,7 @@ func (o *RemoteObserver) fetchPage(
 	if err != nil {
 		switch {
 		case errors.Is(err, graph.ErrGone):
-			return windowPage{}, syncdomain.NewDeltaExpiredError(err)
+			return windowPage{}, syncdomain.NewDeltaExpiredError(ResyncKindOfGone(err), err)
 		case errors.Is(err, graph.ErrDeltaTokenNotALink):
 			// A saved token that is not a link cannot be continued; read as
 			// no token it took a full enumeration for the changes since it.
@@ -1058,4 +1058,28 @@ func deltaPageRetryDelay(err error, policy retry.Policy, attempt int, jitter ret
 	}
 
 	return 0, false
+}
+
+// Graph's inner codes for the two resync flavors of a 410 (R-2.15.3).
+const (
+	graphCodeResyncApplyDifferences  = "resyncChangesApplyDifferences"
+	graphCodeResyncUploadDifferences = "resyncChangesUploadDifferences"
+)
+
+// ResyncKindOfGone is the resync flavor a 410's inner code names, or
+// syncdomain.ResyncKindUnknown when it names none.
+func ResyncKindOfGone(err error) syncdomain.ResyncKind {
+	var graphErr *graph.GraphError
+	if !errors.As(err, &graphErr) {
+		return syncdomain.ResyncKindUnknown
+	}
+
+	switch {
+	case graphErr.HasCode(graphCodeResyncApplyDifferences):
+		return syncdomain.ResyncKindApplyDifferences
+	case graphErr.HasCode(graphCodeResyncUploadDifferences):
+		return syncdomain.ResyncKindUploadDifferences
+	default:
+		return syncdomain.ResyncKindUnknown
+	}
 }

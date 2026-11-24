@@ -12,6 +12,7 @@ import (
 
 	"github.com/tonimelisma/onedrive-go/internal/driveid"
 	"github.com/tonimelisma/onedrive-go/internal/graph"
+	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncexec"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncfixture"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncobserve"
 	"github.com/tonimelisma/onedrive-go/internal/sync/internal/syncsched"
@@ -193,13 +194,13 @@ func TestRuntimeArchitecture_ShutdownDrainSealsAdmissionOnCompletionError(t *tes
 	rt.beginWatchDrain(ctx)
 	require.NoError(t, eng.baseline.Close(context.Background()))
 
-	done, err := rt.handleDrainingCompletion(ctx, p, &syncdomain.ActionCompletion{
+	done, err := rt.handleDrainingCompletion(ctx, p, syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:   1,
 		Path:       "drain.txt",
 		ActionType: syncdomain.ActionUpload,
 		Err:        assert.AnError,
 		ErrMsg:     "retry later",
-	}, true)
+	}), true)
 	require.NoError(t, err)
 	assert.False(t, done)
 	assert.True(t, rt.isDraining())

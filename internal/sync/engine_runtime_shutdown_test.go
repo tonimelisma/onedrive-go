@@ -34,10 +34,10 @@ func failedUploads(actions *syncsched.Scheduler, paths ...string) []syncdomain.A
 	for i, path := range paths {
 		id := int64(i + 1)
 		actions.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: path, View: &syncdomain.PathView{Path: path}}, id, nil)
-		completions = append(completions, syncdomain.ActionCompletion{
+		completions = append(completions, *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			ActionID: id, Path: path, ActionType: syncdomain.ActionUpload, RunEnded: true,
 			HTTPStatus: http.StatusBadGateway, Err: graph.ErrServerError, ErrMsg: "bad gateway",
-		})
+		}))
 	}
 
 	return completions
@@ -68,14 +68,14 @@ func stoppingRunCompletions(t *testing.T, eng *testEngine, actions *syncsched.Sc
 	actions.AddForTest(&syncdomain.Action{Type: syncdomain.ActionFolderCreate, Path: "Projects", View: &syncdomain.PathView{Path: "Projects"}}, 3, nil)
 
 	return append(completions,
-		syncdomain.ActionCompletion{
+		*syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			ActionID: 2, Path: "gone.txt", ActionType: syncdomain.ActionDownload, RunEnded: true,
 			Err: &syncexec.RemoteItemGoneError{Op: "download", ItemID: goneItemID, Role: "item"},
-		},
-		syncdomain.ActionCompletion{
+		}),
+		*syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			ActionID: 3, Path: "Projects", ActionType: syncdomain.ActionFolderCreate, RunEnded: true,
 			Err: fmt.Errorf("sync: commit outcome: %w: %w", context.DeadlineExceeded, syncdomain.ErrStoreAccessTimedOut),
-		},
+		}),
 	)
 }
 
@@ -397,10 +397,10 @@ func TestEngineFlow_AStoppingRunAsksOneDriveNothing(t *testing.T) {
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
 	flow.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: "Shared/file.txt", View: &syncdomain.PathView{Path: "Shared/file.txt"}}, 1, nil)
-	refused := syncdomain.ActionCompletion{
+	refused := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID: 1, Path: "Shared/file.txt", ActionType: syncdomain.ActionUpload, RunEnded: true,
 		HTTPStatus: http.StatusForbidden, ErrMsg: "folder is read-only",
-	}
+	})
 
 	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, syncdomain.NewBaselineSnapshot(nil)))
 	require.NoError(t, flow.endStopDrain())
@@ -438,11 +438,11 @@ func TestEngineFlow_AStoppingRunAsksOneDriveNothingForATrial(t *testing.T) {
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blocked))
 	flow.retryWork.rows[blocked.WorkKey()] = *blocked
 	flow.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionUpload, Path: trialPath, View: &syncdomain.PathView{Path: trialPath}}, 1, nil)
-	refused := syncdomain.ActionCompletion{
+	refused := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID: 1, Path: trialPath, ActionType: syncdomain.ActionUpload, RunEnded: true,
 		HTTPStatus: http.StatusForbidden, ErrMsg: "folder is read-only",
 		IsTrial: true, TrialScopeKey: scopeKey,
-	}
+	})
 
 	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, syncdomain.NewBaselineSnapshot(nil)))
 	require.NoError(t, flow.endStopDrain())
@@ -485,10 +485,10 @@ func TestEngineFlow_AStoppingRunProbesNoLocalFolder(t *testing.T) {
 	setupWatchEngine(t, eng)
 	flow := testEngineFlow(t, eng)
 	flow.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionDownload, Path: refusedPath, View: &syncdomain.PathView{Path: refusedPath}}, 1, nil)
-	refused := syncdomain.ActionCompletion{
+	refused := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID: 1, Path: refusedPath, ActionType: syncdomain.ActionDownload, RunEnded: true,
 		Err: os.ErrPermission, ErrMsg: "permission denied", FailureCapability: syncdomain.PermissionCapabilityLocalWrite,
-	}
+	})
 
 	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, syncdomain.NewBaselineSnapshot(nil)))
 	require.NoError(t, flow.endStopDrain())
@@ -520,11 +520,11 @@ func TestEngineFlow_AStoppingRunProbesNoLocalFolderForATrial(t *testing.T) {
 	require.NoError(t, eng.baseline.UpsertRetryWork(t.Context(), blocked))
 	flow.retryWork.rows[blocked.WorkKey()] = *blocked
 	flow.sched.AddForTest(&syncdomain.Action{Type: syncdomain.ActionDownload, Path: trialPath, View: &syncdomain.PathView{Path: trialPath}}, 1, nil)
-	refused := syncdomain.ActionCompletion{
+	refused := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID: 1, Path: trialPath, ActionType: syncdomain.ActionDownload, RunEnded: true,
 		Err: os.ErrPermission, ErrMsg: "permission denied", FailureCapability: syncdomain.PermissionCapabilityLocalWrite,
 		IsTrial: true, TrialScopeKey: scopeKey,
-	}
+	})
 
 	require.NoError(t, flow.processShutdownCompletion(stoppedContext(t), &refused, syncdomain.NewBaselineSnapshot(nil)))
 	require.NoError(t, flow.endStopDrain())

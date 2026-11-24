@@ -231,11 +231,11 @@ func completionsToBlockTheService(t *testing.T, err error) int {
 	now := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
 	detection := syncsched.NewScopeState(func() time.Time { return now }, slog.New(slog.DiscardHandler))
 	for paths := 1; paths <= 2*syncsched.ServiceWindowThreshold; paths++ {
-		result := detection.UpdateScope(&syncdomain.ActionCompletion{
+		result := detection.UpdateScope(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 			Path:       fmt.Sprintf("file-%d", paths),
 			Err:        err,
-			HTTPStatus: syncdomain.ExtractHTTPStatus(err),
-		})
+			HTTPStatus: syncexec.ExtractHTTPStatus(err),
+		}))
 		if result.Block {
 			assert.Equal(t, syncdomain.SKService(), result.ScopeKey)
 			return paths
@@ -255,7 +255,7 @@ func TestClassifyResult_EveryTimedOutRequestIsOutageEvidenceLikeA504(t *testing.
 	t.Parallel()
 
 	answered := &graph.GraphError{StatusCode: http.StatusGatewayTimeout, Err: graph.ErrServerError}
-	gatewayTimeout := classifyResult(&syncdomain.ActionCompletion{HTTPStatus: http.StatusGatewayTimeout, Err: answered})
+	gatewayTimeout := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{HTTPStatus: http.StatusGatewayTimeout, Err: answered}))
 	require.Equal(t, syncdomain.SKService(), gatewayTimeout.ScopeEvidence)
 	require.Equal(t, syncsched.ServiceWindowThreshold, completionsToBlockTheService(t, answered))
 
@@ -264,7 +264,7 @@ func TestClassifyResult_EveryTimedOutRequestIsOutageEvidenceLikeA504(t *testing.
 			t.Parallel()
 
 			err := request.err(t)
-			got := classifyResult(&syncdomain.ActionCompletion{Err: err, HTTPStatus: syncdomain.ExtractHTTPStatus(err)})
+			got := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: err, HTTPStatus: syncexec.ExtractHTTPStatus(err)}))
 
 			assert.Equal(t, resultRequeue, got.Class, "%v", err)
 			assert.Equal(t, syncdomain.PersistRetryWork, got.Persistence)
@@ -408,7 +408,7 @@ func TestEngineFlow_ProcessTrialDecision_ATimedOutTrialKeepsTheOutageScope(t *te
 	require.NotNil(t, current)
 
 	timedOut := stalledGraphRequestError(t, clientTimeoutKind())
-	completion := &syncdomain.ActionCompletion{
+	completion := syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		ActionID:      current.ID,
 		Path:          "dir",
 		ActionType:    syncdomain.ActionFolderCreate,
@@ -417,7 +417,7 @@ func TestEngineFlow_ProcessTrialDecision_ATimedOutTrialKeepsTheOutageScope(t *te
 		ErrMsg:        timedOut.Error(),
 		IsTrial:       true,
 		TrialScopeKey: syncdomain.SKService(),
-	}
+	})
 	decision := classifyResult(completion)
 	_, err := flow.applyTrialCompletionDecision(t.Context(), syncdomain.SKService(), &decision, current, completion, nil)
 	require.NoError(t, err)
@@ -455,13 +455,13 @@ func TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence(t *testing.T) {
 	flow := testEngineFlow(t, eng)
 	timedOut := stalledGraphRequestError(t, clientTimeoutKind())
 	notEvidence := []*syncdomain.ActionCompletion{
-		{Err: timedOut, RunEnded: true},
-		{Err: keepaliveTimedOutReadError(), RunEnded: true},
-		{Err: fmt.Errorf("create folder: %w", context.DeadlineExceeded), RunEnded: true},
-		{Err: fmt.Errorf("create folder: %w", context.Canceled), RunEnded: true},
-		{Err: fmt.Errorf("create folder: %w", context.Canceled)},
-		{Err: localReadTimedOutError()},
-		{Err: localSideStalledError()},
+		syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: timedOut, RunEnded: true}),
+		syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: keepaliveTimedOutReadError(), RunEnded: true}),
+		syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: fmt.Errorf("create folder: %w", context.DeadlineExceeded), RunEnded: true}),
+		syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: fmt.Errorf("create folder: %w", context.Canceled), RunEnded: true}),
+		syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: fmt.Errorf("create folder: %w", context.Canceled)}),
+		syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: localReadTimedOutError()}),
+		syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: localSideStalledError()}),
 	}
 	apply := func(i int, completion *syncdomain.ActionCompletion) {
 		completion.Path = fmt.Sprintf("dir-%d", i)
@@ -475,10 +475,10 @@ func TestEngineFlow_OnlyTheServicesSilenceIsOutageEvidence(t *testing.T) {
 		apply(i, completion)
 	}
 	assert.Zero(t, servicePathsInWindow(flow), "none of them is the service's silence")
-	localRead := classifyResult(&syncdomain.ActionCompletion{Err: localReadTimedOutError()})
+	localRead := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: localReadTimedOutError()}))
 	assert.NotEqual(t, syncdomain.IssueRequestTimeout, localRead.ConditionType, "a local read is no request")
 
-	apply(len(notEvidence), &syncdomain.ActionCompletion{Err: timedOut})
+	apply(len(notEvidence), syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: timedOut}))
 	assert.Equal(t, 1, servicePathsInWindow(flow), "the live run's timeout is")
 }
 
@@ -562,7 +562,7 @@ func TestWorkerPool_ACommitThatOutlastsItsBoundIsAStoreFailure(t *testing.T) {
 
 	decision := classifyResult(&wedged)
 	assert.NotEqual(t, syncdomain.IssueRequestTimeout, decision.ConditionType, "a store is not a request: %v", wedged.Err)
-	failedCommit := classifyResult(&syncdomain.ActionCompletion{Err: errors.New("sync: commit outcome: disk I/O error")})
+	failedCommit := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: errors.New("sync: commit outcome: disk I/O error")}))
 	assert.Equal(t, failedCommit, decision, "the class of a failed commit")
 	whileStopping := wedged
 	whileStopping.RunEnded = true
@@ -635,7 +635,7 @@ func TestUploadNewFile_ARecordThatOutlastsItsBoundIsAStoreFailure(t *testing.T) 
 	require.ErrorIs(t, uploadErr, context.DeadlineExceeded, "the record gave up at its bound")
 	require.ErrorIs(t, uploadErr, syncdomain.ErrStoreAccessTimedOut)
 
-	completion := syncdomain.ActionCompletion{Err: uploadErr, Path: "doc.txt", ActionType: syncdomain.ActionUpload}
+	completion := *syncexec.CompletionForTest(&syncdomain.ActionCompletion{Err: uploadErr, Path: "doc.txt", ActionType: syncdomain.ActionUpload})
 	decision := classifyResult(&completion)
 	assert.NotEqual(t, syncdomain.IssueRequestTimeout, decision.ConditionType, "a store is not a request: %v", uploadErr)
 

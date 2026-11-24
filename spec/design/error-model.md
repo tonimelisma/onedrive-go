@@ -76,10 +76,11 @@ entry points:
   and CLI presentation
 - `internal/sync/syncstore/store.go` (`IsLocalDiskFull`): the store boundary's answer for
   SQLite `SQLITE_FULL`, folded into the same "local disk full" meaning
-- `internal/sync/syncdomain/domain_graph_error.go` (`classifyServerAnswer`): the one table
+- `internal/sync/internal/syncexec/completion.go` (`classifyServerAnswer`): the one table
   from (status, Graph code, message) to meaning — quota, refusal, outage,
-  throttle, transient conflict, range error — read by scope detection, result
-  classification and issue naming alike
+  throttle, transient conflict, range error — recorded on each completion
+  when it is built (`ActionCompletion.ServerAnswer`) and read by scope
+  detection, result classification and issue naming alike
 - `internal/sync/engine_result_classify.go`: classify each action completion
 - `internal/cli/failure_class.go`: classify command-returned errors into exit
   behavior and reason/action text

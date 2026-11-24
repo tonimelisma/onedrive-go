@@ -3,8 +3,6 @@ package syncdomain
 import (
 	"context"
 	"errors"
-
-	"github.com/tonimelisma/onedrive-go/internal/graph"
 )
 
 // Sentinel texts are user words without a package prefix: the sync console
@@ -44,12 +42,6 @@ const (
 	ResyncKindUploadDifferences
 )
 
-// Graph's inner codes for the two resync flavors.
-const (
-	graphCodeResyncApplyDifferences  = "resyncChangesApplyDifferences"
-	graphCodeResyncUploadDifferences = "resyncChangesUploadDifferences"
-)
-
 // OrphansAreDeletes reports whether the enumeration that follows this resync
 // may turn a confirmed-missing synced item into a delete.
 func (k ResyncKind) OrphansAreDeletes() bool {
@@ -74,18 +66,10 @@ func NewCursorUnusableError(reason string, cause error) *DeltaExpiredError {
 	return &DeltaExpiredError{kind: ResyncKindApplyDifferences, cause: cause, reason: reason}
 }
 
-func NewDeltaExpiredError(cause error) *DeltaExpiredError {
-	kind := ResyncKindUnknown
-	var graphErr *graph.GraphError
-	if errors.As(cause, &graphErr) {
-		switch {
-		case graphErr.HasCode(graphCodeResyncApplyDifferences):
-			kind = ResyncKindApplyDifferences
-		case graphErr.HasCode(graphCodeResyncUploadDifferences):
-			kind = ResyncKindUploadDifferences
-		}
-	}
-
+// NewDeltaExpiredError is the 410 cause with the resync flavor it named
+// (the remote observer reads the flavor from Graph's inner code:
+// syncobserve.ResyncKindOfGone).
+func NewDeltaExpiredError(kind ResyncKind, cause error) *DeltaExpiredError {
 	return &DeltaExpiredError{kind: kind, cause: cause}
 }
 

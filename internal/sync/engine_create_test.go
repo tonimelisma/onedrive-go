@@ -61,10 +61,10 @@ func requireClassifiedAsTheRead(
 	require.NotErrorIs(t, err, syncdomain.ErrActionPreconditionChanged, "a failed read proves nothing about the plan")
 	require.NotErrorIs(t, err, graph.ErrConflict)
 	require.NotErrorIs(t, err, graph.ErrPreconditionFailed)
-	decision := classifyResult(&syncdomain.ActionCompletion{
+	decision := classifyResult(syncexec.CompletionForTest(&syncdomain.ActionCompletion{
 		Path: "read-failed", ActionType: actionType, DriveID: driveID,
-		Err: err, HTTPStatus: syncdomain.ExtractHTTPStatus(err),
-	})
+		Err: err, HTTPStatus: syncexec.ExtractHTTPStatus(err),
+	}))
 	assert.Equal(t, read.class, decision.Class)
 	assert.Equal(t, read.evidence(driveID), decision.ScopeEvidence)
 }
@@ -148,8 +148,8 @@ func TestUploadTransferError_AFailedOutcomeLookupIsNotAStalePrecondition(t *test
 	t.Parallel()
 
 	for _, answer := range []*graph.GraphError{
-		{StatusCode: http.StatusConflict, Code: syncdomain.GraphCodeResourceModified, Err: graph.ErrConflict},
-		{StatusCode: http.StatusPreconditionFailed, Code: syncdomain.GraphCodeResourceModified, Err: graph.ErrPreconditionFailed},
+		{StatusCode: http.StatusConflict, Code: syncexec.GraphCodeResourceModified, Err: graph.ErrConflict},
+		{StatusCode: http.StatusPreconditionFailed, Code: syncexec.GraphCodeResourceModified, Err: graph.ErrPreconditionFailed},
 	} {
 		for _, read := range followUpReadFailures() {
 			t.Run(fmt.Sprintf("%d then %s", answer.StatusCode, read.name), func(t *testing.T) {
