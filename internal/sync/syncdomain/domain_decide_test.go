@@ -90,7 +90,7 @@ func TestDecide_EveryValidStateHasTheTableProperties(t *testing.T) {
 		}
 	}
 	assert.Empty(t, violations)
-	for _, kind := range AllReconciliationKinds() {
+	for _, kind := range allReconciliationKinds() {
 		assert.True(t, reached[kind], "no valid state yields %s", kind)
 	}
 	t.Logf("%d of %d states are valid", valid, decisionStateCount)

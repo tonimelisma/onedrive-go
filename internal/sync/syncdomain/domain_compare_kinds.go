@@ -14,7 +14,7 @@ const kindUnclassified = "unclassified"
 // The zero value is ComparisonUnclassified: a state no rule
 // covers, which planning refuses (validatePlannerKinds). Members are never
 // persisted, so their numbers may change; ComparisonDiverged stays last,
-// because AllComparisonKinds and ParseComparisonKind range up to it.
+// because the kind tests range up to it (allComparisonKinds).
 type ComparisonKind uint8
 
 const (
@@ -82,31 +82,6 @@ func (k ComparisonKind) String() string {
 	}
 }
 
-// AllComparisonKinds lists every member in declaration order, the
-// unclassified one first.
-func AllComparisonKinds() []ComparisonKind {
-	kinds := make([]ComparisonKind, 0, int(ComparisonDiverged)+1)
-	for k := ComparisonUnclassified; k <= ComparisonDiverged; k++ {
-		kinds = append(kinds, k)
-	}
-
-	return kinds
-}
-
-// ParseComparisonKind reads the comparison kind SQL returned. "unclassified"
-// parses to the zero member: it is a state outside the decision table, which
-// planning refuses with the row's inputs. Any other unknown name is the SQL
-// and the enum drifting apart.
-func ParseComparisonKind(s string) (ComparisonKind, error) {
-	for k := ComparisonUnclassified; k <= ComparisonDiverged; k++ {
-		if k.String() == s {
-			return k, nil
-		}
-	}
-
-	return ComparisonUnclassified, fmt.Errorf("sync: unknown comparison kind %q", s)
-}
-
 // ReconciliationKind is the decision the decision table takes for a path
 // (Reconcile, its second stage), which the planner maps to actions
 // (buildActionsForReconciliation). It owns its names: some equal action-type
@@ -115,8 +90,7 @@ func ParseComparisonKind(s string) (ComparisonKind, error) {
 //
 // The zero value is ReconcileUnclassified, the CASE's ELSE; ReconcileNoop is
 // the explicit "nothing to do" that the decision table states for a path.
-// ReconcileReplaceLocal stays last (AllReconciliationKinds,
-// ParseReconciliationKind).
+// ReconcileReplaceLocal stays last (allReconciliationKinds).
 type ReconciliationKind uint8
 
 const (
@@ -182,29 +156,6 @@ func (k ReconciliationKind) String() string {
 	default:
 		return fmt.Sprintf("ReconciliationKind(%d)", uint8(k))
 	}
-}
-
-// AllReconciliationKinds lists every member in declaration order, the
-// unclassified one first.
-func AllReconciliationKinds() []ReconciliationKind {
-	kinds := make([]ReconciliationKind, 0, int(ReconcileReplaceLocal)+1)
-	for k := ReconcileUnclassified; k <= ReconcileReplaceLocal; k++ {
-		kinds = append(kinds, k)
-	}
-
-	return kinds
-}
-
-// ParseReconciliationKind reads the reconciliation kind SQL returned, with
-// the same contract as ParseComparisonKind.
-func ParseReconciliationKind(s string) (ReconciliationKind, error) {
-	for k := ReconcileUnclassified; k <= ReconcileReplaceLocal; k++ {
-		if k.String() == s {
-			return k, nil
-		}
-	}
-
-	return ReconcileUnclassified, fmt.Errorf("sync: unknown reconciliation kind %q", s)
 }
 
 // PlannerDecisionInput is one input of the decision table as the plan error
