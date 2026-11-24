@@ -17,8 +17,10 @@ of its data-safety protections are listed separately in
 
 ## Not yet available
 
-- Release binaries and packages (Homebrew, deb, rpm, AUR, containers). Build
-  from source for now.
+- Packages (Homebrew, deb, rpm, AUR, containers). Use a
+  [release binary](../README.md#release-binaries) (Linux amd64, macOS arm64)
+  or build from source. Releases are builds of every merge to `main`, not
+  stable versions.
 - A launchd example for macOS, and a `service install` command for either
   platform. A systemd unit is provided; see
   [running as a service](running-as-a-service.md).

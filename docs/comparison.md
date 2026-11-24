@@ -25,9 +25,9 @@ are welcome as issues or pull requests.
 | --- | --- | --- | --- |
 | What it is | OneDrive CLI and two-way sync client | OneDrive sync client | General command-line tool for many storage services, including OneDrive |
 | Language, license | Go, MIT | D, GPLv3 | Go, MIT |
-| Maturity | Pre-release, no releases yet | Released, maintained since 2018 | Released; `bisync` is documented as an "advanced command" |
+| Maturity | Pre-release; every merge to `main` is published as a release | Released, maintained since 2018 | Released; `bisync` is documented as an "advanced command" |
 | Platforms | Linux, macOS (FreeBSD builds, untested) | Linux, FreeBSD, OpenBSD; Docker and Podman images. Not Windows or macOS natively | Linux, macOS, Windows, BSDs and more |
-| Install | Build from source | Distribution packages, source builds, containers | Release binaries, packages |
+| Install | Release binaries (Linux amd64, macOS arm64) or source | Distribution packages, source builds, containers | Release binaries, packages |
 | OneDrive Personal, work or school | Yes | Yes | Yes |
 | SharePoint libraries | Yes | Yes | Yes |
 | Folders shared with you | Yes | Yes | See rclone's OneDrive docs |

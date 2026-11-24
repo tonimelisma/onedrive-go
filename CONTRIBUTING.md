@@ -142,10 +142,42 @@ that group instead. A GitHub request that fails with an HTTP 5xx, a dropped
 connection or a network that cannot reach GitHub is repeated with backoff, at
 most four attempts in all.
 
+## Releases
+
+Every merge to `main` is released, with no manual step (R-6.10.41). When the
+push-to-`main` CI run of a commit succeeds, `.github/workflows/release.yml`:
+
+1. refuses to run from any ref but `refs/heads/main`;
+2. picks the version with `scripts/release-version.sh`: the highest
+   `vMAJOR.MINOR.PATCH` tag with its patch bumped (`v0.1.0` for the first), or
+   the tag the commit already has when a rerun finishes its release; a commit
+   a newer release already contains is skipped;
+3. builds `onedrive-go-<tag>-linux-amd64` and `onedrive-go-<tag>-darwin-arm64`
+   from that exact commit (`CGO_ENABLED=0`, `-trimpath`, the tag stamped into
+   `--version`) and writes `SHA256SUMS`;
+4. smoke-tests the Linux binary with `scripts/release-smoke.sh` (it prints its
+   tag, and `sync --watch` keeps running on a paused throwaway drive);
+5. attests the binaries' build provenance, creates the tag with the job's
+   `GITHUB_TOKEN`, publishes the release with generated notes, and verifies
+   the published assets the way a consumer does.
+
+One release runs at a time (concurrency group `release`). The owner can run
+the workflow by hand from `main` with an optional `commit` (one whose push CI
+passed) and a higher `version`. Nobody tags or releases by hand, and no
+workflow runs on tag pushes. To check a download:
+
+```bash
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify onedrive-go-vX.Y.Z-linux-amd64 --repo tonimelisma/onedrive-go \
+  --signer-workflow tonimelisma/onedrive-go/.github/workflows/release.yml \
+  --source-ref refs/heads/main
+```
+
 ## Release readiness
 
-A release is not ready until these proof gates are current for the release
-SHA:
+The automatic releases above are builds of `main` before launch. A release
+announced as ready for use is not ready until these proof gates are current
+for its SHA:
 
 - The nightly `verify public` and `e2e-full` runs are green for the release
   SHA; broader SharePoint and
