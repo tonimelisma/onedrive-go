@@ -123,23 +123,17 @@ deferred state.
 
 `pre-pr` runs the `pr` profile (or the profile named before `--dod`), checks
 the branch is based on latest `origin/main`, and rejects undecided PR-comment
-carryover. `pre-merge` waits for PR CI (`verify`, `integration`, and `e2e`; PR
-`stress` may be skipped), posts the manifest's templated replies, resolves
-handled review threads, and requires zero unresolved review threads.
-`post-merge`, run on the increment's branch with a clean checkout, squash-merges
-the pull request over REST pinned to the head it checked (a pull request merged
-already is no failure), marks the branch's nightly claims fixed, restarts the
-branch from the new `origin/main` and pushes it, waits for the push-to-`main`
-CI run of the merge commit to succeed (every push to `main` runs the quick
-lane), prunes the merged builder worktrees, and ends with the read-only cleanup audit. Both CI waits go on
-while any check changes state and fail after the longest timeout of the jobs
-that run for the awaited event (a pull request, or a push after merge) plus 10
-minutes without a change; a job the runner cancelled in the run of the commit
-they wait for is rerun, at most twice (`--ci-max-reruns`). A check that has
-not started while its job waits in a concurrency group gets one whole run of
-that group instead. A GitHub request that fails with an HTTP 5xx, a dropped
-connection or a network that cannot reach GitHub is repeated with backoff, at
-most four attempts in all.
+carryover. `pre-merge` waits for the pull request's required CI, posts the
+manifest's templated replies, resolves handled review threads, and requires
+zero unresolved review threads. `post-merge`, run on the increment's branch
+with a clean checkout, squash-merges the pull request over REST pinned to the
+head it checked, marks the branch's nightly claims fixed, restarts the branch
+from the new `origin/main` and pushes it, waits for the push-to-`main` CI run
+of the merge commit to succeed, prunes the merged builder worktrees, and ends
+with the read-only cleanup audit. How the two CI waits decide that CI has
+stalled, which cancelled jobs they rerun and how GitHub requests are retried
+is in the Verification Policy of
+[system.md](spec/design/system.md).
 
 ## Releases
 
