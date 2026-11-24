@@ -717,39 +717,105 @@ func TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle(
 
 // Validates: R-2.17.6, R-2.17.1
 //
-// The composition inputs of
+// The composition inputs of four scenarios in which inner.txt, in docs/sub,
+// lands at or below the path docs's move vacates while sub, the nearest
+// folder above it, is relocated too and inner.txt does not land below sub's
+// path: the walk of vacatingFolder goes on past sub to docs
+// (landsPastARelocatedFolder), and inner.txt's move waits for the next pass
+// while the folders' moves run, so every action of the plan has an order.
+// Planned from its source below both moving folders, it closed a cycle
+// wherever nothing else ordered it: onto docs itself, into photos moved onto
+// docs, and with sub moving out of docs. The rows are
 // TestRunOnce_FileMovedOutOfARenamedSubfolderIntoTheRecreatedFolderConverges,
-// made here: docs/sub renamed docs/sub2, docs moved to photos/photos, a new
-// docs made, and photos/photos/sub2/inner.txt moved into it. inner.txt lands
-// below the path docs's move vacates, but the nearest folder above it that is
-// relocated is sub, and its target does not land below sub's path
-// (vacatingFolder), so its move is neither rebased nor held: it keeps the
-// source docs/sub/inner.txt, while sub's rename follows docs's move. Every
-// action of the plan they make with the docs made online has an order.
-func TestComposeMoves_EntryBelowARenamedSubfolderKeepsItsSource(t *testing.T) {
+// TestRunOnce_FileMovedOutOfARenamedSubfolderOntoTheMovedFoldersPathConverges,
+// TestRunOnce_FileMovedOutOfARenamedSubfolderIntoAFolderMovedOntoTheMovedFoldersPathConverges
+// and TestRunOnce_FileMovedOutOfASubfolderThatLeftTheMovedFolderIntoTheRemadeFolderConverges,
+// made on the side the row names.
+func TestComposeMoves_EntryBelowARelocatedSubfolderWaitsForTheNextPass(t *testing.T) {
 	t.Parallel()
 
-	nodes := []moveNode{
-		composeNode("docs", syncdomain.ItemTypeFolder, "docs", "photos/photos", "docs"),
-		composeNode("sub", syncdomain.ItemTypeFolder, "docs/sub", "photos/photos/sub2", "docs/sub"),
-		composeNode("inner", syncdomain.ItemTypeFile, "docs/sub/inner.txt", "docs/inner.txt", "docs/sub/inner.txt"),
-		composeNode("kept", syncdomain.ItemTypeFile, "docs/kept.txt", "photos/photos/kept.txt", "docs/kept.txt"),
-		composeNode("photos", syncdomain.ItemTypeFolder, "photos", "photos", "photos"),
-		composeNode("photo", syncdomain.ItemTypeFile, "photos/photo.jpg", "photos/photo.jpg", "photos/photo.jpg"),
+	photos := composeNode("photos", syncdomain.ItemTypeFolder, "photos", "photos", "photos")
+	photo := composeNode("photo", syncdomain.ItemTypeFile, "photos/photo.jpg", "photos/photo.jpg", "photos/photo.jpg")
+	for _, tc := range []struct {
+		name string
+		// nodes are docs, sub, inner and kept, below which photos and
+		// photo.jpg stay where they were unless the row moves them.
+		nodes      []moveNode
+		newFolders []string
+		// creates is the folder the plan makes on OneDrive at docs.
+		creates    []syncdomain.Action
+		wantLocal  []string
+		wantRemote []string
+	}{
+		{
+			name: "into the docs made again here, below sub renamed",
+			nodes: []moveNode{
+				composeNode("docs", syncdomain.ItemTypeFolder, "docs", "photos/photos", "docs"),
+				composeNode("sub", syncdomain.ItemTypeFolder, "docs/sub", "photos/photos/sub2", "docs/sub"),
+				composeNode("inner", syncdomain.ItemTypeFile, "docs/sub/inner.txt", "docs/inner.txt", "docs/sub/inner.txt"),
+				composeNode("kept", syncdomain.ItemTypeFile, "docs/kept.txt", "photos/photos/kept.txt", "docs/kept.txt"),
+				photos, photo,
+			},
+			newFolders: []string{"docs"},
+			creates:    []syncdomain.Action{{Type: syncdomain.ActionFolderCreate, Path: "docs", CreateSide: syncdomain.CreateRemote}},
+			wantRemote: []string{"docs->photos/photos", "photos/photos/sub->photos/photos/sub2"},
+		},
+		{
+			name: "onto docs here, below sub renamed",
+			nodes: []moveNode{
+				composeNode("docs", syncdomain.ItemTypeFolder, "docs", "archive", "docs"),
+				composeNode("sub", syncdomain.ItemTypeFolder, "docs/sub", "archive/sub2", "docs/sub"),
+				composeNode("inner", syncdomain.ItemTypeFile, "docs/sub/inner.txt", "docs", "docs/sub/inner.txt"),
+				composeNode("kept", syncdomain.ItemTypeFile, "docs/kept.txt", "archive/kept.txt", "docs/kept.txt"),
+				photos, photo,
+			},
+			wantRemote: []string{"docs->archive", "archive/sub->archive/sub2"},
+		},
+		{
+			name: "into photos moved onto docs on OneDrive, below sub renamed",
+			nodes: []moveNode{
+				composeNode("docs", syncdomain.ItemTypeFolder, "docs", "docs", "archive"),
+				composeNode("sub", syncdomain.ItemTypeFolder, "docs/sub", "docs/sub", "archive/sub2"),
+				composeNode("inner", syncdomain.ItemTypeFile, "docs/sub/inner.txt", "docs/sub/inner.txt", "docs/inner.txt"),
+				composeNode("kept", syncdomain.ItemTypeFile, "docs/kept.txt", "docs/kept.txt", "archive/kept.txt"),
+				composeNode("photos", syncdomain.ItemTypeFolder, "photos", "photos", "docs"),
+				composeNode("photo", syncdomain.ItemTypeFile, "photos/photo.jpg", "photos/photo.jpg", "docs/photo.jpg"),
+			},
+			wantLocal: []string{"docs->archive", "photos->docs", "docs/sub->docs/sub2"},
+		},
+		{
+			name: "into the docs made again here, below sub moved out of docs",
+			nodes: []moveNode{
+				composeNode("docs", syncdomain.ItemTypeFolder, "docs", "archive", "docs"),
+				composeNode("sub", syncdomain.ItemTypeFolder, "docs/sub", "photos/sub", "docs/sub"),
+				composeNode("inner", syncdomain.ItemTypeFile, "docs/sub/inner.txt", "docs/inner.txt", "docs/sub/inner.txt"),
+				composeNode("kept", syncdomain.ItemTypeFile, "docs/kept.txt", "archive/kept.txt", "docs/kept.txt"),
+				photos, photo,
+			},
+			newFolders: []string{"docs"},
+			creates:    []syncdomain.Action{{Type: syncdomain.ActionFolderCreate, Path: "docs", CreateSide: syncdomain.CreateRemote}},
+			wantRemote: []string{"docs->archive", "docs/sub->photos/sub"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			occupancy := composeOccupancy(tc.nodes)
+			for _, folder := range tc.newFolders {
+				occupancy.local[folder] = true
+			}
+			c := composeMoves(tc.nodes, occupancy, nil)
+
+			assert.Equal(t, tc.wantLocal, composedMovesBySide(&c, moveCoordLocal), "local moves")
+			assert.Equal(t, tc.wantRemote, composedMovesBySide(&c, moveCoordRemote), "OneDrive moves")
+			assert.Equal(t, map[string]bool{"inner": true}, c.deferred, "inner.txt waits for the next pass")
+
+			actions := append(composedMoveActions(&c, tc.nodes), tc.creates...)
+			kept, _, cycled := isolateDependencyCycles(actions, nil)
+			assert.Len(t, kept, len(actions), "no action is dropped as a cycle")
+			assert.Empty(t, cycled)
+		})
 	}
-	occupancy := composeOccupancy(nodes)
-	occupancy.local["docs"] = true
-	c := composeMoves(nodes, occupancy, nil)
-
-	assert.Equal(t, []string{
-		"docs/sub/inner.txt->docs/inner.txt", "docs->photos/photos", "photos/photos/sub->photos/photos/sub2",
-	}, composedMovesBySide(&c, moveCoordRemote))
-	assert.Empty(t, composedMovesBySide(&c, moveCoordLocal))
-	assert.Empty(t, c.deferred)
-
-	actions := append(composedMoveActions(&c, nodes), syncdomain.Action{Type: syncdomain.ActionFolderCreate, Path: "docs", CreateSide: syncdomain.CreateRemote})
-	kept, _, _ := isolateDependencyCycles(actions, nil)
-	assert.Len(t, kept, len(actions))
 }
 
 // Validates: R-2.17.6, R-2.17.1
@@ -2418,7 +2484,10 @@ func TestBuildDependencies_ALocalMoveOntoAFolderDeletedHereWaitsForItsDelete(t *
 // lies below another local move's destination moves an entry out of what
 // holds that destination now: here p moved into x while OneDrive moved x into
 // p and z onto x, and this computer follows OneDrive. p leaves x first, x
-// moves into p, and z lands where x was. On OneDrive a move's source is
+// moves into p, and z lands where x was. So does one that also lands there,
+// a rename inside the holder: OneDrive renamed docs/sub docs/sub2, moved docs
+// to archive and photos onto docs, so sub is renamed inside docs, docs moves,
+// and photos lands where docs was. On OneDrive a move's source is
 // rebased through the moves before it, so a remote move from below another
 // remote folder move's destination still waits for it; below a file's,
 // which holds nothing, it does not.
@@ -2435,6 +2504,15 @@ func TestBuildDependencies_ALocalMoveFromBelowAnotherLocalMovesDestinationRunsFi
 	kept, deps, _ := isolateDependencyCycles(local, nil)
 	require.Len(t, kept, len(local), "no move is dropped as a cycle")
 	assert.Equal(t, [][]int{nil, {0}, {1}}, deps, "p leaves x, x moves into p, z lands where x was")
+
+	renamedInside := []syncdomain.Action{
+		{Type: syncdomain.ActionLocalMove, OldPath: "docs/sub", Path: "docs/sub2", MovedRemotePath: "archive/sub2", View: folder},
+		{Type: syncdomain.ActionLocalMove, OldPath: "docs", Path: "archive", View: folder},
+		{Type: syncdomain.ActionLocalMove, OldPath: "photos", Path: "docs", View: folder},
+	}
+	kept, deps, _ = isolateDependencyCycles(renamedInside, nil)
+	require.Len(t, kept, len(renamedInside), "no move is dropped as a cycle")
+	assert.Equal(t, [][]int{nil, {0}, {1}}, deps, "sub is renamed inside docs, docs moves, photos lands where docs was")
 
 	remote := []syncdomain.Action{
 		{Type: syncdomain.ActionRemoteMove, OldPath: "z", Path: "x", View: folder},
@@ -2485,10 +2563,12 @@ func TestBuildDependencies_MoveIntoAFolderMadeAtADeletedPathWaitsForTheDeleteAnd
 // for that folder, which waits for the folder move, and the folder move does
 // not wait for it, so it runs after the folder move from its old source.
 // Move composition plans such a move only when it neither rebases nor holds
-// it (vacatingFolder); the last two rows are the plans of
-// TestRunOnce_FileMovedOutOfARenamedSubfolderIntoTheRecreatedFolderConverges,
-// made here, and of
-// TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges.
+// it (vacatingFolder): below a folder present on one side only. The last row
+// is the plan of
+// TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges;
+// the row before it, below a renamed subfolder, is a shape composition now
+// holds for the next pass (landsPastARelocatedFolder), kept as a rule of the
+// dependencies alone.
 func TestBuildDependencies_ChildrenLeaveFirstUnlessTheyMoveIntoTheRecreatedSource(t *testing.T) {
 	t.Parallel()
 

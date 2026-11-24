@@ -69,7 +69,10 @@ import (
 // the path a folder's move vacates, after that folder (vacatingFolder), an
 // ancestor of its source, and, as a file OneDrive moves, after every folder
 // OneDrive relocates (waitsForVacatingFolder); each of these waits ends with
-// the decision of the item waited for. An item also waits while another item
+// the decision of the item waited for. An item whose target lies at or below
+// the path a farther folder's move vacates, past a nearer relocated folder it
+// does not land below, waits for the next pass (landsPastARelocatedFolder).
+// An item also waits while another item
 // holds its destination, whatever that item does (blockingPendingMove): until
 // a move of the plan vacates the destination, parkOneOccupancyCycle parks an
 // item of a swap or rotation, or the final sweep of emitRun defers the waiting
@@ -1426,6 +1429,10 @@ func (e *moveEmitter) newFolderHoldingItsSource(n *moveNode, side moveCoord, new
 // otherwise plans the move or defers it. It reports whether n left the
 // pending state.
 func (e *moveEmitter) resolveMove(n *moveNode, side moveCoord, newPath string) bool {
+	if e.landsPastARelocatedFolder(n, side, newPath) {
+		e.deferNode(n.key)
+		return true
+	}
 	if e.waitsForVacatingFolder(n, side, newPath) {
 		return false
 	}
@@ -1976,18 +1983,14 @@ func (e *moveEmitter) holdsALocalLanding(key string) bool {
 // relocated there, when newPath is that folder's path on side or lies below
 // it. A directory that is not a synced item moves with the folder above it on
 // side, so the search passes over it; a synced folder present on one side
-// only (one SQLite deletes or re-creates) ends it with none. With none, or
-// with a nearer relocated folder n does not land in, n's move keeps its
-// source, and buildDependencies orders it after a folder move whose vacated
-// path the plan creates a folder at (movesIntoRecreatedSource), unless that
-// nearer folder moves out of the moving one: its own move then waits for n
-// to leave it first, a cycle through the folder made there. When the plan
-// deletes the one-sided folder instead, that delete waits for the move and
-// the folder move for the delete, a cycle the delete waits a pass to break
-// (withholdDeletesInsideFolderMoveCycles). When n lands on the vacated path
-// itself or in a folder moved onto it, n's move and the folder move wait for
-// each other: a cycle the planner drops on every pass (sync-planning.md, Move
-// Composition).
+// only (one SQLite deletes or re-creates) ends it with none. With none, n's
+// move keeps its source, and buildDependencies orders it after a folder move
+// whose vacated path the plan creates a folder at (movesIntoRecreatedSource).
+// When the plan deletes the one-sided folder instead, that delete waits for
+// the move and the folder move for the delete, a cycle the delete waits a
+// pass to break (withholdDeletesInsideFolderMoveCycles). A nearer relocated
+// folder n does not land in is returned with lands false; when n lands below
+// a farther one, n waits for the next pass (landsPastARelocatedFolder).
 func (e *moveEmitter) vacatingFolder(n *moveNode, side moveCoord, newPath string) (string, bool) {
 	for dir := path.Dir(n.paths[side]); dir != "." && dir != "/"; dir = path.Dir(dir) {
 		key, isNode := e.byPath[side][dir]
@@ -2005,6 +2008,44 @@ func (e *moveEmitter) vacatingFolder(n *moveNode, side moveCoord, newPath string
 	}
 
 	return "", false
+}
+
+// landsPastARelocatedFolder reports whether n's target lies at or below the
+// path a folder's move on side vacates, past a nearer folder above n that is
+// relocated on side and that the target does not land below: the search of
+// vacatingFolder walked on past that nearer folder. n's move then waits for
+// the next pass, which finds it where both folders' moves carried it. Planned
+// now, from a source below both moving folders, it closed a cycle on every
+// pass wherever nothing else ordered it: onto the vacated path itself or into
+// a folder moved onto it (`docs/sub` renamed `docs/sub2`, `docs` moved to
+// `archive`, and `archive/sub2/inner.txt` moved onto `docs` or into `photos`
+// moved there), the folder move waited for n to leave first and n for the
+// folder move, directly or through the folder moved onto the path; and where
+// the nearer folder moves out of the moving one (`archive/sub` moved to
+// `photos/sub` and `photos/sub/inner.txt` into a new `docs`), that folder's
+// move waited for n to leave it, n for the new folder, the new folder for
+// the folder move and the folder move for the subfolder. The walk stops, as
+// vacatingFolder's does, at a synced folder present on one side only.
+func (e *moveEmitter) landsPastARelocatedFolder(n *moveNode, side moveCoord, newPath string) bool {
+	passedARelocatedFolder := false
+	for dir := path.Dir(n.paths[side]); dir != "." && dir != "/"; dir = path.Dir(dir) {
+		key, isNode := e.byPath[side][dir]
+		if !isNode {
+			continue
+		}
+		if !e.isMoveParticipant(e.nodes[key]) {
+			return false
+		}
+		if sameLocation(e.location(e.nodes[key], side), e.target[key]) {
+			continue
+		}
+		if pathAtOrBelow(newPath, dir) {
+			return passedARelocatedFolder
+		}
+		passedARelocatedFolder = true
+	}
+
+	return false
 }
 
 // waitsForVacatingFolder reports whether n's move on side lands where a

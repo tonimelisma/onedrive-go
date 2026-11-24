@@ -699,21 +699,43 @@ A directory between the item and the moving folder that is not a synced item
 (a folder made on one side) moves with that folder and changes none of this
 (`TestComposeMoves_FileMovedOnOneDriveOutOfAFolderMadeHereWaitsForItsFolder`,
 `TestRunOnce_FileMovedOnOneDriveOutOfAFolderMadeHereConverges`). The search
-for the moving folder stops at the nearest synced folder above the item that
-is relocated on that side or present on that side only (one SQLite deletes
-or re-creates). When that folder is a nearer relocated one the item does not
-land in (`docs/sub` renamed inside the moving `docs`, and its `inner.txt`
-moved into the new `docs`), or the one-sided folder, composition neither
-rebases nor holds the move, which keeps its source below the folder move's.
-Where the plan creates a folder at the vacated path on that side, and no move
-of the folder the search stopped at holds the item back (that folder is
-renamed inside the moving one, or made again on the side SQLite lost it),
-`buildDependencies` lets such a move run after the folder move, from the
-source that move took away: it is superseded once, and the next pass of the
-same sync moves it
-(`TestComposeMoves_EntryBelowARenamedSubfolderKeepsItsSource`,
+for the moving folder (`vacatingFolder`) stops at the nearest synced folder
+above the item that is relocated on that side or present on that side only
+(one SQLite deletes or re-creates). A nearer relocated folder the item does
+not land below does not end the walk: when a farther relocated folder above
+it vacates the path the item's target lies at or below, the item's move
+waits for the next pass (`landsPastARelocatedFolder`), which finds it where
+both folders' moves carried it. Planned from its source below both moving
+folders, such a move closed a cycle wherever nothing else ordered it: with
+`docs/sub` renamed `docs/sub2` and `docs` moved to `archive`, a move of
+`archive/sub2/inner.txt` onto `docs` itself, or into `photos` moved onto
+`docs`, waited for `docs`'s move, directly or through `photos`'s, while
+`docs`'s move waited for it to leave first; and with `docs` moved to
+`archive` and made again and `archive/sub` moved out of it to `photos/sub`,
+a move of `photos/sub/inner.txt` into the new `docs` waited for the new
+folder, the new folder for `docs`'s move, `docs`'s for `sub` to leave, and
+`sub`'s for the file to leave it. Each made on either side converges in one
+sync, as does the renamed subfolder with its `inner.txt` moved into a `docs`
+made again, which `buildDependencies` once ordered by letting the move run
+from the source the folder move took away, superseded once
+(`TestComposeMoves_EntryBelowARelocatedSubfolderWaitsForTheNextPass`,
 `TestRunOnce_FileMovedOutOfARenamedSubfolderIntoTheRecreatedFolderConverges`,
-`TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges`).
+`TestRunOnce_FileMovedOutOfARenamedSubfolderOntoTheMovedFoldersPathConverges`,
+`TestRunOnce_FileMovedOutOfARenamedSubfolderIntoAFolderMovedOntoTheMovedFoldersPathConverges`,
+`TestRunOnce_FileMovedOutOfASubfolderThatLeftTheMovedFolderIntoTheRemadeFolderConverges`).
+In the `photos` shape made on OneDrive, the local rename of `docs/sub` to
+`docs/sub2` runs inside `docs` before `docs` moves, so it does not wait for
+`photos`'s local move onto `docs` though its path lies below that move's
+destination: a local move from below another local move's destination moves
+inside what holds that destination now, wherever it lands there
+(`TestBuildDependencies_ALocalMoveFromBelowAnotherLocalMovesDestinationRunsFirst`).
+When the search stops at the one-sided folder, composition neither rebases
+nor holds the move, which keeps its source below the folder move's. Where
+the plan creates a folder at the vacated path on that side, and SQLite made
+the one-sided folder again on the side it lost it, `buildDependencies` lets
+such a move run after the folder move, from the source that move took away:
+it is superseded once, and the next pass of the same sync moves it
+(`TestRunOnce_FileMovedOutOfASubfolderRemovedHereButAddedToOnOneDriveConverges`).
 Where SQLite deletes the one-sided folder instead, the delete waits for the
 move to leave it (named from where the folder move puts it, the move would
 not hold the delete back, and the folder would be deleted online with the
@@ -731,19 +753,8 @@ the item has left (`mv docs archive; mkdir docs; mv archive/sub/inner.txt
 docs/inner.txt; rmdir archive/sub`, here or on OneDrive)
 (`TestComposeMoves_EntryBelowAFolderOnOneSideOnlyKeepsItsSource`,
 `TestWithholdDeletesInsideFolderMoveCycles_HoldsTheDeleteThatClosesTheCycle`,
-`TestRunOnce_FileMovedOutOfASubfolderIntoTheRemadeFolderWithTheSubfolderRemovedConverges`). Where the
-plan makes no folder at the vacated path, because the move lands on that path
-itself or in a folder moved onto it (on OneDrive, `docs/sub` renamed
-`docs/sub2`, `docs` moved to `archive`, and `archive/sub2/inner.txt` moved to
-`docs`, or `photos` moved to `docs` and the file to `docs/inner.txt`), nothing
-orders the move: the folder move waits for it to leave first, and it waits
-for the folder move, directly or through the folder moved onto the path, a
-cycle the planner drops on every pass. So it is where the folder the search
-stopped at moves out of the moving one (`docs` moved to `archive` and made
-again, `archive/sub` moved to `photos/sub`, and `photos/sub/inner.txt` moved
-into the new `docs`): that folder's own move waits for the item to leave it
-first, the item for the new folder, and the new folder for the folder move,
-which waits for the subfolder to leave. So it is where the new folder can
+`TestRunOnce_FileMovedOutOfASubfolderIntoTheRemadeFolderWithTheSubfolderRemovedConverges`).
+A cycle of another kind closes where the new folder can
 only be made after the moving folder has moved (`y` moved to `x/y` and made
 again, `x/a.txt` moved into the new `y`, and `x` moved to `x2`): `x`'s move
 waits for `a.txt` to leave, `a.txt` for the new `y`, and the new `y` for
