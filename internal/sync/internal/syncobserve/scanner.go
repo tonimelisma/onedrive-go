@@ -76,7 +76,7 @@ const (
 //  1. Walk (sequential): collect observed map and rows, list new folders,
 //     classify files that need hashing into a hashJob slice. Collects
 //     SkippedItems for invalid names, too-long paths, and too-large files.
-//  2. Hash (parallel): errgroup.SetLimit(checkWorkers) hashes files concurrently.
+//  2. Hash (parallel): at most checkWorkers clock-started workers hash files concurrently.
 //  3. Case collision detection (sequential) over the new and changed entries.
 func (o *LocalObserver) FullScan(ctx context.Context, tree *synctree.Root) (ScanResult, error) {
 	syncRoot := tree.Path()

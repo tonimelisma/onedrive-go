@@ -389,6 +389,7 @@ func stressSyncObserveShutdownAndCancellationMembers() []string {
 		"TestCancelPendingTimers",
 		"TestCancelRecoveryScan_StaleTimerFiringIsIgnored",
 		"TestFullDelta_ContextCanceled",
+		"TestFullScan_CancelStopsTheHashWorkers",
 		"TestFullScan_ContextCanceled",
 		"TestHandleDelete_CancelsCoalesceTimer",
 		"TestLocalWatch_ContextCancellation",

@@ -118,7 +118,6 @@ linters:
             - github.com/google/uuid
             - github.com/fsnotify/fsnotify
             - github.com/coder/websocket
-            - golang.org/x/sync
             - github.com/mattn/go-isatty
             - golang.org/x/sys
         # depguard matches files patterns against each file's absolute path,

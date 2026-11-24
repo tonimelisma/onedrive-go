@@ -17,8 +17,9 @@ import (
 // The engine's clock is the sync tree's scheduler as well as its time: every
 // goroutine the sync tree's product code starts is started by SyncClock.Go,
 // so a test that owns the clock owns when the watch's goroutines, the
-// workers, the debounce loop and the socket.io reader run. The one go
-// statement is the real clock's own.
+// workers, the scan's hash workers, the debounce loop and the socket.io
+// reader run. The one go statement is the real clock's own; a goroutine
+// group's Go is no way around it, since depguard admits no errgroup.
 func TestSyncTree_StartsGoroutinesOnlyThroughTheClock(t *testing.T) {
 	t.Parallel()
 
