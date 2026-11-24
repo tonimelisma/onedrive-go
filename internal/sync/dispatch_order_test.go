@@ -252,6 +252,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_DryRun_NoExecution,
 		TestRunOnce_EmojiOnlyVariantIsACollisionNotAnEndlessConflict,
 		TestRunOnce_EmptiedMountPointPlansNoRemoteDeletes,
+		TestRunOnce_StoreFromAnOlderGenerationIsRebuiltAndDeletesNothing,
 		TestRunOnce_EmptyPlan_NoPanic,
 		TestRunOnce_ExecutorPartialFailure,
 		TestRunOnce_FailedActionsRemainInReportErrorsAfterSummaryLogging,
