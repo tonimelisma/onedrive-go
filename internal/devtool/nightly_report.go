@@ -309,6 +309,23 @@ func (p *nightlyReportPlan) describe(verb string) string {
 	return b.String()
 }
 
+// writeLogReadDetails prints, for each job whose log could not be read, why,
+// in gh's own words (nightlyLogReadDetail): the report's job log is where a
+// failed read is diagnosed, and the issue keeps its own words.
+func writeLogReadDetails(stdout io.Writer, jobs []nightlyJobReport) error {
+	for i := range jobs {
+		if jobs[i].logReadDetail == "" {
+			continue
+		}
+		line := fmt.Sprintf("nightly report: the log of %s could not be read: %s\n", jobs[i].name, jobs[i].logReadDetail)
+		if err := writeStatus(stdout, line); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // reportNightly reports one run: it reads the run, its jobs and the failing
 // jobs' logs and posts the commit status, which depends on the run alone;
 // then, for a scheduled run of main, it reads which one is the newest and,
@@ -328,6 +345,9 @@ func reportNightly(ctx context.Context, gh ghClient, repoRoot string, runID int6
 	jobs := nightlyJobReports(run.Jobs, nightlyReportJob)
 	if attributeErr := attributeNightlyFailures(ctx, gh, repoRoot, jobs); attributeErr != nil {
 		return attributeErr
+	}
+	if writeErr := writeLogReadDetails(stdout, jobs); writeErr != nil {
+		return writeErr
 	}
 	report := nightlyRunReport{runID: runID, runURL: run.URL, headSHA: run.HeadSHA, jobs: jobs}
 	if dryRun {
