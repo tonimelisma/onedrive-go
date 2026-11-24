@@ -21,7 +21,7 @@ import (
 // run's goroutine was in when the cancel landed does not add a bound of its
 // own. The run's one goroutine owns it.
 type stopDrain struct {
-	// deadline ends the bound: stopBound after the run's context ended, or
+	// deadline ends the bound: stopDrainBound after the run's context ended, or
 	// after the run first saw a stop no cancel caused, on the real clock that
 	// context deadlines run on.
 	deadline time.Time
@@ -60,16 +60,28 @@ func (flow *engineFlow) withRunStop(ctx context.Context) context.Context {
 }
 
 // stopDeadlineAfterCancel is the stop's one deadline as any goroutine reads it
-// once the run's context ended: stopBound after the cancel (canceledAt), or
-// after now while the callback that records the cancel has not run yet. It
-// reads only the atomic canceledAt and the fixed stopBound, never the drain
-// the run's goroutine owns.
+// once the run's context ended: the stop's bound after the cancel
+// (canceledAt), or after now while the callback that records the cancel has
+// not run yet. It reads only the atomic canceledAt and the fixed bound, never
+// the drain the run's goroutine owns.
 func (flow *engineFlow) stopDeadlineAfterCancel() time.Time {
 	if canceled := flow.canceledAt.Load(); canceled != nil {
-		return canceled.Add(flow.stopBound)
+		return canceled.Add(flow.stopDrainBound())
 	}
 
-	return syncdomain.WallNow().Add(flow.stopBound)
+	return syncdomain.WallNow().Add(flow.stopDrainBound())
+}
+
+// stopDrainBound is how long a stopping run's one bound lasts: the bound of
+// an outcome's detached commit (OutcomeCommitTimeout), unless a test
+// shortened it (engineHooks.stopBound). The run's hooks are fixed for the
+// run, so any goroutine may read it.
+func (flow *engineFlow) stopDrainBound() time.Duration {
+	if flow.hooks.stopBound > 0 {
+		return flow.hooks.stopBound
+	}
+
+	return syncdomain.OutcomeCommitTimeout
 }
 
 // applyLiveCompletion applies a completion that reached the run while it went
@@ -137,7 +149,7 @@ func (flow *engineFlow) beginStopDrain() {
 }
 
 // stopDeadline is the stop's one deadline: the running drain's, or, while no
-// drain runs, stopBound after the cancel (canceledAt), or after now for a stop
+// drain runs, the stop's bound after the cancel (canceledAt), or after now for a stop
 // no cancel caused. Reading it starts nothing.
 func (flow *engineFlow) stopDeadline() time.Time {
 	if flow.stop != nil {
@@ -149,7 +161,7 @@ func (flow *engineFlow) stopDeadline() time.Time {
 		start = *canceled
 	}
 
-	return start.Add(flow.stopBound)
+	return start.Add(flow.stopDrainBound())
 }
 
 // runStoppedStoreAccess runs a store wait that comes after the run's context

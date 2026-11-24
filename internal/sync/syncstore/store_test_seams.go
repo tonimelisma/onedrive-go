@@ -26,6 +26,10 @@ type Hooks struct {
 	// through; empty is the SQLite driver. Tests name a fault-injecting
 	// wrapper of it.
 	Driver string
+	// BetweenSnapshotReads runs between the two halves of a status snapshot
+	// read (readDriveStatusCounts, readDriveStatusConditions): a test writes
+	// the store there to prove the snapshot is one moment.
+	BetweenSnapshotReads func()
 	// SkipFsync opens the store with synchronous=OFF: a commit is written
 	// to the database and its write-ahead log but SQLite does not wait for
 	// the disk to hold it. A test's store dies with its temp directory and

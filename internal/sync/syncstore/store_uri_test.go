@@ -65,7 +65,7 @@ func TestSyncStore_ReopensAStoreInAFolderNamedWithURIDelimiters(t *testing.T) {
 	assert.Equal(t, block.Key, blocks[0].Key)
 	require.NoError(t, reopened.Close(context.Background()))
 
-	inspector, err := openStoreInspector(dbPath, logger)
+	inspector, err := openStoreInspector(dbPath, logger, Hooks{})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, inspector.Close())

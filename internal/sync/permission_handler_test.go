@@ -22,19 +22,38 @@ import (
 func newTestPermHandler(t *testing.T, checker PermissionChecker) (*permissionHandler, string) {
 	t.Helper()
 
+	syncRoot := newTestPermSyncRoot(t)
+
+	return newTestPermHandlerIn(t, checker, syncRoot, nil), syncRoot
+}
+
+// newTestPermSyncRoot makes the sync folder of a test's permission handler.
+func newTestPermSyncRoot(t *testing.T) string {
+	t.Helper()
+
 	syncRoot := filepath.Join(t.TempDir(), "sync")
 	require.NoError(t, os.MkdirAll(syncRoot, 0o750))
 
-	store := syncstoretest.NewTestStore(t)
+	return syncRoot
+}
+
+// newTestPermHandlerIn builds a permission handler over syncRoot whose
+// read-only-filesystem probe is readOnlyDir (engineHooks.readOnlyDir; nil is
+// the real probe).
+func newTestPermHandlerIn(t *testing.T, checker PermissionChecker, syncRoot string, readOnlyDir func(absDir string) bool) *permissionHandler {
+	t.Helper()
+
+	hooks := engineHooks{readOnlyDir: readOnlyDir}
 
 	return &permissionHandler{
-		store:       store,
+		store:       syncstoretest.NewTestStore(t),
 		permChecker: checker,
 		syncTree:    syncfixture.MustOpenSyncTree(t, syncRoot),
 		driveID:     driveid.New("test-drive"),
 		logger:      syncfixture.NewTestLogger(t),
 		nowFn:       time.Now,
-	}, syncRoot
+		readOnlyDir: hooks.readOnlyDirProbe(),
+	}
 }
 
 // Validates: R-2.14.1
@@ -183,13 +202,13 @@ func TestPermHandler_HandleLocalPermission_FileLevel(t *testing.T) {
 func TestPermHandler_HandleLocalPermission_ReadOnlyMountIsOneBoundary(t *testing.T) {
 	t.Parallel()
 
-	ph, syncRoot := newTestPermHandler(t, nil)
+	syncRoot := newTestPermSyncRoot(t)
 	mount := filepath.Join(syncRoot, "media")
 	require.NoError(t, os.MkdirAll(filepath.Join(mount, "photos", "2026"), 0o750))
 	// Everything at or below media/ is on the read-only filesystem.
-	ph.readOnlyDir = func(absDir string) bool {
+	ph := newTestPermHandlerIn(t, nil, syncRoot, func(absDir string) bool {
 		return absDir == mount || strings.HasPrefix(absDir, mount+string(filepath.Separator))
-	}
+	})
 
 	evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
 		Path:       "media/photos/2026/a.jpg",
@@ -207,9 +226,9 @@ func TestPermHandler_HandleLocalPermission_ReadOnlyMountIsOneBoundary(t *testing
 func TestPermHandler_HandleLocalPermission_ReadOnlySyncRootBlocksWholeTree(t *testing.T) {
 	t.Parallel()
 
-	ph, syncRoot := newTestPermHandler(t, nil)
+	syncRoot := newTestPermSyncRoot(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(syncRoot, "docs"), 0o750))
-	ph.readOnlyDir = func(string) bool { return true }
+	ph := newTestPermHandlerIn(t, nil, syncRoot, func(string) bool { return true })
 
 	evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
 		Path:       "docs/a.txt",
@@ -276,8 +295,7 @@ func TestScopeKeyForPermissionEvidence_EveryMemberIsDecided(t *testing.T) {
 func TestPermHandler_HandleLocalPermission_ReadOnlyWithWritableParentStaysPerFile(t *testing.T) {
 	t.Parallel()
 
-	ph, _ := newTestPermHandler(t, nil)
-	ph.readOnlyDir = func(string) bool { return false }
+	ph := newTestPermHandlerIn(t, nil, newTestPermSyncRoot(t), func(string) bool { return false })
 
 	evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
 		Path:       "bound.txt",

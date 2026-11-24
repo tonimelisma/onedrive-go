@@ -261,12 +261,12 @@ func TestPermHandler_HandleLocalPermission_ProbesTheNFDNamedFolder(t *testing.T)
 	t.Run("read-only mount is one stored boundary", func(t *testing.T) {
 		t.Parallel()
 
-		ph, syncRoot := newTestPermHandler(t, nil)
+		syncRoot := newTestPermSyncRoot(t)
 		mount := filepath.Join(syncRoot, syncfixture.NfdCafe)
 		require.NoError(t, os.MkdirAll(filepath.Join(mount, "photos"), 0o750))
-		ph.readOnlyDir = func(absDir string) bool {
+		ph := newTestPermHandlerIn(t, nil, syncRoot, func(absDir string) bool {
 			return absDir == mount || strings.HasPrefix(absDir, mount+string(filepath.Separator))
-		}
+		})
 
 		evidence := ph.handleLocalPermission(t.Context(), &syncdomain.ActionCompletion{
 			Path:       syncfixture.NfcCafe + "/photos/a.jpg",

@@ -297,6 +297,7 @@ func newEnginePermissionHandler(
 		remoteRootItemID: cfg.RemoteRootItemID,
 		logger:           cfg.Logger,
 		nowFn:            engine.nowFunc,
+		readOnlyDir:      cfg.hooks.readOnlyDirProbe(),
 	}
 }
 

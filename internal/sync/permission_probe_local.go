@@ -154,14 +154,9 @@ func (ph *permissionHandler) readOnlyFilesystemEvidence(r *syncdomain.ActionComp
 		return fileEvidence
 	}
 
-	readOnly := ph.readOnlyDir
-	if readOnly == nil {
-		readOnly = isOnReadOnlyFilesystem
-	}
-
 	root := ph.syncTree.Path()
 	dir := filepath.Dir(absPath)
-	if !readOnly(dir) {
+	if !ph.readOnlyDir(dir) {
 		// The directory itself is writable, so the failing path is a mount
 		// of its own (a read-only file bind-mounted in): keep it per file.
 		return fileEvidence
@@ -170,7 +165,7 @@ func (ph *permissionHandler) readOnlyFilesystemEvidence(r *syncdomain.ActionComp
 	boundary := dir
 	for boundary != root {
 		parent := filepath.Dir(boundary)
-		if parent == boundary || !readOnly(parent) {
+		if parent == boundary || !ph.readOnlyDir(parent) {
 			break
 		}
 		boundary = parent

@@ -65,6 +65,13 @@ type engineHooks struct {
 	// for the startup proof's clear. Tests return a held catalog lock
 	// through it without waiting out the lock's timeout.
 	clearAccountAuthRequirement func(ctx context.Context, dataDir string, account driveid.CanonicalID) error
+	// readOnlyDir replaces isOnReadOnlyFilesystem, the permission handler's
+	// probe of whether a directory is on a read-only filesystem: an
+	// unprivileged test cannot mount one.
+	readOnlyDir func(absDir string) bool
+	// stopBound, when positive, shortens how long a stopping run's one
+	// bound lasts (engineFlow.stopDrainBound); zero is OutcomeCommitTimeout.
+	stopBound time.Duration
 	// clock replaces the engine's run clock (runClock); nil runs on the
 	// engine's real clock. Observers the engine builds stay on the real
 	// clock either way (buildLocalObserver).
@@ -126,6 +133,16 @@ func (h *engineHooks) recordFrontierStep(step frontierStep, ta *syncdomain.Track
 // between runs; a run reads its flow's clock (runtimeDeps.clock).
 func (e *Engine) runClock() syncdomain.SyncClock {
 	return e.hooks.runClock(e.wallClock)
+}
+
+// readOnlyDirProbe is the read-only-filesystem probe these hooks give the
+// permission handler: isOnReadOnlyFilesystem unless a test replaced it.
+func (h *engineHooks) readOnlyDirProbe() func(absDir string) bool {
+	if h.readOnlyDir != nil {
+		return h.readOnlyDir
+	}
+
+	return isOnReadOnlyFilesystem
 }
 
 // runClock is the clock these hooks give a run: wall unless a test replaced

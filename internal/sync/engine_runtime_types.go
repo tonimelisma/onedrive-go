@@ -78,10 +78,6 @@ type engineFlow struct {
 	// completions under (beginStopDrain); nil while the run goes on.
 	stop *stopDrain
 
-	// stopBound is how long that bound lasts: OutcomeCommitTimeout, which
-	// tests shorten.
-	stopBound time.Duration
-
 	// canceledAt is when the run's context ended, set once by the callback
 	// noteRunCancel registers; nil while the run goes on. The stop's bound
 	// starts there.
@@ -193,7 +189,6 @@ func newEngineFlow(in *flowInputs) *engineFlow {
 		retryWork:  retryWork{rows: make(map[syncdomain.RetryWorkKey]syncdomain.RetryWorkRow)},
 
 		supersedeStreaks: make(map[string]int),
-		stopBound:        syncdomain.OutcomeCommitTimeout,
 	}
 	return flow
 }

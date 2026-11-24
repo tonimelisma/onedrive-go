@@ -24,8 +24,8 @@ type permissionHandler struct {
 	nowFn            func() time.Time
 
 	// readOnlyDir reports whether an absolute directory is on a read-only
-	// filesystem. nil means isOnReadOnlyFilesystem; tests inject a fake
-	// because an unprivileged test cannot mount one.
+	// filesystem: isOnReadOnlyFilesystem, unless a test replaced it
+	// (engineHooks.readOnlyDir).
 	readOnlyDir func(absDir string) bool
 
 	// rootInaccessibleReported is set once an inaccessible sync folder has

@@ -18,11 +18,9 @@ import (
 type storeInspector struct {
 	db     *sql.DB
 	logger *slog.Logger
-	// betweenSnapshotReads, when set, runs between the two halves of a status
-	// snapshot read (readDriveStatusCounts, readDriveStatusConditions).
-	// Test-only; nil in production: a test writes the store there to prove
-	// the snapshot is one moment.
-	betweenSnapshotReads func()
+	// hooks are the store's test seams (Hooks.BetweenSnapshotReads); the
+	// zero value is production.
+	hooks Hooks
 }
 
 // sqlListRemoteDriftItems lists already-observed remote-side differences
@@ -185,10 +183,7 @@ func (s *SyncStore) ReadDriveStatusSnapshot(ctx context.Context) (DriveStatusSna
 		return DriveStatusSnapshot{}, errors.New("read drive status snapshot: nil store")
 	}
 
-	inspector := &storeInspector{
-		db:     s.db,
-		logger: s.logger,
-	}
+	inspector := s.inspector()
 
 	return inspector.ReadDriveStatusSnapshot(ctx)
 }
@@ -203,10 +198,7 @@ func (s *SyncStore) ReadPathTruthStatus(
 		return nil, errors.New("read path truth status: nil store")
 	}
 
-	inspector := &storeInspector{
-		db:     s.db,
-		logger: s.logger,
-	}
+	inspector := s.inspector()
 
 	return inspector.ReadPathTruthStatus(ctx, paths)
 }
@@ -216,7 +208,7 @@ func readWithInspector[T any](
 	logger *slog.Logger,
 	read func(*storeInspector) (T, error),
 ) (result T, err error) {
-	inspector, err := openStoreInspector(dbPath, logger)
+	inspector, err := openStoreInspector(dbPath, logger, Hooks{})
 	if err != nil {
 		return result, fmt.Errorf("open sync store inspector: %w", err)
 	}
@@ -260,7 +252,9 @@ func finalizeInspectorRead[T any](
 	return result, errors.Join(readErr, wrappedCloseErr)
 }
 
-func openStoreInspector(dbPath string, logger *slog.Logger) (*storeInspector, error) {
+// openStoreInspector opens a read-only inspector of the store at dbPath, with
+// the store's test seams hooks (production passes the zero value).
+func openStoreInspector(dbPath string, logger *slog.Logger, hooks Hooks) (*storeInspector, error) {
 	db, err := openReadOnlySyncStoreDB(dbPath)
 	if err != nil {
 		return nil, err
@@ -269,7 +263,18 @@ func openStoreInspector(dbPath string, logger *slog.Logger) (*storeInspector, er
 	return &storeInspector{
 		db:     db,
 		logger: logger,
+		hooks:  hooks,
 	}, nil
+}
+
+// inspector is a read-only inspector over the open store's own connection,
+// with the store's test seams.
+func (s *SyncStore) inspector() *storeInspector {
+	return &storeInspector{
+		db:     s.db,
+		logger: s.logger,
+		hooks:  s.hooks,
+	}
 }
 
 // inspectorBusyTimeout is how long a read-only inspector statement waits for
@@ -324,8 +329,8 @@ func (i *storeInspector) ReadDriveStatusSnapshotWithFilter(
 	if snapshot, err = readDriveStatusCounts(ctx, tx, filter); err != nil {
 		return DriveStatusSnapshot{}, err
 	}
-	if i.betweenSnapshotReads != nil {
-		i.betweenSnapshotReads()
+	if i.hooks.BetweenSnapshotReads != nil {
+		i.hooks.BetweenSnapshotReads()
 	}
 	if conditionsErr := readDriveStatusConditions(ctx, tx, &snapshot); conditionsErr != nil {
 		return DriveStatusSnapshot{}, conditionsErr

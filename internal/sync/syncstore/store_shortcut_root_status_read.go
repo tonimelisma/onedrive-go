@@ -38,10 +38,7 @@ func (s *SyncStore) ReadShortcutRootStatusSnapshot(
 		return nil, errors.New("read shortcut root status snapshot: nil store")
 	}
 
-	inspector := &storeInspector{
-		db:     s.db,
-		logger: s.logger,
-	}
+	inspector := s.inspector()
 
 	return inspector.ReadShortcutRootStatusSnapshot(ctx, namespaceID, parentSyncRoot)
 }

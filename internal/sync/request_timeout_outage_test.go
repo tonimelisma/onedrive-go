@@ -669,7 +669,7 @@ func TestEngineFlow_ACommitThatOutlastsItsBoundWhileStoppingIsSaid(t *testing.T)
 	logger, logs = syncfixture.NewCapturedLogger()
 	eng, _ = newTestEngineWithLogger(t, &syncfixture.EngineMockClient{}, logger)
 	flow = testEngineFlow(t, eng)
-	flow.stopBound = workerTestCommitBound
+	flow.hooks.stopBound = workerTestCommitBound
 	stopped := stoppedContext(t)
 	flow.beginStopDrain()
 	release := holdStoreConnection(t, eng.baseline)
