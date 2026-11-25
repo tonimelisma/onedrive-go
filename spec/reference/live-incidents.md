@@ -147,7 +147,13 @@ file in `e.conflict-<n>/b.txt`.
 
 Fix: the model's conflict copy moves the whole subtree, as the executor
 does; the seed is kept as `TestPlannerModel_AFolderConflictCopyCarriesItsSubtree`,
-which fails on the old model.
+which fails on the old model. A sweep of seeds 1 to 42,000 on the
+corrected model found seven other failing seeds (6678, 6943, 9132, 25963,
+26899, 39126, 41422) that fail the same way on `main` before this fix: plans
+that never go quiet, sides left different, and an upload planned after its
+file moved. Each involves folders moved onto or into each other's names;
+they are a separate investigation of the planner's move resolution, not
+this model bug.
 
 ## LI-20261124-04: The e2e fault proxy wrote an answer of unknown length unframed, and a folder create's answer never ended
 
