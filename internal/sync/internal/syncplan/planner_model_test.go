@@ -314,11 +314,11 @@ func (s *pmState) applyAction(a *syncdomain.Action) {
 	case syncdomain.ActionFolderCreate:
 		s.createFolder(a)
 	case syncdomain.ActionConflictCopy:
-		src, ok := s.local[a.Path]
+		// The executor renames the entry, so a folder's copy carries its
+		// whole subtree; the baseline is left as it was (ExecuteConflictCopy).
+		_, ok := s.local[a.Path]
 		require.True(s.t, ok, "conflict copy of %s: no local entry", a.Path)
-		copyPath := conflictModelPath(a.Path, s.next())
-		delete(s.local, a.Path)
-		s.local[copyPath] = src
+		moveTree(s.local, a.Path, conflictModelPath(a.Path, s.next()))
 	case syncdomain.ActionBaselineUpdate:
 		s.updateBaseline(a)
 	case syncdomain.ActionCleanup:
@@ -683,6 +683,24 @@ func TestPlannerModel_RandomTriplesConverge(t *testing.T) {
 		})
 	}
 }
+
+// Validates: R-2.3.1
+//
+// Seed 327056 conflict-copies the folder e, which holds a file created here,
+// before moving the remote's d onto e's name. The executor renames a folder
+// with its subtree, but the model moved only the folder's own entry, so the
+// new file stayed at e/b.txt for the move to land on and was reported lost;
+// the planner was right. The model now renames the subtree, as the executor
+// does.
+func TestPlannerModel_AFolderConflictCopyCarriesItsSubtree(t *testing.T) {
+	t.Parallel()
+
+	runPlannerModel(t, plannerModelFolderConflictCopySeed)
+}
+
+// plannerModelFolderConflictCopySeed is the seed of the 2026-11-24 dispatched
+// nightly that found the model's folder conflict copy dropping its subtree.
+const plannerModelFolderConflictCopySeed = 327056
 
 // failureContext names the seed and the operations of the run. The
 // `seed-replay:` line a failing seed logs (logSeedReplayOnFailure) is the one
