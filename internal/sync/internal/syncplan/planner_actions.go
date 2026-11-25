@@ -287,8 +287,17 @@ func countRenames(actions []syncdomain.Action) int {
 // move commits; addressed at the old local path it failed on every pass and
 // held the folder's move behind it. It now runs after the move. Its view keeps
 // the snapshot path, which is where freshness finds its local truth.
+//
+// A folder move composition planned inside another moving folder, before that
+// folder moves (landsInTheFolderMoveCarries), does not put the content where
+// it ends up: the other folder's move then carries it on, so the create is
+// rebased through that move too, and through any it lands in the same way.
+// Rebased through the first move alone, it addressed a path the second had
+// emptied, here and on OneDrive (planner seed 6943: OneDrive moved e into d
+// and d onto e, and a file made here in e was uploaded at d/e/b.txt once the
+// two moves had put it at e/e/b.txt).
 func rebaseRemoteCreatesThroughLocalFolderMoves(actions []syncdomain.Action) []syncdomain.Action {
-	var folderMoves []graphFolderMoveBoundary
+	var folderMoves []*syncdomain.Action
 	for i := range actions {
 		action := &actions[i]
 		if action.Type != syncdomain.ActionLocalMove ||
@@ -296,16 +305,13 @@ func rebaseRemoteCreatesThroughLocalFolderMoves(actions []syncdomain.Action) []s
 			action.OldPath == "" {
 			continue
 		}
-		folderMoves = append(folderMoves, graphFolderMoveBoundary{
-			oldPrefix: action.OldPath + "/",
-			newPrefix: action.Path + "/",
-		})
+		folderMoves = append(folderMoves, action)
 	}
 	if len(folderMoves) == 0 {
 		return actions
 	}
-	sort.Slice(folderMoves, func(i, j int) bool {
-		return len(folderMoves[i].oldPrefix) > len(folderMoves[j].oldPrefix)
+	sort.SliceStable(folderMoves, func(i, j int) bool {
+		return len(folderMoves[i].OldPath) > len(folderMoves[j].OldPath)
 	})
 
 	rebased := make([]syncdomain.Action, len(actions))
@@ -313,11 +319,40 @@ func rebaseRemoteCreatesThroughLocalFolderMoves(actions []syncdomain.Action) []s
 	for i := range rebased {
 		action := &rebased[i]
 		if createsOnSide(action, moveCoordRemote) {
-			action.Path = rebaseThroughFolderMoves(action.Path, folderMoves)
+			action.Path = rebaseThroughCarryingFolderMoves(action.Path, folderMoves)
 		}
 	}
 
 	return rebased
+}
+
+// rebaseThroughCarryingFolderMoves rebases p through the innermost folder
+// move whose source holds it, then through each folder move that carries the
+// previous one's destination on (landsInTheFolderMoveCarries). Each move is
+// applied at most once, so the chain ends. folderMoves is sorted by the
+// length of the source, longest first.
+func rebaseThroughCarryingFolderMoves(p string, folderMoves []*syncdomain.Action) string {
+	applied := make([]bool, len(folderMoves))
+	var last *syncdomain.Action
+	for {
+		next := -1
+		for i, move := range folderMoves {
+			if applied[i] || !strings.HasPrefix(p, move.OldPath+"/") {
+				continue
+			}
+			if last == nil || landsInTheFolderMoveCarries(last, move) {
+				next = i
+			}
+			break
+		}
+		if next < 0 {
+			return p
+		}
+		move := folderMoves[next]
+		applied[next] = true
+		p = move.Path + "/" + strings.TrimPrefix(p, move.OldPath+"/")
+		last = move
+	}
 }
 
 // rebaseLocalWritesToLocalFolderPositions makes remote-origin local writes
