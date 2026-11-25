@@ -68,7 +68,7 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20261124-01 | An observer's exit event came before the watch counted it stopped | fixed | test bug | 2026-11-24 | no |
 | LI-20261123-02 | A refused retry dropped the intent of a lost create, and the user's new file became a conflict copy beside an empty one | fixed | product bug | 2026-11-23 | no |
 | LI-20261123-01 | A watch test still counted the pools' workers without their floor | fixed | test bug | 2026-11-23 | no |
-| LI-20261121-02 | The nightly report could not read a red job's log and did not say why | mitigated | test harness | 2026-11-23 | yes |
+| LI-20261121-02 | The nightly report could not read a red job's log and did not say why | fixed | test harness | 2026-11-24 | yes |
 | LI-20261121-01 | The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline | fixed | test harness | 2026-11-21 | yes |
 | LI-20261115-01 | Graph answered an ordinary folder move with 400 `Invalid request` | mitigated | graph quirk | 2026-11-15 | yes |
 | LI-20261115-02 | The stress lane's race runs of the sync tree ran past a fixed 40-minute deadline | fixed | test harness | 2026-11-15 | yes |
@@ -324,12 +324,12 @@ Fix: the test expects the three idle workers' 30ms.
 ## LI-20261121-02: The nightly report could not read a red job's log and did not say why
 
 First seen: 2026-11-21
-Last seen: 2026-11-23 (run 45275981385, all three red jobs; also issues #919, #951, #964)
+Last seen: 2026-11-24 (dispatched run 45513443214, a reproduction; run 45275981385, all three red jobs; also issues #919, #951, #964)
 Area: `internal/devtool/nightly_verdict.go` (`attributeNightlyFailures`)
 Suite / test: the `nightly-report` job of the scheduled run, for the red
 `verify-full (ubuntu-latest)` job
 Classification: test harness
-Status: mitigated (the cause of the refusal is not yet known)
+Status: fixed
 Recurring: yes (every red night since at least 2026-11-15)
 Summary: the `nightly-failure` issue said of the red job "failed; its log
 could not be read". The reader kept only that the read failed and dropped
@@ -368,6 +368,27 @@ with every URL's query cut, since a log's redirect is signed
 report's own words. The next red night names the cause; the leading
 suspicion is that the report reads logs while its own run is still in
 progress.
+
+2026-11-24: cause found. A manual dispatch of the report against one red
+job (run 45513443214, on a throwaway commit later dropped) printed gh's
+words: "the response contains terminal escape sequences; pass
+--allow-escape-sequences to output it anyway". The runner's gh refuses to
+print a response holding an escape sequence, and every job log holds the
+colored output of the runner's own command lines; GitHub had answered 200
+with the whole log. A session's gh (2.89.0) prints the response and knows no
+such flag, which is why the same reads from a session always worked. The
+suspicion of the in-progress run was wrong: the same dispatch, and a read of
+a finished job of a run still in progress made from a session, both read the
+log. Fix: the reader makes the plain read, and repeats it once with
+`--allow-escape-sequences` only when gh refused it naming that flag, so
+neither an older gh (which rejects the flag) nor a newer one (which
+requires it) fails (`readNightlyJobLog`,
+`TestNightlyReportReadsALogThatHoldsEscapeSequences`,
+`TestNightlyReportReadsALogWithAnEarlierGHInOneRequest`). The same
+reproduction dispatched on the fix (run 45513851094) read the red job's log
+and printed no read failure; the dry run of run 45275981385 from a session
+keyed its failed tests and would have opened the seed issue for
+`TestModel_ChaosGraphConverges` seed 79.
 
 ## LI-20261121-01: The full tier's `internal/sync` race+coverage run ran past go test's 20-minute per-package deadline
 
