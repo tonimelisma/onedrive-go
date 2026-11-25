@@ -62,6 +62,8 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261125-02 | The planner model's baseline, folder create and local move were unlike the store's and the executor's | fixed | test bug | 2026-11-25 | no |
+| LI-20261125-01 | A file made here in a folder carried on by a second folder move was uploaded at a path the moves had emptied | fixed | product bug | 2026-11-25 | no |
 | LI-20261124-05 | The planner model's folder conflict copy left the folder's subtree behind and reported a new file lost | fixed | test bug | 2026-11-24 | no |
 | LI-20261124-04 | The e2e fault proxy wrote an answer of unknown length unframed, and a folder create's answer never ended | fixed | test bug | 2026-11-24 | no |
 | LI-20261124-03 | A chaos seed's fault draws were checked on macOS, where the model takes another course | fixed | test bug | 2026-11-24 | no |
@@ -122,6 +124,77 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
 
+## LI-20261125-02: The planner model's baseline, folder create and local move were unlike the store's and the executor's
+
+First seen: 2026-11-24 (a sweep of seeds 1 to 42,000, LI-20261124-05)
+Last seen: 2026-11-25
+Area: `internal/sync/internal/syncplan/planner_model_test.go` (`pmState`)
+Suite / test: `internal/sync/internal/syncplan.TestPlannerModel_RandomTriplesConverge`, seeds 6678, 9132, 25963, 26899, 39126, 41422
+Classification: test bug
+Status: fixed
+Recurring: no
+Summary: 6678, 9132 and 26899 reported "the plan never went quiet", repeating
+folder creates and baseline updates; 25963, 39126 and 41422 reported "local
+and OneDrive differ". All fail on `main` before LI-20261124-05's fix.
+
+Evidence: the plans were right; the model applied them unlike the store and
+the executor do.
+- The store keys the baseline by item ID with a unique path
+  (`commitUpsert`): binding a folder made here to an item drops the item's row
+  at its old path. The model kept both rows, and the store it wrote them into
+  kept the old one, so 9132 and 26899 bound the folder again every pass.
+- The store's move and re-key find the row by item ID and repath the subtree
+  from where that row was (`commitMove`); with no row left (6678: a folder
+  create at the old path took it first) they insert the row the outcome
+  carries. The model moved whatever row sat at `OldPath`, the new folder's.
+- The remote folder create carries the item ID of the file the path had
+  (25963, 39126, 41422: a file here replaced with a folder while OneDrive
+  moved the file away), which the executor ignores: it creates by parent and
+  name (`createRemoteFolder`). The model looked the folder up by that ID,
+  found the moved file and created nothing, and the upload below it went into
+  a folder OneDrive never had.
+
+Fix: the model's baseline writes follow the store (`putSynced`,
+`moveSynced`), its remote folder create goes by name, and two more
+differences the corrected baseline exposed were closed with it, as no seed on
+`main` reaches them: a local move refuses a taken destination unless it
+replaces the very file the plan saw, and a missing source or parent
+(`ExecuteLocalMove`), where the model overwrote and made parents; and a
+refused action's dependents are skipped, as the engine retires them
+(`completeSubtree`), where the model ran them. Without the first, seed 450
+lost OneDrive's edit to a move the executor refuses; without the second,
+seed 9196 failed an upload below a refused move. The seeds are kept as
+`TestPlannerModel_ABaselineRowFollowsItsItemID`,
+`TestPlannerModel_ARekeyFindsItsRowByItemID` and
+`TestPlannerModel_ARemoteFolderCreateIsMadeByName`.
+
+## LI-20261125-01: A file made here in a folder carried on by a second folder move was uploaded at a path the moves had emptied
+
+First seen: 2026-11-24 (a sweep of seeds 1 to 42,000, LI-20261124-05)
+Last seen: 2026-11-25
+Area: `internal/sync/internal/syncplan/planner_actions.go` (`rebaseRemoteCreatesThroughLocalFolderMoves`)
+Suite / test: `internal/sync/internal/syncplan.TestPlannerModel_RandomTriplesConverge`, seed 6943
+Classification: product bug
+Status: fixed
+Recurring: no
+Summary: the seed reported "upload of d/e/b.txt: no local file". OneDrive
+moved `e` into `d` and then `d` onto `e`'s name; here `e/b.txt` was made. The
+plan moved `e` to `d/e` here, inside `d` before `d` moves, then `d` to `e`,
+and uploaded `d/e/b.txt`.
+
+Evidence: the seed fails on `main` before LI-20261124-05's fix. The upload of
+a new file below a folder this plan moves here is rebased to the folder's new
+path, but through one folder move only. `e`'s move lands inside `d`, whose
+move carries it on to `e/e` (`landsInTheFolderMoveCarries`), so the file ends
+at `e/e/b.txt`; at `d/e/b.txt` the upload found no file here, and its parent
+resolved through the baseline to nothing on OneDrive.
+
+Fix: the rebase follows each folder move that carries the previous one's
+destination on, so the upload goes to `e/e/b.txt` and waits for both moves
+(`TestPlannerPlanCurrentState_ACreateFollowsAFolderMoveCarriedOnByAnother`,
+`TestPlannerModel_ACreateFollowsAFolderMoveCarriedOnByAnother`, both red
+before the fix).
+
 ## LI-20261124-05: The planner model's folder conflict copy left the folder's subtree behind and reported a new file lost
 
 First seen: 2026-11-24 (dispatched run 45513256819 of `main` at c4661602, `model-seeds`)
@@ -153,7 +226,8 @@ corrected model found seven other failing seeds (6678, 6943, 9132, 25963,
 that never go quiet, sides left different, and an upload planned after its
 file moved. Each involves folders moved onto or into each other's names;
 they are a separate investigation of the planner's move resolution, not
-this model bug.
+this model bug. That investigation is LI-20261125-01 (6943, a planner bug)
+and LI-20261125-02 (the other six, model bugs).
 
 ## LI-20261124-04: The e2e fault proxy wrote an answer of unknown length unframed, and a folder create's answer never ended
 

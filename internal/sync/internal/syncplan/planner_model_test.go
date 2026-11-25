@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"math/rand/v2"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,8 +73,14 @@ type pmState struct {
 	local    map[string]pmItem
 	remote   map[string]pmItem
 	baseline map[string]pmSynced
-	seq      int
-	log      []string
+	// planned is the baseline as the plan being applied saw it: an
+	// action's outcome carries the rows of its view (plannedSynced).
+	planned map[string]pmSynced
+	// refused is set by an action the executor would fail (a stale
+	// precondition, a 409): apply skips what waits for it.
+	refused bool
+	seq     int
+	log     []string
 	// birthTimes makes every local entry report a birth time, as a
 	// filesystem that records one does (Linux statx, macOS st_birthtime);
 	// off, the model is a filesystem that records none. An entry's birth
@@ -91,6 +98,13 @@ func newPMState(t *testing.T) *pmState {
 func (s *pmState) next() int {
 	s.seq++
 	return s.seq
+}
+
+// refusef fails the action being applied, as the executor fails it: nothing
+// changes, and the actions that wait for it are skipped.
+func (s *pmState) refusef(format string, args ...any) {
+	s.refused = true
+	s.logf("    "+format, args...)
 }
 
 func (s *pmState) logf(format string, args ...any) {
@@ -276,10 +290,24 @@ func planOrder(t *testing.T, plan *syncdomain.ActionPlan) []int {
 // apply carries out a plan on the model: its actions in dependency order,
 // then its held deletes, as a user confirming them would.
 func (s *pmState) apply(plan *syncdomain.ActionPlan) {
+	s.planned = make(map[string]pmSynced, len(s.baseline))
+	for key, row := range s.baseline {
+		s.planned[key] = row
+	}
+	// A failed action's dependents are completed without running, as the
+	// engine retires them (completeSubtree), and replanned next pass.
+	failed := make([]bool, len(plan.Actions))
 	for _, i := range planOrder(s.t, plan) {
 		a := &plan.Actions[i]
 		s.logf("  %s", actionLine(a))
+		if i < len(plan.Deps) && slices.ContainsFunc(plan.Deps[i], func(dep int) bool { return failed[dep] }) {
+			s.logf("    skipped: it waits for a failed action")
+			failed[i] = true
+			continue
+		}
+		s.refused = false
 		s.applyAction(a)
+		failed[i] = s.refused
 	}
 	for _, held := range plan.HeldDeletes {
 		s.logf("  confirmed held %v delete %s", held.Side, held.Path)
@@ -307,8 +335,7 @@ func (s *pmState) applyAction(a *syncdomain.Action) {
 		}
 		deleteSyncedTree(s.baseline, a.Path)
 	case syncdomain.ActionLocalMove:
-		moveTree(s.local, a.OldPath, a.Path)
-		moveTree(s.baseline, a.OldPath, a.Path)
+		s.localMove(a)
 	case syncdomain.ActionRemoteMove:
 		s.remoteMove(a)
 	case syncdomain.ActionFolderCreate:
@@ -333,7 +360,7 @@ func (s *pmState) download(a *syncdomain.Action) {
 	require.True(s.t, ok && !src.folder, "download of %s: no remote file", a.Path)
 	inode := uint64(s.next())
 	s.local[a.Path] = pmItem{content: src.content, inode: inode}
-	s.baseline[a.Path] = pmSynced{id: src.id, localContent: src.content, remoteContent: src.content, inode: inode, etag: src.etag}
+	s.putSynced(a.Path, pmSynced{id: src.id, localContent: src.content, remoteContent: src.content, inode: inode, etag: src.etag})
 }
 
 // upload overwrites the item by ID, wherever it is, or creates a new item at
@@ -347,25 +374,55 @@ func (s *pmState) upload(a *syncdomain.Action) {
 	id := existing.id
 	if a.ItemID == "" || !found {
 		if _, taken := s.remote[a.Path]; taken {
-			s.logf("    409: %s is taken on OneDrive", a.Path)
+			s.refusef("409: %s is taken on OneDrive", a.Path)
 			return
 		}
 		at, id = a.Path, "item-"+strconv.Itoa(s.next())
 	}
 	s.remote[at] = pmItem{id: id, content: src.content, etag: etag}
-	s.baseline[a.Path] = pmSynced{id: id, localContent: src.content, remoteContent: src.content, inode: src.inode, etag: etag}
+	s.putSynced(a.Path, pmSynced{id: id, localContent: src.content, remoteContent: src.content, inode: src.inode, etag: etag})
+}
+
+// localMove renames the local entry as ExecuteLocalMove does: the source
+// must still be there and the destination's parent a folder, and a taken
+// destination is refused (a stale precondition, replanned next pass) unless
+// the move replaces it and it is still the file the plan saw, which goes to
+// the trash.
+func (s *pmState) localMove(a *syncdomain.Action) {
+	if _, ok := s.local[a.OldPath]; !ok {
+		s.refusef("stale: local move source %s is missing", a.OldPath)
+		return
+	}
+	if dir := path.Dir(a.Path); dir != "." {
+		if parent, ok := s.local[dir]; !ok || !parent.folder {
+			s.refusef("stale: local move destination parent %s is missing", dir)
+			return
+		}
+	}
+	if dest, taken := s.local[a.Path]; taken {
+		planned := a.View.Local
+		replaceable := a.ReplaceLocalTarget && !dest.folder && planned != nil && planned.Hash != "" &&
+			planned.Hash == s.hash(false, dest.content) && planned.LocalInode == dest.inode
+		if !replaceable {
+			s.refusef("stale: local move destination %s already exists", a.Path)
+			return
+		}
+		delete(s.local, a.Path)
+	}
+	moveTree(s.local, a.OldPath, a.Path)
+	s.moveSynced(a)
 }
 
 func (s *pmState) remoteMove(a *syncdomain.Action) {
 	at, _, found := s.remoteItem(a)
 	require.True(s.t, found, "remote move to %s: no remote item %s", a.Path, a.ItemID)
 	if _, taken := s.remote[a.Path]; taken && at != a.Path {
-		s.logf("    409: %s is taken on OneDrive", a.Path)
+		s.refusef("409: %s is taken on OneDrive", a.Path)
 		return
 	}
 	moveTree(s.remote, at, a.Path)
 	s.bumpRemote(a.Path)
-	moveTree(s.baseline, a.OldPath, a.Path)
+	s.moveSynced(a)
 }
 
 // remoteItem finds the remote item an action names: by its ID when it has
@@ -396,18 +453,19 @@ func (s *pmState) createFolder(a *syncdomain.Action) {
 	local, localOK := s.local[a.Path]
 	if a.CreateSide == syncdomain.CreateRemote {
 		require.True(s.t, localOK && local.folder, "remote folder create %s: no local folder", a.Path)
-		if atPath, taken := s.remote[a.Path]; taken && !atPath.folder {
-			// The executor creates by parent and name and adopts only a
-			// folder there (adoptExistingRemoteFolder); a file at the
-			// name refuses the create.
-			s.logf("    409: %s is a file on OneDrive", a.Path)
+		// The executor creates by parent and name, never by the action's
+		// item ID, which can name the item that left the path (a file
+		// OneDrive moved away from where a folder was made here), and adopts
+		// only a folder there (adoptExistingRemoteFolder); a file at the
+		// name refuses the create.
+		atPath, taken := s.remote[a.Path]
+		switch {
+		case taken && !atPath.folder:
+			s.refusef("409: %s is a file on OneDrive", a.Path)
 			return
-		}
-		if !remoteOK {
-			if _, taken := s.remote[a.Path]; taken {
-				s.logf("    409: %s is taken on OneDrive", a.Path)
-				return
-			}
+		case taken:
+			remote = atPath
+		default:
 			remote = pmItem{id: "item-" + strconv.Itoa(s.next()), folder: true, etag: s.next()}
 			s.remote[a.Path] = remote
 		}
@@ -418,23 +476,90 @@ func (s *pmState) createFolder(a *syncdomain.Action) {
 			s.local[a.Path] = local
 		}
 	}
-	s.baseline[a.Path] = pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag}
+	s.putSynced(a.Path, pmSynced{id: remote.id, folder: true, inode: local.inode, etag: remote.etag})
 }
 
 // updateBaseline records agreement: a rekey (OldPath set) moves the synced
 // row and keeps its content facts, so a content change still reads as one;
 // otherwise both sides as they are now.
 func (s *pmState) updateBaseline(a *syncdomain.Action) {
-	if a.OldPath != "" {
-		moveTree(s.baseline, a.OldPath, a.Path)
+	if a.OldPath != "" && a.OldPath != a.Path {
+		s.moveSynced(a)
 		return
 	}
 	remote, remoteOK := s.remote[a.Path]
 	local, localOK := s.local[a.Path]
 	require.True(s.t, remoteOK && localOK, "baseline update %s: missing a side", a.Path)
-	s.baseline[a.Path] = pmSynced{
+	s.putSynced(a.Path, pmSynced{
 		id: remote.id, folder: remote.folder, localContent: local.content, remoteContent: remote.content,
 		inode: local.inode, etag: remote.etag,
+	})
+}
+
+// putSynced records row as the baseline row at p, as the store's upsert
+// does (commitUpsert): the baseline is keyed by item ID with a unique path,
+// so a row of another item at p is dropped and the item's row at another
+// path moves to p, without its children.
+func (s *pmState) putSynced(p string, row pmSynced) {
+	for key, synced := range s.baseline {
+		if synced.id == row.id && key != p {
+			delete(s.baseline, key)
+		}
+	}
+	s.baseline[p] = row
+}
+
+// moveSynced moves the moved item's baseline row to the action's path, as
+// the store's move does (commitMove): the row is found by item ID, not at
+// OldPath, which is the moving side's path and can name another item's row,
+// and a folder's subtree follows from where its row was.
+func (s *pmState) moveSynced(a *syncdomain.Action) {
+	from := ""
+	for key, synced := range s.baseline {
+		if synced.id == a.ItemID {
+			from = key
+		}
+	}
+	if from == "" {
+		// An earlier action of the plan took the item's row away (a create
+		// at its old path drops the row there): the store inserts the row
+		// the outcome carries, the baseline the plan saw, and no subtree
+		// follows.
+		row, planned := s.plannedSynced(a.ItemID)
+		require.True(s.t, planned, "%s: no baseline row of %s", actionLine(a), a.ItemID)
+		s.putSynced(a.Path, row)
+		return
+	}
+	row := s.baseline[from]
+	s.putSynced(a.Path, row)
+	if row.folder && from != a.Path {
+		repathSyncedSubtree(s.baseline, from, a.Path)
+	}
+}
+
+// plannedSynced is the row the plan saw for item id.
+func (s *pmState) plannedSynced(id string) (pmSynced, bool) {
+	for _, row := range s.planned {
+		if row.id == id {
+			return row, true
+		}
+	}
+
+	return pmSynced{}, false
+}
+
+// repathSyncedSubtree moves the rows strictly below from to sit below to
+// (repathSubtreeTx).
+func repathSyncedSubtree(baseline map[string]pmSynced, from, to string) {
+	moved := map[string]pmSynced{}
+	for key, row := range baseline {
+		if rest, ok := strings.CutPrefix(key, from+"/"); ok {
+			moved[to+"/"+rest] = row
+			delete(baseline, key)
+		}
+	}
+	for key, row := range moved {
+		baseline[key] = row
 	}
 }
 
@@ -697,6 +822,90 @@ func TestPlannerModel_AFolderConflictCopyCarriesItsSubtree(t *testing.T) {
 
 	runPlannerModel(t, plannerModelFolderConflictCopySeed)
 }
+
+// Validates: R-2.3.1, R-2.17.6
+//
+// Seeds 9132 and 26899 move a folder on both sides to different places, and
+// a folder made here at OneDrive's destination is bound to the item there.
+// The store keys the baseline by item ID with a unique path, so that row
+// replaces the item's row at its old path; the model kept both, the store it
+// wrote them into kept the old one, and the plan bound the folder again on
+// every pass. The planner was right; the model now keys its baseline as the
+// store does (putSynced, LI-20261125-02).
+func TestPlannerModel_ABaselineRowFollowsItsItemID(t *testing.T) {
+	t.Parallel()
+
+	for _, seed := range []uint64{plannerModelBaselineByItemSeedA, plannerModelBaselineByItemSeedB} {
+		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
+			t.Parallel()
+			runPlannerModel(t, seed)
+		})
+	}
+}
+
+// Validates: R-2.3.1, R-2.17.6
+//
+// Seed 6678 re-keys the baseline row of a folder both sides moved alike after
+// a folder create at its old path took the row there away. The store's move
+// finds the row by item ID, and with none left inserts the row the outcome
+// carries, from the plan's view; the model moved whatever row sat at the old
+// path, the new folder's, and the plan never went quiet. The planner was
+// right (moveSynced, LI-20261125-02).
+func TestPlannerModel_ARekeyFindsItsRowByItemID(t *testing.T) {
+	t.Parallel()
+
+	runPlannerModel(t, plannerModelRekeyByItemSeed)
+}
+
+// Validates: R-2.3.1, R-2.17.4
+//
+// Seeds 25963, 39126 and 41422 replace a file here with a folder while
+// OneDrive moves the file away. The remote folder create carries the file's
+// item ID, which the executor ignores: it creates by parent and name. The
+// model looked the folder up by that ID, found the moved file, created
+// nothing, and the upload below it went into a folder OneDrive never had.
+// The planner was right (createFolder, LI-20261125-02).
+func TestPlannerModel_ARemoteFolderCreateIsMadeByName(t *testing.T) {
+	t.Parallel()
+
+	for _, seed := range []uint64{
+		plannerModelFolderCreateByNameSeedA, plannerModelFolderCreateByNameSeedB, plannerModelFolderCreateByNameSeedC,
+	} {
+		t.Run("seed="+strconv.FormatUint(seed, 10), func(t *testing.T) {
+			t.Parallel()
+			runPlannerModel(t, seed)
+		})
+	}
+}
+
+// The seeds of the 2026-11-25 sweep of seeds 1 to 42,000 that found the
+// model's baseline and remote folder create unlike the store's and the
+// executor's.
+const (
+	plannerModelBaselineByItemSeedA     = 9132
+	plannerModelBaselineByItemSeedB     = 26899
+	plannerModelRekeyByItemSeed         = 6678
+	plannerModelFolderCreateByNameSeedA = 25963
+	plannerModelFolderCreateByNameSeedB = 39126
+	plannerModelFolderCreateByNameSeedC = 41422
+)
+
+// Validates: R-2.17.6
+//
+// Seed 6943: OneDrive moved e into d and d onto e's name, and a file was
+// made here in e. Both folders move here, e inside d before d moves, and the
+// file's upload was rebased through e's move alone, to d/e/b.txt, where d's
+// move had left nothing. The planner was wrong: the upload now follows both
+// moves to e/e/b.txt (LI-20261125-01).
+func TestPlannerModel_ACreateFollowsAFolderMoveCarriedOnByAnother(t *testing.T) {
+	t.Parallel()
+
+	runPlannerModel(t, plannerModelCarriedFolderMoveSeed)
+}
+
+// plannerModelCarriedFolderMoveSeed is the seed of the 2026-11-25 sweep that
+// found a create rebased through one of two chained folder moves.
+const plannerModelCarriedFolderMoveSeed = 6943
 
 // plannerModelFolderConflictCopySeed is the seed of the 2026-11-24 dispatched
 // nightly that found the model's folder conflict copy dropping its subtree.
