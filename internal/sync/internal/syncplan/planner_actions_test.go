@@ -258,6 +258,40 @@ func TestPlannerPlanCurrentState_LocalMoveComposesWithTheRemoteEdit(t *testing.T
 	assert.Contains(t, plan.Deps[downloadIndex], moveIndex, "the download runs after the move")
 }
 
+// Validates: R-2.17.6
+//
+// OneDrive moved e into d and then d onto e's old name. Here e is moved into
+// d first, inside the folder before d moves, and d's move carries it on to
+// e/e. A file made here in e ends up at e/e/b.txt, so its upload is addressed
+// there and waits for both moves; addressed at d/e/b.txt, through the first
+// move alone, it found no file (planner seed 6943).
+func TestPlannerPlanCurrentState_ACreateFollowsAFolderMoveCarriedOnByAnother(t *testing.T) {
+	t.Parallel()
+
+	s := newPMState(t)
+	s.addSynced("d", true, "")
+	s.addSynced("d/a.txt", false, "synced a")
+	s.addSynced("e", true, "")
+	s.addSynced("e/c.txt", false, "synced c")
+	moveTree(s.remote, "e", "d/e")
+	s.bumpRemote("d/e")
+	moveTree(s.remote, "d", "e")
+	s.bumpRemote("e")
+	s.local["e/b.txt"] = pmItem{content: "made here", inode: uint64(s.next())}
+
+	plan := s.plan()
+	uploadIndex := slices.IndexFunc(plan.Actions, func(a syncdomain.Action) bool { return a.Type == syncdomain.ActionUpload })
+	require.NotEqual(t, -1, uploadIndex)
+	assert.Equal(t, "e/e/b.txt", plan.Actions[uploadIndex].Path)
+	order := planOrder(t, plan)
+	for i := range plan.Actions {
+		if plan.Actions[i].Type == syncdomain.ActionLocalMove {
+			assert.Less(t, slices.Index(order, i), slices.Index(order, uploadIndex),
+				"the upload runs after %s", actionLine(&plan.Actions[i]))
+		}
+	}
+}
+
 // Validates: R-2.17.3
 func TestPlannerPlanCurrentState_RemoteMoveCarriesSourceBaseline(t *testing.T) {
 	t.Parallel()
