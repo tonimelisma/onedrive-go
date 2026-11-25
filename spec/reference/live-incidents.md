@@ -62,6 +62,7 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261124-05 | The planner model's folder conflict copy left the folder's subtree behind and reported a new file lost | fixed | test bug | 2026-11-24 | no |
 | LI-20261124-04 | The e2e fault proxy wrote an answer of unknown length unframed, and a folder create's answer never ended | fixed | test bug | 2026-11-24 | no |
 | LI-20261124-03 | A chaos seed's fault draws were checked on macOS, where the model takes another course | fixed | test bug | 2026-11-24 | no |
 | LI-20261124-02 | A folder OneDrive made at a name a waiting folder here held in another case was made into that folder on macOS | fixed | product bug | 2026-11-24 | no |
@@ -120,6 +121,39 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261124-05: The planner model's folder conflict copy left the folder's subtree behind and reported a new file lost
+
+First seen: 2026-11-24 (dispatched run 45513256819 of `main` at c4661602, `model-seeds`)
+Last seen: 2026-11-24
+Area: `internal/sync/internal/syncplan/planner_model_test.go` (`pmState.applyAction`)
+Suite / test: `internal/sync/internal/syncplan.TestPlannerModel_RandomTriplesConverge`, seed 327056
+Classification: test bug
+Status: fixed
+Recurring: no
+Summary: the seed reported "local create-file of e/b.txt was lost". Here a
+file `e/b.txt` was created and `e/d` made; OneDrive deleted `e`, moved
+`b.txt` into `d` and moved `d` onto `e`'s name. The plan conflict-copied the
+local `e`, then moved the local `d` onto `e`.
+
+Evidence: the seed fails at every commit back to ec8c705f, before this
+week's increments, so a new seed found it; no change caused it. The
+executor's conflict copy renames the entry (`ExecuteConflictCopy`), so a
+folder's copy carries its subtree, and the store leaves the baseline as it
+was. The model moved only the folder's own key: the new file stayed at
+`e/b.txt`, the later move of `d` landed the downloaded `b.txt` on that path,
+and the oracle found the user's content gone. The planner's plan keeps the
+file in `e.conflict-<n>/b.txt`.
+
+Fix: the model's conflict copy moves the whole subtree, as the executor
+does; the seed is kept as `TestPlannerModel_AFolderConflictCopyCarriesItsSubtree`,
+which fails on the old model. A sweep of seeds 1 to 42,000 on the
+corrected model found seven other failing seeds (6678, 6943, 9132, 25963,
+26899, 39126, 41422) that fail the same way on `main` before this fix: plans
+that never go quiet, sides left different, and an upload planned after its
+file moved. Each involves folders moved onto or into each other's names;
+they are a separate investigation of the planner's move resolution, not
+this model bug.
 
 ## LI-20261124-04: The e2e fault proxy wrote an answer of unknown length unframed, and a folder create's answer never ended
 
