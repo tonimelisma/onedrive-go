@@ -15,9 +15,11 @@ import (
 	"sync"
 )
 
-// TestUserEnv names the environment variable that gives `--as-user` its
-// default, so a cloud environment can set it once for every session.
-const TestUserEnv = "DEVTOOL_TEST_USER"
+// DefaultTestUser is the user verify runs go test as, when it runs as root
+// on Linux with no `--as-user` and the user exists: the non-root user a cloud
+// environment's setup script creates. The repository, not an environment
+// variable, carries the default, so the environment holds only its script.
+const DefaultTestUser = "dev"
 
 const (
 	linuxGOOS = "linux"
@@ -28,7 +30,7 @@ const (
 	// rootTestWarning is printed once, before the first go test step, when
 	// verify runs as root with no test user.
 	rootTestWarning = "devtool verify: running go test as root; tests that rely on file permissions " +
-		"(or that refuse root) may fail. Pass --as-user <name> or set " + TestUserEnv + " to run them as that user.\n"
+		"(or that refuse root) may fail. Pass --as-user <name>, or create the " + DefaultTestUser + " user, to run them as that user.\n"
 )
 
 // userSwitchTools are the commands that can start a process as another user,
@@ -59,10 +61,11 @@ func defaultTestUserHost() testUserHost {
 }
 
 // withTestUser returns the runner verify's steps use. As root on Linux with a
-// test user, it is a runner that starts every go test as that user; as root
-// without one, it prints rootTestWarning before the first go test. Elsewhere
-// it is runner itself: a test user that is the current user needs no switch,
-// and any other one is refused, since only root can switch users.
+// test user, asUser or else DefaultTestUser when that user exists, it is a
+// runner that starts every go test as that user; as root without one, it
+// prints rootTestWarning before the first go test. Elsewhere it is runner
+// itself: a test user that is the current user needs no switch, and any
+// other one is refused, since only root can switch users.
 func withTestUser(runner commandRunner, asUser string, host testUserHost, stderr io.Writer) (commandRunner, error) {
 	if host.goos != linuxGOOS || host.euid != rootUID {
 		if asUser == "" {
@@ -79,14 +82,18 @@ func withTestUser(runner commandRunner, asUser string, host testUserHost, stderr
 		return nil, fmt.Errorf("--as-user %s: switching users needs root on Linux", asUser)
 	}
 
-	if asUser == "" || asUser == "root" {
+	if asUser == "root" {
 		return &testUserRunner{inner: runner, stderr: stderr}, nil
 	}
 
-	target, err := host.lookupUser(asUser)
+	target, found, err := lookupTestUser(asUser, host)
 	if err != nil {
-		return nil, fmt.Errorf("--as-user %s: look up user: %w", asUser, err)
+		return nil, err
 	}
+	if !found {
+		return &testUserRunner{inner: runner, stderr: stderr}, nil
+	}
+	asUser = target.Username
 	uid, uidErr := strconv.Atoi(target.Uid)
 	gid, gidErr := strconv.Atoi(target.Gid)
 	if uidErr != nil || gidErr != nil {
@@ -121,6 +128,32 @@ func withTestUser(runner commandRunner, asUser string, host testUserHost, stderr
 		lookPath: host.lookPath,
 		chown:    host.chown,
 	}, nil
+}
+
+// lookupTestUser finds the user go test runs as when verify runs as root:
+// asUser, or, when that is empty, DefaultTestUser if the host has it. It
+// reports no user found when asUser is empty and the host has no
+// DefaultTestUser.
+func lookupTestUser(asUser string, host testUserHost) (*user.User, bool, error) {
+	if asUser != "" {
+		target, err := host.lookupUser(asUser)
+		if err != nil {
+			return nil, false, fmt.Errorf("--as-user %s: look up user: %w", asUser, err)
+		}
+
+		return target, true, nil
+	}
+
+	target, err := host.lookupUser(DefaultTestUser)
+	var unknown user.UnknownUserError
+	if errors.As(err, &unknown) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("look up the default test user %s: %w", DefaultTestUser, err)
+	}
+
+	return target, true, nil
 }
 
 type testUser struct {

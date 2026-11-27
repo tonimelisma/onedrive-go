@@ -148,8 +148,8 @@ type VerifyOptions struct {
 	// Now is the clock of the seeds profile's date; nil is the real clock.
 	Now func() time.Time
 	// AsUser names the user the go test steps run as when verify runs as
-	// root on Linux (`--as-user`, default from DEVTOOL_TEST_USER). Empty
-	// runs them as root, after one warning.
+	// root on Linux (`--as-user`). Empty runs them as DefaultTestUser when
+	// that user exists, else as root, after one warning.
 	AsUser string
 	Stdout io.Writer
 	Stderr io.Writer

@@ -363,8 +363,8 @@ func (f *verifyFlags) registerProfileFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(
 		&f.asUser,
 		"as-user",
-		os.Getenv(devtool.TestUserEnv),
-		"run the go test steps as this user when verify runs as root on Linux (default from "+devtool.TestUserEnv+")",
+		"",
+		"run the go test steps as this user when verify runs as root on Linux (default: "+devtool.DefaultTestUser+", when that user exists)",
 	)
 	cmd.Flags().BoolVar(
 		&f.classifyLiveQuirks,
