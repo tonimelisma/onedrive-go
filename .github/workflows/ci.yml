@@ -412,32 +412,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # This repository's logs are public, and GitHub prints a job-level env
-      # value in the header of every step, so the test drives and the account
-      # allowlist come into this job here only, right after the checkout:
-      # scripts/ci-mask-test-drives.sh masks every spelling of them the job or
-      # its tests can print, lists those spellings for the artifact
-      # redaction, and exports the values and each drive's vault secret and
-      # token file names through GITHUB_ENV, whose headers then show ***.
-      # While they are repository variables, this step's header still shows
-      # the values once; a repository secret of the same name takes precedence
-      # and removes that last occurrence too.
-      - name: Mask the test drive and the account allowlist
-        env:
-          ONEDRIVE_TEST_DRIVE: ${{ secrets.ONEDRIVE_TEST_DRIVE_INTEGRATION || vars.ONEDRIVE_TEST_DRIVE_INTEGRATION }}
-          ONEDRIVE_ALLOWED_TEST_ACCOUNTS: ${{ secrets.ONEDRIVE_ALLOWED_TEST_ACCOUNTS || vars.ONEDRIVE_ALLOWED_TEST_ACCOUNTS }}
-        run: ./scripts/ci-mask-test-drives.sh
-
-      # Live jobs disable setup-go cache restore because toolchain tar extraction
-      # conflicts during cache replay can break the job before tests start.
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
-        with:
-          go-version-file: go.mod
-          cache: false
-
-      - name: Build
-        run: go build ./...
-
       - name: Azure OIDC login (attempt 1)
         id: azure_login_integration
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
@@ -454,6 +428,32 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # This repository's logs are public, and GitHub prints a step's env
+      # values in its header, so the test drives and the account allowlist
+      # are no repository variables: they live in Key Vault, and this step,
+      # which only the checkout and the Azure login precede, names each by
+      # its vault secret. scripts/ci-mask-test-drives.sh reads them, masks
+      # each value and every spelling of it the job or its tests can print,
+      # lists those spellings for the artifact redaction, and exports the
+      # values and each drive's vault secret and token file names through
+      # GITHUB_ENV, whose headers then show ***.
+      - name: Mask the test drive and the account allowlist
+        env:
+          AZURE_KEY_VAULT_NAME: ${{ vars.AZURE_KEY_VAULT_NAME }}
+          ONEDRIVE_TEST_DRIVE_FROM_VAULT: onedrive-test-drive-integration
+          ONEDRIVE_ALLOWED_TEST_ACCOUNTS_FROM_VAULT: onedrive-test-allowed-accounts
+        run: ./scripts/ci-mask-test-drives.sh
+
+      # Live jobs disable setup-go cache restore because toolchain tar extraction
+      # conflicts during cache replay can break the job before tests start.
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build
+        run: go build ./...
 
       - name: Download credentials to .testdata/
         run: |
@@ -534,34 +534,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # This repository's logs are public, and GitHub prints a job-level env
-      # value in the header of every step, so the test drives and the account
-      # allowlist come into this job here only, right after the checkout:
-      # scripts/ci-mask-test-drives.sh masks every spelling of them the job or
-      # its tests can print, lists those spellings for the artifact
-      # redaction, and exports the values and each drive's vault secret and
-      # token file names through GITHUB_ENV, whose headers then show ***.
-      # While they are repository variables, this step's header still shows
-      # the values once; a repository secret of the same name takes precedence
-      # and removes that last occurrence too.
-      - name: Mask the test drives and the account allowlist
-        env:
-          ONEDRIVE_TEST_DRIVE: ${{ secrets.ONEDRIVE_TEST_DRIVE_E2E || vars.ONEDRIVE_TEST_DRIVE_E2E }}
-          ONEDRIVE_TEST_DRIVE_2: ${{ secrets.ONEDRIVE_TEST_DRIVE_E2E_2 || vars.ONEDRIVE_TEST_DRIVE_E2E_2 }}
-          ONEDRIVE_ALLOWED_TEST_ACCOUNTS: ${{ secrets.ONEDRIVE_ALLOWED_TEST_ACCOUNTS || vars.ONEDRIVE_ALLOWED_TEST_ACCOUNTS }}
-          # Which drive holds each shortcut fixture, by variable name, never
-          # by value: the script exports the fixture variables from them.
-          ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE_FROM: ONEDRIVE_TEST_DRIVE
-          ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE_FROM: ONEDRIVE_TEST_DRIVE_2
-        run: ./scripts/ci-mask-test-drives.sh
-
-      # Live jobs disable setup-go cache restore because toolchain tar extraction
-      # conflicts during cache replay can break the job before tests start.
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
-        with:
-          go-version-file: go.mod
-          cache: false
-
       - name: Azure OIDC login (attempt 1)
         id: azure_login_e2e
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
@@ -578,6 +550,34 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # This repository's logs are public, and GitHub prints a step's env
+      # values in its header, so the test drives and the account allowlist
+      # are no repository variables: they live in Key Vault, and this step,
+      # which only the checkout and the Azure login precede, names each by
+      # its vault secret. scripts/ci-mask-test-drives.sh reads them, masks
+      # each value and every spelling of it the job or its tests can print,
+      # lists those spellings for the artifact redaction, and exports the
+      # values and each drive's vault secret and token file names through
+      # GITHUB_ENV, whose headers then show ***.
+      - name: Mask the test drives and the account allowlist
+        env:
+          AZURE_KEY_VAULT_NAME: ${{ vars.AZURE_KEY_VAULT_NAME }}
+          ONEDRIVE_TEST_DRIVE_FROM_VAULT: onedrive-test-drive-e2e
+          ONEDRIVE_TEST_DRIVE_2_FROM_VAULT: onedrive-test-drive-e2e-2
+          ONEDRIVE_ALLOWED_TEST_ACCOUNTS_FROM_VAULT: onedrive-test-allowed-accounts
+          # Which drive holds each shortcut fixture, by variable name, never
+          # by value: the script exports the fixture variables from them.
+          ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE_FROM: ONEDRIVE_TEST_DRIVE
+          ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE_FROM: ONEDRIVE_TEST_DRIVE_2
+        run: ./scripts/ci-mask-test-drives.sh
+
+      # Live jobs disable setup-go cache restore because toolchain tar extraction
+      # conflicts during cache replay can break the job before tests start.
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
 
       - name: Download credentials to .testdata/
         run: |

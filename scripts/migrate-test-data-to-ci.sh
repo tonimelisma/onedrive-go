@@ -11,6 +11,16 @@
 # Prerequisites:
 #   - az CLI logged in (az login)
 #   - .testdata/ populated (run bootstrap-test-credentials.sh first)
+#
+# Which drive each live CI job tests and the account allowlist are Key Vault
+# secrets too, set by hand when they change, never repository variables (the
+# CI logs are public): onedrive-test-drive-integration,
+# onedrive-test-drive-e2e, onedrive-test-drive-e2e-2 and
+# onedrive-test-allowed-accounts, each a drive identifier
+# (personal:<address>) or, for the allowlist, a comma-separated list of them.
+# Set one without echoing it:
+#   printf '%s' "$VALUE" | az keyvault secret set --vault-name kv-onedrivego-ci \
+#     --name onedrive-test-drive-e2e --file /dev/stdin --output none
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
