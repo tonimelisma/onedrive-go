@@ -38,6 +38,9 @@ type fakeTestUserHost struct {
 	euid   int
 	tools  []string
 	chowns []chownCall
+	// lookupErr, when set, is every user lookup's answer: a host without
+	// the dev user answers user.UnknownUserError.
+	lookupErr error
 }
 
 func (h *fakeTestUserHost) host() testUserHost {
@@ -51,6 +54,9 @@ func (h *fakeTestUserHost) host() testUserHost {
 			return &user.User{Username: asUserTestName, Uid: "1001", Gid: "1002", HomeDir: asUserTestHome}, nil
 		},
 		lookupUser: func(name string) (*user.User, error) {
+			if h.lookupErr != nil {
+				return nil, h.lookupErr
+			}
 			if name != asUserTestName {
 				return nil, user.UnknownUserError(name)
 			}
@@ -231,7 +237,7 @@ func TestWithTestUser_HandsTheCoverageProfileToTheUser(t *testing.T) {
 func TestWithTestUser_WarnsOnceAsRootWithoutAUser(t *testing.T) {
 	t.Parallel()
 
-	host := &fakeTestUserHost{euid: rootUID, tools: []string{"runuser"}}
+	host := &fakeTestUserHost{euid: rootUID, tools: []string{"runuser"}, lookupErr: user.UnknownUserError(DefaultTestUser)}
 	inner := &fakeRunner{}
 	var stderr bytes.Buffer
 	runner, err := withTestUser(inner, "", host.host(), &stderr)
@@ -245,6 +251,38 @@ func TestWithTestUser_WarnsOnceAsRootWithoutAUser(t *testing.T) {
 	}
 	assert.Equal(t, rootTestWarning, stderr.String())
 	assert.Equal(t, "go", inner.runCommands[1].name, "as root without a user, go test runs as root")
+}
+
+// Validates: R-6.10.38
+//
+// As root with no --as-user, the go tests run as the dev user a cloud
+// environment's setup script creates, with no variable naming it; a user
+// database that cannot answer stops verify rather than running as root.
+func TestWithTestUser_DefaultsToTheDevUserAsRoot(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, asUserTestName, DefaultTestUser)
+	host := &fakeTestUserHost{euid: rootUID, tools: []string{"runuser"}}
+	inner := goEnvRunner()
+	var stderr bytes.Buffer
+	runner, err := withTestUser(inner, "", host.host(), &stderr)
+	require.NoError(t, err)
+
+	require.NoError(t, runner.Run(t.Context(), "/repo", nil, &bytes.Buffer{}, &bytes.Buffer{}, "go", "test", "./..."))
+	test := inner.runCommands[len(inner.runCommands)-1]
+	assert.Equal(t, "/usr/bin/runuser", test.name)
+	assert.Equal(t, []string{"-u", DefaultTestUser, "--", asUserTestGoBinary, "test", "./..."}, test.args)
+	assert.NotContains(t, stderr.String(), rootTestWarning)
+
+	broken := &fakeTestUserHost{euid: rootUID, tools: []string{"runuser"}, lookupErr: errors.New("nsswitch: no answer")}
+	_, err = withTestUser(goEnvRunner(), "", broken.host(), &bytes.Buffer{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "look up the default test user dev")
+
+	notRoot := &fakeTestUserHost{euid: asUserTestUID + 1, tools: []string{"runuser"}}
+	same, err := withTestUser(&fakeRunner{}, "", notRoot.host(), &bytes.Buffer{})
+	require.NoError(t, err)
+	assert.IsType(t, &fakeRunner{}, same, "not root, there is no default to switch to")
 }
 
 // Validates: R-6.10.38

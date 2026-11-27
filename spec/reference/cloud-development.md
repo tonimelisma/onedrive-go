@@ -28,7 +28,7 @@ CLAUDE.md's E2E section, which needs a browser.
 | --- | --- |
 | one increment per session branch, squash-merged, then the branch restarted from `origin/main` | the session may push only its own branch; the squash commit is not a descendant of the branch, so without the restart the next increment would carry the merged commits (`verify --dod --stage post-merge` does the restart) |
 | builders in harness-made worktrees, removed by `go run ./cmd/devtool worktree prune-merged` | builder branches are squash-merged too, so no ancestry check ever sees them merged; twenty-five builder worktrees were once left behind. Integrate a builder's commits as they are (cherry-pick), so the command can prove them merged |
-| go tests as the non-root `dev` user (`DEVTOOL_TEST_USER`, or `verify --as-user`) | as root, permission tests do not bite and the sync tests that refuse root fail |
+| go tests as the non-root `dev` user (verify's default as root when `dev` exists, or `verify --as-user`) | as root, permission tests do not bite and the sync tests that refuse root fail |
 | every DoD stage run in the session | the stages read GitHub over REST, which the proxy serves, review threads over its REST thread routes, and the merge is a REST call too; the nightly claims are issues |
 | no `.env`, no `.testdata` | live tests run only in CI, from the Key Vault secrets; nothing credential-bearing is copied into a container. The live benchmark is the same: a session dispatches `.github/workflows/bench.yml` over REST (`POST repos/{owner}/{repo}/actions/workflows/bench.yml/dispatches`, `ref=main`) and reads its `bench-result` artifact |
 | no tags, releases or installs from a session | every merge to `main` is released by `.github/workflows/release.yml` once its push CI passes (R-6.10.41); the GitHub proxy refuses tag pushes and release writes, and a release only that workflow on `main` attests is the one a machine running the newest code accepts |
@@ -80,9 +80,9 @@ downloads an asset with
 
 ## Environment setup script
 
-The onedrive-go cloud environment carries this script and
-`DEVTOOL_TEST_USER=dev`; a session for this repository should run on that
-environment. The script runs as root each time a container is built,
+The onedrive-go cloud environment carries this script and nothing else: no
+environment variables, since what a session needs is in the repository. A
+session for this repository should run on that environment. The script runs as root each time a container is built,
 in the directory that holds the repository checkouts. This one installs what
 `devtool verify` requires and prepares a non-root `dev` user. The versions
 are the ones devtool and CI pin: the toolchain is `go.mod`'s `toolchain`
@@ -120,8 +120,9 @@ id dev >/dev/null 2>&1 || useradd --create-home --shell /bin/bash dev
 chmod 0711 /root
 ```
 
-With `DEVTOOL_TEST_USER=dev` set, every `devtool verify` in the session runs
-its go tests as `dev` without the flag. If the pins have moved and the script was not updated, devtool says so:
+With the `dev` user in place, every `devtool verify` in the session runs
+its go tests as `dev` without the flag: as root on Linux, verify defaults to
+that user whenever it exists. If the pins have moved and the script was not updated, devtool says so:
 it refuses a golangci-lint of another version and prints the install
 command.
 

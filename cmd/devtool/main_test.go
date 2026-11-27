@@ -127,10 +127,11 @@ func TestNewVerifyCmdPassesFlagsThrough(t *testing.T) {
 
 // Validates: R-6.10.38
 //
-// A cloud environment sets the test user once, for every session, through
-// the environment; the flag still overrides it.
-func TestNewVerifyCmdTakesTheTestUserFromTheEnvironment(t *testing.T) {
-	t.Setenv(devtool.TestUserEnv, "builder")
+// Without the flag, verify itself picks the test user (the dev user, when it
+// exists): no environment variable feeds the flag, so a cloud environment
+// needs none.
+func TestNewVerifyCmdLeavesTheDefaultTestUserToVerify(t *testing.T) {
+	t.Parallel()
 
 	var got devtool.VerifyOptions
 	newCmd := func(args ...string) error {
@@ -149,10 +150,10 @@ func TestNewVerifyCmdTakesTheTestUserFromTheEnvironment(t *testing.T) {
 	}
 
 	require.NoError(t, newCmd("quick"))
-	assert.Equal(t, "builder", got.AsUser)
+	assert.Empty(t, got.AsUser)
 
-	require.NoError(t, newCmd("quick", "--as-user", "dev"))
-	assert.Equal(t, "dev", got.AsUser)
+	require.NoError(t, newCmd("quick", "--as-user", "builder"))
+	assert.Equal(t, "builder", got.AsUser)
 }
 
 // Validates: R-6.10.14
