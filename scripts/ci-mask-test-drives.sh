@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-# ci-mask-test-drives.sh masks a live CI job's test drives and account
-# allowlist, then hands them to the job's later steps.
+# ci-mask-test-drives.sh reads a live CI job's test drives and account
+# allowlist from Azure Key Vault, masks them, then hands them to the job's
+# later steps.
 #
-# This repository's CI logs are public, and GitHub prints a job-level env value
-# in the header of every step. A live job therefore receives
-# ONEDRIVE_TEST_DRIVE, ONEDRIVE_TEST_DRIVE_2 (optional) and
-# ONEDRIVE_ALLOWED_TEST_ACCOUNTS only in the env of the step that runs this
-# script, right after the checkout. The script
+# This repository's CI logs are public, and GitHub prints a step's env values
+# in its header, so the test drives and the allowlist are never repository
+# variables and never in any step's env. The step that runs this script, which
+# only the checkout and the job's Azure login precede, names them by the Key
+# Vault secret that holds each: <NAME>_FROM_VAULT for ONEDRIVE_TEST_DRIVE,
+# ONEDRIVE_TEST_DRIVE_2 (optional) and ONEDRIVE_ALLOWED_TEST_ACCOUNTS, read
+# from the vault AZURE_KEY_VAULT_NAME names through the az session the login
+# left. The script
+#   - masks each value the moment it is read, before anything else runs;
 #   - masks every spelling of them the job or its tests can print: each drive
 #     identifier and allowlist entry, the account address inside it, the Key
 #     Vault secret and token-file spellings derived from it, and the
@@ -23,9 +28,6 @@
 #     job states which drive holds each shortcut fixture by variable name,
 #     never by value;
 #   - prints nothing but the mask commands, which the runner consumes.
-# With repository variables, the header of the step that runs this script
-# still shows the values once; a repository secret of the same name takes
-# precedence and removes that last occurrence.
 #
 # It keeps to the bash 3.2 that macOS ships, because the devtool tests run it
 # on both CI platforms.
@@ -42,6 +44,30 @@ value() {
 trim() {
   sed 's/^[[:space:]]*//; s/[[:space:]]*$//' <<< "$1"
 }
+
+# The values come from the vault alone: a value already in the environment is
+# dropped, so a step that sets one cannot slip it past the vault.
+vault="${AZURE_KEY_VAULT_NAME:?AZURE_KEY_VAULT_NAME must name the Key Vault}"
+for name in ONEDRIVE_TEST_DRIVE ONEDRIVE_TEST_DRIVE_2 ONEDRIVE_ALLOWED_TEST_ACCOUNTS; do
+  unset "${name}"
+  secret="$(value "${name}_FROM_VAULT")"
+  if [ -z "${secret}" ]; then
+    case "${name}" in
+      ONEDRIVE_TEST_DRIVE_2) continue ;;
+      *)
+        echo "${name}_FROM_VAULT must name the Key Vault secret that holds ${name}" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  fetched="$(az keyvault secret show --vault-name "${vault}" --name "${secret}" --query value --output tsv)"
+  if [ -z "$(trim "${fetched}")" ]; then
+    echo "the Key Vault secret ${name}_FROM_VAULT names holds nothing" >&2
+    exit 1
+  fi
+  echo "::add-mask::${fetched}"
+  export "${name}=${fetched}"
+done
 
 # vault_spelling and token_spelling are how a drive's Key Vault secret and
 # token file spell it.

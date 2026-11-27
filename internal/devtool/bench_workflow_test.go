@@ -73,8 +73,11 @@ func TestBenchWorkflowHoldsItsContract(t *testing.T) {
 	assert.LessOrEqual(t, timeout, ciGroupLongestTimeout(t, repoRoot, liveAccountE2EGroup),
 		"a run of the group lasts no longer than ci.yml says it can")
 
-	exposures := workflowDriveExposures(workflow, map[string][]string{
-		benchWorkflowJob: {"ONEDRIVE_TEST_DRIVE", "ONEDRIVE_ALLOWED_TEST_ACCOUNTS"},
+	exposures := workflowDriveExposures(workflow, map[string]map[string]string{
+		benchWorkflowJob: {
+			"ONEDRIVE_TEST_DRIVE":            "onedrive-test-drive-e2e",
+			"ONEDRIVE_ALLOWED_TEST_ACCOUNTS": "onedrive-test-allowed-accounts",
+		},
 	})
 	assert.Empty(t, exposures)
 	assert.Equal(t, ciMaskingStepDrive(t, ciJobNamed(t, ciWorkflowJobs(ciWorkflowText(t, repoRoot)), "e2e")),
@@ -150,15 +153,15 @@ func ciGroupLongestTimeout(t *testing.T, repoRoot string, group string) time.Dur
 	return longest
 }
 
-// ciMaskingStepDrive is what a live job's masking step reads as its
-// ONEDRIVE_TEST_DRIVE.
+// ciMaskingStepDrive is the Key Vault secret a live job's masking step reads
+// its ONEDRIVE_TEST_DRIVE from.
 func ciMaskingStepDrive(t *testing.T, job ciWorkflowJob) string {
 	t.Helper()
 
 	steps := ciJobSteps(job)
 	index := slices.IndexFunc(steps, func(step []string) bool { return strings.Contains(ciStepRun(step), ciMaskScript) })
 	require.GreaterOrEqual(t, index, 0, "%s has no masking step", job.name)
-	drive, ok := ciBlockEntries(steps[index], "        env:")["ONEDRIVE_TEST_DRIVE"]
+	drive, ok := ciBlockEntries(steps[index], "        env:")["ONEDRIVE_TEST_DRIVE"+ciFromVaultSuffix]
 	require.True(t, ok, "%s's masking step reads no ONEDRIVE_TEST_DRIVE", job.name)
 
 	return drive

@@ -314,23 +314,39 @@ func ciShortcutFixtureSources() map[string]map[string]string {
 }
 
 // ciLiveJobVariables lists, per live job, the variables that carry its test
-// drives and the account allowlist.
-func ciLiveJobVariables() map[string][]string {
-	return map[string][]string{
-		"integration": {"ONEDRIVE_TEST_DRIVE", "ONEDRIVE_ALLOWED_TEST_ACCOUNTS"},
-		"e2e":         {"ONEDRIVE_TEST_DRIVE", "ONEDRIVE_TEST_DRIVE_2", "ONEDRIVE_ALLOWED_TEST_ACCOUNTS"},
+// drives and the account allowlist, each with the Key Vault secret that holds
+// it: the masking step names the secret, never the value.
+func ciLiveJobVariables() map[string]map[string]string {
+	return map[string]map[string]string{
+		"integration": {
+			"ONEDRIVE_TEST_DRIVE":            "onedrive-test-drive-integration",
+			"ONEDRIVE_ALLOWED_TEST_ACCOUNTS": "onedrive-test-allowed-accounts",
+		},
+		"e2e": {
+			"ONEDRIVE_TEST_DRIVE":            "onedrive-test-drive-e2e",
+			"ONEDRIVE_TEST_DRIVE_2":          "onedrive-test-drive-e2e-2",
+			"ONEDRIVE_ALLOWED_TEST_ACCOUNTS": "onedrive-test-allowed-accounts",
+		},
 	}
 }
 
+// ciFromVaultSuffix ends the masking step's env entry that names the Key
+// Vault secret holding a test drive or the allowlist.
+const ciFromVaultSuffix = "_FROM_VAULT"
+
+// ciKeyVaultNameEntry is how the masking step receives the vault it reads.
+const ciKeyVaultNameEntry = "${{ vars.AZURE_KEY_VAULT_NAME }}"
+
 // Validates: R-6.10.27
 //
-// The repository's logs are public. GitHub prints a job-level env value in
-// the header of every step, so the test drives and the account allowlist
-// were in every step of both live jobs. They now reach a job only through
-// the step that runs the masking script, which nothing but the checkout
-// precedes; every later step reads the masked values and the names the
-// script derives; and an artifact, which masking does not reach, is
-// uploaded only after a step redacts the masked spellings in it.
+// The repository's logs are public, and GitHub prints a step's env values in
+// its header. The test drives and the account allowlist are therefore no
+// repository variables and in no step's env: they reach a job only from Key
+// Vault, read by the step that runs the masking script, which nothing but
+// the checkout and the Azure login precede and which names each value by its
+// vault secret; every later step reads the masked values and the names the
+// script derives; and an artifact, which masking does not reach, is uploaded
+// only after a step redacts the masked spellings in it.
 func TestCIWorkflowSetsNoTestDriveInJobEnv(t *testing.T) {
 	t.Parallel()
 
@@ -370,6 +386,30 @@ func TestCIWorkflowSetsNoTestDriveInJobEnv(t *testing.T) {
 	require.NotEqual(t, workflow, elsewhere)
 	assert.Contains(t, strings.Join(ciDriveExposures(elsewhere), "\n"),
 		"uploads /tmp/e2e-debug-logs, which no earlier step redacted")
+
+	// The same workflow handing the masking step a drive's value, as a
+	// repository variable did, and naming another vault secret.
+	const fromVault = "          ONEDRIVE_TEST_DRIVE_FROM_VAULT: onedrive-test-drive-integration\n"
+	byValue := strings.Replace(workflow, fromVault,
+		"          ONEDRIVE_TEST_DRIVE: ${{ vars.ONEDRIVE_TEST_DRIVE_INTEGRATION }}\n", 1)
+	require.NotEqual(t, workflow, byValue)
+	problems := strings.Join(ciDriveExposures(byValue), "\n")
+	assert.Contains(t, problems, "integration: the masking step receives ONEDRIVE_TEST_DRIVE itself; it reads it from Key Vault")
+	assert.Contains(t, problems, "integration: the masking step names no vault secret for ONEDRIVE_TEST_DRIVE")
+	assert.Contains(t, problems, "integration: step 4 reads a test drive variable itself")
+
+	otherSecret := strings.Replace(workflow, fromVault,
+		"          ONEDRIVE_TEST_DRIVE_FROM_VAULT: onedrive-test-drive-e2e\n", 1)
+	assert.Contains(t, ciDriveExposures(otherSecret),
+		`integration: the masking step reads ONEDRIVE_TEST_DRIVE from "onedrive-test-drive-e2e", want "onedrive-test-drive-integration"`)
+
+	// And with the masking step ahead of the Azure login it reads the vault
+	// through.
+	integrationAt := strings.Index(workflow, "\n  integration:\n")
+	require.Positive(t, integrationAt)
+	noLogin := workflow[:integrationAt] + strings.Replace(workflow[integrationAt:],
+		"uses: azure/login@", "uses: azure/other@", 2)
+	assert.Contains(t, ciDriveExposures(noLogin), "integration: no Azure login precedes the masking step")
 }
 
 // ciDriveExposures lists every way the CI workflow's live jobs could print a
@@ -381,7 +421,7 @@ func ciDriveExposures(workflow string) []string {
 // workflowDriveExposures lists every way a workflow's live jobs could print a
 // test drive or the account allowlist in a public log or artifact; expected
 // names each live job of the workflow and the variables it receives.
-func workflowDriveExposures(workflow string, expected map[string][]string) []string {
+func workflowDriveExposures(workflow string, expected map[string]map[string]string) []string {
 	var problems []string
 	live := []string{}
 	for _, job := range ciWorkflowJobs(workflow) {
@@ -409,7 +449,7 @@ func workflowDriveExposures(workflow string, expected map[string][]string) []str
 	return problems
 }
 
-func ciLiveJobExposures(job ciWorkflowJob, names []string) []string {
+func ciLiveJobExposures(job ciWorkflowJob, secrets map[string]string) []string {
 	var problems []string
 	for name := range ciBlockEntries(job.lines, "    env:") {
 		if strings.HasPrefix(name, "ONEDRIVE_") {
@@ -423,13 +463,22 @@ func ciLiveJobExposures(job ciWorkflowJob, names []string) []string {
 		return append(problems, job.name+": no step runs "+ciMaskScript)
 	}
 	// Only steps that run nothing of this repository's and see no drive may
-	// come first: the checkout the script needs.
+	// come first: the checkout the script needs and the Azure login whose
+	// session it reads the vault through.
 	for i, step := range steps[:masking] {
 		if ciStepRun(step) != "" || slices.ContainsFunc(step, func(line string) bool { return strings.Contains(line, "ONEDRIVE_") }) {
 			problems = append(problems, fmt.Sprintf("%s: step %d runs before the masking script", job.name, i+1))
 		}
 	}
-	problems = append(problems, ciMaskingStepInputExposures(job.name, steps[masking], names)...)
+	if !slices.ContainsFunc(steps[:masking], func(step []string) bool {
+		return slices.ContainsFunc(step, func(line string) bool { return strings.Contains(line, "uses: azure/login@") })
+	}) {
+		problems = append(problems, job.name+": no Azure login precedes the masking step")
+	}
+	if slices.ContainsFunc(steps[masking], ciReadsTestDriveVariable) {
+		problems = append(problems, fmt.Sprintf("%s: step %d reads a test drive variable itself", job.name, masking+1))
+	}
+	problems = append(problems, ciMaskingStepInputExposures(job.name, steps[masking], secrets)...)
 
 	return append(problems, ciLaterStepExposures(job.name, steps[masking+1:], masking+2)...)
 }
@@ -445,9 +494,7 @@ func ciLaterStepExposures(job string, steps [][]string, first int) []string {
 	for i, step := range steps {
 		number := first + i
 		run := ciStepRun(step)
-		if slices.ContainsFunc(step, func(line string) bool {
-			return strings.Contains(line, "vars.ONEDRIVE_") || strings.Contains(line, "secrets.ONEDRIVE_")
-		}) {
+		if slices.ContainsFunc(step, ciReadsTestDriveVariable) {
 			problems = append(problems, fmt.Sprintf("%s: step %d reads a test drive variable itself", job, number))
 		}
 		if strings.Contains(run, "sed ") {
@@ -511,25 +558,40 @@ func ciUploadPaths(step []string) []string {
 	return paths
 }
 
-// ciSecretOrVariablePattern is the one shape a masking step's input takes: a
-// secret of the variable's name, if the owner creates one, wins and is masked
-// by GitHub everywhere, this step's header included.
-var ciSecretOrVariablePattern = regexp.MustCompile(`^\$\{\{ secrets\.([A-Z0-9_]+) \|\| vars\.([A-Z0-9_]+) \}\}$`)
+// ciReadsTestDriveVariable reports whether a workflow line reads a test drive
+// or the allowlist from a repository variable or secret, which no step may:
+// they live in Key Vault alone.
+func ciReadsTestDriveVariable(line string) bool {
+	return strings.Contains(line, "vars.ONEDRIVE_") || strings.Contains(line, "secrets.ONEDRIVE_")
+}
 
-// ciMaskingStepInputExposures checks that the masking step receives each of
-// the job's variables, and in the one shape that lets a secret win.
-func ciMaskingStepInputExposures(job string, step []string, names []string) []string {
+// ciMaskingStepInputExposures checks that the masking step receives none of
+// the job's values, only the vault and, for each value, the name of the vault
+// secret that holds it.
+func ciMaskingStepInputExposures(job string, step []string, secrets map[string]string) []string {
 	var problems []string
 	env := ciBlockEntries(step, "        env:")
-	for _, name := range names {
-		value, ok := env[name]
+	if vault := env["AZURE_KEY_VAULT_NAME"]; vault != ciKeyVaultNameEntry {
+		problems = append(problems, fmt.Sprintf("%s: the masking step reads the vault name as %q", job, vault))
+	}
+	for _, name := range slices.Sorted(maps.Keys(secrets)) {
+		if _, ok := env[name]; ok {
+			problems = append(problems, job+": the masking step receives "+name+" itself; it reads it from Key Vault")
+		}
+		secret, ok := env[name+ciFromVaultSuffix]
 		if !ok {
-			problems = append(problems, job+": the masking step does not receive "+name)
+			problems = append(problems, job+": the masking step names no vault secret for "+name)
 			continue
 		}
-		m := ciSecretOrVariablePattern.FindStringSubmatch(value)
-		if len(m) != 3 || m[1] != m[2] {
-			problems = append(problems, fmt.Sprintf("%s: the masking step reads %s as %q", job, name, value))
+		if secret != secrets[name] {
+			problems = append(problems, fmt.Sprintf("%s: the masking step reads %s from %q, want %q", job, name, secret, secrets[name]))
+		}
+	}
+	for name := range env {
+		if base, ok := strings.CutSuffix(name, ciFromVaultSuffix); ok {
+			if _, known := secrets[base]; !known {
+				problems = append(problems, job+": the masking step reads "+base+", which the job does not receive")
+			}
 		}
 	}
 	sources := map[string]string{}
@@ -547,10 +609,11 @@ func ciMaskingStepInputExposures(job string, step []string, names []string) []st
 
 // Validates: R-6.10.27
 //
-// The masking script, run as a live job runs it with synthetic values: it
-// prints nothing but mask commands, masks every spelling the job, its tests
-// and Graph URLs can print, lists them for the artifact redaction, and
-// exports the values and each drive's vault secret and token file names.
+// The masking script, run as a live job runs it with synthetic values in a
+// stand-in vault: it prints nothing but mask commands, masks every spelling
+// the job, its tests and Graph URLs can print, lists them for the artifact
+// redaction, and exports the values and each drive's vault secret and token
+// file names.
 func TestCIMaskScript_MasksEverySpellingAndExportsTheNames(t *testing.T) {
 	t.Parallel()
 
@@ -562,9 +625,10 @@ func TestCIMaskScript_MasksEverySpellingAndExportsTheNames(t *testing.T) {
 	dir := t.TempDir()
 	githubEnv := filepath.Join(dir, "github-env")
 	stdout, environment := runCIMaskScript(t, dir, githubEnv, map[string]string{
-		"ONEDRIVE_TEST_DRIVE":                               first,
-		"ONEDRIVE_TEST_DRIVE_2":                             second,
-		"ONEDRIVE_ALLOWED_TEST_ACCOUNTS":                    allowlist,
+		"ONEDRIVE_TEST_DRIVE":            first,
+		"ONEDRIVE_TEST_DRIVE_2":          second,
+		"ONEDRIVE_ALLOWED_TEST_ACCOUNTS": allowlist,
+	}, map[string]string{
 		"ONEDRIVE_TEST_SHORTCUT_READONLY_PARENT_DRIVE_FROM": "ONEDRIVE_TEST_DRIVE",
 		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE_FROM": "ONEDRIVE_TEST_DRIVE_2",
 	})
@@ -584,6 +648,9 @@ func TestCIMaskScript_MasksEverySpellingAndExportsTheNames(t *testing.T) {
 	} {
 		assert.True(t, masked[spelling], "%q is not masked", spelling)
 	}
+	firstMasks := strings.Split(stdout, "\n")[:3]
+	assert.ElementsMatch(t, []string{"::add-mask::" + first, "::add-mask::" + second, "::add-mask::" + allowlist}, firstMasks,
+		"each value is masked the moment it is read")
 
 	list, err := readFile(filepath.Join(dir, ciTestMasksFile))
 	require.NoError(t, err)
@@ -601,11 +668,14 @@ func TestCIMaskScript_MasksEverySpellingAndExportsTheNames(t *testing.T) {
 		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE=" + second,
 	}, environment)
 
-	// A job with one drive exports nothing for the second.
+	// A job with one drive exports nothing for the second, and a value the
+	// environment already holds is dropped for the vault's.
 	single := t.TempDir()
 	_, environment = runCIMaskScript(t, single, filepath.Join(single, "github-env"), map[string]string{
 		"ONEDRIVE_TEST_DRIVE":            first,
 		"ONEDRIVE_ALLOWED_TEST_ACCOUNTS": first,
+	}, map[string]string{
+		"ONEDRIVE_TEST_DRIVE_2": second,
 	})
 	assert.ElementsMatch(t, []string{
 		"ONEDRIVE_TEST_DRIVE=" + first,
@@ -622,24 +692,83 @@ func TestCIMaskScript_MasksEverySpellingAndExportsTheNames(t *testing.T) {
 func TestCIMaskScript_RefusesAShortcutMappingToAnotherVariable(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	cmd := ciMaskScriptCommand(t, dir, filepath.Join(dir, "github-env"), map[string]string{
-		"ONEDRIVE_TEST_DRIVE":                               "personal:alice@example.test",
+	stderr := failCIMaskScript(t, map[string]string{
+		"ONEDRIVE_TEST_DRIVE":            "personal:alice@example.test",
+		"ONEDRIVE_ALLOWED_TEST_ACCOUNTS": "personal:alice@example.test",
+	}, map[string]string{
 		"ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE_FROM": "HOME",
 	})
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	require.Error(t, cmd.Run())
-	assert.Contains(t, stderr.String(), "ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE_FROM must name")
+	assert.Contains(t, stderr, "ONEDRIVE_TEST_SHORTCUT_WRITABLE_PARENT_DRIVE_FROM must name")
 }
 
-// ciMaskScriptCommand is the masking script, ready to run with only the given
-// variables and the runner's.
-func ciMaskScriptCommand(t *testing.T, runnerTemp, githubEnv string, vars map[string]string) *exec.Cmd {
+// Validates: R-6.10.27
+//
+// The drive and the allowlist a job needs come from the vault or the job
+// stops: a missing secret name, a secret the vault does not hold and an
+// empty one each fail, naming the variable, never a value.
+func TestCIMaskScript_RefusesAValueTheVaultDoesNotGive(t *testing.T) {
+	t.Parallel()
+
+	const drive = "personal:alice@example.test"
+	noAllowlist := failCIMaskScript(t, map[string]string{"ONEDRIVE_TEST_DRIVE": drive}, nil)
+	assert.Contains(t, noAllowlist, "ONEDRIVE_ALLOWED_TEST_ACCOUNTS_FROM_VAULT must name the Key Vault secret")
+	assert.NotContains(t, noAllowlist, drive)
+
+	empty := failCIMaskScript(t, map[string]string{"ONEDRIVE_TEST_DRIVE": drive, "ONEDRIVE_ALLOWED_TEST_ACCOUNTS": " "}, nil)
+	assert.Contains(t, empty, "the Key Vault secret ONEDRIVE_ALLOWED_TEST_ACCOUNTS_FROM_VAULT names holds nothing")
+
+	unknown := failCIMaskScript(t, map[string]string{"ONEDRIVE_ALLOWED_TEST_ACCOUNTS": drive}, map[string]string{
+		"ONEDRIVE_TEST_DRIVE_FROM_VAULT": "onedrive-test-missing",
+	})
+	assert.Contains(t, unknown, "SecretNotFound")
+	assert.NotContains(t, unknown, drive)
+}
+
+// ciFakeVaultName is the vault the masking script's tests point it at.
+const ciFakeVaultName = "kv-test"
+
+// ciFakeAz stands in for the Azure CLI: it answers the one call the masking
+// script makes, `az keyvault secret show` of the fake vault, with the file
+// of the secret's name, and refuses any other call.
+const ciFakeAz = `#!/bin/sh
+if [ "$1 $2 $3 $4 $5 $6" != "keyvault secret show --vault-name ` + ciFakeVaultName + ` --name" ] ||
+  [ "$8 $9 ${10} ${11}" != "--query value --output tsv" ]; then
+  echo "fake az: unexpected call: $*" >&2
+  exit 2
+fi
+if [ ! -f "$FAKE_VAULT_DIR/$7" ]; then
+  echo "ERROR: (SecretNotFound) A secret with (name/id) $7 was not found in this key vault." >&2
+  exit 3
+fi
+cat "$FAKE_VAULT_DIR/$7"
+`
+
+// ciMaskScriptCommand is the masking script, ready to run with only the
+// runner's variables and the given ones, and with the fake Azure CLI first
+// on PATH answering for a vault that holds vault's values: each under a
+// secret of its own, which the command's environment names through
+// <NAME>_FROM_VAULT.
+func ciMaskScriptCommand(t *testing.T, runnerTemp, githubEnv string, vault, vars map[string]string) *exec.Cmd {
 	t.Helper()
 
+	fake := t.TempDir()
+	bin := filepath.Join(fake, "bin")
+	secrets := filepath.Join(fake, "vault")
+	require.NoError(t, os.MkdirAll(bin, 0o750))
+	require.NoError(t, os.MkdirAll(secrets, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "az"), []byte(ciFakeAz), 0o700)) //nolint:gosec // an executable stand-in the test runs
+
 	script := filepath.Join(repoRootFromDevtoolPackage(t), ciMaskScript)
-	env := []string{"PATH=" + os.Getenv("PATH"), "RUNNER_TEMP=" + runnerTemp, "GITHUB_ENV=" + githubEnv}
+	env := []string{
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"RUNNER_TEMP=" + runnerTemp, "GITHUB_ENV=" + githubEnv,
+		"AZURE_KEY_VAULT_NAME=" + ciFakeVaultName, "FAKE_VAULT_DIR=" + secrets,
+	}
+	for name, value := range vault {
+		secret := "secret-" + strings.ToLower(strings.ReplaceAll(name, "_", "-"))
+		require.NoError(t, os.WriteFile(filepath.Join(secrets, secret), []byte(value+"\n"), 0o600))
+		env = append(env, name+ciFromVaultSuffix+"="+secret)
+	}
 	for name, value := range vars {
 		env = append(env, name+"="+value)
 	}
@@ -649,12 +778,13 @@ func ciMaskScriptCommand(t *testing.T, runnerTemp, githubEnv string, vars map[st
 	return cmd
 }
 
-// runCIMaskScript runs the masking script with only the given variables and
-// the runner's, and returns what it printed and what it exported.
-func runCIMaskScript(t *testing.T, runnerTemp, githubEnv string, vars map[string]string) (string, []string) {
+// runCIMaskScript runs the masking script with only the given vault values
+// and variables and the runner's, and returns what it printed and what it
+// exported.
+func runCIMaskScript(t *testing.T, runnerTemp, githubEnv string, vault, vars map[string]string) (string, []string) {
 	t.Helper()
 
-	cmd := ciMaskScriptCommand(t, runnerTemp, githubEnv, vars)
+	cmd := ciMaskScriptCommand(t, runnerTemp, githubEnv, vault, vars)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -665,6 +795,20 @@ func runCIMaskScript(t *testing.T, runnerTemp, githubEnv string, vars map[string
 	require.NoError(t, err)
 
 	return stdout.String(), strings.Split(strings.TrimSpace(string(exported)), "\n")
+}
+
+// failCIMaskScript runs the masking script as runCIMaskScript does, requires
+// it to fail, and returns what it printed to stderr.
+func failCIMaskScript(t *testing.T, vault, vars map[string]string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	cmd := ciMaskScriptCommand(t, dir, filepath.Join(dir, "github-env"), vault, vars)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	require.Error(t, cmd.Run())
+
+	return stderr.String()
 }
 
 func sortedKeys(set map[string]bool) []string {
