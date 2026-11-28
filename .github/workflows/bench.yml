@@ -49,36 +49,26 @@ jobs:
     concurrency:
       group: live-account-e2e
       cancel-in-progress: false
+    # The `live` environment holds the Azure variables, and the Entra app
+    # trusts only this repository's `live` environment (an immutable OIDC
+    # subject), so only a job that names it can read the vault.
+    environment: live
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_KEY_VAULT: ${{ vars.AZURE_KEY_VAULT }}
     permissions:
       contents: read
       id-token: write # OIDC federation with Azure
-    if: vars.AZURE_CLIENT_ID != ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Azure OIDC login (attempt 1)
-        id: azure_login_bench
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        continue-on-error: true
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Azure OIDC login (retry)
-        if: steps.azure_login_bench.outcome == 'failure'
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
       # This repository's logs are public, and GitHub prints a step's env
       # values in its header, so the test drives and the account allowlist
       # are no repository variables: they live in Key Vault, and this step,
-      # which only the checkout and the Azure login precede, names each by
+      # which only the checkout precedes, names each by
       # its vault secret. scripts/ci-mask-test-drives.sh reads them, masks
       # each value and every spelling of it the job or the benchmark can print,
       # lists those spellings for the artifact redaction, and exports the
@@ -86,7 +76,6 @@ jobs:
       # GITHUB_ENV, whose headers then show ***.
       - name: Mask the test drive and the account allowlist
         env:
-          AZURE_KEY_VAULT_NAME: ${{ vars.AZURE_KEY_VAULT_NAME }}
           ONEDRIVE_TEST_DRIVE_FROM_VAULT: onedrive-test-drive-e2e
           ONEDRIVE_ALLOWED_TEST_ACCOUNTS_FROM_VAULT: onedrive-test-allowed-accounts
         run: ./scripts/ci-mask-test-drives.sh
@@ -105,22 +94,14 @@ jobs:
           set -euo pipefail
           mkdir -p .testdata
 
-          az keyvault secret download \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "onedrive-test-catalog" \
-            --file ".testdata/catalog.json" \
-            --encoding utf-8
+          bash scripts/ci-keyvault.sh download "onedrive-test-catalog" ".testdata/catalog.json"
 
           # Download the token of this job's drive, under the secret and file
           # names the masking script exported. This repository's logs are
           # public: name the variable, never the drive, the secret or the
           # token file, which all embed the account.
           echo "Downloading the token of ONEDRIVE_TEST_DRIVE"
-          az keyvault secret download \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" \
-            --file ".testdata/${ONEDRIVE_TEST_DRIVE_TOKEN_FILE}" \
-            --encoding utf-8
+          bash scripts/ci-keyvault.sh download "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" ".testdata/${ONEDRIVE_TEST_DRIVE_TOKEN_FILE}"
 
           echo "=== .testdata/ holds $(find .testdata -type f | wc -l) files ==="
 
@@ -189,9 +170,4 @@ jobs:
           fi
 
           echo "Saving rotated token for ONEDRIVE_TEST_DRIVE"
-          az keyvault secret set \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" \
-            --file "$TOKEN_PATH" \
-            --content-type "application/json" \
-            --output none
+          bash scripts/ci-keyvault.sh upload "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" "$TOKEN_PATH"

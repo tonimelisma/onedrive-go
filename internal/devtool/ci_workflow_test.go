@@ -334,8 +334,19 @@ func ciLiveJobVariables() map[string]map[string]string {
 // Vault secret holding a test drive or the allowlist.
 const ciFromVaultSuffix = "_FROM_VAULT"
 
-// ciKeyVaultNameEntry is how the masking step receives the vault it reads.
-const ciKeyVaultNameEntry = "${{ vars.AZURE_KEY_VAULT_NAME }}"
+// ciLiveJobAzureEnv is the job-level env of every live job: the `live`
+// environment's variables, which the Key Vault script reads.
+func ciLiveJobAzureEnv() map[string]string {
+	return map[string]string{
+		"AZURE_CLIENT_ID": "${{ vars.AZURE_CLIENT_ID }}",
+		"AZURE_TENANT_ID": "${{ vars.AZURE_TENANT_ID }}",
+		"AZURE_KEY_VAULT": "${{ vars.AZURE_KEY_VAULT }}",
+	}
+}
+
+// ciLiveEnvironment is the GitHub environment every live job runs in: the
+// Entra app trusts only this repository's jobs in it.
+const ciLiveEnvironment = "    environment: live"
 
 // Validates: R-6.10.27
 //
@@ -343,8 +354,8 @@ const ciKeyVaultNameEntry = "${{ vars.AZURE_KEY_VAULT_NAME }}"
 // its header. The test drives and the account allowlist are therefore no
 // repository variables and in no step's env: they reach a job only from Key
 // Vault, read by the step that runs the masking script, which nothing but
-// the checkout and the Azure login precede and which names each value by its
-// vault secret; every later step reads the masked values and the names the
+// the checkout precedes and which names each value by its vault secret; the
+// job runs in the `live` environment, whose variables name the vault; every later step reads the masked values and the names the
 // script derives; and an artifact, which masking does not reach, is uploaded
 // only after a step redacts the masked spellings in it.
 func TestCIWorkflowSetsNoTestDriveInJobEnv(t *testing.T) {
@@ -396,20 +407,23 @@ func TestCIWorkflowSetsNoTestDriveInJobEnv(t *testing.T) {
 	problems := strings.Join(ciDriveExposures(byValue), "\n")
 	assert.Contains(t, problems, "integration: the masking step receives ONEDRIVE_TEST_DRIVE itself; it reads it from Key Vault")
 	assert.Contains(t, problems, "integration: the masking step names no vault secret for ONEDRIVE_TEST_DRIVE")
-	assert.Contains(t, problems, "integration: step 4 reads a test drive variable itself")
+	assert.Contains(t, problems, "integration: step 2 reads a test drive variable itself")
 
 	otherSecret := strings.Replace(workflow, fromVault,
 		"          ONEDRIVE_TEST_DRIVE_FROM_VAULT: onedrive-test-drive-e2e\n", 1)
 	assert.Contains(t, ciDriveExposures(otherSecret),
 		`integration: the masking step reads ONEDRIVE_TEST_DRIVE from "onedrive-test-drive-e2e", want "onedrive-test-drive-integration"`)
 
-	// And with the masking step ahead of the Azure login it reads the vault
-	// through.
+	// And with the integration job outside the `live` environment, and with
+	// its vault named by another variable.
 	integrationAt := strings.Index(workflow, "\n  integration:\n")
 	require.Positive(t, integrationAt)
-	noLogin := workflow[:integrationAt] + strings.Replace(workflow[integrationAt:],
-		"uses: azure/login@", "uses: azure/other@", 2)
-	assert.Contains(t, ciDriveExposures(noLogin), "integration: no Azure login precedes the masking step")
+	noEnvironment := workflow[:integrationAt] + strings.Replace(workflow[integrationAt:],
+		ciLiveEnvironment+"\n", "", 1)
+	assert.Contains(t, ciDriveExposures(noEnvironment), "integration: the job does not run in the live environment")
+	otherVault := workflow[:integrationAt] + strings.Replace(workflow[integrationAt:],
+		"AZURE_KEY_VAULT: ${{ vars.AZURE_KEY_VAULT }}", "AZURE_KEY_VAULT: kv-other", 1)
+	assert.Contains(t, strings.Join(ciDriveExposures(otherVault), "\n"), `integration: job-level env sets AZURE_KEY_VAULT to "kv-other"`)
 }
 
 // ciDriveExposures lists every way the CI workflow's live jobs could print a
@@ -451,10 +465,19 @@ func workflowDriveExposures(workflow string, expected map[string]map[string]stri
 
 func ciLiveJobExposures(job ciWorkflowJob, secrets map[string]string) []string {
 	var problems []string
-	for name := range ciBlockEntries(job.lines, "    env:") {
+	jobEnv := ciBlockEntries(job.lines, "    env:")
+	for name := range jobEnv {
 		if strings.HasPrefix(name, "ONEDRIVE_") {
 			problems = append(problems, job.name+": job-level env sets "+name)
 		}
+	}
+	for name, want := range ciLiveJobAzureEnv() {
+		if got := jobEnv[name]; got != want {
+			problems = append(problems, fmt.Sprintf("%s: job-level env sets %s to %q, want %q", job.name, name, got, want))
+		}
+	}
+	if !slices.Contains(job.lines, ciLiveEnvironment) {
+		problems = append(problems, job.name+": the job does not run in the live environment")
 	}
 
 	steps := ciJobSteps(job)
@@ -463,17 +486,11 @@ func ciLiveJobExposures(job ciWorkflowJob, secrets map[string]string) []string {
 		return append(problems, job.name+": no step runs "+ciMaskScript)
 	}
 	// Only steps that run nothing of this repository's and see no drive may
-	// come first: the checkout the script needs and the Azure login whose
-	// session it reads the vault through.
+	// come first: the checkout the script needs.
 	for i, step := range steps[:masking] {
 		if ciStepRun(step) != "" || slices.ContainsFunc(step, func(line string) bool { return strings.Contains(line, "ONEDRIVE_") }) {
 			problems = append(problems, fmt.Sprintf("%s: step %d runs before the masking script", job.name, i+1))
 		}
-	}
-	if !slices.ContainsFunc(steps[:masking], func(step []string) bool {
-		return slices.ContainsFunc(step, func(line string) bool { return strings.Contains(line, "uses: azure/login@") })
-	}) {
-		problems = append(problems, job.name+": no Azure login precedes the masking step")
 	}
 	if slices.ContainsFunc(steps[masking], ciReadsTestDriveVariable) {
 		problems = append(problems, fmt.Sprintf("%s: step %d reads a test drive variable itself", job.name, masking+1))
@@ -571,9 +588,6 @@ func ciReadsTestDriveVariable(line string) bool {
 func ciMaskingStepInputExposures(job string, step []string, secrets map[string]string) []string {
 	var problems []string
 	env := ciBlockEntries(step, "        env:")
-	if vault := env["AZURE_KEY_VAULT_NAME"]; vault != ciKeyVaultNameEntry {
-		problems = append(problems, fmt.Sprintf("%s: the masking step reads the vault name as %q", job, vault))
-	}
 	for _, name := range slices.Sorted(maps.Keys(secrets)) {
 		if _, ok := env[name]; ok {
 			problems = append(problems, job+": the masking step receives "+name+" itself; it reads it from Key Vault")
@@ -727,24 +741,45 @@ func TestCIMaskScript_RefusesAValueTheVaultDoesNotGive(t *testing.T) {
 // ciFakeVaultName is the vault the masking script's tests point it at.
 const ciFakeVaultName = "kv-test"
 
-// ciFakeAz stands in for the Azure CLI: it answers the one call the masking
-// script makes, `az keyvault secret show` of the fake vault, with the file
-// of the secret's name, and refuses any other call.
-const ciFakeAz = `#!/bin/sh
-if [ "$1 $2 $3 $4 $5 $6" != "keyvault secret show --vault-name ` + ciFakeVaultName + ` --name" ] ||
-  [ "$8 $9 ${10} ${11}" != "--query value --output tsv" ]; then
-  echo "fake az: unexpected call: $*" >&2
-  exit 2
-fi
-if [ ! -f "$FAKE_VAULT_DIR/$7" ]; then
-  echo "ERROR: (SecretNotFound) A secret with (name/id) $7 was not found in this key vault." >&2
-  exit 3
-fi
-cat "$FAKE_VAULT_DIR/$7"
+// ciFakeCurl stands in for curl, answering the three requests
+// scripts/ci-keyvault.sh makes: the job's OIDC token, the Entra token
+// exchange, and a read or a write (PUT) of a secret of the fake vault, kept
+// in the file of the secret's name. A secret with no file is Key Vault's 404 SecretNotFound; any
+// other request is refused.
+const ciFakeCurl = `#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+out = args[args.index("-o") + 1]
+url = [a for a in args if a.startswith("http")][-1]
+def answer(status, doc):
+    with open(out, "w") as f:
+        json.dump(doc, f)
+    sys.stdout.write(str(status))
+if url.startswith(os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]):
+    answer(200, {"value": "fake-oidc"})
+elif url.startswith("https://login.microsoftonline.com/"):
+    answer(200, {"access_token": "fake-access"})
+elif url.startswith("https://` + ciFakeVaultName + `.vault.azure.net/secrets/"):
+    name = url.split("/secrets/")[1].split("?")[0]
+    path = os.path.join(os.environ["FAKE_VAULT_DIR"], name)
+    if "PUT" in args:
+        doc = json.load(open(args[args.index("--data-binary") + 1][1:]))
+        with open(path, "w") as f:
+            f.write(doc["value"])
+        with open(path + ".content-type", "w") as f:
+            f.write(doc["contentType"])
+        answer(200, {"id": name})
+    elif os.path.exists(path):
+        answer(200, {"value": open(path).read()})
+    else:
+        answer(404, {"error": {"code": "SecretNotFound", "message": "not found"}})
+else:
+    sys.stderr.write("fake curl: unexpected request: %s\n" % url)
+    sys.exit(2)
 `
 
 // ciMaskScriptCommand is the masking script, ready to run with only the
-// runner's variables and the given ones, and with the fake Azure CLI first
+// runner's variables and the given ones, and with the fake curl first
 // on PATH answering for a vault that holds vault's values: each under a
 // secret of its own, which the command's environment names through
 // <NAME>_FROM_VAULT.
@@ -756,13 +791,16 @@ func ciMaskScriptCommand(t *testing.T, runnerTemp, githubEnv string, vault, vars
 	secrets := filepath.Join(fake, "vault")
 	require.NoError(t, os.MkdirAll(bin, 0o750))
 	require.NoError(t, os.MkdirAll(secrets, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "az"), []byte(ciFakeAz), 0o700)) //nolint:gosec // an executable stand-in the test runs
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "curl"), []byte(ciFakeCurl), 0o700)) //nolint:gosec // an executable stand-in the test runs
 
 	script := filepath.Join(repoRootFromDevtoolPackage(t), ciMaskScript)
 	env := []string{
 		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
 		"RUNNER_TEMP=" + runnerTemp, "GITHUB_ENV=" + githubEnv,
-		"AZURE_KEY_VAULT_NAME=" + ciFakeVaultName, "FAKE_VAULT_DIR=" + secrets,
+		"AZURE_KEY_VAULT=" + ciFakeVaultName, "FAKE_VAULT_DIR=" + secrets,
+		"AZURE_CLIENT_ID=fake-client", "AZURE_TENANT_ID=fake-tenant",
+		"ACTIONS_ID_TOKEN_REQUEST_URL=https://token.actions.invalid/token?x=1",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN=fake-request",
 	}
 	for name, value := range vault {
 		secret := "secret-" + strings.ToLower(strings.ReplaceAll(name, "_", "-"))
@@ -897,4 +935,60 @@ func ciStepRun(step []string) string {
 	}
 
 	return strings.Join(script, "\n")
+}
+
+// Validates: R-6.10.27
+//
+// The Key Vault script, against the stand-in vault: a download writes the
+// secret's value byte for byte, an upload sets the secret to the file's
+// content as JSON, and a missing secret fails naming it and Key Vault's error
+// code, never a value.
+func TestCIKeyVaultScript_DownloadsAndUploadsSecrets(t *testing.T) {
+	t.Parallel()
+
+	fake := t.TempDir()
+	bin := filepath.Join(fake, "bin")
+	vault := filepath.Join(fake, "vault")
+	require.NoError(t, os.MkdirAll(bin, 0o750))
+	require.NoError(t, os.MkdirAll(vault, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "curl"), []byte(ciFakeCurl), 0o700)) //nolint:gosec // an executable stand-in the test runs
+	const token = "token one\twith a tab\n"
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "cache"), []byte(token), 0o600))
+
+	script := filepath.Join(repoRootFromDevtoolPackage(t), "scripts", "ci-keyvault.sh")
+	run := func(args ...string) (string, error) {
+		cmd := exec.CommandContext(t.Context(), "bash", append([]string{script}, args...)...) //nolint:gosec // the repository's own script under a fixed interpreter
+		cmd.Env = []string{
+			"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+			"AZURE_KEY_VAULT=" + ciFakeVaultName, "FAKE_VAULT_DIR=" + vault,
+			"AZURE_CLIENT_ID=fake-client", "AZURE_TENANT_ID=fake-tenant",
+			"ACTIONS_ID_TOKEN_REQUEST_URL=https://token.actions.invalid/token?x=1",
+			"ACTIONS_ID_TOKEN_REQUEST_TOKEN=fake-request",
+		}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	downloaded := filepath.Join(fake, "token.json")
+	out, err := run("download", "cache", downloaded)
+	require.NoError(t, err, out)
+	got, err := readFile(downloaded)
+	require.NoError(t, err)
+	assert.Equal(t, token, string(got), "the value is written byte for byte")
+
+	rotated := filepath.Join(fake, "rotated.json")
+	require.NoError(t, os.WriteFile(rotated, []byte("token two\n"), 0o600))
+	out, err = run("upload", "cache", rotated)
+	require.NoError(t, err, out)
+	assert.Empty(t, out, "an upload prints nothing")
+	stored, err := readFile(filepath.Join(vault, "cache"))
+	require.NoError(t, err)
+	assert.Equal(t, "token two\n", string(stored))
+	contentType, err := readFile(filepath.Join(vault, "cache.content-type"))
+	require.NoError(t, err)
+	assert.Equal(t, "application/json", string(contentType))
+
+	out, err = run("get", "missing")
+	require.Error(t, err)
+	assert.Contains(t, out, "read secret missing: HTTP 404 SecretNotFound")
 }

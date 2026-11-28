@@ -602,7 +602,6 @@ mistake it for optional contributor convenience.
 - `verify`: repo-owned verification profiles
 - `verify --dod --stage <stage>`: the Definition of Done stages, `post-merge` ending with the read-only cleanup audit
 - `nightly`: the nightly run's claims (`check`, `release`) and its verdict (`report`)
-- `ci rerun-unstarted`: CI's rerun of a run whose only trouble is jobs no runner took
 - `worktree prune-merged`: removes the builder worktrees whose work is already in `origin/main`
 - `bench`: benchmark scenarios and result bundles
 

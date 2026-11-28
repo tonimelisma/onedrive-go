@@ -108,7 +108,7 @@ func TestBenchWorkflowHoldsItsContract(t *testing.T) {
 		return slices.Equal(ciUploadPaths(step), []string{benchResultDir})
 	}), "the result directory is uploaded after the run")
 	assert.True(t, slices.ContainsFunc(steps[runAt+1:], func(step []string) bool {
-		return strings.Contains(ciStepRun(step), "az keyvault secret set")
+		return strings.Contains(ciStepRun(step), "scripts/ci-keyvault.sh upload ")
 	}), "the drive's token is saved back after the run")
 }
 

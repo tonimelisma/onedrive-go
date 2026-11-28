@@ -22,8 +22,6 @@ type nightlyFunc func(context.Context, devtool.NightlyOptions) error
 
 type worktreePruneFunc func(context.Context, devtool.WorktreePruneOptions) error
 
-type ciRerunFunc func(context.Context, devtool.CIRerunOptions) error
-
 func main() {
 	os.Exit(execute(context.Background(), newRootCmd(), os.Stderr))
 }
@@ -55,7 +53,6 @@ func newRootCmd() *cobra.Command {
 		newBenchCmd(defaultCWD, defaultBench),
 		newWorktreeCmd(defaultCWD, defaultPruneMergedWorktrees),
 		newNightlyCmd(defaultCWD, defaultNightly),
-		newCICmd(defaultCWD, defaultCIRerun),
 	)
 	silenceRunErrorUsage(cmd)
 
@@ -138,41 +135,6 @@ func newNightlyCmd(getwd cwdLookup, runNightly nightlyFunc) *cobra.Command {
 	requireFlag(release, "key")
 
 	cmd.AddCommand(check, release, newNightlyReportCmd(getwd, runNightly))
-
-	return cmd
-}
-
-// newCICmd groups the commands CI itself runs about its own runs.
-func newCICmd(getwd cwdLookup, rerun ciRerunFunc) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "ci",
-		Short: "Commands CI runs about its own runs",
-	}
-	cmd.AddCommand(newCIRerunUnstartedCmd(getwd, rerun))
-
-	return cmd
-}
-
-func newCIRerunUnstartedCmd(getwd cwdLookup, rerun ciRerunFunc) *cobra.Command {
-	var runID int64
-	cmd := &cobra.Command{
-		Use:   "rerun-unstarted",
-		Short: "Rerun a finished CI run whose only trouble is jobs no runner took",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			repoRoot, err := getwd()
-			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
-			}
-
-			return rerun(cmd.Context(), devtool.CIRerunOptions{
-				RepoRoot: repoRoot,
-				RunID:    runID,
-				Stdout:   cmd.OutOrStdout(),
-			})
-		},
-	}
-	cmd.Flags().Int64Var(&runID, "run-id", 0, "the finished CI run to judge")
-	requireFlag(cmd, "run-id")
 
 	return cmd
 }
@@ -514,14 +476,6 @@ func defaultBench(ctx context.Context, opts devtool.BenchOptions) error {
 func defaultPruneMergedWorktrees(ctx context.Context, opts devtool.WorktreePruneOptions) error {
 	if err := devtool.PruneMergedWorktrees(ctx, devtool.ExecRunner{}, opts); err != nil {
 		return fmt.Errorf("prune merged worktrees: %w", err)
-	}
-
-	return nil
-}
-
-func defaultCIRerun(ctx context.Context, opts devtool.CIRerunOptions) error {
-	if err := devtool.RerunUnstartedCIJobs(ctx, devtool.ExecRunner{}, opts); err != nil {
-		return fmt.Errorf("rerun unstarted ci jobs: %w", err)
 	}
 
 	return nil
