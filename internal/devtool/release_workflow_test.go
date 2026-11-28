@@ -300,6 +300,11 @@ func TestReleaseWorkflow_OnlyMainReleasesAndNothingRunsOnTags(t *testing.T) {
 	assert.Contains(t, firstStep, `if [ "${REF}" != refs/heads/main ]; then`)
 	assert.Contains(t, firstStep, "exit 1")
 
+	// The version step pipes the script into tee, so without pipefail a
+	// refusal reads as success with no version and the release goes on.
+	assert.Contains(t, workflow, "set -euo pipefail\n          bash scripts/release-version.sh",
+		"a refused version fails its step")
+
 	for _, fragment := range []string{
 		"group: release\n  cancel-in-progress: false",
 		"head_sha }}",

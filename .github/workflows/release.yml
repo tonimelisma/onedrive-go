@@ -94,7 +94,9 @@ jobs:
         id: version
         env:
           COMMIT: ${{ steps.commit.outputs.sha }}
+        # pipefail: the script's refusal fails the step, not tee's success.
         run: |
+          set -euo pipefail
           bash scripts/release-version.sh refs/remotes/origin/main "${COMMIT}" | tee -a "${GITHUB_OUTPUT}"
 
       - name: Check out the commit
