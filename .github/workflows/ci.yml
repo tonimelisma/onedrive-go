@@ -718,7 +718,7 @@ jobs:
         run: |
           echo "::warning::E2E test auth may have failed."
           echo "::warning::If the refresh token has expired (90 days idle), re-bootstrap."
-          echo "::warning::See CLAUDE.md 'Test credential pipeline' for re-bootstrap instructions."
+          echo "::warning::See CLAUDE.md 'Maintainer setup' for re-bootstrap instructions."
 
   # The verdict of a full-tier run, where a person sees it (R-6.10.24): the
   # commit status `nightly` on the run's head commit and, for a scheduled run

@@ -1,20 +1,21 @@
 # Cloud Development
 
 Every increment of this repository is built in a Claude Code cloud session.
-`CLAUDE.md` (Dev Process) states the rules; this page gives the reasons and
-the environment that makes them cheap to follow. The one step still done on
-the owner's own machine is the one-time live-test credential bootstrap of
-CLAUDE.md's E2E section, which needs a browser.
+`CLAUDE.md` (Increment lifecycle, Where work happens) states the rules; this page gives the reasons and
+the environment that makes them cheap to follow. The one step done outside a
+session is the maintainer's one-time live-test credential bootstrap
+(CLAUDE.md, "Maintainer setup"), which needs a browser.
 
 ## What a cloud session is
 
 - An ephemeral Linux container, running as root, rebuilt when the session
   starts on a fresh machine. Anything left only in it is lost.
-- One assigned session branch (`branch/<name>`), which the session pushes and
+- One branch per increment (`feat/`, `fix/`, `docs/`, `chore/`, `refactor/` or
+  `perf/` plus a topic, cut from `origin/main`), which the session pushes and
   opens pull requests from.
 - GitHub reached through a proxy: `gh` works for the REST API (`gh api`,
-  `gh run`), GraphQL is refused with HTTP 403, and git may push only the
-  session's branch. The DoD stages read GitHub over REST alone, review threads
+  `gh run`), GraphQL is refused with HTTP 403, and tag pushes and branch
+  deletion are refused. The DoD stages read GitHub over REST alone, review threads
   through the proxy's REST thread routes when GraphQL is refused, so they run
   here; the nightly claims are GitHub issues written over REST too, so a
   session takes, renews and releases them like any checkout.
@@ -26,7 +27,7 @@ CLAUDE.md's E2E section, which needs a browser.
 
 | Practice | Why |
 | --- | --- |
-| one increment per session branch, squash-merged, then the branch restarted from `origin/main` | the session may push only its own branch; the squash commit is not a descendant of the branch, so without the restart the next increment would carry the merged commits (`verify --dod --stage post-merge` does the restart) |
+| one branch per increment, squash-merged, never reused | the squash commit is not a descendant of the branch, so a reused branch would carry the merged commits into the next increment; `verify --dod --stage post-merge` checks out a fresh `main` and deletes the merged branch locally, and GitHub deletes the remote one on merge |
 | builders in harness-made worktrees, removed by `go run ./cmd/devtool worktree prune-merged` | builder branches are squash-merged too, so no ancestry check ever sees them merged; twenty-five builder worktrees were once left behind. Integrate a builder's commits as they are (cherry-pick), so the command can prove them merged |
 | go tests as the non-root `dev` user (verify's default as root when `dev` exists, or `verify --as-user`) | as root, permission tests do not bite and the sync tests that refuse root fail |
 | every DoD stage run in the session | the stages read GitHub over REST, which the proxy serves, review threads over its REST thread routes, and the merge is a REST call too; the nightly claims are issues |
@@ -130,7 +131,7 @@ command.
 
 None are needed. `go run ./cmd/devtool` runs without a prompt, and every
 cleanup a session does goes through it: `prune-merged` removes builder
-worktrees, and `post-merge` restarts the branch. Removing a worktree by hand
+worktrees, and `post-merge` deletes the merged branch. Removing a worktree by hand
 was only ever needed for the local-style worktrees an increment made before
 development moved to cloud sessions; with those gone, an allow rule for
 `git worktree remove` would widen what a session may delete for no task that

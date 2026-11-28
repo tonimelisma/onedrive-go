@@ -881,9 +881,10 @@ hidden name (`TestDetachRegularFile_PutsTheFileBackWithoutHardLinks`).
 Known limit: on a filesystem that offers neither hard links nor the
 no-replace flag (FAT-family: FAT32, exFAT), the put-back's check and plain
 rename have a window of microseconds in which a file saved at that name is
-replaced by the set-aside version. The owner kept this behaviour over keeping
-the file under its hidden name, which the next sync would read as a delete
-(PARKED row W59-n1, `spec/history/onedrive-go-program-2026-11-10/`). The
+replaced by the set-aside version. This behaviour is kept on purpose:
+closing the window would mean leaving the file under its hidden temporary
+name, which the next sync would read as the user's file deleted, and a lost
+save in a microsecond race is the smaller risk than a spurious delete. The
 engine says so once, as it starts: `synctree.Root.ProbeNoReplaceSupport` makes
 an empty `.onedrive-go.<random>.probe` file in the sync folder (observation
 ignores the name, `synctree.IsProbeArtifactName`), links it and renames it
