@@ -4,8 +4,11 @@ on:
   push:
     branches: [main]
   # Every PR, whatever its base, so a stacked PR gets CI before the PR under it
-  # merges and retargets it to main.
+  # merges and retargets it to main. `edited`: a description fixed after the
+  # push re-runs the checks that read it; every job runs on it, so the newest
+  # `CI gate` on a commit always covers every check.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -37,15 +40,17 @@ permissions:
 #
 # The PR lane runs on every pull request and on every push to main, as
 # parallel jobs whose slowest member is the critical path: `verify-lint`,
-# and `verify-unit`, a matrix of Linux `verify quick` shards and macOS
-# `verify platform` shards. `quick` is format, the repository rules, the
-# builds, the tagged vets and the short unit tier (`go test -short`: no race
-# detector, no coverage profile, no exhaustive tests); `platform` is the host
-# build plus the same short tier. The aggregate `verify` job is the required
-# check. Push to main is not skipped for squash merges any more: branch
-# protection no longer requires a PR branch to be up to date, so a merge of
-# a stale branch can break main, and the push run is what catches it within
-# minutes. A push also runs `verify-race`, the ./internal/sync/... tree under
+# `verify-unit`, a matrix of Linux `verify quick` shards, and `process`, the
+# pull request description check. `quick` is format, the repository rules,
+# the builds, the tagged vets and the short unit tier (`go test -short`: no
+# race detector, no coverage profile, no exhaustive tests). macOS runs in the
+# nightly full tier only: the lint matrix already builds and vets the darwin
+# sources on every pull request, and a macOS leg on the PR lane made runner
+# shortages fail changes nothing was wrong with. `CI gate`, which needs every
+# job, is the one required check. Push to main is not skipped for squash
+# merges: the ruleset does not require a PR branch to be up to date, so a
+# merge of a stale branch can break main, and the push run is what catches it
+# within minutes. A push also runs `verify-race`, the ./internal/sync/... tree under
 # the race detector, inside the aggregate, so a data race in the sync
 # packages fails the push that brought it.
 #
@@ -116,20 +121,19 @@ jobs:
           LINT_PASS: ${{ matrix.pass }}
         run: go run ./cmd/devtool verify lint --lint-pass "${LINT_PASS}"
 
-  # README lists Linux and macOS as primary platforms, and the tree carries
-  # darwin-only sources (synctree stat identity, the non-Linux watcher path).
-  # Both legs run so neither platform can break unobserved. The unit tier is
-  # sharded by test name (`verify_quick.go`): the shards of one count partition
-  # every test, so each job runs its slice and together they run everything.
+  # The unit tier is sharded by test name (`verify_quick.go`): the shards of
+  # one count partition every test, so each job runs its slice and together
+  # they run everything. The darwin-only sources (synctree stat identity, the
+  # non-Linux watcher path) are linted on every pull request by the darwin
+  # lint leg and tested nightly by verify-full's macOS leg.
   verify-unit:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        # One job per entry, on each OS. To grow the lane, add entries of the
-        # next count ("1/4" .. "4/4"): the count is read from the entries.
+        # One job per entry. To grow the lane, add entries of the next count
+        # ("1/4" .. "4/4"): the count is read from the entries.
         shard: ["1/3", "2/3", "3/3"]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     # Above devtool's 10-minute short-tier go test deadline plus the builds, so
     # the test deadline, not the job, ends a slow run.
     timeout-minutes: 20
@@ -155,7 +159,6 @@ jobs:
           cache: true
 
       - name: Install format tools
-        if: matrix.os == 'ubuntu-latest'
         run: |
           set -euo pipefail
           go install mvdan.cc/gofumpt@v0.9.2
@@ -165,14 +168,7 @@ jobs:
       # --check-format lists what the formatters would change and fails on it;
       # without it the format step rewrites the checkout and cannot fail.
       - name: Verify quick (format, repository rules, builds, short unit tier)
-        if: matrix.os == 'ubuntu-latest'
         run: go run ./cmd/devtool verify quick --check-format --shard "${VERIFY_SHARD}"
-
-      # The macOS leg exists to catch darwin-only build and behavior breakage;
-      # the repository rules are platform-independent and already ran on Linux.
-      - name: Verify platform (host build, short unit tier)
-        if: matrix.os == 'macos-latest'
-        run: go run ./cmd/devtool verify platform --shard "${VERIFY_SHARD}"
 
   # The race detector over the sync tree on every push to main, unshortened, so
   # a data race in the sync packages fails the push that brought it and the
@@ -274,16 +270,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # Branch protection requires a check literally named "verify". Pointing it at
-  # a matrix job does not work: the legs report as "verify-unit (ubuntu-latest,
-  # 1/3)" and so on, so the required name never appears and every PR stays
-  # blocked forever. This aggregate keeps the required name stable and
-  # independent of how many jobs and shards the lane grows. It waits on every
-  # verify tier, not on `stress` or the live jobs: on a PR the race job and the
-  # full tier are skipped by their own conditions, on a push the full tier, on
-  # the schedule the PR lane and the race job, and a skipped job is not a
-  # failure. A run in which nothing at all ran is. The nightly's verdict over
-  # all of its jobs is the `nightly-report` job's.
+  # The aggregate of the verify tiers. It waits on every verify tier, not on
+  # `stress` or the live jobs: on a PR the race job and the full tier are
+  # skipped by their own conditions, on a push the full tier, on the schedule
+  # the PR lane and the race job, and a skipped job is not a failure. A run in
+  # which nothing at all ran is. The nightly report keys a night by the jobs
+  # this one waits for, not by it (nightlyAggregateJob); `CI gate`, below, is
+  # the required check.
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -403,36 +396,29 @@ jobs:
     concurrency:
       group: live-account-integration
       cancel-in-progress: false
+    # The `live` environment holds the Azure variables, and the Entra app
+    # trusts only this repository's `live` environment (an immutable OIDC
+    # subject), so only a job that names it can read the vault.
+    environment: live
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_KEY_VAULT: ${{ vars.AZURE_KEY_VAULT }}
     permissions:
       contents: read
       id-token: write # OIDC federation with Azure
-    if: vars.AZURE_CLIENT_ID != '' && github.event_name != 'push'
+    # Never on push to main, and not for a fork's pull request, which gets no
+    # OIDC token the vault trusts.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == 'tonimelisma/onedrive-go'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Azure OIDC login (attempt 1)
-        id: azure_login_integration
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        continue-on-error: true
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Azure OIDC login (retry)
-        if: steps.azure_login_integration.outcome == 'failure'
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
       # This repository's logs are public, and GitHub prints a step's env
       # values in its header, so the test drives and the account allowlist
       # are no repository variables: they live in Key Vault, and this step,
-      # which only the checkout and the Azure login precede, names each by
+      # which only the checkout precedes, names each by
       # its vault secret. scripts/ci-mask-test-drives.sh reads them, masks
       # each value and every spelling of it the job or its tests can print,
       # lists those spellings for the artifact redaction, and exports the
@@ -440,7 +426,6 @@ jobs:
       # GITHUB_ENV, whose headers then show ***.
       - name: Mask the test drive and the account allowlist
         env:
-          AZURE_KEY_VAULT_NAME: ${{ vars.AZURE_KEY_VAULT_NAME }}
           ONEDRIVE_TEST_DRIVE_FROM_VAULT: onedrive-test-drive-integration
           ONEDRIVE_ALLOWED_TEST_ACCOUNTS_FROM_VAULT: onedrive-test-allowed-accounts
         run: ./scripts/ci-mask-test-drives.sh
@@ -460,29 +445,17 @@ jobs:
           set -euo pipefail
           mkdir -p .testdata
 
-          az keyvault secret download \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "onedrive-test-catalog" \
-            --file ".testdata/catalog.json" \
-            --encoding utf-8
+          bash scripts/ci-keyvault.sh download "onedrive-test-catalog" ".testdata/catalog.json"
 
           # Download config.
-          az keyvault secret download \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "onedrive-test-config" \
-            --file ".testdata/config.toml" \
-            --encoding utf-8
+          bash scripts/ci-keyvault.sh download "onedrive-test-config" ".testdata/config.toml"
 
           # Download the token of this job's drive, under the secret and file
           # names the masking script exported. This repository's logs are
           # public: name the variable, never the drive, the secret or the
           # token file, which all embed the account.
           echo "Downloading the token of ONEDRIVE_TEST_DRIVE"
-          az keyvault secret download \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" \
-            --file ".testdata/${ONEDRIVE_TEST_DRIVE_TOKEN_FILE}" \
-            --encoding utf-8
+          bash scripts/ci-keyvault.sh download "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" ".testdata/${ONEDRIVE_TEST_DRIVE_TOKEN_FILE}"
 
           echo "=== .testdata/ holds $(find .testdata -type f | wc -l) files ==="
 
@@ -503,12 +476,7 @@ jobs:
           fi
 
           echo "Saving rotated token"
-          az keyvault secret set \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" \
-            --file "$TOKEN_PATH" \
-            --content-type "application/json" \
-            --output none
+          bash scripts/ci-keyvault.sh upload "${ONEDRIVE_TEST_DRIVE_VAULT_SECRET}" "$TOKEN_PATH"
 
   e2e:
     runs-on: ubuntu-latest
@@ -525,36 +493,29 @@ jobs:
     concurrency:
       group: live-account-e2e
       cancel-in-progress: false
+    # The `live` environment holds the Azure variables, and the Entra app
+    # trusts only this repository's `live` environment (an immutable OIDC
+    # subject), so only a job that names it can read the vault.
+    environment: live
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_KEY_VAULT: ${{ vars.AZURE_KEY_VAULT }}
     permissions:
       contents: read
       id-token: write # OIDC federation with Azure
-    if: vars.AZURE_CLIENT_ID != '' && github.event_name != 'push'
+    # Never on push to main, and not for a fork's pull request, which gets no
+    # OIDC token the vault trusts.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == 'tonimelisma/onedrive-go'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Azure OIDC login (attempt 1)
-        id: azure_login_e2e
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        continue-on-error: true
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Azure OIDC login (retry)
-        if: steps.azure_login_e2e.outcome == 'failure'
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
       # This repository's logs are public, and GitHub prints a step's env
       # values in its header, so the test drives and the account allowlist
       # are no repository variables: they live in Key Vault, and this step,
-      # which only the checkout and the Azure login precede, names each by
+      # which only the checkout precedes, names each by
       # its vault secret. scripts/ci-mask-test-drives.sh reads them, masks
       # each value and every spelling of it the job or its tests can print,
       # lists those spellings for the artifact redaction, and exports the
@@ -562,7 +523,6 @@ jobs:
       # GITHUB_ENV, whose headers then show ***.
       - name: Mask the test drives and the account allowlist
         env:
-          AZURE_KEY_VAULT_NAME: ${{ vars.AZURE_KEY_VAULT_NAME }}
           ONEDRIVE_TEST_DRIVE_FROM_VAULT: onedrive-test-drive-e2e
           ONEDRIVE_TEST_DRIVE_2_FROM_VAULT: onedrive-test-drive-e2e-2
           ONEDRIVE_ALLOWED_TEST_ACCOUNTS_FROM_VAULT: onedrive-test-allowed-accounts
@@ -584,24 +544,12 @@ jobs:
           set -euo pipefail
           mkdir -p .testdata
 
-          az keyvault secret download \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "onedrive-test-catalog" \
-            --file ".testdata/catalog.json" \
-            --encoding utf-8
+          bash scripts/ci-keyvault.sh download "onedrive-test-catalog" ".testdata/catalog.json"
 
           # Download config.
-          az keyvault secret download \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "onedrive-test-config" \
-            --file ".testdata/config.toml" \
-            --encoding utf-8
+          bash scripts/ci-keyvault.sh download "onedrive-test-config" ".testdata/config.toml"
 
-          az keyvault secret download \
-            --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-            --name "onedrive-test-fixtures-env" \
-            --file ".testdata/fixtures.env" \
-            --encoding utf-8
+          bash scripts/ci-keyvault.sh download "onedrive-test-fixtures-env" ".testdata/fixtures.env"
 
           # Download token files for each test drive, under the secret and file
           # names the masking script exported; shared inventory comes from
@@ -616,11 +564,7 @@ jobs:
             # Public logs: name the variable, never the drive, the secret or
             # the token file, which all embed the account.
             echo "Downloading the token of ${DRIVE_VAR}"
-            az keyvault secret download \
-              --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-              --name "${!SECRET_VAR}" \
-              --file ".testdata/${!TOKEN_VAR}" \
-              --encoding utf-8
+            bash scripts/ci-keyvault.sh download "${!SECRET_VAR}" ".testdata/${!TOKEN_VAR}"
           done
 
           echo "=== .testdata/ holds $(find .testdata -type f | wc -l) files ==="
@@ -705,12 +649,7 @@ jobs:
             fi
 
             echo "Saving rotated token for ${DRIVE_VAR}"
-            az keyvault secret set \
-              --vault-name "${{ vars.AZURE_KEY_VAULT_NAME }}" \
-              --name "${!SECRET_VAR}" \
-              --file "$TOKEN_PATH" \
-              --content-type "application/json" \
-              --output none
+            bash scripts/ci-keyvault.sh upload "${!SECRET_VAR}" "$TOKEN_PATH"
           done
 
       - name: Auth failure guidance
@@ -719,6 +658,40 @@ jobs:
           echo "::warning::E2E test auth may have failed."
           echo "::warning::If the refresh token has expired (90 days idle), re-bootstrap."
           echo "::warning::See CLAUDE.md 'Maintainer setup' for re-bootstrap instructions."
+
+  # The pull request description check (.github/pull_request_template.md's
+  # sections are filled; a `fix` PR changes a test). The repository rules
+  # behind the kit's process-check (requirements, Validates tags, GOVERNS,
+  # doc links) run in `verify quick`.
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # pr-check diffs the pull request's base and head
+          persist-credentials: false
+      - name: pr-check
+        run: script/pr-check
+
+  # The one required status check. It needs every job a pull request or a
+  # push runs and passes only when each of them succeeded or was skipped, so a
+  # cancelled or failed job can never be merged around. It does not run on
+  # the schedule or a dispatch, whose verdict is the nightly report's.
+  gate:
+    name: CI gate
+    if: always() && github.event_name == 'pull_request' || always() && github.event_name == 'push'
+    needs: [verify-lint, verify-unit, verify-race, verify, process, integration, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success" or .result == "skipped")' >/dev/null
 
   # The verdict of a full-tier run, where a person sees it (R-6.10.24): the
   # commit status `nightly` on the run's head commit and, for a scheduled run

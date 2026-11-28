@@ -36,6 +36,7 @@ const (
 	ciAlwaysCondition      = "always()"
 	ciEventNameOperand     = "github.event_name"
 	ciVariablePrefix       = "vars."
+	ciHeadRepoPrefix       = "github.event.pull_request.head.repo."
 )
 
 var (
@@ -143,9 +144,10 @@ func stripYAMLComment(value string) string {
 // The condition is evaluated in the forms the workflow uses and no others:
 // comparisons joined by && and ||, && binding tighter. A comparison is
 // `always()`, `github.event_name == 'x'` or `!= 'x'`, or a comparison of a
-// repository variable, which counts as true: the variables gate the live jobs
-// on whether credentials are configured, and assuming they are only ever
-// makes a window longer. Anything else, parentheses, negation or another
+// repository variable or of the pull request's head repository, which counts
+// as true: they gate the live jobs on configured credentials and on a pull
+// request from this repository rather than a fork, and assuming they hold
+// only ever makes a window longer. Anything else, parentheses, negation or another
 // function, fails loudly, so a new condition cannot silently drop a job.
 func (j ciWorkflowJob) runsOn(event string) (bool, error) {
 	condition, set, err := j.key(ciJobIfKey)
@@ -195,7 +197,7 @@ func evaluateCITerm(term string, event string) (bool, error) {
 	switch {
 	case operand == ciEventNameOperand:
 		return (event == literal) == (operator == "=="), nil
-	case strings.HasPrefix(operand, ciVariablePrefix):
+	case strings.HasPrefix(operand, ciVariablePrefix), strings.HasPrefix(operand, ciHeadRepoPrefix):
 		return true, nil
 	default:
 		return false, fmt.Errorf("term %q compares %s, which is not read", term, operand)

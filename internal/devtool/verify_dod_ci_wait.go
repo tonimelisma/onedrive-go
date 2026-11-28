@@ -26,8 +26,10 @@ const (
 
 	checkConclusionCancelled = "cancelled" //nolint:misspell // GitHub's spelling of the conclusion
 
-	// The checks branch protection requires on a pull request. `verify` is
-	// the aggregate job of the verify lane.
+	// The checks the pre-merge wait requires on a pull request, the longest
+	// of the jobs `CI gate` needs; the ruleset requires the gate itself, so a
+	// merge with any of its jobs red is refused. `verify` is the aggregate
+	// job of the verify lane.
 	prCheckVerify      = nightlyAggregateJob
 	prCheckIntegration = "integration"
 	prCheckE2E         = "e2e"
@@ -590,7 +592,7 @@ func isRequiredPRCheck(name string) bool {
 	return slices.Contains(requiredPRChecks(), name)
 }
 
-// requiredPRChecks lists the checks branch protection requires, sorted.
+// requiredPRChecks lists the checks the pre-merge wait requires, sorted.
 func requiredPRChecks() []string {
 	return []string{prCheckE2E, prCheckIntegration, prCheckVerify}
 }

@@ -2,7 +2,8 @@ name: Release
 
 # Every merge to main is released (R-6.10.41). When the push-to-main CI run of
 # a commit succeeds, this workflow tags that exact commit with the next
-# vMAJOR.MINOR.PATCH, builds static binaries with the tag stamped in, smoke-
+# vMAJOR.MINOR.PATCH (the series MAJOR.MINOR from the file VERSION, the next
+# patch within it), builds static binaries with the tag stamped in, smoke-
 # tests the Linux one, attests the binaries' build provenance, publishes the
 # release with generated notes, and then verifies what it published the way
 # a consumer does: the checksums and `gh attestation verify` pinned to this
@@ -21,16 +22,10 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  # A manual run releases the tip of main, once its push CI has passed: for
+  # a release a failed run left unfinished. It takes no inputs; a new series
+  # is an edit of VERSION.
   workflow_dispatch:
-    inputs:
-      commit:
-        description: 'A commit on main whose push CI passed; empty releases the tip of main'
-        type: string
-        default: ''
-      version:
-        description: 'vMAJOR.MINOR.PATCH higher than every release tag; empty bumps the patch'
-        type: string
-        default: ''
 
 permissions:
   contents: read
@@ -79,14 +74,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
-          INPUT_COMMIT: ${{ inputs.commit }}
           MAIN_SHA: ${{ github.sha }}
         run: |
           if [ "${EVENT}" = workflow_run ]; then
             commit="${RUN_SHA}"
           else
-            commit="${INPUT_COMMIT:-${MAIN_SHA}}"
-            commit="$(git rev-parse --verify "${commit}^{commit}")"
+            commit="$(git rev-parse --verify "${MAIN_SHA}^{commit}")"
             # A dispatch releases only a commit whose push-to-main CI passed,
             # as the workflow_run trigger does.
             passed="$(gh api "repos/${GH_REPO}/actions/workflows/ci.yml/runs?head_sha=${commit}&event=push&status=success" --jq '.total_count')"
@@ -101,9 +94,8 @@ jobs:
         id: version
         env:
           COMMIT: ${{ steps.commit.outputs.sha }}
-          REQUESTED: ${{ inputs.version }}
         run: |
-          bash scripts/release-version.sh refs/remotes/origin/main "${COMMIT}" "${REQUESTED}" | tee -a "${GITHUB_OUTPUT}"
+          bash scripts/release-version.sh refs/remotes/origin/main "${COMMIT}" | tee -a "${GITHUB_OUTPUT}"
 
       - name: Check out the commit
         if: steps.version.outputs.action != 'skip'

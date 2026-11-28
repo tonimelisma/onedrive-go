@@ -357,6 +357,11 @@ a browser), after which CI keeps them fresh by writing rotated tokens back to Ke
 2. `./scripts/migrate-test-data-to-ci.sh` (signed in with `az login`): uploads `.testdata/` to
    the CI Key Vault.
 
+CI reaches that vault keylessly: the live jobs run in the `live` GitHub environment (variables
+`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_KEY_VAULT`), the Entra app trusts only that
+environment's immutable OIDC subject, and `scripts/ci-keyvault.sh` exchanges the job's token with
+curl to read the test data and write rotated tokens back.
+
 ## Git, CI and PRs
 
 - One branch per increment, cut from a fresh `origin/main`, named `feat/`, `fix/`, `docs/`,
@@ -364,8 +369,8 @@ a browser), after which CI keeps them fresh by writing rotated tokens back to Ke
   never name a branch for the tool that wrote it.
 - Every change lands through a PR whose body fills `.github/pull_request_template.md`. CI checks
   the body, and that a PR titled `fix...` changes a test.
-- `CI gate` is the one required check: a job that needs every other job. Wait for it (the
-  pre-merge stage), and fix every failure; never bypass it.
+- `CI gate` is the one required check, in the `main` ruleset: a job that needs every job a PR or
+  a push runs. Wait for it (the pre-merge stage), and fix every failure; never bypass it.
 - Squash-merge as soon as `CI gate` is green, without asking: the post-merge stage does it over
   REST (`PUT repos/tonimelisma/onedrive-go/pulls/<N>/merge` pinned to the head); locally
   `gh pr merge --auto --squash` also works.
@@ -375,7 +380,8 @@ a browser), after which CI keeps them fresh by writing rotated tokens back to Ke
   workflow.
 - Commit messages: an imperative subject saying what changed; the body says why.
 - Releases: when the push-to-`main` CI run of a commit succeeds, `.github/workflows/release.yml`
-  tags it with the next version, builds the static binaries with the tag stamped in, smoke-tests
+  tags it with the next patch of the series in `VERSION` (`MAJOR.MINOR`; a new series is a PR
+  that edits that line, starting at `.0`), builds the static binaries with the tag stamped in, smoke-tests
   the Linux one, attests them, publishes the release with `SHA256SUMS`, and verifies the published
   files as a consumer does (`gh attestation verify --signer-workflow
   tonimelisma/onedrive-go/.github/workflows/release.yml --source-ref refs/heads/main`). The path

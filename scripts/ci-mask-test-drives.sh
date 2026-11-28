@@ -6,11 +6,12 @@
 # This repository's CI logs are public, and GitHub prints a step's env values
 # in its header, so the test drives and the allowlist are never repository
 # variables and never in any step's env. The step that runs this script, which
-# only the checkout and the job's Azure login precede, names them by the Key
+# only the checkout precedes, names them by the Key
 # Vault secret that holds each: <NAME>_FROM_VAULT for ONEDRIVE_TEST_DRIVE,
 # ONEDRIVE_TEST_DRIVE_2 (optional) and ONEDRIVE_ALLOWED_TEST_ACCOUNTS, read
-# from the vault AZURE_KEY_VAULT_NAME names through the az session the login
-# left. The script
+# from the vault AZURE_KEY_VAULT names through scripts/ci-keyvault.sh, with the
+# job's OIDC token (AZURE_CLIENT_ID and AZURE_TENANT_ID name the app). The
+# script
 #   - masks each value the moment it is read, before anything else runs;
 #   - masks every spelling of them the job or its tests can print: each drive
 #     identifier and allowlist entry, the account address inside it, the Key
@@ -47,7 +48,8 @@ trim() {
 
 # The values come from the vault alone: a value already in the environment is
 # dropped, so a step that sets one cannot slip it past the vault.
-vault="${AZURE_KEY_VAULT_NAME:?AZURE_KEY_VAULT_NAME must name the Key Vault}"
+: "${AZURE_KEY_VAULT:?AZURE_KEY_VAULT must name the Key Vault}"
+keyvault="$(dirname "$0")/ci-keyvault.sh"
 for name in ONEDRIVE_TEST_DRIVE ONEDRIVE_TEST_DRIVE_2 ONEDRIVE_ALLOWED_TEST_ACCOUNTS; do
   unset "${name}"
   secret="$(value "${name}_FROM_VAULT")"
@@ -60,7 +62,7 @@ for name in ONEDRIVE_TEST_DRIVE ONEDRIVE_TEST_DRIVE_2 ONEDRIVE_ALLOWED_TEST_ACCO
         ;;
     esac
   fi
-  fetched="$(az keyvault secret show --vault-name "${vault}" --name "${secret}" --query value --output tsv)"
+  fetched="$(bash "${keyvault}" get "${secret}")"
   if [ -z "$(trim "${fetched}")" ]; then
     echo "the Key Vault secret ${name}_FROM_VAULT names holds nothing" >&2
     exit 1

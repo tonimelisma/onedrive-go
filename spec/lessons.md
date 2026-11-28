@@ -356,7 +356,6 @@ analyses are already in the docs:
 
 None of these has an issue unless an issue number is given.
 
-- **#1046: a model-test seed fails in the nightly.** The failing test is `TestRunOnce_RandomizedBidirectionalEditsConverge`, seed 328009. Seed sweeps remain the main source of planner fixes.
 - **Publication runs one fsync'd transaction per baseline update.** That is about 45 minutes at 138k items after a first plan. Batching a few hundred per transaction would make it seconds.
   - The path is `runPublicationDrainStage` in `internal/sync/engine_runtime_completion.go`, which calls `CommitMutation` in `internal/sync/syncstore/store_write_baseline.go`.
 - **Per-row unprepared statements in observation commits.**

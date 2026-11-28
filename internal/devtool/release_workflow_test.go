@@ -49,10 +49,13 @@ func (r *releaseRepo) git(args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// commit adds an empty commit to the current branch and returns its SHA.
-func (r *releaseRepo) commit(message string) string {
+// commit adds a commit to the current branch whose VERSION holds series and
+// returns its SHA.
+func (r *releaseRepo) commit(message string, series string) string {
 	r.t.Helper()
 
+	require.NoError(r.t, os.WriteFile(filepath.Join(r.dir, "VERSION"), []byte(series+"\n"), 0o600))
+	r.git("add", "VERSION")
 	r.git("commit", "--quiet", "--allow-empty", "-m", message)
 
 	return r.git("rev-parse", "HEAD")
@@ -60,15 +63,11 @@ func (r *releaseRepo) commit(message string) string {
 
 // version runs the version script for commit against main and returns its
 // output lines, or the error text when it refuses.
-func (r *releaseRepo) version(commit string, requested string) (map[string]string, string) {
+func (r *releaseRepo) version(commit string) (map[string]string, string) {
 	r.t.Helper()
 
 	script := filepath.Join(repoRootFromDevtoolPackage(r.t), releaseVersionScript)
-	args := []string{script, "refs/heads/main", commit}
-	if requested != "" {
-		args = append(args, requested)
-	}
-	cmd := exec.CommandContext(r.t.Context(), "bash", args...) //nolint:gosec // the repository's own script under a fixed interpreter
+	cmd := exec.CommandContext(r.t.Context(), "bash", script, "refs/heads/main", commit) //nolint:gosec // the repository's own script under a fixed interpreter
 	cmd.Dir = r.dir
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -93,57 +92,58 @@ func releaseOutputs(action, version, latest string) map[string]string {
 
 // Validates: R-6.10.41
 //
-// The version script gives the first release v0.1.0, bumps the patch of the
-// highest vX.Y.Z tag after that, honors a higher requested version, lets a
-// rerun finish the release a commit already has, and skips a commit a newer
-// release already contains.
+// The version script takes the series from VERSION: the first release of a
+// series is vMAJOR.MINOR.0, each later one bumps the patch of the series'
+// highest tag, a rerun finishes the release a commit already has, and a
+// commit a newer release already contains is skipped.
 func TestReleaseVersionScript_ChoosesTheNextVersion(t *testing.T) {
 	t.Parallel()
 
 	repo := newReleaseRepo(t)
-	first := repo.commit("first")
+	first := repo.commit("first", "0.1")
 
-	outputs, refusal := repo.version(first, "")
+	outputs, refusal := repo.version(first)
 	require.Empty(t, refusal)
-	assert.Equal(t, releaseOutputs("create", "v0.1.0", "true"), outputs, "the first release")
+	assert.Equal(t, releaseOutputs("create", "v0.1.0", "true"), outputs, "the first release of the series")
 
 	repo.git("tag", "v0.1.0", first)
-	outputs, refusal = repo.version(first, "")
+	outputs, refusal = repo.version(first)
 	require.Empty(t, refusal)
 	assert.Equal(t, releaseOutputs("finish", "v0.1.0", "true"), outputs, "a rerun finishes the commit's release")
 
 	// Tags that are not vMAJOR.MINOR.PATCH are not releases.
-	second := repo.commit("second")
+	second := repo.commit("second", "0.1")
 	repo.git("tag", "v9.0", second)
 	repo.git("tag", "v9.0.0-rc1", second)
 	repo.git("tag", "nightly", second)
-	outputs, refusal = repo.version(second, "")
+	outputs, refusal = repo.version(second)
 	require.Empty(t, refusal)
-	assert.Equal(t, releaseOutputs("create", "v0.1.1", "true"), outputs, "the patch of the highest release tag is bumped")
-
-	outputs, refusal = repo.version(second, "v0.2.0")
-	require.Empty(t, refusal)
-	assert.Equal(t, releaseOutputs("create", "v0.2.0", "true"), outputs, "a higher requested version wins")
+	assert.Equal(t, releaseOutputs("create", "v0.1.1", "true"), outputs, "the patch of the series' highest tag is bumped")
 
 	// Versions compare numerically, not as text.
-	repo.git("tag", "v0.9.0", second)
-	third := repo.commit("third")
-	repo.git("tag", "v0.10.0", third)
-	fourth := repo.commit("fourth")
-	outputs, refusal = repo.version(fourth, "")
+	repo.git("tag", "v0.1.9", second)
+	third := repo.commit("third", "0.1")
+	repo.git("tag", "v0.1.10", third)
+	fourth := repo.commit("fourth", "0.1")
+	outputs, refusal = repo.version(fourth)
 	require.Empty(t, refusal)
-	assert.Equal(t, releaseOutputs("create", "v0.10.1", "true"), outputs)
+	assert.Equal(t, releaseOutputs("create", "v0.1.11", "true"), outputs)
 
-	outputs, refusal = repo.version(second, "")
+	outputs, refusal = repo.version(second)
 	require.Empty(t, refusal)
-	assert.Equal(t, releaseOutputs("finish", "v0.9.0", "false"), outputs,
+	assert.Equal(t, releaseOutputs("finish", "v0.1.9", "false"), outputs,
 		"finishing an older release leaves the newer one latest")
 
-	// fourth was never released (its run waited behind fifth's), and
-	// fifth's release contains it.
-	fifth := repo.commit("fifth")
-	repo.git("tag", "v0.10.1", fifth)
-	outputs, refusal = repo.version(fourth, "")
+	// A pull request that edits VERSION starts a new series at .0.
+	fifth := repo.commit("fifth", "0.2")
+	outputs, refusal = repo.version(fifth)
+	require.Empty(t, refusal)
+	assert.Equal(t, releaseOutputs("create", "v0.2.0", "true"), outputs, "a new series starts at .0")
+
+	// fourth was never released (its run waited behind sixth's), and
+	// sixth's release contains it.
+	repo.git("tag", "v0.2.0", fifth)
+	outputs, refusal = repo.version(fourth)
 	require.Empty(t, refusal)
 	assert.Equal(t, releaseOutputs("skip", "", "false"), outputs,
 		"a commit the newest release contains is not released again under a higher version")
@@ -151,35 +151,37 @@ func TestReleaseVersionScript_ChoosesTheNextVersion(t *testing.T) {
 
 // Validates: R-6.10.41
 //
-// The version script refuses a commit off main, a malformed or lower
-// requested version, and a requested version for a commit already released.
+// The version script refuses a commit off main, a missing or malformed
+// VERSION, and a series lower than the highest release's.
 func TestReleaseVersionScript_Refuses(t *testing.T) {
 	t.Parallel()
 
 	repo := newReleaseRepo(t)
-	first := repo.commit("first")
+	first := repo.commit("first", "1.2")
 	repo.git("tag", "v1.2.3", first)
-	second := repo.commit("second")
 	repo.git("checkout", "--quiet", "-b", "feature")
-	offMain := repo.commit("feature work")
+	offMain := repo.commit("feature work", "1.2")
 	repo.git("checkout", "--quiet", "main")
 
-	_, refusal := repo.version(offMain, "")
+	_, refusal := repo.version(offMain)
 	assert.Contains(t, refusal, "is not on refs/heads/main; only main is released")
 
-	_, refusal = repo.version(second, "1.3.0")
-	assert.Contains(t, refusal, "is not vMAJOR.MINOR.PATCH")
+	for _, series := range []string{"1.3.0", "v1.3", "1", ""} {
+		bad := repo.commit("bad series", series)
+		_, refusal = repo.version(bad)
+		assert.Contains(t, refusal, "must hold one MAJOR.MINOR line", "series %q", series)
+	}
 
-	_, refusal = repo.version(second, "v1.2.3")
-	assert.Contains(t, refusal, "is not higher than v1.2.3")
+	lower := repo.commit("lower series", "1.1")
+	_, refusal = repo.version(lower)
+	assert.Contains(t, refusal, "series 1.1 is lower than the highest release v1.2.3")
 
-	_, refusal = repo.version(second, "v1.2.0")
-	assert.Contains(t, refusal, "is not higher than v1.2.3")
+	repo.git("rm", "--quiet", "VERSION")
+	repo.git("commit", "--quiet", "-m", "no version file")
+	_, refusal = repo.version(repo.git("rev-parse", "HEAD"))
+	assert.Contains(t, refusal, "must hold one MAJOR.MINOR line")
 
-	_, refusal = repo.version(first, "v2.0.0")
-	assert.Contains(t, refusal, "is already released as v1.2.3")
-
-	_, refusal = repo.version("no-such-commit", "")
+	_, refusal = repo.version("no-such-commit")
 	assert.Contains(t, refusal, "is not a commit")
 }
 

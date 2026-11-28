@@ -283,7 +283,7 @@ func TestNewRootCmd(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names = append(names, sub.Name())
 	}
-	assert.ElementsMatch(t, []string{"verify", "bench", "worktree", "nightly", "ci"}, names)
+	assert.ElementsMatch(t, []string{"verify", "bench", "worktree", "nightly"}, names)
 }
 
 // Validates: R-6.10.1
@@ -522,44 +522,4 @@ func TestRootCmdShowsUsageForAMissingRequiredFlag(t *testing.T) {
 		assert.Equal(t, 1, strings.Count(out, tc.message), "%v: the error is printed once", tc.args)
 		assert.NotContains(t, out, "Error:", "%v: cobra does not print it a second time", tc.args)
 	}
-}
-
-// Validates: R-6.10.39
-func TestNewCIRerunUnstartedCmdPassesTheRun(t *testing.T) {
-	t.Parallel()
-
-	var got devtool.CIRerunOptions
-	calls := 0
-	cmd := newCICmd(
-		func() (string, error) { return testRepoRoot, nil },
-		func(_ context.Context, opts devtool.CIRerunOptions) error {
-			calls++
-			got = opts
-			return nil
-		},
-	)
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"rerun-unstarted", "--run-id", "4242"})
-
-	require.NoError(t, cmd.Execute())
-	require.Equal(t, 1, calls)
-	assert.Equal(t, testRepoRoot, got.RepoRoot)
-	assert.Equal(t, int64(4242), got.RunID)
-	assert.NotNil(t, got.Stdout)
-}
-
-// Validates: R-6.10.39
-func TestNewCIRerunUnstartedCmdRequiresTheRun(t *testing.T) {
-	t.Parallel()
-
-	cmd := newCICmd(
-		func() (string, error) { return testRepoRoot, nil },
-		func(context.Context, devtool.CIRerunOptions) error { return nil },
-	)
-	cmd.SetOut(io.Discard)
-	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"rerun-unstarted"})
-
-	require.Error(t, cmd.Execute())
 }

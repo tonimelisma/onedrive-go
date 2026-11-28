@@ -58,7 +58,7 @@ in parallel jobs: `verify lint` (golangci-lint, then a pinned actionlint over
 `.github/workflows`, which `go run` fetches itself, so nothing is installed
 for it), and `verify quick` (format, the repo rules,
 the builds and `go test -short`, split into shards with `--shard k/n`) on
-Linux plus `verify platform` (host build and the same short tier) on macOS. `-short` skips the tests marked exhaustive (randomized
+Linux; macOS runs in the nightly full tier. `-short` skips the tests marked exhaustive (randomized
 model runs, replays, the reverse-dispatch and case-insensitive re-runs of
 every scenario, the reconcile matrix); the race detector and the coverage gate do not run there.
 Every push to `main` also runs `verify race`, the `./internal/sync/...` tree
@@ -142,8 +142,9 @@ Every merge to `main` is released, with no manual step (R-6.10.41). When the
 push-to-`main` CI run of a commit succeeds, `.github/workflows/release.yml`:
 
 1. refuses to run from any ref but `refs/heads/main`;
-2. picks the version with `scripts/release-version.sh`: the highest
-   `vMAJOR.MINOR.PATCH` tag with its patch bumped (`v0.1.0` for the first), or
+2. picks the version with `scripts/release-version.sh`: the series
+   `MAJOR.MINOR` is the one line of `VERSION`, and the version is the next
+   patch after the series' highest tag (`.0` for a new series), or
    the tag the commit already has when a rerun finishes its release; a commit
    a newer release already contains is skipped;
 3. builds `onedrive-go-<tag>-linux-amd64` and `onedrive-go-<tag>-darwin-arm64`
@@ -155,9 +156,10 @@ push-to-`main` CI run of a commit succeeds, `.github/workflows/release.yml`:
    `GITHUB_TOKEN`, publishes the release with generated notes, and verifies
    the published assets the way a consumer does.
 
-One release runs at a time (concurrency group `release`). The owner can run
-the workflow by hand from `main` with an optional `commit` (one whose push CI
-passed) and a higher `version`. Nobody tags or releases by hand, and no
+One release runs at a time (concurrency group `release`). A new minor or major
+series is a pull request that edits `VERSION`. A manual run of the workflow,
+which takes no inputs, releases the tip of `main` once its push CI passed, to
+finish a release a failed run left behind. Nobody tags or releases by hand, and no
 workflow runs on tag pushes. To check a download:
 
 ```bash
