@@ -104,6 +104,28 @@ func TestRunOnce_RandomizedBidirectionalEditsConverge(t *testing.T) {
 	}
 }
 
+// Validates: R-2.3.1, R-2.17.8
+//
+// Seed 328009 of the 2026-11-25 nightly synced a hard link as a file of its
+// own, then removed the link's name here with its folder while OneDrive
+// renamed the link's folders in case only. The inode at the other name was
+// read as the link moved there, and the other file was moved to OneDrive's
+// name of the link and then deleted on OneDrive (LI-20261128-01). Its course
+// runs through case-only renames, which the model makes only on a
+// case-sensitive filesystem; elsewhere the seed takes another course, and
+// TestRunOnce_AHardLinkDeletedHereAndMovedOnOneDriveLeavesTheOtherNameInPlace
+// holds the fix on every platform.
+func TestModel_SeedOfAHardLinkWhoseNameWentHereConverges(t *testing.T) {
+	syncfixture.SkipInShort(t)
+	t.Parallel()
+
+	runModelScenarioWith(t, modelHardLinkNameGoneSeed, modelOptions{})
+}
+
+// modelHardLinkNameGoneSeed is the seed of the 2026-11-25 nightly that found
+// a hard link's other name paired as the link moved onto it.
+const modelHardLinkNameGoneSeed = 328009
+
 // Validates: R-2.3.1
 //
 // The same seed twice gives the same actions in the same order and the same

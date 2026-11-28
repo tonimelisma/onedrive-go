@@ -269,6 +269,7 @@ func runOnceScenarios() []func(*testing.T) {
 		TestRunOnce_FullRescanWithEveryFolderReboundPlansNoTransfers,
 		TestRunOnce_FullRescanWithItemReplacedAtSamePath,
 		TestRunOnce_HardLinkUploadsAsANewFile,
+		TestRunOnce_AHardLinkDeletedHereAndMovedOnOneDriveLeavesTheOtherNameInPlace,
 		TestRunOnce_InPlaceEditWithRestoredMtimeConflictsWithRemoteEdit,
 		TestRunOnce_InPlaceEditWithRestoredMtimeUploads,
 		TestRunOnce_InterruptedCreateFinishesIntoItsOwnPlaceholder,

@@ -62,6 +62,7 @@ the product fix and the broader tests named, not on a dedicated test.
 
 | Incident | Title | Status | Classification | Last seen | Recurring |
 | --- | --- | --- | --- | --- | --- |
+| LI-20261128-01 | A synced file at the other name of a hard link was moved to the link's OneDrive name and deleted on OneDrive | fixed | product bug | 2026-11-25 | no |
 | LI-20261125-02 | The planner model's baseline, folder create and local move were unlike the store's and the executor's | fixed | test bug | 2026-11-25 | no |
 | LI-20261125-01 | A file made here in a folder carried on by a second folder move was uploaded at a path the moves had emptied | fixed | product bug | 2026-11-25 | no |
 | LI-20261124-05 | The planner model's folder conflict copy left the folder's subtree behind and reported a new file lost | fixed | test bug | 2026-11-24 | no |
@@ -123,6 +124,44 @@ the product fix and the broader tests named, not on a dedicated test.
 | LI-20260405-03 | Websocket watch tests timed websocket assertions before the steady-state subtree was ready | mitigated | test bug | 2026-04-24 | yes |
 | LI-20260405-02 | Stale root-level E2E artifacts inflated bootstrap and polluted live drives | fixed | test bug | 2026-04-05 | yes |
 | LI-20260403-01 | Live Graph metadata requests stalled before response headers | mitigated | graph quirk | 2026-04-05 | yes |
+
+## LI-20261128-01: A synced file at the other name of a hard link was moved to the link's OneDrive name and deleted on OneDrive
+
+First seen: 2026-11-25 (scheduled run 45623639723 of `main` at 225ccdf7, `model-seeds`, Linux; issue #1046)
+Last seen: 2026-11-25
+Area: `internal/sync/internal/syncplan/planner_move_inputs.go` (`movedOntoAnotherItemsPath`)
+Suite / test: `internal/sync.TestRunOnce_RandomizedBidirectionalEditsConverge`, seed 328009
+Classification: product bug
+Status: fixed
+Recurring: no
+Summary: the seed reported "batch 4: untouched a+b.txt changed". In batch
+3 a hard link `q%20r/photos/x/50%.txt` of `a+b.txt` was made here and
+uploaded as a new file, so two baseline rows hold one inode. In batch 4 the
+folder `q%20r` was replaced here by a file, which took the link's name with
+it, while OneDrive renamed `q%20r/photos` and its `x` in case only. Sync
+moved `a+b.txt` here to `q%20r/Photos/X/50%.txt` and, on the next pass,
+deleted `a+b.txt` on OneDrive.
+
+Evidence: the seed fails on Linux at the run's commit and at cae38767 and
+passes on macOS, where the model makes no case-only rename and the seed
+takes another course. The model's trace (`ONEDRIVE_GO_MODEL_TRACE=1`) and
+the engine's log show the pass's notice "Renamed differently on both sides"
+with `path=q%20r/photos/x/50%.txt local_path=a+b.txt`: the link's item, gone
+from its path on both sides, was found by its inode at `a+b.txt`
+(`movedOntoAnotherItemsPath`), a path whose baseline names another item,
+and paired as moved there. That rule is for a path the other item vacated
+or freed; `a+b.txt` still held its own synced file, the same inode, so the
+local move carried it to OneDrive's name of the link and its path read as
+deleted here. The same shape on any filesystem (synced hard link, its name
+removed here, its item moved on OneDrive) reproduces it.
+
+Fix: a path whose own synced file still holds the identity there is not a
+destination (`heldByItsOwnSyncedFile`), as SQLite's pairing already refuses
+a hard link while the source path holds the identity. The seed is kept as
+`TestModel_SeedOfAHardLinkWhoseNameWentHereConverges`, and the shape as
+`TestRunOnce_AHardLinkDeletedHereAndMovedOnOneDriveLeavesTheOtherNameInPlace`
+and a case of `TestMovedOntoAnotherItemsPath_NeedsTheIdentityAndTheSyncedContent`,
+each red before the fix.
 
 ## LI-20261125-02: The planner model's baseline, folder create and local move were unlike the store's and the executor's
 
