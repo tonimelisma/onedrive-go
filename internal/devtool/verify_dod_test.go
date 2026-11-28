@@ -664,8 +664,8 @@ const mergeRequestKey = "gh api -X PUT " + githubRepoPath + "/pulls/682/merge -f
 	" -f commit_title=Fix a thing (#682) -f commit_message=Body.\n\n" + mergeTrailer
 
 // mergeTestPR is the pull request the merge tests merge.
-func mergeTestPR() githubPullRequest {
-	pr := githubPullRequest{Title: "Fix a thing", Body: "Body."}
+func mergeTestPR() *githubPullRequest {
+	pr := &githubPullRequest{Title: "Fix a thing", Body: "Body."}
 	pr.Head.SHA = "head-sha"
 	return pr
 }

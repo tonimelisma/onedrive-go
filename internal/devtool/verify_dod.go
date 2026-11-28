@@ -403,7 +403,7 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 		return headErr
 	}
 
-	merged, err := mergePR(ctx, gh, opts.RepoRoot, opts.DODPR, pr)
+	merged, err := mergePR(ctx, gh, opts.RepoRoot, opts.DODPR, &pr)
 	if err != nil {
 		return err
 	}
@@ -742,7 +742,7 @@ func squashMessage(body string) string {
 // squashMessage. The request is sent once; whether it merged, also when it
 // failed after GitHub carried it out or when the pull request was merged
 // already, is the server's merge state, read next.
-func mergePR(ctx context.Context, gh ghClient, repoRoot string, prNumber int, pr githubPullRequest) (githubPullRequest, error) {
+func mergePR(ctx context.Context, gh ghClient, repoRoot string, prNumber int, pr *githubPullRequest) (githubPullRequest, error) {
 	number := strconv.Itoa(prNumber)
 	_, mergeErr := gh.outputOnce(ctx, repoRoot, "dod merge PR #"+number+" (PUT repos/{owner}/{repo}/pulls/"+number+"/merge)",
 		"api", "-X", "PUT", githubRepoPath+"/pulls/"+number+"/merge", "-f", "merge_method=squash", "-f", "sha="+pr.Head.SHA,
