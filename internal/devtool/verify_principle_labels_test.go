@@ -10,15 +10,15 @@ import (
 )
 
 // Validates: R-6.10.18
-func TestFindPrincipleLabelViolations_FlagsALabelOutsideTheHistory(t *testing.T) {
+func TestFindPrincipleLabelViolations_FlagsALabelInCodeAndDocs(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	for path, content := range map[string]string{
-		"internal/demo/demo.go":      "package demo\n\n// kept in the trash (P-4).\n",
-		"spec/design/demo.md":        "A rule (P-6) and a requirement (R-2.17.6).\n",
-		"spec/history/notes/plan.md": "The old label P-4 stays in the record.\n",
-		"internal/demo/clean.go":     "package demo\n\n// kept in the trash (R-6.4.9).\n",
+		"internal/demo/demo.go":  "package demo\n\n// kept in the trash (P-4).\n",
+		"spec/design/demo.md":    "A rule (P-6) and a requirement (R-2.17.6).\n",
+		"spec/lessons.md":        "An old note (P-4).\n",
+		"internal/demo/clean.go": "package demo\n\n// kept in the trash (R-6.4.9).\n",
 	} {
 		full := filepath.Join(root, filepath.FromSlash(path))
 		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o750))
@@ -32,7 +32,7 @@ func TestFindPrincipleLabelViolations_FlagsALabelOutsideTheHistory(t *testing.T)
 	for _, violation := range violations {
 		locations = append(locations, violation.Location)
 	}
-	assert.ElementsMatch(t, []string{"internal/demo/demo.go:3", "spec/design/demo.md:1"}, locations)
+	assert.ElementsMatch(t, []string{"internal/demo/demo.go:3", "spec/design/demo.md:1", "spec/lessons.md:1"}, locations)
 }
 
 // Validates: R-6.10.18

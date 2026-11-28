@@ -394,20 +394,23 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 	if pr.Head.Ref != branch {
 		return fmt.Errorf("dod post-merge: --branch %s is not the head branch of PR #%d, %s", branch, opts.DODPR, pr.Head.Ref)
 	}
-	// The branch is reset to main once the merge is in, so a change it does
-	// not hold yet would be lost: refuse before anything happens.
+	// The branch is deleted once the merge is in, so a change it does not
+	// hold yet would be lost: refuse before anything happens.
 	if cleanErr := requireCleanCheckout(ctx, runner, opts.RepoRoot); cleanErr != nil {
 		return cleanErr
 	}
+	if headErr := requireBranchAtHead(ctx, runner, opts.RepoRoot, branch, pr.Head.SHA); headErr != nil {
+		return headErr
+	}
 
-	merged, err := mergePR(ctx, gh, opts.RepoRoot, opts.DODPR, pr.Head.SHA)
+	merged, err := mergePR(ctx, gh, opts.RepoRoot, opts.DODPR, pr)
 	if err != nil {
 		return err
 	}
 	if err := markNightlyClaimsFixed(ctx, gh, opts.RepoRoot, branch, merged.MergeCommitSHA, time.Now()); err != nil {
 		return err
 	}
-	if err := restartBranchFromMain(ctx, runner, opts.RepoRoot, branch, stderr, ciWait.sleep); err != nil {
+	if err := returnToMain(ctx, runner, opts.RepoRoot, branch, stderr); err != nil {
 		return err
 	}
 	if err := waitForPostMergePushCI(ctx, runner, opts.RepoRoot, merged.MergeCommitSHA, ciWait); err != nil {
@@ -426,11 +429,11 @@ func runDODPostMerge(ctx context.Context, runner commandRunner, gh ghClient, opt
 	if err := runDODNightly(ctx, runner, gh, opts.RepoRoot, DODStagePostMerge, branch, time.Now, stdout); err != nil {
 		return err
 	}
-	return writeStatus(stdout, "dod post-merge: merge, branch restart, and post-merge CI interpretation passed\n")
+	return writeStatus(stdout, "dod post-merge: merge, return to main, and post-merge CI interpretation passed\n")
 }
 
 // postMergeBranch is the increment's branch: --branch, else the branch the
-// checkout is on, which is the session's branch in a cloud session.
+// checkout is on, the increment's branch.
 func postMergeBranch(ctx context.Context, runner commandRunner, opts *VerifyOptions) (string, error) {
 	if opts.DODBranch != "" {
 		return opts.DODBranch, nil
@@ -446,7 +449,7 @@ func postMergeBranch(ctx context.Context, runner commandRunner, opts *VerifyOpti
 }
 
 // requireCleanCheckout refuses a checkout holding a change git tracks or a
-// file it does not: the increment's branch is about to be reset to main.
+// file it does not: the increment's branch is about to be deleted.
 func requireCleanCheckout(ctx context.Context, runner commandRunner, repoRoot string) error {
 	out, err := runner.Output(ctx, repoRoot, os.Environ(), "git", "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
@@ -458,63 +461,37 @@ func requireCleanCheckout(ctx context.Context, runner commandRunner, repoRoot st
 	return nil
 }
 
-// restartPushAttempts bounds the pushes of a restarted branch, and
-// restartPushBackoff is the wait before the first repeat, doubled after.
-const (
-	restartPushAttempts = 3
-	restartPushBackoff  = 2 * time.Second
-)
-
-// restartBranchFromMain points the increment's branch at the new origin/main
-// and pushes it, the way a session's branch starts its next increment after a
-// squash merge: the squash commit is not a descendant of the branch, so the
-// branch would otherwise carry the merged commits into the next pull request.
-// The push is a force with lease, since the remote branch holds only the
-// merged commits, or nothing once the merge deleted it. GitHub deletes the
-// branch a moment after the merge, so the lease can name a branch that is gone
-// when the push lands; a failed push waits, fetches again, which prunes it,
-// and is repeated, at most restartPushAttempts times in all.
-func restartBranchFromMain(
-	ctx context.Context,
-	runner commandRunner,
-	repoRoot string,
-	branch string,
-	stderr io.Writer,
-	sleep func(context.Context, time.Duration) error,
-) error {
-	git := func(args ...string) error {
+// returnToMain moves the checkout from the merged increment's branch to a
+// fresh main and deletes the local branch. A branch is never reused after
+// its pull request merged, and nothing pushes it again: GitHub deletes the
+// remote branch on merge, and the next increment cuts a new one from
+// origin/main. The caller has checked that the checkout is clean and that
+// the branch's tip is the head GitHub merged, so the delete loses nothing.
+func returnToMain(ctx context.Context, runner commandRunner, repoRoot string, branch string, stderr io.Writer) error {
+	for _, args := range [][]string{
+		{"fetch", "--prune", "origin"},
+		{"checkout", "-B", "main", originMainRef},
+		{"branch", "-D", branch},
+	} {
 		if err := runner.Run(ctx, repoRoot, os.Environ(), io.Discard, stderr, "git", args...); err != nil {
-			return fmt.Errorf("dod post-merge restart %s from %s: git %s: %w", branch, originMainRef, args[0], err)
-		}
-		return nil
-	}
-	// Every ref, not main alone: the merge may have deleted the remote
-	// branch, and a remote-tracking ref --prune left behind would make the
-	// lease below expect a branch that no longer exists.
-	fetch := []string{"fetch", "--prune", "origin"}
-	if err := git(fetch...); err != nil {
-		return err
-	}
-	if err := git("checkout", "-B", branch, originMainRef); err != nil {
-		return err
-	}
-	backoff := restartPushBackoff
-	var pushErr error
-	for attempt := 1; ; attempt++ {
-		if pushErr = git("push", "--force-with-lease", "-u", "origin", branch); pushErr == nil {
-			return nil
-		}
-		if attempt == restartPushAttempts {
-			return pushErr
-		}
-		if err := sleep(ctx, backoff); err != nil {
-			return errors.Join(pushErr, err)
-		}
-		backoff *= 2
-		if err := git(fetch...); err != nil {
-			return errors.Join(pushErr, err)
+			return fmt.Errorf("dod post-merge return to %s from %s: git %s: %w", originMainRef, branch, args[0], err)
 		}
 	}
+	return nil
+}
+
+// requireBranchAtHead refuses a local branch whose tip is not the pull
+// request's head: a commit not pushed would be lost when the branch is
+// deleted after the merge.
+func requireBranchAtHead(ctx context.Context, runner commandRunner, repoRoot string, branch string, head string) error {
+	out, err := runner.Output(ctx, repoRoot, os.Environ(), "git", "rev-parse", "refs/heads/"+branch)
+	if err != nil {
+		return fmt.Errorf("dod post-merge read %s: %w", branch, err)
+	}
+	if tip := strings.TrimSpace(string(out)); tip != head {
+		return fmt.Errorf("dod post-merge: %s is at %s, not the pull request's head %s; push it or reset it first", branch, tip, head)
+	}
+	return nil
 }
 
 func dodRecentMerged(opts *VerifyOptions) int {
@@ -741,15 +718,35 @@ func gitHeadShort(ctx context.Context, runner commandRunner, repoRoot string) (s
 	return strings.TrimSpace(string(out)), nil
 }
 
-// mergePR squash-merges the pull request over REST, pinned to head, the head
-// commit the stage checked: GitHub refuses the merge when the branch moved
-// since. The request is sent once; whether it merged, also when it failed
-// after GitHub carried it out or when the pull request was merged already,
-// is the server's merge state, read next.
-func mergePR(ctx context.Context, gh ghClient, repoRoot string, prNumber int, head string) (githubPullRequest, error) {
+// mergeTrailer ends every squash commit's message. The repository squashes
+// with the pull request's body as the message, which drops the commits'
+// trailers, so the merge states the attribution itself.
+const mergeTrailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+
+// squashMessage is the squash commit's message: the pull request's body,
+// then mergeTrailer unless the body already ends with it.
+func squashMessage(body string) string {
+	body = strings.TrimRight(body, "\n")
+	if strings.HasSuffix(body, mergeTrailer) {
+		return body
+	}
+	if body == "" {
+		return mergeTrailer
+	}
+	return body + "\n\n" + mergeTrailer
+}
+
+// mergePR squash-merges the pull request over REST, pinned to the head commit
+// the stage checked: GitHub refuses the merge when the branch moved since. The
+// commit is titled like GitHub's own squash ("<title> (#N)") and carries
+// squashMessage. The request is sent once; whether it merged, also when it
+// failed after GitHub carried it out or when the pull request was merged
+// already, is the server's merge state, read next.
+func mergePR(ctx context.Context, gh ghClient, repoRoot string, prNumber int, pr githubPullRequest) (githubPullRequest, error) {
 	number := strconv.Itoa(prNumber)
 	_, mergeErr := gh.outputOnce(ctx, repoRoot, "dod merge PR #"+number+" (PUT repos/{owner}/{repo}/pulls/"+number+"/merge)",
-		"api", "-X", "PUT", githubRepoPath+"/pulls/"+number+"/merge", "-f", "merge_method=squash", "-f", "sha="+head)
+		"api", "-X", "PUT", githubRepoPath+"/pulls/"+number+"/merge", "-f", "merge_method=squash", "-f", "sha="+pr.Head.SHA,
+		"-f", "commit_title="+pr.Title+" (#"+number+")", "-f", "commit_message="+squashMessage(pr.Body))
 	merged, stateErr := requirePRMerged(ctx, gh, repoRoot, prNumber)
 	if stateErr == nil {
 		return merged, nil

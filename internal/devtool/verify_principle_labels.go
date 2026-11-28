@@ -14,12 +14,8 @@ import (
 // such rule is a requirement, which is what the code and the docs cite.
 var principleLabelPattern = regexp.MustCompile(`\bP-\d+\b`)
 
-// principleLabelHistoryDir holds the historical program notes, which keep the
-// labels as they were written.
-const principleLabelHistoryDir = "spec/history"
-
 // findPrincipleLabelViolations reports every principle label in the Go files
-// and in the Markdown outside spec/history, each to be replaced by the
+// and in the Markdown, each to be replaced by the
 // requirement ID it stands for.
 func findPrincipleLabelViolations(repoRoot string) ([]checkViolation, error) {
 	var violations []checkViolation
@@ -29,7 +25,7 @@ func findPrincipleLabelViolations(repoRoot string) ([]checkViolation, error) {
 		}
 		rel := repoRelative(repoRoot, path)
 		if d.IsDir() {
-			if skipRepositoryRuleDir(d.Name()) || filepath.ToSlash(rel) == principleLabelHistoryDir {
+			if skipRepositoryRuleDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

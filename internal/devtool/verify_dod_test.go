@@ -506,8 +506,8 @@ func TestDODPrePRRunsThePRProfileByDefault(t *testing.T) {
 
 // Validates: R-6.10.16, R-6.10.23
 //
-// post-merge marks the nightly claims of --branch fixed and restarts that
-// branch from main, so a --branch that is not the pull request's head is
+// post-merge marks the nightly claims of --branch fixed and deletes that
+// branch after the merge, so a --branch that is not the pull request's head is
 // refused before anything is merged.
 func TestDODPostMergeRefusesABranchThatIsNotThePRsHead(t *testing.T) {
 	t.Parallel()
@@ -534,7 +534,7 @@ func TestDODPostMergeRefusesABranchThatIsNotThePRsHead(t *testing.T) {
 
 // Validates: R-6.10.16
 //
-// The branch is reset to main after the merge, so a checkout holding a
+// The branch is deleted after the merge, so a checkout holding a
 // change, tracked or not, is refused before anything is merged.
 func TestDODPostMergeRefusesACheckoutWithChanges(t *testing.T) {
 	t.Parallel()
@@ -561,16 +561,14 @@ func TestDODPostMergeRefusesACheckoutWithChanges(t *testing.T) {
 
 // Validates: R-6.10.16
 //
-// After the merge the branch restarts from the new origin/main, as a
-// session's branch starts its next increment, and is pushed with a lease.
-// The fetch prunes every ref: a merge that deleted the remote branch left a
-// remote-tracking ref behind, and a lease read from it would refuse the push.
-func TestRestartBranchFromMainPointsTheBranchAtMainAndPushesIt(t *testing.T) {
+// After the merge the checkout moves to a fresh main and the merged branch is
+// deleted locally. Nothing pushes it: a branch is never reused after its pull
+// request merged, and GitHub deleted the remote one.
+func TestReturnToMainChecksOutMainAndDeletesTheMergedBranch(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeRunner{}
-	require.NoError(t, restartBranchFromMain(context.Background(), runner, testCleanupRepoRoot, "fix/the-head", io.Discard,
-		(&recordedSleeps{}).sleep))
+	require.NoError(t, returnToMain(context.Background(), runner, testCleanupRepoRoot, "fix/the-head", io.Discard))
 
 	got := make([]string, 0, len(runner.runCommands))
 	for _, command := range runner.runCommands {
@@ -578,58 +576,49 @@ func TestRestartBranchFromMainPointsTheBranchAtMainAndPushesIt(t *testing.T) {
 	}
 	assert.Equal(t, []string{
 		"git fetch --prune origin",
-		"git checkout -B fix/the-head origin/main",
-		"git push --force-with-lease -u origin fix/the-head",
+		"git checkout -B main origin/main",
+		"git branch -D fix/the-head",
 	}, got)
 }
 
 // Validates: R-6.10.16
 //
-// GitHub deletes a merged pull request's branch a moment after the merge, so
-// the lease of the first push can name a branch that is gone by the time the
-// push lands. The restart fetches again, which prunes it, and pushes again.
-func TestRestartBranchFromMainRetriesAPushTheBranchDeletionRaced(t *testing.T) {
+// The merged branch is deleted locally, so a tip that is not the head GitHub
+// merged (a commit never pushed) is refused before anything is merged.
+func TestDODPostMergeRefusesABranchAheadOfThePRsHead(t *testing.T) {
 	t.Parallel()
 
-	const push = "git push --force-with-lease -u origin fix/the-head"
-	runner := &fakeRunner{runErrSequenceByKey: map[string][]error{
-		push: {errors.New("remote rejected: cannot lock ref"), nil},
+	runner := &fakeRunner{outputs: map[string][]byte{
+		"git rev-parse --abbrev-ref HEAD":              []byte("fix/the-head\n"),
+		"gh api " + githubRepoPath + "/pulls/7":        []byte(`{"state":"open","head":{"ref":"fix/the-head","sha":"head-sha"}}`),
+		"git status --porcelain --untracked-files=all": []byte(""),
+		"git rev-parse refs/heads/fix/the-head":        []byte("local-sha\n"),
 	}}
-	sleeps := &recordedSleeps{}
-	require.NoError(t, restartBranchFromMain(context.Background(), runner, testCleanupRepoRoot, "fix/the-head", io.Discard,
-		sleeps.sleep))
+	err := RunVerify(context.Background(), runner, &VerifyOptions{
+		RepoRoot: writeWorkflowFixture(t, nightlyBoundWorkflow),
+		DOD:      true,
+		DODStage: DODStagePostMerge,
+		DODPR:    7,
+		Stdout:   &bytes.Buffer{},
+		Stderr:   &bytes.Buffer{},
+	})
+	require.Error(t, err)
 
-	got := make([]string, 0, len(runner.runCommands))
-	for _, command := range runner.runCommands {
-		got = append(got, command.name+" "+strings.Join(command.args, " "))
-	}
-	assert.Equal(t, []string{
-		"git fetch --prune origin",
-		"git checkout -B fix/the-head origin/main",
-		push,
-		"git fetch --prune origin",
-		push,
-	}, got)
-	assert.Len(t, sleeps.waits, 1, "the second push waits for GitHub's deletion to land")
+	assert.Contains(t, err.Error(), "local-sha")
+	assertNoMergeRequest(t, runner)
+	assert.Empty(t, runner.runCommands, "no branch is touched")
 }
 
 // Validates: R-6.10.16
-func TestRestartBranchFromMainFailsAfterItsPushAttempts(t *testing.T) {
+//
+// The squash commit's message is the pull request's body, which drops the
+// commits' trailers, so the merge appends the attribution trailer once.
+func TestSquashMessageEndsWithTheAttributionTrailerOnce(t *testing.T) {
 	t.Parallel()
 
-	const push = "git push --force-with-lease -u origin fix/the-head"
-	runner := &fakeRunner{runErrByKey: map[string]error{push: errors.New("remote rejected: protected branch")}}
-	err := restartBranchFromMain(context.Background(), runner, testCleanupRepoRoot, "fix/the-head", io.Discard,
-		(&recordedSleeps{}).sleep)
-	require.ErrorContains(t, err, "protected branch")
-
-	pushes := 0
-	for _, command := range runner.runCommands {
-		if command.name+" "+strings.Join(command.args, " ") == push {
-			pushes++
-		}
-	}
-	assert.Equal(t, restartPushAttempts, pushes)
+	assert.Equal(t, "Body.\n\n"+mergeTrailer, squashMessage("Body.\n"))
+	assert.Equal(t, "Body.\n\n"+mergeTrailer, squashMessage("Body.\n\n"+mergeTrailer+"\n"))
+	assert.Equal(t, mergeTrailer, squashMessage(""))
 }
 
 // assertNoMergeRequest fails when runner sent a merge request.
@@ -671,7 +660,15 @@ func TestDODPrePRKeepsTheFullTierSelectable(t *testing.T) {
 
 // mergeRequestKey is the REST merge request mergePR sends for PR 682 at
 // head-sha.
-const mergeRequestKey = "gh api -X PUT " + githubRepoPath + "/pulls/682/merge -f merge_method=squash -f sha=head-sha"
+const mergeRequestKey = "gh api -X PUT " + githubRepoPath + "/pulls/682/merge -f merge_method=squash -f sha=head-sha" +
+	" -f commit_title=Fix a thing (#682) -f commit_message=Body.\n\n" + mergeTrailer
+
+// mergeTestPR is the pull request the merge tests merge.
+func mergeTestPR() githubPullRequest {
+	pr := githubPullRequest{Title: "Fix a thing", Body: "Body."}
+	pr.Head.SHA = "head-sha"
+	return pr
+}
 
 // Validates: R-6.10.16, R-6.10.40
 //
@@ -702,7 +699,7 @@ func TestDODMergeSquashesOverRESTAndReadsTheServerState(t *testing.T) {
 				}
 			}}
 
-			state, err := mergePR(context.Background(), newGHClient(runner, nil), testCleanupRepoRoot, 682, "head-sha")
+			state, err := mergePR(context.Background(), newGHClient(runner, nil), testCleanupRepoRoot, 682, mergeTestPR())
 			require.NoError(t, err)
 			assert.True(t, state.Merged)
 			assert.Equal(t, "merge-sha", state.MergeCommitSHA)
@@ -727,7 +724,7 @@ func TestDODMergeFailsWhenTheServerSaysItIsNotMerged(t *testing.T) {
 		}
 	}}
 
-	_, err := mergePR(context.Background(), newGHClient(runner, nil), testCleanupRepoRoot, 682, "head-sha")
+	_, err := mergePR(context.Background(), newGHClient(runner, nil), testCleanupRepoRoot, 682, mergeTestPR())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Head branch was modified")
 	assert.Contains(t, err.Error(), "server state is not merged")

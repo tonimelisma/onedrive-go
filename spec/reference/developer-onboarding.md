@@ -280,7 +280,7 @@ The repo does not rely on each contributor improvising their own workflow.
 Pick a small change and do it the repo's way:
 
 - claim the work
-- work on the session's branch, which starts at the current `origin/main`
+- work on a new branch (`feat/...`, `fix/...`) cut from the current `origin/main`
 - write or adjust tests first when behavior changes
 - update docs in the same increment
 - run `go run ./cmd/devtool verify pr` (or `verify public` for the full
@@ -353,11 +353,11 @@ able to scan this table and place every top-level code area.
 | `internal/synctest` | Sync-specific shared test helpers |
 | `testutil` | Repo-wide test helpers |
 | `e2e` | Live provider coverage, fixture preflight, and CLI/sync end-to-end behavior |
-| `scripts/bootstrap-test-credentials.sh` | Owner's machine only, never a session: one-time live-test credential bootstrap that rebuilds `.testdata/` with token files, `catalog.json`, and `config.toml` |
-| `scripts/migrate-test-data-to-ci.sh` | Owner's machine only, never a session: move the owner's `.testdata/` tokens, `catalog.json`, `config.toml`, and fixture env into CI secrets storage |
+| `scripts/bootstrap-test-credentials.sh` | Maintainer setup only, never a session: one-time live-test credential bootstrap that rebuilds `.testdata/` with token files, `catalog.json`, and `config.toml` |
+| `scripts/migrate-test-data-to-ci.sh` | Maintainer setup only, never a session: move the maintainer's `.testdata/` tokens, `catalog.json`, `config.toml`, and fixture env into CI secrets storage |
 | `scripts/dev-env.sh` | Local development environment helper |
 
-Live-test note: `.testdata/` exists only on the owner's machine and in CI,
+Live-test note: `.testdata/` exists only on the maintainer's setup machine and in CI,
 which writes it from Key Vault; no session or container ever holds it, a
 `.env`, or a token file. It should contain `token_*.json`, `catalog.json`,
 `config.toml`, and any expected state DB fixtures from
@@ -708,7 +708,7 @@ use this:
 ### Week 3
 
 1. pick one small increment
-2. work on the session's branch, started from `origin/main`
+2. work on a new branch cut from `origin/main`
 3. make the change with tests and doc updates
 4. run `go run ./cmd/devtool verify pr` (or `verify public` for the full
    offline tier)

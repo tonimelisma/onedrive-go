@@ -1,6 +1,182 @@
-# onedrive-go
+# CLAUDE.md
 
-Fast, safe OneDrive CLI and sync client in Go. Unix-style file ops (`ls`, `get`, `put`) plus bidirectional sync. Linux and macOS. MIT licensed.
+## What this is
+
+onedrive-go is a fast, safe OneDrive CLI and sync client: Unix-style file operations (`ls`, `get`,
+`put`, `mv`, `rm`) plus bidirectional sync and a watch daemon, for Linux and macOS, MIT licensed.
+It ships as static Go binaries (`linux-amd64`, `darwin-arm64`) on GitHub Releases, each with a
+build-provenance attestation. Go only; the repository's own tooling is `cmd/devtool`.
+
+## Working style
+
+- When it is clear what is wanted, do it. Ask only for what only the user can do, or for a real
+  product choice nobody has made yet.
+- Don't end a turn with a summary announcing the next step, an offer to continue, or a list of
+  decisions that block nothing: take the next step.
+- Stop only when nothing can move forward without the user, or when what blocks you is
+  deliberately protected (a permission, a ruleset, a secret). Then say exactly what is needed.
+- Still confirm destructive or irreversible actions outside the normal flow (deleting data,
+  rewriting history, changing settings); the normal flow (branch, commit, PR, merge, release) is
+  not one of them.
+- Live tests clean up everything they create in their own teardown, even when they fail, and
+  confirm the removal.
+
+## Product invariants
+
+- Never lose user data: a sync never deletes or overwrites a local or remote file whose change it
+  has not seen synced, and every disagreement it cannot resolve becomes a kept conflict copy
+  ([sync-planning.md](spec/design/sync-planning.md), [sync.md](spec/requirements/sync.md)).
+- Files that matter are written atomically: a temp file in the target directory, `fsync`, then
+  rename ([sync-execution.md](spec/design/sync-execution.md)).
+- File identity is content, not timestamps: QuickXorHash and SHA-256 are the truth, a timestamp
+  is only a fast-path hint ([drive-transfers.md](spec/design/drive-transfers.md)).
+- The state database is a cache of decisions, never the source of truth: lost or corrupt state is
+  rebuilt from the remote and the local tree without the user's help
+  ([sync-store.md](spec/design/sync-store.md)).
+- The app has no users yet and no compatibility requirement anywhere: config, token and state
+  files, CLI flags, output and internal APIs change whenever a better design needs it, with no
+  shims. This file is where that rule lives.
+- Every merge to `main` is released, attested by `.github/workflows/release.yml` on
+  `refs/heads/main`, and nothing else releases (R-6.10.41,
+  [system.md](spec/design/system.md)).
+
+## Engineering philosophy
+
+- No compatibility shims. When a structure is wrong, replace it and migrate its callers in the
+  same change.
+- The smallest correct design. Simplicity first; measure before optimizing, never optimize on a
+  hunch.
+- One owner per fact, per mutation and per side effect. Two places that know the same thing will
+  disagree.
+- Abstractions only at real boundaries (a process, a network, a storage format, a platform), not
+  in anticipation.
+- Don't guess and don't fabricate: an unknown API, path, value or result is looked up, measured or
+  reported as unknown.
+- You own the repository. Nothing is "pre-existing" or someone else's problem, and red CI is never
+  waived: it is fixed first.
+- Comments and docs describe current behavior and why it is that way, never its history.
+
+Repository-specific:
+
+- **Functional core, imperative shell.** Planning, classification, validation and safety policy
+  are deterministic and side-effect free; filesystem, network, database, clock and process effects
+  stay at the edges behind explicit capabilities (narrow objects for a sync root, a token file, a
+  store), never ambient `os` or `http`.
+- **Single-owner runtime state.** Watch loops, worker pools, retries and lifecycle control have
+  one owner; single-writer discipline beats defensive mutation spread across goroutines. In-memory
+  state is an ephemeral working set or a derived index, rebuildable, never a competing authority.
+- **No abstraction without authority.** A type, package or layer exists only if it owns I/O,
+  policy, lifecycle or a durable truth boundary: no services, managers, adapters, builders or
+  pass-through DTOs. Inside a package a short concrete helper beats a handler chain. Interfaces
+  live at the consuming boundary, never around every concrete type.
+- **DRY applies to knowledge, not syntax.** Never duplicate a fact, a policy or a lifecycle rule;
+  small code duplication is fine when it keeps ownership clear.
+- **No ghost architecture.** A rename, move or deletion updates every comment, doc, `GOVERNS:`
+  line, verifier rule, error prefix and test name in the same change (comments and error prefixes
+  name the package that owns the code now); `internal/sync` is split
+  along its authority boundaries (the routing table below) with no re-export layer.
+- **Say what the code really does.** "Pure" only for code that neither logs, mutates nor does I/O;
+  otherwise "deterministic".
+- **Simple until measured.** Bottlenecks here are usually Graph latency, filesystem I/O or
+  transaction boundaries, not where intuition points. A linear scan over a small per-folder or
+  per-batch set, or a brute-force rebuild, beats a cache with subtle invalidation until a profile
+  says otherwise. Data model first, algorithm second.
+
+## Engineering practices
+
+- Test first. A change in behavior starts with a test that fails without it.
+- Every bug, CI failure and review finding gets a regression test, seen failing before the fix;
+  quote its red output in the PR.
+- The instrumentation flywheel, every increment:
+  - Never guess a bug's cause. If the logs and metrics can't explain it, add the instrumentation
+    first, so this occurrence or the next one is diagnosable, then fix.
+  - Never guess at performance: measure, keep a baseline, optimize, and report before and after
+    (`devtool bench`, `status --perf`, [performance-benchmarking.md](spec/design/performance-benchmarking.md)).
+  - Even when nothing is blocked, review the instrumentation on every path you touched: add what
+    was missing, remove what is noise.
+- Tests are hermetic: temporary directories and fixtures, never the developer's real data, config
+  or accounts.
+
+Go conventions that lint and the repository rules do not enforce (lint does enforce the rest:
+`.golangci.yml`, and `devtool verify` holds testify-only assertions, no `time.Sleep` in tests, the
+`...ForTest` seams and the test-support import rules):
+
+- **Errors.** Wrap as `fmt.Errorf("verb noun: %w", err)`, so the chain reads
+  `sync file: upload chunk: HTTP POST: connection refused`; never "failed to". Translate Graph,
+  filesystem and SQLite errors into domain errors at the boundary that understands them, and wrap
+  once per boundary. A sentinel exists only when a caller branches on it. Never swallow an error:
+  a handled one becomes an explicit decision, a durable record or a returned error, logged once at
+  the boundary that owns the decision. Panics are for impossible states only, recovered at
+  goroutine boundaries and logged at Error. Bulk operations collect, report and continue.
+- **Concurrency.** Every goroutine has an owner that ensures it ends; no fire-and-forget. Every
+  function that does I/O or can block takes `context.Context` first and honors it. Channel
+  direction is declared in signatures and the sender closes. A mutex's comment says which fields
+  it guards; no I/O or channel operation under a lock; `sync.Mutex` unless profiling shows read
+  contention. Fan-out is bounded (a semaphore or a fixed worker set), never by input size.
+- **Resources and files.** Check the error of `Close()` on writes. Stream; never read a body or
+  file whole unless bounded and under 1 MB. Close every `http.Response` body. Temp files go in the
+  target directory, so the rename is atomic. Paths use `filepath.Join`. Validate every path from
+  outside (`..`, absolute names, reserved characters) before touching the filesystem. Preserve
+  remote metadata you don't model: write back only the fields you manage.
+- **APIs.** Timeout budgets propagate inward with `context.WithTimeout` at each layer. Every API
+  response is untrusted: nil-check nested fields, validate enums, don't trust `Content-Length` or
+  array order. Follow every `@odata.nextLink`. Retry automatically only idempotent operations.
+- **State.** State transitions are enumerated and validated, illegal ones refused loudly; state
+  persists atomically (a transaction or write-replace).
+- **Types.** Make illegal states unrepresentable (`driveid.ID`, enums over strings); validate at
+  system boundaries and trust inside a package. Named fields in every struct literal. Unexported by
+  default. Every collection from outside is bounded or streamed. Timeouts on everything external.
+- **Shutdown.** On SIGINT/SIGTERM stop admitting work, cancel in-flight operations and let each
+  unwind, commit the records of work already done on a context detached from the cancel, then
+  exit; a second signal exits at once. Cleanup runs on every exit path.
+- **Logging.** `log/slog` with structured fields. Debug: HTTP, token acquisition, file I/O. Info:
+  lifecycle (login, sync start and end, config load). Warn: degraded but recoverable (retries,
+  fallbacks); bulk sync logs scope-level events and end-of-pass summaries, items at Debug. Error:
+  terminal failures. Never log a secret.
+- **Dependencies.** Prefer the standard library; a new dependency is weighed for maintenance,
+  transitive dependencies and attack surface.
+- **Tests.** `require` when the test cannot go on, `assert` otherwise. A test that proves a
+  requirement carries `// Validates: R-X.Y.Z` (comma-separated for several) on the line before
+  `func Test...`, or on a table case. Test the contract through exported APIs. Every I/O path has a
+  failure-injection test; fakes implement the full contract (latency, partial results, errors),
+  hand-written. Wait on readiness channels, injected clocks or observable state, never wall time.
+  Golden files (`-update`) for structured output. Concurrent paths get `-race` and `-count=100`
+  stress on flaky candidates. A test is exhaustive (`skipInShort`, skip message `exhaustive: runs
+  in the full verify profiles`) only when it is a breadth, replay, randomized or many-pass variant
+  of behavior a targeted test proves; under `-short` every targeted sync engine test runs.
+
+## Commands
+
+```sh
+go run ./cmd/devtool verify --dod --stage pre-pr  # what to run before every push: lint, then quick
+go run ./cmd/devtool verify                # the same `pr` profile without the DoD checks
+go run ./cmd/devtool verify quick          # format (rewrites; --check-format only lists), repository rules, builds, tagged vets, go test -short
+go run ./cmd/devtool verify public         # full tier: race, coverage gate, exhaustive tests (>1 h on 2 cores)
+go test -run '^TestName$' ./internal/sync  # one test
+go run ./cmd/devtool verify --dod --stage start | pre-merge --pr <N> | post-merge --pr <N>
+```
+
+## Where docs live
+
+- `spec/` is the engineering record. Requirements live in `spec/requirements/*.md` (index:
+  [index.md](spec/requirements/index.md)): stable IDs `R-X.Y.Z`, one sentence each, current
+  behavior, each `[verified]` by a test tagged `// Validates: R-X.Y.Z` (or by the design doc that
+  implements it) or marked with another status and its reason. A `[planned]` status names
+  accepted future behavior; new future work is filed as a GitHub issue.
+- `spec/design/<module>.md` says how each module is built and why; each starts with `GOVERNS:`
+  naming the files it owns. `spec/reference/` holds API quirks, the live-incident ledger
+  ([live-incidents.md](spec/reference/live-incidents.md)), onboarding
+  ([developer-onboarding.md](spec/reference/developer-onboarding.md)) and the cloud environment
+  ([cloud-development.md](spec/reference/cloud-development.md)).
+  [lessons.md](spec/lessons.md) holds rules learned, research findings and open problems, and is
+  pruned when they are resolved. `docs/` is the user documentation; `README.md` summarizes
+  capability status from the requirements index and adds no roadmap of its own.
+- Update the docs and this file in the same PR as the code they describe: the design doc of each
+  touched module, requirement statuses, reference docs for a new API quirk, the live-incident
+  entry for a live CI failure (reuse a recurring one), README for capability or workflow changes.
+- Learnings go to [lessons.md](spec/lessons.md), decisions to the design docs. Never committed:
+  per-PR readiness or report files, session state or resume files, ledgers of merged PRs, program
+  notebooks. That information belongs in the PR body, its comments and GitHub issues.
 
 ## Routing Table
 
@@ -49,323 +225,213 @@ table above must resolve. All three are enforced by
 `go run ./cmd/devtool verify public`; when two docs claim the same file, the
 more specific pattern wins.
 
-Planned work: search `spec/` for `[planned]` (outside `spec/history/`). Reference docs: `spec/reference/`. Historical program notes, not current guidance: `spec/history/`.
-New contributors should start with `spec/reference/developer-onboarding.md`.
-
-## Eng Philosophy
-
-- Prefer durable solutions for authority boundaries, state ownership, and side-effect boundaries over expedient patches.
-- Never treat current implementation as a reason to avoid change.
-- Robustness comes from explicit ownership, simple data flow, and strong invariants, not from adding layers, wrappers, or framework-shaped local architecture.
-- Do not add services, managers, adapters, builders, or DTO-style pass-through types unless they own a real boundary or eliminate duplicated authority.
-- Change modules and packages deliberately when it reduces duplicated authority, hidden coupling, or unclear ownership. No code is sacred, but churn without architectural payoff is not a virtue.
-- App has zero users and hasn't launched yet. There is zero backwards-compatibility requirement anywhere: config format, token/cache files, state DB/schema, CLI flags, command output, and internal APIs can all change. Prefer the best design now and remove compatibility shims rather than carrying old architecture forward.
-
-### Architecture Priorities
-
-Optimize first for a codebase that is easy to reason about, easy to test, and explicit about ownership.
-
-- **Explicit ownership of truth, mutation, and side effects.** Every persisted fact, derived view, runtime control path, and external effect must have a clear owner. If two modules can both "really" decide or mutate the same thing, the design is wrong.
-- **Functional core, imperative shell.** Planning, classification, validation, resolution, and safety policy should be deterministic and side-effect free. Filesystem, network, database, clock, process, and environment effects stay at the edges behind explicit boundaries.
-- **Single-owner mutable runtime state.** For coordinators such as watch loops, worker pools, retries, and lifecycle control, prefer one owner over shared mutable state. In concurrent code, single-writer discipline beats defensive mutation spread across goroutines.
-- **High cohesion, low coupling.** Packages should own one axis of change and one slice of authority. Avoid pass-through layers, convenience imports, and sideways dependencies that blur responsibility.
-- **Least-privilege capabilities.** Filesystem roots, arbitrary local paths, HTTP dispatch, token files, and state stores should be accessed through narrow capability objects or interfaces, not ambient access to `os`, `http`, or global process state.
-- **DRY applies to knowledge, not syntax.** Do not duplicate facts, policy, invariants, or lifecycle rules. Small code duplication is acceptable when it preserves clearer ownership and avoids the wrong abstraction.
-- **Domain types may own behavior.** Keep invariant-preserving behavior with the data it constrains when that improves clarity. Avoid both god objects and anemic "data only" types that force policy into distant helpers.
-- **Composition and dependency inversion are tools, not rituals.** Compose small collaborators with explicit dependencies. Introduce interfaces at consuming boundaries for I/O, policy, or coordination seams; do not manufacture interfaces around every concrete type.
-- **Prefer immutability in decision logic, ownership in runtime logic.** Pure planning inputs and outputs should be treated as values. For long-lived coordinators, optimize for explicit ownership and controlled mutation rather than blanket copying.
-
-### Anti-Fizzbuzz Guardrails
-
-- **No abstraction without authority.** If a new type, package, or layer does not own I/O, policy, lifecycle, or a durable truth boundary, it probably should not exist.
-- **Prefer direct concrete call flow.** Inside one package, a short concrete helper is usually better than a same-process handler/service/manager chain.
-- **Package moves must reduce cognitive load.** If a boundary is collapsed or renamed, remove the old vocabulary everywhere in the same increment.
-- **Avoid ghost architecture.** Do not keep comments, docs, verifier rules, error prefixes, or test names referring to deleted packages, files, or concepts.
-- **Say what the code really does.** Do not call code "pure" if it logs, mutates state, or performs I/O. Use "deterministic" when that is what you mean.
-- **Avoid god packages.** If one package starts owning unrelated reasons to change, split it by authority boundary, not by generic technical phase names.
-- **No fake intermediate boundaries.** `internal/sync` is split into packages along its authority boundaries (the routing table above); each consumer imports the package that owns a symbol, with no re-export layer, and a package that no longer exists is not kept alive as a naming convention.
-
-### Performance and Simplicity
-
-These rules are the project-specific version of Pike/Hoare/KISS/Brooks. The short version: do not speculate, do not get clever early, and do not add coordination state without proof.
-
-- **Measure before optimizing.** Do not add caches, batching, special-case fast paths, or algorithmic complexity without profiles, benchmarks, or traces showing that part dominates. In this codebase, bottlenecks are often Graph latency, filesystem I/O, or transactional boundaries — not the place intuition points first.
-- **Prefer simple algorithms while `n` is small.** Most sync decisions are per-path, per-folder, per-scope, or per-batch, and those sets are usually small. A direct linear scan over a small set is often the right choice until measured data proves otherwise.
-- **Prefer simple data structures over clever machinery.** Fancy algorithms and layered caches bring invalidation bugs, ownership confusion, and duplicate state. If a simpler structure is fast enough, it is the better design.
-- **Data model first, algorithm second.** Get the ownership boundaries, persisted state, and in-memory projections right first. When the data structures are correct, the right algorithm is usually obvious. If an optimization requires a second source of truth, it is probably the wrong optimization.
-
-Project-specific consequences:
-
-- **One source of truth beats duplicated state.** Durable state belongs in the authoritative store. In-memory state is allowed for ephemeral working sets or derived indexes, but it must be rebuildable and must never become a competing authority.
-- **Hot-path complexity must earn its keep.** Watch-mode admission, planner checks, and retry scheduling should stay simple unless profiling shows a real bottleneck under realistic load.
-- **Use brute force when it keeps the design honest.** A straightforward scan, recomputation, or rebuild is often preferable to a fragile cache with subtle invalidation rules.
-
-### Ownership - you own this repo
-
-- Never leave the repo in a broken state (build fails, tests fail, lint errors)
-- Never call issues "pre-existing" - you find it, you fix it
-- If you touch a file, leave it better than you found it
-- If something is broken, fix it — don't work around it
-- If you intentionally deviate from a rule, document the exception, why it was necessary, and any follow-up in the increment report
-
-## Coding Conventions
-
-### General
-
-- Write comments for **why**, invariants, ownership rules, concurrency contracts, and non-obvious tradeoffs. Do not narrate the code line by line.
-- Comments and error prefixes must name the current package or concept, not the package or boundary that used to own the code before a refactor.
-- Functions do one thing, with side effects explicit in their name, signature, or owning type
-- Return concrete types by default. Define small interfaces in the consuming package at I/O, policy, or coordination seams
-- No package-level mutable state; no goroutines in `init()` or at package scope
-- No magic numbers — use named constants near their usage
-- Always use named fields in struct literals — positional initialization breaks silently when fields are added
-- Unexported by default. Export only what other packages need. The exported API is a contract.
-- A hook another package's tests need lives in a `*_test_seams.go` file and is named `...ForTest`; lint refuses its use outside tests, and refuses importing a test-support package (`syncfixture`, `syncstoretest`, `synctest`) from product code.
-
-### Naming
-
-- **Names carry the semantics the type can't.** `count int` is useless. `pendingUploadCount int` is self-documenting. A name should let you understand usage without reading the definition.
-- **Boolean names state the true condition.** `isReady`, `hasConflict`, `canRetry` — never negated names like `notDone` (double negatives in `if !notDone` are unreadable).
-- **Package names are single lowercase words.** No underscores, no `util`, no `common`, no `helpers`. If you can't name the package, the abstraction is wrong.
-
-### Error Handling
-
-- **Wrap with `fmt.Errorf("verb noun: %w", err)`** — the message reads as a chain: `"sync file: upload chunk: HTTP POST: connection refused"`. Verb-noun, not "failed to" or "error while".
-- **Error boundaries are explicit.** Translate Graph, filesystem, SQLite, and library errors into domain semantics at the boundary that understands them. Callers should branch on domain errors or decisions, not transport details leaking upward.
-- **Errors cross exactly one boundary before being wrapped.** Don't double-wrap: if `graph.Client` wraps the HTTP error, `driveops` adds its own context but doesn't re-wrap the inner error. Each layer adds *its* perspective: what it was trying to do.
-- **Sentinel errors are for callers that branch on them.** If no caller checks `errors.Is(err, ErrFoo)`, it doesn't need to be a sentinel — a formatted string is fine.
-- **Never swallow errors.** If you handle an error (retry, fallback, skip), convert it into an explicit domain decision, durable record, or returned error. Log at the boundary that owns the decision, and avoid duplicate logging of the same failure as it crosses layers. The only silent discard allowed is when the doc comment on the function explicitly says so and why.
-- **Panics are bugs, not flow control.** Panic only for programmer errors (invariant violations, impossible states). Never panic on external input — network responses, file system results, user config. Recover only at goroutine boundaries to prevent crashes, and log the panic as Error.
-- **Partial failure is a first-class concept.** Operations that process multiple items return both results and errors. Never stop-on-first-error for bulk operations — collect, report, continue.
-
-### Concurrency
-
-- **Goroutine ownership:** Every goroutine must have a clear owner responsible for its lifecycle. The owner must ensure the goroutine terminates. No fire-and-forget goroutines — ever.
-- **Context is the cancellation backbone.** Every function that does I/O or could block takes `context.Context` as its first parameter. Respect cancellation: check `ctx.Err()` before expensive operations, and select on `ctx.Done()` in loops.
-- **Channel direction:** Always declare channel direction in function signatures (`chan<-`, `<-chan`). The sender closes, never the receiver.
-- **Mutex scope:** A mutex protects data, not code. Comment what fields it guards. Keep critical sections small — no I/O under a lock, no channel operations under a lock. Prefer `sync.Mutex` over `sync.RWMutex` unless profiling shows read contention.
-- **Worker pools have bounded concurrency.** Use semaphores (`chan struct{}`) or a fixed set of workers; `errgroup` is not a dependency (depguard admits no `golang.org/x/sync`). Never let fan-out scale with input size.
-
-### Resource Lifecycle
-
-- **`defer` for cleanup, but verify the close.** `defer f.Close()` silently drops the error. For writes: check the error from `Close()` — it flushes buffers. Pattern: `defer func() { closeErr := f.Close(); if err == nil { err = closeErr } }()`.
-- **Streams over buffers.** Never read an entire file or HTTP body into memory unless the size is bounded and small (< 1 MB). Use `io.Reader`/`io.Writer` pipelines. For large files, chunk.
-- **HTTP response bodies are always closed.** Every `http.Response` gets `defer resp.Body.Close()` immediately, even on error status codes. Failing to do so leaks connections.
-- **Temporary files use the target directory.** `os.CreateTemp(targetDir, pattern)` — so the subsequent `os.Rename` is atomic (same filesystem). Never create temps in `/tmp` and rename across mount points.
-
-### File System Safety
-
-- **Atomic writes only.** Never write directly to the target path. Write to a temp file in the same directory, `fsync`, then `os.Rename`. This is non-negotiable for any file that matters.
-- **Paths use `filepath.Join`, never `+` concatenation.** No exceptions.
-- **Validate all paths from external sources.** API responses can contain `..`, absolute paths, or names with special characters. Sanitize before any filesystem operation. Reject path traversal.
-- **File comparison is content-based, not timestamp-based.** Timestamps lie (timezone bugs, FAT32 precision, NTP skew). Use checksums as the source of truth; timestamps as a fast-path hint only.
-- **Preserve what you don't understand.** If the remote has metadata you don't model, don't destroy it by round-tripping through your structs. Only write back fields you explicitly manage.
-
-### API Interaction Discipline
-
-- **Timeout budgets propagate inward.** A sync pass has a deadline. Subdivide it across phases. Don't let one stuck request consume the entire budget. Use `context.WithTimeout` at each layer.
-- **Treat every API response as untrusted input.** Nil-check nested fields. Validate enums against known values. Don't trust `Content-Length`. Don't assume array order.
-- **Pagination is mandatory, not optional.** If an API can return `@odata.nextLink`, code must follow it. Never assume a single page is the full result. Test with collections larger than one page.
-- **Idempotency awareness.** Know which operations are idempotent (GET, PUT, DELETE by ID) and which aren't (POST to create). Only retry idempotent operations automatically. For non-idempotent operations, implement idempotency keys or check-before-act.
-
-### State Machine Discipline
-
-- **State transitions are explicit, enumerated, and validated.** If an item can be `clean → modified → uploading → clean`, enforce the valid transitions. Reject illegal transitions loudly (log + error, not silent ignore).
-- **State persists atomically.** Never write half a state update. Use transactions or write-replace for the state store. A crash between two writes must not leave inconsistent state.
-- **State is recoverable from truth.** If local state is lost or corrupt, the system must be able to rebuild from the remote (or local FS + remote) without user intervention. Design state as a cache of decisions, not the source of truth.
-
-### Defensive Coding
-
-- **Validate at system boundaries, trust internally.** Validate: CLI args, config files, API responses, file system reads. Don't validate: function-to-function calls within a package (that's what types are for).
-- **Make illegal states unrepresentable.** Use types to prevent misuse. A `DriveID` type prevents passing a random string where a drive ID is expected. Enums over raw strings. Required fields are struct members, optional fields use pointer-or-option patterns.
-- **Timeouts on everything external.** Every HTTP call, every file operation that could hang (NFS, FUSE), every channel send that could block. No operation waits forever.
-- **Bound all collections from external input.** If the API returns items, cap how many you process per batch. If a directory has 500k files, don't load them all into a slice. Stream or paginate.
-- **Invariant assertions in debug/test.** For critical invariants (e.g., "every item has a parent"), add assertions that panic in test builds. Use build tags or a flag to enable them.
-
-### Shutdown and Lifecycle
-
-- **Graceful shutdown is cooperative.** On SIGINT/SIGTERM: stop accepting new work, cancel in-flight operations and let each unwind through its own cleanup, commit the records of work that already happened (on a context detached from the cancel), and exit when the runtime settles. In-flight work is canceled, not waited for to complete. Second signal = immediate exit.
-- **In-flight operations are interruptible.** Every long operation checks context cancellation. An upload that ignores cancellation holds the process hostage.
-- **Cleanup runs even on error paths.** Temp files, partial uploads, lock files — all cleaned up on any exit path. `defer` is the mechanism; never rely on "we'll clean up next run."
-
-### Dependencies
-
-- Evaluate every new dependency for maintenance health, transitive deps, and whether the functionality justifies the coupling. Fewer deps = smaller attack surface.
-- Prefer stdlib over third-party when the stdlib solution is reasonable. Don't add a library for something `net/http` or `os` already does.
-
-### Logging
-
-`log/slog` with structured fields:
-- **Debug**: HTTP request/response, token acquisition, file read/write
-- **Info**: Lifecycle events — login/logout, sync start/complete, config load
-- **Warn**: Degraded but recoverable — retries, expired tokens, fallbacks.
-  For bulk sync operations, scope-level events and end-of-pass failure
-  summaries replace per-item warnings. Individual items logged at Debug.
-- **Error**: Terminal failures — request failed after all retries, unrecoverable auth
-- Minimum per meaningful boundary: lifecycle events, state transitions, retries, external calls, and terminal error paths. Do not log routine function entry by default. Never log secrets.
-
-### Test Style
-
-- **All assertions use testify** (`github.com/stretchr/testify/assert` and `require`). Never use stdlib `t.Fatal`, `t.Fatalf`, `t.Error`, `t.Errorf` for assertions. Use `require` when the test cannot continue without the assertion passing (nil checks, error checks before using result). Use `assert` for non-fatal value comparisons.
-- **Requirement traceability**: Every test that validates a spec requirement MUST have a `// Validates: R-X.Y.Z` comment on the line immediately before the `func Test...` declaration. Multiple requirements use comma separation: `// Validates: R-1.1, R-1.2`. For table-driven subtests, place the comment on the subtest case struct. This enables `grep -r "Validates:"` to produce a full traceability matrix.
-- Never pass nil context — runtime panics not caught by compiler
-- Table-driven tests where appropriate, with specific assertions (check values, not just "no error")
-
-### Test Strategy
-
-- **Test the contract, not the implementation.** Tests should break when behavior changes, not when you refactor internals. Test through exported APIs. Only test unexported functions when the logic is complex and the exported surface doesn't exercise it.
-- **Failure injection is mandatory for I/O paths.** Use interfaces to inject: network failures, partial reads, slow responses, disk-full errors. Every I/O path must have at least one failure test.
-- **Use explicit synchronization, not wall-clock sleeps.** `time.Sleep` is banned in test code. Use readiness channels, injected clocks/timers, or observable state transitions instead. The only acceptable exception is a narrowly justified live E2E helper that waits on external process or provider propagation and carries a specific `nolint`.
-- **Test concurrent code with the race detector and stress.** `-race` runs in `verify public`, `verify race` and the nightly, but also: write tests that exercise concurrent paths with `sync.WaitGroup` barriers. Use `-count=100` on flaky-candidate tests.
-- **Golden files for complex output.** Sync plans, conflict reports, any structured output — compare against checked-in golden files, not inline string assertions. Update with `-update` flag.
-- **Mocks implement the full interface contract.** A mock that returns `nil, nil` is a lie. Fakes should simulate realistic behavior: latency, partial results, error conditions. Write hand-written fakes that implement the full contract; no code uses `testify/mock`, and lint keeps it out.
-
-### E2E & Integration Tests
-
-**Verification tiers (R-6.10.22).** What each profile and CI lane runs, its deadlines and how they scale with the cores, sharding, the short and exhaustive tiers, the nightly lanes, stress membership, seeds and the live buckets are specified in `spec/design/system.md` → Verification Policy. What you do:
-
-- Before a PR, run `go run ./cmd/devtool verify --dod --stage pre-pr`: the `pr` profile, lint over the packages changed against `origin/main` and their direct importers, then `quick` (format, repository rules, builds, tagged vets, `go test -short`). A plain `go run ./cmd/devtool verify` runs the same profile.
-- `go run ./cmd/devtool verify public` is the full tier a session runs: the race detector, the coverage gate and every exhaustive test. It takes more than an hour on a 2-core host, so make it the pre-PR gate (`verify public --dod --stage pre-pr`) only on a host that can finish it. The live profiles (`e2e`, `e2e-full`) run only in CI, since no session holds test accounts.
-- The coverage gate's number is written only in requirement R-6.10.4, which devtool reads: change it there and nowhere else.
-- Mark a new test exhaustive (`skipInShort`, whose skip message `exhaustive: runs in the full verify profiles` a grep finds) only when it is a breadth, replay, randomized or many-pass variant of behavior a targeted test already proves, never a targeted safety test. Under `-short` every targeted sync engine test runs.
-- PR CI runs the quick lane alone: the lint matrix, `verify quick` shards on Linux and `verify platform` shards on macOS. Every push to `main` adds `verify race`, the `./internal/sync/...` tree under the race detector. **The trade-off is explicit: a data race outside the sync tree, a coverage drop or an exhaustive-tier failure can reach `main` and is caught by the nightly run** (`verify public` on both platforms, `stress`, `seeds`, `e2e-full`), so the nightly can be red through no change of yours. Step 1 says what to do about it.
-- A failing model seed prints `seed-replay: <command>`: run that command at the commit the run tested to replay it, and carry `Closes #N` for its `seed-failure` issue in the pull request that fixes it.
-- A failed go test step keeps its full output under `.verify-logs/` (`--verify-log-dir` moves it) and names the file: read the failure there.
-
-Live tests run against live OneDrive accounts, only in CI. Test account names are never committed and never GitHub variables: CI reads the test drives and the allowlist from Azure Key Vault in its masking step, writes `.testdata/` from it and exports the test-account variables, no container ever holds a `.env`, and `TestE2E_TrackedFilesNameNoTestAccount` fails when a tracked file spells a configured test account. E2E tests are tiered. The `e2e` tag is the minimal PR smoke lane, its live tests listed in the allow-list `fastE2ELiveTestNames`: a new live test of the fast lane is an edit of that list. The `e2e_full` tag is the slow suite, run nightly and on manual dispatch, on top of the fast suite, through `go run ./cmd/devtool verify e2e-full`, never `go test -tags=e2e_full` alone. A full-tier test's name alone places it: `TestE2E_<Family>_<Case>`, the family looked up in the one table `fullE2EFamilyBuckets` (`internal/devtool/verify_e2e_tiers.go`), and a name the table cannot place stops `verify e2e-full` before its first live call (R-6.10.28). A new family is an edit of that table, and a family joins `full-parallel-misc` only when each of its tests is safe beside every test of that bucket.
-
-**Test credential pipeline** (one-time setup on the owner's own machine, never in a session; then CI is self-sustaining):
-
-1. **Bootstrap** — run once per test account (interactive, requires browser):
-   ./scripts/bootstrap-test-credentials.sh   # opens browser for OAuth login
-   Creates `.testdata/` with token files, `catalog.json`, and `config.toml`. Run multiple times to add accounts (config accumulates drive sections and the catalog accumulates inventory).
-
-2. **Migrate to CI** — upload `.testdata/` to Azure Key Vault:
-   az login                                   # if not already logged in
-   ./scripts/migrate-test-data-to-ci.sh       # uploads tokens + catalog + config to Key Vault
-
-## Dev Process
-
-Work is done in increments. Do not ask permission, do not skip any step.
-
-### Where work happens
-
-Every increment is built in a Claude Code cloud session on the `onedrive-go` cloud environment: an ephemeral Linux container running as root, with one assigned session branch, GitHub reached through the connector tools and `gh`'s REST API (GraphQL is refused), and git allowed to push the session's branch alone. The reasons for each rule below, and the environment's setup script, are in `spec/reference/cloud-development.md`.
-
-- One increment at a time on the session's branch, one PR per increment, squash-merged; `post-merge` then restarts the branch from `origin/main` for the next one.
-- Builder subagents work in worktrees the harness makes under `.claude/worktrees`. A harness worktree starts from `origin/main`, not from the session branch: a builder whose work builds on commits that have not merged yet must first cherry-pick them (name the SHAs in its brief), or start after they merge. Integrate a builder's commits as they are (cherry-pick, then add your own commits on top), so `go run ./cmd/devtool worktree prune-merged` can prove them merged and remove them; `post-merge` runs it too.
-- Go tests run as the non-root `dev` user: as root on Linux, `devtool verify` runs them as `dev` whenever that user exists (`verify --as-user <user>` names another).
-- Every DoD stage runs in the session, over GitHub's REST API; nightly claims are GitHub issues.
-- Live tests run only in CI. No `.env`, `.testdata` or token file ever exists in a container.
-- Nothing worth keeping lives only in the container: push it, put it in the PR, or write it to the repo.
-- Every merge to `main` is released automatically by `.github/workflows/release.yml` once its push-to-`main` CI run succeeds, and nothing else releases (R-6.10.41; the versioning, the build, the attestation and how a consumer verifies a download are in `spec/design/system.md` and CONTRIBUTING.md → Releases). A session never tags, releases or installs by hand and never builds or tests on the owner's machines; a merge ends with the automatic release, and the workflow's manual `workflow_dispatch` is for the owner.
-- The cloud environment is part of the toolchain, and you own its fitness. At the start of every session check it against `spec/reference/cloud-development.md`: the session runs on the `onedrive-go` environment (`get_environment`; one started on another, such as the account's Default, lacks its setup script: tell the owner to start sessions there and repair this container meanwhile), with the pinned tools (golangci-lint, gofumpt, goimports) on `PATH`, the `dev` user, a non-shallow enough clone, and the setup script that provides them; the environment holds that script and no variables. Fix anything wrong or missing (a tool absent or at another version, a host the network refuses, a credential a step needs, a setup script that no longer matches the reference): repair this container, then save the fix with the environment tools (`update_environment` for the setup script or hosts, `request_credential` for a key), each of which the owner approves. Where only the owner can make the change (environment settings you cannot edit, Azure or GitHub settings), ask, naming the exact change and why. Never work around a broken environment silently: the increment report says what was wrong and how it was fixed or who was asked.
-
-### Step 1: Claim work
-
-1. Search `spec/` for `[planned]` items.
-2. If the work involves a live CI / E2E / integration failure, search `spec/reference/live-incidents.md` first for an existing matching incident before starting a new investigation trail.
-3. Read the governing design doc and requirements file (see Routing Table above).
-4. Run `go run ./cmd/devtool verify --dod --stage start` before heavy implementation. This writes/updates the local ignored `.dod-pr-comments.json` manifest from the latest recent merged-PR review threads. If it fails because unresolved threads need manual classification, classify each unresolved thread in the manifest as `fixed`, `already_fixed`, or `non_actionable`; include `what_changed`, `how_fixed`, and evidence for fixed/already-fixed threads, or `reason` for non-actionable threads. Fold every actionable stale comment into the current increment before running expensive verification.
-5. The same stage checks the newest completed scheduled run of `main` (R-6.10.23). Every failure it finds (keyed by test, model seed, failed step or job; the keys, the claim issues and their 24-hour lease are in `spec/design/system.md` → Verification Policy, the nightly entry) is either claimed for this increment or reported as held by another, and **a failure this increment claims is fixed in this increment**: find the root cause from the run's logs, fix it, and record it in `spec/reference/live-incidents.md`. Run the stage on the session's branch, or pass `--branch <branch-name>`: on `main` without one nothing is claimed and every unheld failure fails the stage. A job that did not run is printed and claimed by no one. The stage also fails, in one sentence, when the nightly has no verdict, when a red run has no failed job, and when GitHub keeps failing a read; later stages only warn about the nightly, though `pre-merge`'s claim gate (step 8, item 10) still fails. The DoD stages renew the branch's claims (`go run ./cmd/devtool nightly check` checks on its own). Hand back a claimed failure that turns out to be beyond this increment with `go run ./cmd/devtool nightly release --branch <branch-name> --key <key>` and say so in the report; never let it lapse silently. Delete a claim the check reports as stale with `nightly release`, named as the check prints it (`issue-<n>`). The verdict is also on GitHub: the commit status `nightly`, the one open `nightly-failure` issue while it is red, and the README badge (R-6.10.24).
-6. Evaluate the codebase to determine if any foundational improvements are needed before starting.
-7. If docs and code disagree about package names, file ownership, or boundaries, fix that drift in the same increment before building more work on top of the stale model.
-
-### Step 2: Definition of Ready
-
-Before implementation, produce and present a Definition of Ready report to the
-human. Do not start code edits until every item is `PASS`, or until a failed
-item is converted into a documented assumption with a concrete validation step.
-Once the report is presented and every item is `PASS` or `ASSUMPTION`, continue
-the increment without waiting for separate approval unless the human explicitly
-pauses or redirects the work. If later discovery changes the behavior, scope,
-authority owner, regression plan, verification plan, or safety profile, refresh
-this report before continuing.
-
-**DoR report format:** List all 12 checklist items in order. Prefix every item
-with `PASS`, `FAIL`, or `ASSUMPTION`. Include the evidence, file path, command,
-design-doc section, or explicit assumption that supports the status.
-
-1. [ ] **Task intent**: state the increment as one product-visible behavior, repo-maintenance outcome, or investigation result.
-2. [ ] **Non-goals**: state what is intentionally out of scope for this increment.
-3. [ ] **Governing docs**: identify the requirements, design docs, and reference docs read for the touched area.
-4. [ ] **Authority owner**: name the owner of truth, mutation, side effects, durable state, runtime lifecycle, and user-facing output for the change.
-5. [ ] **Code scope**: name the expected packages/files and any areas that must not be touched.
-6. [ ] **Regression plan**: name the failing test, new test, or existing verification surface that will prove the behavior.
-7. [ ] **Verification plan**: name the focused test commands, race/stress/E2E needs, and verifier profile required before PR.
-8. [ ] **Data safety**: state how the increment avoids unintended local deletes, remote deletes, overwrites, state DB corruption, and stale-truth mutation.
-9. [ ] **Secret and credential safety**: state whether token files, `.env`, CI secrets, live account names, or credential-bearing logs are involved; if so, state the redaction/avoidance plan.
-10. [ ] **Live provider and destructive operations**: state whether the increment can mutate live OneDrive/SharePoint state, reset local state, alter release artifacts, rewrite git history, or upgrade dependencies; if so, name the exact operation, why it is necessary, and the rollback or recovery plan.
-11. [ ] **Review carryover and nightly**: summarize the `go run ./cmd/devtool verify --dod --stage start` result: how any actionable stale review threads are folded into this increment, and which nightly failures the increment claimed (with the planned fix for each) or found held elsewhere.
-12. [ ] **Unknowns and assumptions**: list each unknown in this format: `Question:`, `Current assumption:`, `Validation step:`, and `Owner document/code path affected if assumption is wrong:`.
-
-### Step 3: Start from current main
-
-1. The session's branch starts at the current `origin/main`: `post-merge` leaves it there after the previous increment. A new session whose branch holds merged history restarts it with `git fetch origin main && git checkout -B <session-branch> origin/main`.
-2. All changes go through a PR from the session's branch.
-
-### Step 4: Develop with TDD
-
-All development follows strict red/green/refactor TDD
-Mandatory regression tests for every bug fix.
-
-### Step 5: Update docs
-
-Mandatory, not optional:
-- **Design doc**: update the module doc(s) you touched. New behavior → new spec section. Changed behavior → updated spec. New constraint discovered → constraints section.
-- **Requirements**: if you completed a feature, update status (`implemented` → `verified` once tests pass). Mirror status in the design doc `Implements:` line.
-- **Reference**: if you discovered a new API quirk, update the relevant reference doc upstream.
-- **Live incidents ledger**: if the increment investigates or fixes a live CI / E2E / integration failure, add or update the matching entry in `spec/reference/live-incidents.md` in the same increment. Reuse the existing entry when the incident is clearly recurring instead of creating duplicates.
-- **README/public status**: if the increment changes product capability status, phase/status language, supported platforms, setup commands, verification entrypoints, or contributor workflow, update `README.md` in the same increment. `README.md` status must summarize `spec/requirements/index.md`; it must not introduce a separate phase or roadmap model.
-- **Refactor hygiene**: package/file renames, deletions, merges, and boundary moves must update in the same increment: `AGENTS.md`, `CLAUDE.md`, routing tables, `GOVERNS:` lists, verifier rules, package comments, error-message prefixes, test names, and design-doc references. Do not leave basic naming cleanup for a follow-up increment.
-- **Deleted-name sweep**: after boundary refactors, grep for deleted package, file, and concept names and remove or justify every remaining reference. Historical references must be explicitly labeled as historical.
-
-### Step 6: Self-verify
-
-Re-read the governing design doc. Produce a compliance report listing each spec item, whether it was implemented in full, partially, or not at all, and how it was implemented.
-If the increment moved, deleted, or collapsed a boundary, run an architecture-drift sweep and verify that docs, verifier rules, comments, package docs, and user-facing/internal error text use the current package and file names.
-If you deleted a package or file, prove there are no stale references left outside intentionally labeled historical notes.
-
-### Step 7: Code review checklist
-
-Self-review every change against coding standards before proceeding to the Definition of Done. After opening a PR, review all human and automation feedback. This repo runs Codex PR reviews; Codex does not provide a required approval, but unresolved Codex review threads still block merge because `main` requires conversation resolution.
-
-When a PR carries review-thread follow-up from prior work, include a PR body section named `Review-thread carryover` with the prior PR number, comment summary, code/test evidence, and resolution status. If there is no carryover, state `none`.
-
-Recent merged PRs are audited for unfixed actionable comments and unresolved threads by the start stage (Step 1, item 4). The tool never guesses actionability: classify every unresolved thread in `.dod-pr-comments.json`, fix stale actionable comments in the current increment with regression evidence, and let the DoD tool post the original-thread reply with what/how/evidence text. Comment on and resolve every handled thread, always; non-actionable noise such as review tool quota notices is classified `non_actionable` with a reason and resolved by the tool, never silently ignored.
-
-### Step 8: Definition of Done
-
-After each increment, run through the entire DoD checklist. If something fails,
-fix and re-run from the top. If you rebase, resolve conflicts, or otherwise
-rewrite branch history, re-run the checklist from item 1 on the rebased branch
-before creating the PR. **When complete, present the numbered DoD checklist and
-the numbered Final Increment Report to the human.**
-
-**DoD checklist format:** List checklist items 1-11 in order. Prefix every item with a status emoji and text: `✅ PASS` when complete, `❌ FAIL` when failed, blocked, skipped, or not run. Do not collapse items together; include the command, PR, CI, cleanup, or review evidence that proves each status.
-
-1. [ ] **Format**: reported by `go run ./cmd/devtool verify --dod --stage pre-pr` (the `pr` profile) and by PR CI
-2. [ ] **Lint**: reported by the pre-pr stage and by PR CI
-3. [ ] **Build**: reported by the pre-pr stage and by PR CI
-4. [ ] **Unit tests**: the `-short` tier, reported by the pre-pr stage and by PR CI; the full race tier runs nightly, or in-session with `verify public --dod --stage pre-pr` on a host that can finish it (see "Verification tiers")
-5. [ ] **Coverage**: gated by the nightly `verify public`, or in-session by `verify public`; neither the `pr` profile nor PR CI gates it
-6. [ ] **Fast E2E**: reported by PR CI's `e2e` check, which the pre-merge stage waits for; fast E2E runs only in CI
-7. [ ] **Docs updated**: `README.md`, `AGENTS.md`, `CLAUDE.md`, the routing table, governed design docs, and verifier rules all match the current code layout and capability status
-8. [ ] **Architecture/docs drift sweep**: no stale references to deleted packages, files, or boundaries remain in repo guidance, design docs, package comments, or error strings unless explicitly marked historical
-9. [ ] **Rebase onto latest main**: Immediately before opening the PR, run `git fetch origin` and `git rebase origin/main` on the session's branch, then run `go run ./cmd/devtool verify --dod --stage pre-pr` (the `pr` profile: lint, then quick; name `public` before `--dod` for the full tier). Never open a PR from a stale merge base. If the rebase changes the branch or you resolve conflicts, restart this checklist at item 1 and only continue once the rebased branch is green.
-10. [ ] **Push, review, CI green, PR comments audited, and PR merged to main**: After item 9 passes, push the branch (`git push --force-with-lease` if the rebase rewrote history) and open the PR with the GitHub connector tools, its body carrying the review-thread carryover section from `.dod-pr-comments.json` and, when the increment holds nightly claims, a `Nightly failures` section naming each claimed key and its fix (pre-merge refuses a body that does not name every key the branch holds). When CI and review are ready, run `go run ./cmd/devtool verify --dod --stage pre-merge --pr <pr_number>`: it waits for required PR CI while any check keeps changing state, reruns jobs a runner cancelled, applies the classified review-thread replies, resolves handled threads, and verifies no unresolved current or recent merged-PR review threads remain (the wait windows, `--ci-timeout`, `--ci-max-reruns` and GitHub retries: `spec/design/system.md` → Verification Policy, the DoD CI waits). Do not wait indefinitely for automatic Codex comments that may never arrive; if none exist when CI is terminal, continue after the final sweep. A late actionable thread after merge is fixed in a follow-up PR and resolved there. Then run `go run ./cmd/devtool verify --dod --stage post-merge --pr <pr_number>` on the session's branch with a clean checkout: it squash-merges over REST pinned to the head it checked, marks the increment's nightly claims fixed with the merge commit, restarts the branch from the new `origin/main` and pushes it, and waits for the merge commit's push-to-`main` CI run, which alone decides (a red nightly on that commit is not the merge's failure). This item is `✅ PASS` only after `post-merge` reports the PR merged, the branch restarted, and the push-to-`main` run green; that run starts the automatic release, and there is no install step.
-11. [ ] **Cleanup**: `post-merge` also prunes the builder worktrees whose work is in `origin/main` and runs the read-only cleanup audit. Include **cleanup evidence** inside this item, one line per finding: the session branch against `origin/main`; each worktree left under `.claude/worktrees` with `prune-merged`'s reason; other local branches; stashes; and the session's open PRs. For a builder `prune-merged` keeps, find out whether its work is in `origin/main` in another form (renamed, folded into another change, superseded) or is genuinely missing: land missing work through a PR, and remove a builder only once its work is shown to be on `main`, with the evidence in this item. Never delete a worktree, branch or stash holding work that is not on `main`.
-
-### Final Increment Report
-
-After the DoD checklist passes, present one numbered final increment report to
-the human. This report is not a checklist item. It is the narrative handoff for
-the completed increment.
-
-1. **What you changed**: What files did you change, why and how
-2. **Definition of Ready**: The original DoR result, assumptions made, and any DoR refreshes caused by changed scope, authority owner, regression plan, verification plan, or safety profile
-3. **PR comment audit**: Current PR review-thread status, old merged PR comment/thread sweep scope, stale actionable comments fixed, original PR comments posted with evidence, and non-actionable comments left alone
-4. **Plan deviations**: For every deviation from the approved plan — what changed, why it changed, what was done instead, and whether the new approach is the long-term solution or a temporary measure that needs follow-up
-5. **Live incidents**: Which `spec/reference/live-incidents.md` entries were added or updated in this increment, or explicitly say `none`; name the nightly failures the increment claimed and fixed, released, or found held by another increment
-6. **Top-up recommendations**: Any remaining codebase improvements you'd make. Don't be coy. Engineering effort is free, and this is mission-critical software. Ensure even small issues are brought up, and don't be coy to suggest more ambitious refactoring.
-7. **Unfixed items**: Anything you were unable to address in this increment
+## Increment lifecycle
+
+1. **Start**: `go run ./cmd/devtool verify --dod --stage start --branch <branch>`. It writes the
+   local, ignored `.dod-pr-comments.json` from the review threads of recent merged PRs: classify
+   every unresolved one `fixed`, `already_fixed` (with `what_changed`, `how_fixed`, evidence) or
+   `non_actionable` (with `reason`), and fold every actionable one into this increment. It also
+   reads the newest scheduled run of `main` (R-6.10.23): every failure is claimed by this
+   increment, and a claimed failure is fixed in it, root cause from the run's logs, recorded in
+   [live-incidents.md](spec/reference/live-incidents.md); or it is reported as held by another
+   branch. Hand back a claim beyond this increment with `go run ./cmd/devtool nightly release
+   --branch <branch> --key <key>` and say so in the report. A failing model seed prints
+   `seed-replay: <command>`: replay it at the commit the run tested, keep the seed as a named
+   test, and close its `seed-failure` issue with `Closes #N`. For a live failure, search
+   [live-incidents.md](spec/reference/live-incidents.md) first. Read the open issues, the
+   governing design doc and requirements (routing table), and fix any drift between docs and
+   code before building on it.
+2. **Ready**: write the Definition of Ready in the PR body (below); if discovery later changes
+   the scope, owner, regression or verification plan or the safety profile, update it.
+3. **Test first** (red, green, refactor), then implement with the instrumentation flywheel.
+4. **Verify**: `go run ./cmd/devtool verify --dod --stage pre-pr` (lint, then quick, and the
+   branch contains `origin/main`), green before pushing. A failed go test step keeps its full
+   output under `.verify-logs/` and names the file.
+5. **Docs** in the same PR (Where docs live). After a boundary move, grep for the deleted names
+   and remove every stale reference.
+6. **Land**: push, open the PR, then `go run ./cmd/devtool verify --dod --stage pre-merge --pr
+   <N>`: it waits for CI (reruns jobs a runner cancelled), posts the classified review-thread
+   replies, resolves handled threads and requires none unresolved. Don't wait for automatic
+   review comments that never arrive; a late actionable one is fixed in a follow-up PR. Then
+   `go run ./cmd/devtool verify --dod --stage post-merge --pr <N>` on the clean branch: it
+   squash-merges over REST pinned to the head it checked, with the attribution trailer, marks the
+   branch's nightly claims fixed, checks out a fresh `main` and deletes the merged branch,
+   waits for the push-to-`main` CI run, prunes merged builder worktrees and runs the cleanup
+   audit. The release follows by itself.
+7. **Report**: after the merge, one PR comment with the Definition of Done checklist and the final
+   increment report (below), posted with
+   `gh api -X POST repos/tonimelisma/onedrive-go/issues/<N>/comments -F body=@<file>` from a file
+   outside the repository. The chat gets the same text or its link.
+
+A plan that spans several increments lives in a GitHub tracking issue with a checklist, never in
+a file.
+
+### Definition of Ready
+
+The PR body's `## Definition of Ready` section lists these items, each `PASS` or `ASSUMPTION`
+with its evidence (a file, command, design-doc section or the assumption and how it will be
+validated). Code edits start only when none is `FAIL`.
+
+1. **Task intent**: one product-visible behavior, maintenance outcome or investigation result.
+2. **Non-goals**: what is out of scope.
+3. **Governing docs**: the requirements, design and reference docs read.
+4. **Authority owner**: the owner of truth, mutation, side effects, durable state, runtime
+   lifecycle and user-facing output for the change.
+5. **Code scope**: the packages and files expected, and what must not be touched.
+6. **Regression plan**: the failing or new test, or the verification surface, that proves it.
+7. **Verification plan**: focused test commands, race, stress or live needs, the verify profile.
+8. **Data safety**: how unintended local or remote deletes, overwrites, state corruption and
+   stale-truth mutation are avoided.
+9. **Secret and credential safety**: whether tokens, CI secrets, test account names or
+   credential-bearing logs are involved, and the redaction plan.
+10. **Live and destructive operations**: whether it can mutate live OneDrive state, reset local
+    state, alter release artifacts, rewrite history or upgrade dependencies; if so the exact
+    operation, why, and the recovery plan.
+11. **Review carryover and nightly**: the start stage's result, how stale threads are folded in,
+    which nightly failures were claimed (and the planned fix) or found held elsewhere.
+12. **Unknowns**: each as `Question:`, `Current assumption:`, `Validation step:`, `Doc or code
+    affected if wrong:`.
+
+The body also carries `## Review-thread carryover` (prior PR, comment, evidence, status, or
+`none`) and, when the branch holds nightly claims, `## Nightly failures` naming each claimed key
+and its fix: pre-merge refuses a body that misses a key the branch holds.
+
+## Verification tiers
+
+What each profile and CI lane runs, its deadlines and how they scale with the cores, sharding,
+the nightly lanes, stress membership, seeds and the live buckets are specified in
+[system.md](spec/design/system.md), Verification Policy (R-6.10.22). What you do:
+
+- Before a PR: the pre-pr stage (`pr` profile). `verify public` is the full tier: run it as the
+  pre-PR gate (`verify public --dod --stage pre-pr`) only on a host that can finish it.
+- PR CI runs the quick lane: the lint matrix (linux, darwin with `race`, freebsd) and the
+  `verify quick` shards. Every push to `main` adds `verify race` (the `./internal/sync/...` tree
+  under the race detector). The nightly runs `verify public` on both platforms, `stress`,
+  `seeds` and `e2e-full`. **A data race outside the sync tree, a coverage drop or an
+  exhaustive-tier failure can reach `main` and is caught by the nightly**, which can therefore be
+  red through no change of yours: the start stage says what to do.
+- The coverage gate's number lives only in requirement R-6.10.4, which devtool reads.
+- Live tests run against live OneDrive test accounts, only in CI. Test account names are never
+  committed and never GitHub variables: CI reads the test drives and the allowlist from Azure
+  Key Vault, masks them, writes `.testdata/` and exports the test-account variables;
+  `TestE2E_TrackedFilesNameNoTestAccount` fails when a tracked file spells a configured account.
+  The `e2e` tag is the PR smoke lane, its tests listed in `fastE2ELiveTestNames`. The `e2e_full`
+  tag is the nightly suite, run only through `go run ./cmd/devtool verify e2e-full`: a full-tier
+  test's name `TestE2E_<Family>_<Case>` places it through the family table
+  `fullE2EFamilyBuckets` (`internal/devtool/verify_e2e_tiers.go`), and a name the table cannot
+  place stops the run before its first live call (R-6.10.28). A family joins
+  `full-parallel-misc` only when each of its tests is safe beside every test of that bucket.
+
+## Where work happens
+
+Increments are built in Claude Code cloud sessions on the `onedrive-go` cloud environment: an
+ephemeral Linux container running as root, GitHub reached through `gh`'s REST API (GraphQL is
+refused). The reasons and the environment's setup script are in
+[cloud-development.md](spec/reference/cloud-development.md).
+
+- CI is the verification. Go tests run as the non-root `dev` user: as root on Linux, `devtool
+  verify` runs them as `dev` whenever that user exists (`--as-user` names another).
+- No `.env`, `.testdata` or token file ever exists in a session; nothing worth keeping lives only
+  in the container.
+- Builder subagents work in harness worktrees under `.claude/worktrees`, which start from
+  `origin/main`: a builder whose work needs unmerged commits cherry-picks them first (name the
+  SHAs in its brief). Integrate a builder's commits as they are (cherry-pick), so
+  `go run ./cmd/devtool worktree prune-merged` can prove them merged; post-merge runs it too.
+- You own the environment's fitness. At session start check it against
+  [cloud-development.md](spec/reference/cloud-development.md): the `onedrive-go` environment, the
+  pinned tools (golangci-lint, gofumpt, goimports) on `PATH`, the `dev` user, a deep enough
+  clone. Repair the container, save the fix with the environment tools (each approved by the
+  maintainer), and say in the report what was wrong.
+- On request, and never by default, a session on a machine where the client is installed and
+  signed in may read that client's logs and test it by hand. It never builds over, reinstalls or
+  reconfigures that installation, and live checks there touch only what the person running the
+  session names.
+
+### Maintainer setup
+
+The live-test credentials are bootstrapped once, by the maintainer, outside any session (it needs
+a browser), after which CI keeps them fresh by writing rotated tokens back to Key Vault:
+
+1. `./scripts/bootstrap-test-credentials.sh` once per test account: an OAuth sign-in that writes
+   `.testdata/` (token files, `catalog.json`, `config.toml`); repeated runs add accounts.
+2. `./scripts/migrate-test-data-to-ci.sh` (signed in with `az login`): uploads `.testdata/` to
+   the CI Key Vault.
+
+## Git, CI and PRs
+
+- One branch per increment, cut from a fresh `origin/main`, named `feat/`, `fix/`, `docs/`,
+  `chore/`, `refactor/` or `perf/` plus a short topic. Never reuse a branch after its PR merged;
+  never name a branch for the tool that wrote it.
+- Every change lands through a PR whose body fills `.github/pull_request_template.md`. CI checks
+  the body, and that a PR titled `fix...` changes a test.
+- `CI gate` is the one required check: a job that needs every other job. Wait for it (the
+  pre-merge stage), and fix every failure; never bypass it.
+- Squash-merge as soon as `CI gate` is green, without asking: the post-merge stage does it over
+  REST (`PUT repos/tonimelisma/onedrive-go/pulls/<N>/merge` pinned to the head); locally
+  `gh pr merge --auto --squash` also works.
+- Merging to main releases; nobody tags or publishes by hand.
+- The cloud sessions' GitHub proxy refuses tag pushes, branch deletion and GraphQL: use the REST
+  API (`gh api`), and leave branch deletion to GitHub's delete-on-merge and the branch-cleanup
+  workflow.
+- Commit messages: an imperative subject saying what changed; the body says why.
+- Releases: when the push-to-`main` CI run of a commit succeeds, `.github/workflows/release.yml`
+  tags it with the next version, builds the static binaries with the tag stamped in, smoke-tests
+  the Linux one, attests them, publishes the release with `SHA256SUMS`, and verifies the published
+  files as a consumer does (`gh attestation verify --signer-workflow
+  tonimelisma/onedrive-go/.github/workflows/release.yml --source-ref refs/heads/main`). The path
+  of that workflow and its `main` ref are the signing identity consumers check: never change
+  either without moving every consumer's policy first. Versioning, the build and verification are
+  in [system.md](spec/design/system.md) and [CONTRIBUTING.md](CONTRIBUTING.md), Releases.
+
+## Privacy review
+
+Before every commit, read your own staged diff (`git diff --cached`) and remove anything private
+about the maintainer, their family or their computers: people's names, addresses, personal email
+addresses and accounts, hostnames, home-directory paths, IP addresses, tenant, client or vault
+IDs, real personal documents or photos. Use neutral stand-ins in tests and examples. There is no
+list of private terms to check against: judge the diff.
+
+## Definition of Done
+
+An increment is done when every line holds; the final report marks each ✅ or ❌ with evidence:
+
+- [ ] Start stage clean: main CI, the last scheduled run and recent review threads were green or
+      handled first; every nightly failure claimed was fixed, released or found held elsewhere.
+- [ ] Tests first; the regression test's red output before the fix is quoted.
+- [ ] Format, lint, build and the short unit tier green in the pre-pr stage, on a branch that
+      contains the latest `origin/main`; CI green on the final commit, fast e2e included.
+- [ ] Coverage and the exhaustive tier: run in-session with `verify public` on a host that can
+      finish it, or left to the nightly and said so.
+- [ ] Repository rules green (requirements, `GOVERNS:`, routing table, doc links) and the PR
+      body check green.
+- [ ] Docs and CLAUDE.md are updated in the same PR; no stale reference to a deleted package,
+      file or boundary remains.
+- [ ] Instrumentation reviewed on touched paths: what was added, what removed, or why it is
+      adequate.
+- [ ] Privacy review done on every commit's staged diff.
+- [ ] Every review thread is answered or resolved (pre-merge).
+- [ ] Merged by the post-merge stage; main CI green; the release it produced is linked.
+- [ ] Clean up: only main and open PRs' branches remain on the remote; builder worktrees whose
+      work is on `main` are pruned (any kept one is explained); the working tree is clean.
+
+### Final increment report
+
+One PR comment after the merge, with these parts:
+
+1. **Done / not done**: what the increment delivered, and anything left out.
+2. **Definition of Ready**: as written, and whether it held or was refreshed.
+3. **Requirements and docs**: IDs added, changed or retired; design and reference docs touched.
+4. **Design decisions**: each with the alternatives considered and why they lost; every
+   deviation from the plan and whether it is the long-term answer.
+5. **Verification evidence**: commands, CI run links and durations, release link.
+6. **Regression test**: name and red output before the fix (or "no bug fixed").
+7. **Diagnosis**: for a bug, the root cause and how it was established.
+8. **Review threads and nightly**: current and carried-over threads and how each was handled;
+   live-incident entries added or updated; nightly failures claimed and fixed, released, or held
+   elsewhere.
+9. **Instrumentation**: added, removed, and gaps still open.
+10. **Performance**: before and after numbers, or "not touched".
+11. **Privacy review**: done on every commit; anything removed.
+12. **Smells**: what looked wrong but was out of scope, without holding back.
+13. **Follow-ups**: each filed as an issue, linked.
+14. **Definition of Done**: the checklist above, each line ✅ or ❌ with evidence.
