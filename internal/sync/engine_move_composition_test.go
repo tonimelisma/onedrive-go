@@ -166,6 +166,41 @@ func TestRunOnce_HardLinkUploadsAsANewFile(t *testing.T) {
 	requireScenarioQuietPlan(t, eng)
 }
 
+// Validates: R-2.17.8, R-2.17.6
+//
+// A hard link synced as its own file shares the inode of the synced file it
+// names. When the link's name is deleted here and OneDrive moves the link's
+// item, the inode is still at the other file's own path, where that file's
+// baseline holds the same identity. That is the other file in its place, not
+// the link's item moved onto a path its owner freed: paired as such a move,
+// the divergent rename moved the other file here to OneDrive's name of the
+// link and the next pass deleted the other file on OneDrive (model test seed
+// 328009, where the link's name went with its folder replaced by a file and
+// OneDrive renamed the link's folders in case only).
+func TestRunOnce_AHardLinkDeletedHereAndMovedOnOneDriveLeavesTheOtherNameInPlace(t *testing.T) {
+	t.Parallel()
+
+	remote := newMoveScenarioRemote(driveid.New(syncfixture.EngineTestDriveID))
+	remote.addFile(t, "item-a", "root", "a.txt", "alpha\n")
+	h := newSyncHarness(t, remote)
+	runScenarioPass(t, h.eng)
+
+	h.beginRound(t)
+	require.NoError(t, os.Link(filepath.Join(h.syncRoot, "a.txt"), filepath.Join(h.syncRoot, "link.txt")))
+	runScenarioPass(t, h.eng)
+	require.Equal(t, map[string]string{"a.txt": "alpha\n", "link.txt": "alpha\n"}, remote.tree())
+
+	h.beginRound(t)
+	require.NoError(t, os.Remove(filepath.Join(h.syncRoot, "link.txt")))
+	remote.moveAt(t, "link.txt", "moved.txt")
+	runScenarioPass(t, h.eng)
+	runScenarioPass(t, h.eng)
+
+	requireScenarioLocalFile(t, h.syncRoot, "a.txt", "alpha\n")
+	assert.Equal(t, "item-a", requireScenarioRemoteID(t, remote, "a.txt"))
+	assertSyncInvariants(t, h)
+}
+
 // Validates: R-2.17.8
 //
 // mv a.txt renamed.txt followed by a new a.txt: one remote move carries the

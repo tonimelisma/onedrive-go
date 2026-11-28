@@ -2841,7 +2841,9 @@ func TestDropCreatesOntoComposedItems_ACreateBelowAnotherItemsFolderWaits(t *tes
 // A synced file gone from its path on both sides is found by its identity at
 // a path whose baseline names another item, only while it also holds its
 // synced content: an edited file, or a new file on a reused inode, stays new
-// content, so a move never carries it over OneDrive's copy of the item.
+// content, so a move never carries it over OneDrive's copy of the item. A
+// path whose own synced file still holds the identity there is not freed:
+// that is the other name of a hard link (model test seed 328009).
 func TestMovedOntoAnotherItemsPath_NeedsTheIdentityAndTheSyncedContent(t *testing.T) {
 	t.Parallel()
 
@@ -2862,19 +2864,31 @@ func TestMovedOntoAnotherItemsPath_NeedsTheIdentityAndTheSyncedContent(t *testin
 		}}
 	}
 
-	at, ok := movedOntoAnotherItemsPath(gone, entry, local("p", "hash-z"), cmpByPath)
+	at, ok := movedOntoAnotherItemsPath(gone, entry, local("p", "hash-z"), cmpByPath, nil)
 	assert.True(t, ok)
 	assert.Equal(t, "p", at, "the file sits at p, the path of the folder p")
 
-	_, ok = movedOntoAnotherItemsPath(gone, entry, local("p", "hash-edited"), cmpByPath)
+	_, ok = movedOntoAnotherItemsPath(gone, entry, local("p", "hash-edited"), cmpByPath, nil)
 	assert.False(t, ok, "edited, the file is not proven the item")
 
-	_, ok = movedOntoAnotherItemsPath(gone, entry, local("n", "hash-z"), cmpByPath)
+	_, ok = movedOntoAnotherItemsPath(gone, entry, local("n", "hash-z"), cmpByPath, nil)
 	assert.False(t, ok, "at a path no synced item had, SQLite pairs the move itself")
 
 	stillHere := &DecidedComparison{ComparisonRow: syncdomain.ComparisonRow{Path: "z", BaselineType: syncdomain.SideFile, RemoteType: syncdomain.SideFile}}
-	_, ok = movedOntoAnotherItemsPath(stillHere, entry, local("p", "hash-z"), cmpByPath)
+	_, ok = movedOntoAnotherItemsPath(stillHere, entry, local("p", "hash-z"), cmpByPath, nil)
 	assert.False(t, ok, "OneDrive still holds the item at its path")
+
+	// h is a synced file on the same inode as z: z was a hard link of h,
+	// uploaded as a file of its own, and only z's name went here.
+	cmpByPath["h"] = &DecidedComparison{ComparisonRow: syncdomain.ComparisonRow{
+		Path: "h", BaselineItemID: "item-h", BaselineType: syncdomain.SideFile, LocalType: syncdomain.SideFile,
+	}}
+	views := map[string]*syncdomain.PathView{"h": {Path: "h", Baseline: &syncdomain.BaselineEntry{
+		Path: "h", ItemID: "item-h", ItemType: syncdomain.ItemTypeFile, LocalHash: "hash-z",
+		LocalDevice: 1, LocalInode: inode, LocalHasIdentity: true,
+	}}}
+	_, ok = movedOntoAnotherItemsPath(gone, entry, local("h", "hash-z"), cmpByPath, views)
+	assert.False(t, ok, "h's own synced file is still at h: the other name of a hard link, not z moved there")
 }
 
 // Validates: R-2.17.13

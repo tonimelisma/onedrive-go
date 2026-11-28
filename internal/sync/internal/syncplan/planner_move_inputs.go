@@ -63,7 +63,7 @@ func moveCompositionInputs(
 		node.paths[moveCoordBaseline] = cmp.Path
 		node.paths[moveCoordLocal] = composedLocalPosition(cmp, view)
 		if node.paths[moveCoordLocal] == "" {
-			if at, ok := movedOntoAnotherItemsPath(cmp, entry, localRows, cmpByPath); ok {
+			if at, ok := movedOntoAnotherItemsPath(cmp, entry, localRows, cmpByPath, views); ok {
 				node.paths[moveCoordLocal] = at
 				identified[at] = node.key
 			} else if at, ok := folderMovedOntoAPathItsItemLeft(cmp, entry, localRows, cmpByPath); ok {
@@ -104,10 +104,14 @@ func moveCompositionInputs(
 // prove it is the item, so its moves compose. Only a file whose identity
 // both sides know and whose hash is the synced one or whose birth time
 // proves it: an edited file without that proof, or a new one on a reused
-// inode, stays new content.
+// inode, stays new content. A path whose own synced file is still the entry
+// there is not freed: a hard link synced as a file of its own shares the
+// inode of the other name, which stays in place when the link's name goes
+// (heldByItsOwnSyncedFile).
 func movedOntoAnotherItemsPath(
 	cmp *DecidedComparison, entry *syncdomain.BaselineEntry,
 	localRows []syncdomain.LocalStateRow, cmpByPath map[string]*DecidedComparison,
+	views map[string]*syncdomain.PathView,
 ) (string, bool) {
 	if entry.ItemType != syncdomain.ItemTypeFile || cmp.LocalType.Present() {
 		return "", false
@@ -129,7 +133,7 @@ func movedOntoAnotherItemsPath(
 			continue
 		}
 		have, ok := row.FileIdentity()
-		if !ok || !synctree.SameIdentity(have, want) {
+		if !ok || !synctree.SameIdentity(have, want) || heldByItsOwnSyncedFile(views[row.Path], have) {
 			continue
 		}
 		if (row.Hash == "" || row.Hash != entry.LocalHash) && !synctree.IdentityProvesSameEntry(have, want) {
@@ -143,6 +147,24 @@ func movedOntoAnotherItemsPath(
 	}
 
 	return "", false
+}
+
+// heldByItsOwnSyncedFile reports whether the entry with identity have at the
+// path of view is that path's own synced file, its baseline identity: the
+// path's item never left it, so no other item moved onto it. Two synced
+// files share one identity only as two names of one inode, a hard link
+// uploaded as a new file (R-2.17.8); with the link's name gone here and
+// OneDrive's item of it moved, the inode at the other name read as the link
+// moved there, the divergent rename carried the other file to OneDrive's
+// name of the link, and the next pass deleted the other file on OneDrive
+// (model test seed 328009).
+func heldByItsOwnSyncedFile(view *syncdomain.PathView, have synctree.FileIdentity) bool {
+	if view == nil || view.Baseline == nil || view.Baseline.ItemType != syncdomain.ItemTypeFile {
+		return false
+	}
+	own, known := view.Baseline.FileIdentity()
+
+	return known && synctree.SameIdentity(own, have)
 }
 
 // takesAnotherItemsPath reports whether at, the comparison row of the path
